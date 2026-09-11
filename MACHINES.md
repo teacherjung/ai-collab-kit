@@ -13,7 +13,7 @@
 
 ## 專案設定
 
-正本＝`PROJECT-SETTINGS.md`（範本，搬進專案後逐欄填）：參與者識別值表、來源字串標準表、禁區清單與真實資料清單的位置、掃描發射者的登記方式（誰指派、登記在哪、平手怎麼定、沒有合格者時誰記錄未執行與轉正式）、合併預授權。變更說明的「實作者」「獨立審查者」兩欄、結論標頭與自評的角色格，填的是識別值、不是職稱；「共享檔案」「最糟失去什麼」兩欄填內容。來源字串標準表是**寫作義務**：機器只驗來源非空、同一身分前後一致，不驗它在不在表上。
+正本＝`PROJECT-SETTINGS.md`（範本，搬進專案後逐欄填）：參與者識別值（值域與貼文帳號資格）、來源字串標準表、各清單與正本的位置（禁區、真實資料、忽略／豁免、路標範圍、主幹分支、三關命令、必要檢查、合併步驟登記、驗收依據與分級正本）、掃描發射者的登記方式、合併預授權，以及每支機器的啟用狀態。變更說明的「實作者」「獨立審查者」兩欄、結論標頭與自評的角色格，填的是識別值、不是職稱；「共享檔案」「最糟失去什麼」兩欄填內容。來源字串標準表是**寫作義務**：機器只驗來源非空、同一身分前後一致，不驗它在不在表上。
 
 ## 本文條目 → 機器
 
@@ -22,7 +22,7 @@
 | 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |
 |---|---|---|---|---|---|
 | 甲2、戊1、丁3 | `scripts/check-pr-collab-fields.js`＋`.github/workflows/collab-fields.yml`＋`.github/pull_request_template.md`＋`test/collab-fields-cli.test.js` | 四欄任一缺、角色識別值不在名單、實作者＝獨立審查者 | 真實身分、是否真的複審過、誰按鍵、預約秩序 | 平台上設成必過檢查且對管理員生效；識別值名單改成本專案的 | 尚未移植 |
-| 甲2、己4、己5 | `scripts/check-review-verdicts.js`＋`test/review-verdicts.test.js`＋`test/review-verdicts-cli.test.js` | 有未撤銷的阻擋、沒有針對目前版本的合規通過、有 🤖 記號但標頭寫壞＝退 1；查不清＝退 2 | 沒有 🤖 記號的留言只提醒不擋；來源是否在標準表上；有沒有人跑 | 合併者親手跑；來源字串規矩照 templates/verdict-header.md | 尚未移植（要改：識別值名單） |
+| 甲2、己4、己5 | `scripts/check-review-verdicts.js`＋`test/review-verdicts.test.js`＋`test/review-verdicts-cli.test.js` | 有未撤銷的阻擋、沒有針對目前版本的合規通過、有 🤖 記號但標頭寫壞（普通補發救不了，要正式重述或豁免）＝退 1；查不清＝退 2 | 沒有 🤖 記號的留言只提醒不擋；來源是否在標準表上；有沒有人跑 | 合併者親手跑；來源字串規矩照 templates/verdict-header.md；識別值只收純拉丁字母 | 尚未移植（要改：識別值名單、豁免句裡寫死的裁示者名字） |
 | 乙1 | `.claude/settings.json` deny＋PreToolUse hook、`.codex/hooks.json`、`test/money-boundary.test.js`、`test/codex-money-hook.test.js` | 命中清單上的工具名／家族即拒絕 | 清單外的任何能力；沒安裝那一方 | 每一方各自安裝、信任、啟用；清單改成本專案的 | 尚未移植 |
 | 乙4、戊7 | `test/no-hiding-places.test.js` | 指定忽略／豁免清單被改就紅 | 資料是否被讀；子目錄另設清單、其他豁免通道 | 清單重列 | 尚未移植 |
 | 戊2、戊3 | `scripts/git-hooks/pre-push`、`.github/workflows/ci.yml`、`test/worktree-integrity.test.js`、`test/deploy-config.test.js` | 三關任一失敗＝鉤子擋推送／雲端紅 | 鉤子被跳過；沒人看雲端結果 | 每份複本啟用鉤子；雲端工作設成必過檢查；執行環境版本與稽核等級改成本專案的 | 尚未移植 |
@@ -37,7 +37,7 @@
 | 辛6 | `scripts/acceptance-tier.js`＋`test/acceptance-tier.test.js` | 算出級別與動作 | 有沒有照做 | 路徑家族表重寫成本專案的 | 尚未移植 |
 | 子2 | 本倉庫 `tests/rules-length.test.js` | 去空白字元數＞3,000 就紅 | 取捨理由 | 無 | 已就位 |
 | 子3 | `test/comment-test-refs.test.js` | 指定考題目錄第一層、帶記號的同檔路標不存在就紅 | 其他目錄與更深層 | 目錄範圍改成本專案的 | 尚未移植 |
-| 丁1 | `scripts/pending-rulings.js`＋`test/pending-rulings.test.js` | 只印清單、不擋 | 一切 | 留痕形狀要對上它的解析器（templates/ruling-record.md 是形狀正本）；識別值名單 | 尚未移植 |
+| 丁1 | `scripts/pending-rulings.js`＋`test/pending-rulings.test.js` | 只印清單、不擋 | 一切 | 留痕形狀要對上它的解析器（templates/ruling-record.md 是形狀正本）；解析器裡寫死的裁示者名字、撤回自報句、只採計擁有者帳號（OWNER）這三處要參數化成 PROJECT-SETTINGS 的值 | 尚未移植 |
 
 ## 範本（本文指到「範本」的地方）
 
