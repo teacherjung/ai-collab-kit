@@ -1,0 +1,54 @@
+{
+ "participants": [
+  { "role": "裁示者（人）", "id": "未設定", "account": "未設定" },
+  { "role": "AI 甲", "id": "未設定", "account": "未設定" },
+  { "role": "AI 乙", "id": "未設定", "account": "未設定" }
+ ],
+ "accountRule": "只採計倉庫擁有者帳號貼的 ❓／⚖️／🚫：非擁有者的留言不採計為有效留痕——它貼的 ❓ 不入待裁，它貼的 ⚖️／🚫 不能替已採計的問題收口（原題繼續待裁），形狀合規的會另列成疑似。結論閘只認識別值、不認帳號。用兩個各自帳號的 AI 時，要一併登記解析器的採計範圍改動；不要把任意協作者帳號自動放寬成可信。",
+ "identityDomain": "現階段只准純拉丁字母：結論標頭與重述的正則只收 A 到 Z 的字母，協作欄位閘收得寬，兩道機器值域不同——要放寬就得標頭、重述、欄位閘整族一起改。",
+ "sources": [
+  { "tool": "未設定", "string": "未設定" }
+ ],
+ "locations": [
+  { "item": "禁區工具與能力清單（含攔截器安裝在哪一方）", "rules": "B1", "where": "未設定" },
+  { "item": "真實資料檔清單", "rules": "B4", "where": "未設定" },
+  { "item": "忽略清單、檢查豁免允許清單", "rules": "E7", "where": "未設定" },
+  { "item": "路標考題掃描的目錄範圍", "rules": "K3", "where": "未設定" },
+  { "item": "三關的實際命令、執行環境版本、稽核等級（或唯一設定檔位置）", "rules": "E2、E3", "where": "未設定" },
+  { "item": "必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單）", "rules": "E3、H3", "where": "未設定" },
+  { "item": "合併步驟登記正本（閘登記對帳題讀它）", "rules": "H1", "where": "未設定" },
+  { "item": "合併前必做的驗收依據", "rules": "A5", "where": "未設定" },
+  { "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）", "rules": "H6", "where": "未設定" }
+ ],
+ "mainBranch": "未設定",
+ "scanner": {
+  "tool": "未設定",
+  "assignedBy": "未設定",
+  "tieBreak": "未設定",
+  "fallback": "未設定"
+ },
+ "mergeAuthorization": "未設定",
+ "machines": [
+  { "name": "合併指令（依序跑完登記的閘，任一道紅就停）", "rules": "A5、H1", "state": "未移植", "verified": "" },
+  { "name": "協作欄位閘（雲端＋變更說明範本）", "rules": "A2、E1、D3", "state": "未移植", "verified": "" },
+  { "name": "結論聯集閘", "rules": "A2、F4、F5", "state": "未移植", "verified": "" },
+  { "name": "禁區攔截器（每一方各一列）", "rules": "B1", "state": "未移植", "verified": "" },
+  { "name": "忽略／豁免清單一致考題", "rules": "B4、E7", "state": "未移植", "verified": "" },
+  { "name": "推送前鉤子", "rules": "E2", "state": "未移植", "verified": "" },
+  { "name": "雲端三關", "rules": "E3", "state": "未移植", "verified": "" },
+  { "name": "版本控制環境清理共用實作＋呼叫點行為題", "rules": "E4", "state": "未移植", "verified": "" },
+  { "name": "閘退出路徑／進入點行為題", "rules": "E5", "state": "未移植", "verified": "" },
+  { "name": "檔名考題", "rules": "E6", "state": "未移植", "verified": "" },
+  { "name": "掃描器（含隔離、金絲雀、驗屍）", "rules": "G2", "state": "未移植", "verified": "" },
+  { "name": "合併閘登記對帳題", "rules": "H1", "state": "未移植", "verified": "" },
+  { "name": "堆疊閘", "rules": "H2", "state": "未移植", "verified": "" },
+  { "name": "真考卷閘", "rules": "H3", "state": "未移植", "verified": "" },
+  { "name": "跨變更試合併閘", "rules": "H4", "state": "未移植", "verified": "" },
+  { "name": "驗收分級腳本＋考題", "rules": "H6", "state": "未移植", "verified": "" },
+  { "name": "本文長度考題", "rules": "K2", "state": "已啟用", "verified": "2026-09-12" },
+  { "name": "案例簿考題＋索引產生器", "rules": "K1、K2", "state": "已啟用", "verified": "2026-09-12" },
+  { "name": "專案設定產生器", "rules": "A1", "state": "已啟用", "verified": "2026-09-12" },
+  { "name": "路標考題", "rules": "K3", "state": "未移植", "verified": "" },
+  { "name": "待裁清單工具", "rules": "D1", "state": "未移植", "verified": "" }
+ ]
+}
