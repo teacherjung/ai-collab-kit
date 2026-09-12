@@ -18,21 +18,23 @@
 //    標籤不准帶全形括號。契約只有那一份，考題與產生器共用。
 //
 // 這一題守五件，全部量得到、不必猜任何呈現規則：
-//   ①資料合契約（欄位不會跑出自己的位置）；
-//   ②字數：直接加總資料裡每一條的正文；
-//   ③每條的執行者標籤以一個**已定義**的名字開頭；
-//   ④那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的；
-//   ⑤**RULES.md 必須與產生結果逐字元相同**——手改本文就紅。
+//   ①資料合契約（單行、非空、前後不帶空白，欄位不會跑出自己的位置）；
+//   ②**字面編碼是完整的**：每個欄位編出去以後不留任何未跳脫的 ASCII 標點，而且解回來
+//     與原文逐字元相同（語法只能由固定範本提供，文字本身不會被改掉）；
+//   ③字數：直接加總資料裡每一條的正文；
+//   ④每條的執行者標籤以一個**已定義**的名字開頭；
+//   ⑤那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的；
+//   ⑥**RULES.md 必須與產生結果逐字元相同**——手改本文就紅。
 //
-// ⚠️ 守不到的照實說：第⑤件只證明**本文與資料同步**，不能單靠它推出前四件（上一版的註解
+// ⚠️ 守不到的照實說：第⑥件只證明**本文與資料同步**，不能單靠它推出前面幾件（早一版的註解
 //    這樣寫，被實測推翻）。還有一整類機器永遠看不到：作者把語意上的新規矩寫成一個仍然合格的
-//    小節標題或射程說明——那要靠人與獨立審查者。
+//    小節標題或射程說明——那要靠人與獨立審查者。這一題也不宣稱「任何未來的改法都繞不過」。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { build, read, validate, dataFile, outFile, MIN_RULES } = require('../tools/build-rules.js');
+const { build, read, validate, literal, plain, dataFile, outFile, MIN_RULES } = require('../tools/build-rules.js');
 
 const LIMIT = 3000;
 const machinesFile = path.join(__dirname, '..', 'MACHINES.md');
@@ -71,6 +73,42 @@ function allRules(data) {
 
 test('rules.json 合資料契約（欄位不會跑出自己的位置）', () => {
   assert.deepEqual(validate(read()), [], '資料不合契約');
+});
+
+function everyField(data) {
+  const fields = [
+    ['本文標題', data.title],
+    ['開頭那句指路', data.preamble],
+  ];
+  for (const section of data.sections) {
+    fields.push([`小節 ${section.letter} 的標題`, section.title]);
+    for (const rule of section.rules) {
+      fields.push([`${section.letter}${rule.n} 的正文`, rule.text]);
+      fields.push([`${section.letter}${rule.n} 的標籤`, rule.tag]);
+    }
+  }
+  return fields;
+}
+
+test('每個欄位都被編成字面文字：沒有漏跳脫的標點，而且解回來與原文相同', () => {
+  const data = read();
+  assert.deepEqual(validate(data), [], '資料不合契約，編碼檢查不算數');
+  for (const [what, value] of everyField(data)) {
+    const encoded = literal(value);
+    assert.equal(plain(encoded), value, `${what} 編過再解回來跟原文不一樣：編碼把文字改掉了`);
+    const leaked = encoded.replace(/\\[!-/:-@[-`{-~]/gu, '').match(/[!-/:-@[-`{-~]/u);
+    assert.equal(leaked, null, `${what} 編出去之後還留著沒跳脫的標點「${leaked && leaked[0]}」：它在本文裡還有語法能力`);
+  }
+});
+
+test('本文裡的每一條解回來，就是資料裡的那一條', () => {
+  const data = read();
+  const lines = build(data).split('\n').filter((l) => l.startsWith('- '));
+  const expected = [];
+  for (const section of data.sections) {
+    for (const rule of section.rules) expected.push(`- ${section.letter}${rule.n} ${rule.text}（${rule.tag}）`);
+  }
+  assert.deepEqual(lines.map(plain), expected, '產出的規矩行解回來跟資料對不上');
 });
 
 test('規矩正文不超過 3,000 字（標題、條號、句尾標籤不算）', () => {

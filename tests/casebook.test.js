@@ -8,10 +8,12 @@
 // 守得到的：
 //   ①索引表格列與檔案**雙向唯一對應**，「共 N 則」要對得上，而且索引列的日期／標題／條號
 //     要跟檔案裡的一致（不是只比檔名連結）；
-//   ②每則的六欄**各恰好一個**、值非空；每則至少一個有效條號；條號都存在；
-//     而且**本文每一條都至少有一則案例指著**（案例簿的進門規則）；
-//   ③案例正文與索引都不出現裁示者名字與 AI 產品名——**只認一份已知的字表、不分大小寫**；
-//     來源網址裡的帳號與庫名是約定的定位方式，只豁免網址本身，網址後面照掃。
+//   ②每則**整份檔案就是那個固定形狀**：第一行標題、空行、六欄依序各一行、最後可有一行「相關」，
+//     再無別的內容——不是「檔案裡找得到這幾串字」（上一版是那樣寫，於是註解或舉例可以替缺欄代答）；
+//     每則至少一個有效條號、條號都存在；而且**本文每一條都至少有一則案例指著**（進門規則）；
+//   ③案例正文與索引都不出現裁示者名字與 AI 產品名——**只認一份已知的字表、不分大小寫、
+//     整行照掃不給任何豁免**（上一版對網址整段放行，結果網址後面緊接著的名字也被吞掉；
+//     來源網址裡本來就不該出現字表上的名字，所以根本不需要那個例外）。
 //
 // ⚠️ 守不到的，照實說：事實對不對、一事一檔、來源連結活不活著、條號撐不撐得住那條規矩
 //    （字面引用 ≠ 事件支撐）、以及這份字表以外的新產品名、變形拼寫與其他個人狀況——
@@ -32,7 +34,6 @@ const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '�
 const FORBIDDEN = ['william', 'codex', 'claude', 'grok', 'gpt', 'anthropic', 'openai'];
 // 索引表格列：| 日期 | [標題](檔名.md) | 條號 |
 const INDEX_ROW = /^\|\s*([^|]+?)\s*\|\s*\[([^\]]+)\]\(([^)]+)\.md\)\s*\|\s*([^|]*?)\s*\|\s*$/u;
-const URL = /https?:\/\/\S+/gu;
 
 function caseFiles() {
   return fs
@@ -41,21 +42,33 @@ function caseFiles() {
     .sort();
 }
 
-/** 照固定格式讀出一則案例的六欄；欄位不是恰好一個就報錯，不讓別處的字代答。 */
+/**
+ * 照固定形狀讀一則案例：**整份檔案就是這個形狀**，多一行少一行都報錯。
+ * 形狀＝`# 標題` ／ 空行 ／ 六欄依序各一行 ／（可有）一行「- 相關：」 ／（可有）結尾空行。
+ * 用形狀而不是「找得到這幾串字」，是因為後者可以被註解、舉例或別欄的敘述代答。
+ */
 function readCase(file) {
-  const text = fs.readFileSync(path.join(casesDir, file), 'utf8');
-  const fields = {};
-  for (const name of FIELDS) {
-    const lines = text.split('\n').filter((l) => l.startsWith(`- ${name}：`));
-    assert.equal(lines.length, 1, `${file} 的「${name}」欄不是恰好一個（找到 ${lines.length} 個）`);
-    const value = lines[0].slice(`- ${name}：`.length).trim();
+  const lines = fs.readFileSync(path.join(casesDir, file), 'utf8').split('\n');
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  assert.ok(
+    lines.length === FIELDS.length + 2 || lines.length === FIELDS.length + 3,
+    `${file} 的行數是 ${lines.length}：案例的固定形狀是標題、空行、六欄，最多再加一行「相關」`,
+  );
+  assert.ok(lines[0].startsWith('# ') && lines[0].slice(2).trim() !== '', `${file} 第一行不是標題`);
+  assert.equal(lines[1], '', `${file} 第二行要空著`);
+  const fields = { 標題: lines[0].slice(2).trim() };
+  FIELDS.forEach((name, i) => {
+    const line = lines[i + 2];
+    const head = `- ${name}：`;
+    assert.ok(line.startsWith(head), `${file} 第 ${i + 3} 行應該是「${head}…」，實際是：${line.slice(0, 24)}`);
+    const value = line.slice(head.length).trim();
     assert.notEqual(value, '', `${file} 的「${name}」欄是空的`);
     fields[name] = value;
+  });
+  if (lines.length === FIELDS.length + 3) {
+    assert.ok(lines[FIELDS.length + 2].startsWith('- 相關：'), `${file} 最後一行只能是「- 相關：…」`);
   }
-  const title = text.split('\n')[0];
-  assert.ok(title.startsWith('# '), `${file} 第一行不是標題`);
-  fields.標題 = title.slice(2).trim();
-  fields.條號 = fields['本文條號'].split('、').map((s) => s.trim()).filter(Boolean);
+  fields.條號 = fields['本文條號'].split('、').map((x) => x.trim()).filter(Boolean);
   assert.ok(fields.條號.length > 0, `${file} 沒有任何有效的本文條號`);
   return fields;
 }
@@ -117,8 +130,8 @@ test('案例與索引都不出現裁示者名字與 AI 產品名（只認一份�
     fs.readFileSync(path.join(casesDir, file), 'utf8')
       .split('\n')
       .forEach((line, i) => {
-        // 只豁免網址本身（來源的定位方式），網址後面的普通文字照掃。
-        const scannable = line.replace(URL, ' ').toLowerCase();
+        // 整行照掃、不給任何豁免：來源網址裡本來就不該出現字表上的名字。
+        const scannable = line.toLowerCase();
         for (const word of FORBIDDEN) {
           assert.ok(
             !scannable.includes(word),
