@@ -9,22 +9,32 @@
 //    撐不到下一輪。實作者在自問表裡寫下停損線：再有一種新的漏算，就不再補寫法、改成
 //    「規矩存成資料、本文由它產生」。第七輪的 CR 換行觸發了它。
 //
-// **所以現在沒有「哪幾行算規矩」這個問題**：規矩住在 rules.json，一則一筆；
-// RULES.md 是產物。這一題只要守四件，全部量得到、不必猜任何呈現規則：
-//   ①字數：直接加總資料裡每一條的正文；
-//   ②每條都有非空的執行者標籤，而且以一個**已定義**的名字開頭；
-//   ③那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的；
-//   ④**RULES.md 必須與產生結果逐字元相同**——手改本文就紅，所以繞不過①②③。
+// **所以現在沒有「哪幾行算規矩」這個問題**：規矩住在 rules.json，一則一筆；RULES.md 是產物。
+//
+// ⚠️ 但只有「由資料產生」還不夠。第八輪實測出下一層：**不計字的欄位會跑出它該待的位置**——
+//    小節標題裡塞一個換行，後面那段就變成獨立的正文段落、完全不計字；句尾標籤裡先關括號再換行，
+//    就能長出一整條沒人數的新規矩。兩種都不必動本文、產物也照樣同步。所以真正的收口是
+//    **資料契約**（build-rules.js 的 validate）：每個會被輸出的欄位都要是單行純文字，
+//    標籤不准帶全形括號。契約只有那一份，考題與產生器共用。
+//
+// 這一題守五件，全部量得到、不必猜任何呈現規則：
+//   ①資料合契約（欄位不會跑出自己的位置）；
+//   ②字數：直接加總資料裡每一條的正文；
+//   ③每條的執行者標籤以一個**已定義**的名字開頭；
+//   ④那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的；
+//   ⑤**RULES.md 必須與產生結果逐字元相同**——手改本文就紅。
+//
+// ⚠️ 守不到的照實說：第⑤件只證明**本文與資料同步**，不能單靠它推出前四件（上一版的註解
+//    這樣寫，被實測推翻）。還有一整類機器永遠看不到：作者把語意上的新規矩寫成一個仍然合格的
+//    小節標題或射程說明——那要靠人與獨立審查者。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { build, read, dataFile, outFile } = require('../tools/build-rules.js');
+const { build, read, validate, dataFile, outFile, MIN_RULES } = require('../tools/build-rules.js');
 
 const LIMIT = 3000;
-// 下限只是「這份資料還是一份規矩清單」的地板，不是實際條數（實際條數會變，寫死會漂）。
-const MIN_RULES = 20;
 const machinesFile = path.join(__dirname, '..', 'MACHINES.md');
 // MACHINES.md 裡那張定義表的開頭，用來定位（標籤的正本只有那一份）。
 const LABEL_TABLE_ANCHOR = '句尾的執行者標籤，定義在這裡、只在這裡';
@@ -48,33 +58,26 @@ function definedLabels() {
   return labels;
 }
 
-/** 把資料攤平成一條一筆，順便擋掉編號跳號與重複。 */
+/** 把資料攤平成一條一筆。契約由 build-rules.js 的 validate 說了算，這裡不另寫一份。 */
 function allRules(data) {
-  assert.ok(Array.isArray(data.sections) && data.sections.length > 0, 'rules.json 沒有任何小節');
-  const seen = new Set();
   const rules = [];
   for (const section of data.sections) {
-    assert.ok(/^[A-Z]$/u.test(section.letter), `小節代號「${section.letter}」不是單一個大寫英文字母`);
-    assert.ok(Array.isArray(section.rules), `小節 ${section.letter} 沒有規矩清單`);
-    section.rules.forEach((rule, i) => {
-      const id = `${section.letter}${rule.n}`;
-      assert.equal(rule.n, i + 1, `${id} 的編號跳號了：同一節裡要從 1 開始連號`);
-      assert.ok(!seen.has(id), `條號 ${id} 重複了`);
-      seen.add(id);
-      assert.ok(typeof rule.text === 'string' && rule.text.trim() !== '', `${id} 沒有正文`);
-      assert.ok(typeof rule.tag === 'string' && rule.tag.trim() !== '', `${id} 沒有執行者標籤`);
-      rules.push({ id, text: rule.text, tag: rule.tag });
-    });
+    for (const rule of section.rules) {
+      rules.push({ id: `${section.letter}${rule.n}`, text: rule.text, tag: rule.tag });
+    }
   }
-  assert.ok(
-    rules.length >= MIN_RULES,
-    `rules.json 只找到 ${rules.length} 條規矩（至少要 ${MIN_RULES} 條）：資料整份變形的話字數會算成零、這題就變成永遠綠的空包彈`,
-  );
   return rules;
 }
 
+test('rules.json 合資料契約（欄位不會跑出自己的位置）', () => {
+  assert.deepEqual(validate(read()), [], '資料不合契約');
+});
+
 test('規矩正文不超過 3,000 字（標題、條號、句尾標籤不算）', () => {
-  const rules = allRules(read());
+  const data = read();
+  assert.deepEqual(validate(data), [], '資料不合契約，字數算出來不算數');
+  const rules = allRules(data);
+  assert.ok(rules.length >= MIN_RULES, `只找到 ${rules.length} 條規矩：契約的地板是 ${MIN_RULES}`);
   const count = rules.reduce((n, r) => n + Array.from(r.text.replace(/\s+/g, '')).length, 0);
   assert.ok(
     count <= LIMIT,
@@ -84,7 +87,9 @@ test('規矩正文不超過 3,000 字（標題、條號、句尾標籤不算）'
 
 test('每條規矩的執行者標籤都以一個已定義的名字開頭', () => {
   const labels = definedLabels();
-  for (const rule of allRules(read())) {
+  const data = read();
+  assert.deepEqual(validate(data), [], '資料不合契約，標籤檢查不算數');
+  for (const rule of allRules(data)) {
     assert.ok(
       labels.some((l) => rule.tag.startsWith(l)),
       `${rule.id} 的標籤「${rule.tag}」沒有以已定義的執行者名字開頭（${labels.join('／')}）`,
