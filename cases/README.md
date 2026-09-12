@@ -3,7 +3,7 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：裁示者／實作者／獨立審查者／掃描器，不寫人名。
 來源欄的 `PFW #n` ＝原專案 personal-finance-webapp 的第 n 支變更。
 
-共 127 則。
+共 136 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -27,10 +27,17 @@
 | 2026-08-03 | [連接器能備妥真委託單](money-absolute-boundary.md) | 乙1、乙2、乙3 |
 | 2026-08-03 | [閘沒跑卻回報通過](silent-pass-is-worst.md) | 戊5 |
 | 2026-08-04 | [實作常設、審查拋棄](permanent-impl-tree-disposable-review-tree.md) | 己1、丁2 |
-| 2026-08-05 | [六支一次送審全退回：考題驗的是中間層](six-changes-tested-middle-layer.md) | 戊8 |
+| 2026-08-05 | [「做不到」被寫成誠實劃界，審查者當場做出來](cannot-do-claimed-reviewer-did-it.md) | 子4 |
+| 2026-08-05 | [備審查樹失敗被管線吞掉，審查者拿到舊版本](review-tree-pipeline-swallowed-failure.md) | 己3、己1 |
 | 2026-08-05 | [六支並行讓裁示者讀不完](one-thing-at-a-time.md) | 丙1、癸2 |
+| 2026-08-05 | [六條備份考題全綠，其中三條弄壞了也不會紅](my-own-guards-lied.md) | 戊8 |
+| 2026-08-05 | [只看退出碼就回報三關全綠，錯誤就印在自己導出的檔案裡](exit-code-only-missed-error-log.md) | 戊2、子4 |
+| 2026-08-05 | [夾具少一個欄位，要測的那一行根本沒被走到](fixture-missing-field-never-reached.md) | 戊8 |
 | 2026-08-05 | [審查回饋無條件全改的跑步機](review-feedback-treadmill.md) | 己6 |
-| 2026-08-05 | [自己的護欄回報通過卻沒在守](my-own-guards-lied.md) | 戊8、戊9 |
+| 2026-08-05 | [掃描器跳過非英文檔名，回報零問題](scanner-skipped-non-ascii-paths.md) | 戊6、子4 |
+| 2026-08-05 | [突變探針用版本控制還原，當批成果被洗掉](mutation-probe-restore-wiped-work.md) | 戊9 |
+| 2026-08-05 | [考題只呼叫小函式，正式接線改壞照樣全綠](tests-called-helper-not-the-wiring.md) | 戊8 |
+| 2026-08-05 | [邊界考題踩的值離邊界很遠，門檻調鬆全綠](boundary-tests-far-from-the-edge.md) | 戊8 |
 | 2026-08-06 | [停損門檻至少超過七輪，而且問自己不問他](stop-loss-over-seven-rounds.md) | 己9 |
 | 2026-08-06 | [結論字串加括號閘看不見](review-verdict-strings.md) | 己3、己4 |
 | 2026-08-06 | [護欄自己成了最大缺陷來源，拆掉才第一次通過](guard-became-defect-source.md) | 己10 |
@@ -68,6 +75,7 @@
 | 2026-08-29 | [護欄連兩輪被戳洞後改劃界](tripwire-vs-safety-gate.md) | 子3、子4、戊4 |
 | 2026-08-29 | [重疊的草稿變更擋住快合併的那支](pr-overlap-open-strategy.md) | 丁3 |
 | 2026-08-30 | [前瞻工作的既有間歇紅差點被誤認](ci-forward-job-flaky.md) | 辛1 |
+| 2026-08-31 | [不擋部署的工作紅著，代合併照規矩停在確認全綠那一步](forward-job-red-stopped-proxy-merge.md) | 戊3、辛1 |
 | 2026-08-31 | [提示詞要具體字串、整遍掃描判事故](scan-prompt-asked-for-literal-strings.md) | 庚2、庚3 |
 | 2026-09-01 | [原話含個人狀況抄進公開倉庫](personal-details-not-public.md) | 乙5 |
 | 2026-09-01 | [夾具在新環境靜靜變空包彈](fixture-control-assertion.md) | 戊8、子4 |
@@ -85,7 +93,7 @@
 | 2026-09-03 | [編輯沒寫入、提交照跑](edit-failure-must-block-commit.md) | 戊9 |
 | 2026-09-03 | [跨變更試合併閘量到的是負載](cross-pr-gate-measures-load.md) | 辛1、辛4 |
 | 2026-09-04 | [回報標籤三套字混用被抓](report-format.md) | 癸1、癸2 |
-| 2026-09-04 | [提示詞裡的「之後會怎樣」被當成指令](next-step-read-as-instruction.md) | 己3、庚4 |
+| 2026-09-04 | [提示詞裡的「之後會怎樣」被當成指令](next-step-read-as-instruction.md) | 己3 |
 | 2026-09-04 | [正規式護欄同時假綠假紅](structural-guard-use-parser.md) | 戊8 |
 | 2026-09-04 | [純考題變更也把別檔的劃界句弄成假話](stale-header-in-tests-only-change.md) | 子5、子3 |
 | 2026-09-04 | [行尾註解吞掉同行後面的程式](comment-swallowed-rest-of-line.md) | 戊9 |
@@ -116,8 +124,9 @@
 | 2026-09-09 | [寫提示詞的步驟被管線吃掉、審查空跑](heredoc-eaten-empty-prompt.md) | 戊9 |
 | 2026-09-09 | [把常態講成規矩被裁示者問住](quote-rules-verbatim.md) | 癸3 |
 | 2026-09-09 | [掃描紀錄從上一支抄過來](scan-record-copied-from-previous-change.md) | 庚3 |
-| 2026-09-09 | [掃描結果抄進註解時抄反了](scan-finding-transcribed-backwards.md) | 子4、子3 |
+| 2026-09-09 | [掃描結果抄進考題註解時抄反了](scan-finding-transcribed-backwards.md) | 子3、子4 |
 | 2026-09-09 | [探針備份被掃進提交上了變更](probe-files-in-worktree.md) | 戊9 |
+| 2026-09-09 | [發射理由少了中間那一環，兩件事實被說成足以證明結論](launch-reason-skipped-measured-premise.md) | 子4 |
 | 2026-09-09 | [護欄的宣稱一直超出證據](guard-claims-vs-evidence.md) | 子4、子3、己10 |
 | 2026-09-09 | [超過七輪要留公開自評](over-seven-rounds-public-self-review.md) | 己9 |
 | 2026-09-10 | [「沒有明文」與「這張表上沒有」是兩句話](no-explicit-rule-vs-not-on-this-table.md) | 子4 |
@@ -133,7 +142,7 @@
 | 2026-09-10 | [自己讀表格文法四輪被打穿](reimplementing-parser-stop-second-round.md) | 己10、壬4 |
 | 2026-09-10 | [誰在磨誰拍板](whoever-is-grinding-decides.md) | 甲1、己6 |
 | 2026-09-10 | [轉正式後檢查重跑，拿舊綠就發射合併](stale-green-after-promote.md) | 辛3、戊3 |
-| 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | 甲1 |
+| 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | 甲1、庚4 |
 
 ## 不是事故、但值得記的方法
 
