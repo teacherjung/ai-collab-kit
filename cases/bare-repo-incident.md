@@ -5,5 +5,5 @@
 - 發生什麼：一支變更的測試夾具（＝考題用的假資料與假環境）呼叫了版本控制的「初始化」，而從連結工作樹（＝同一個倉庫掛出去的第二個工作目錄）推送時，推送前鉤子的環境帶著指向主倉庫的變數，初始化於是寫進共用設定檔，把主倉庫標成裸倉庫（＝只剩歷史、沒有可編輯檔案的形態），主目錄與四十多棵連結工作樹同一天兩度失去工作樹身分（主幹內容未損，還原是改回一個設定值）。實作者最初宣布「逐一掃過十一顆提交、零初始化、夾具已排除」，獨立審查者在補救變更第一輪貼出那兩顆提交，指出它們的時間與兩次事故只差幾十秒，實作者親手重現才推翻舊結論——那次掃描很可能只掃了字面字串、漏掉輔助函式的呼叫（原掃描指令沒留檔，這句是推測）。補救是絆線：推送前鉤子開頭把那一族環境變數整族清掉、測試前後各驗一次設定檔；它擋的是「壞了還推出去」，不是「不會再壞」。
 - 代價：倉庫兩度變裸倉庫、四十多棵工作樹同時失效，外加一次錯誤排除肇因的查核結論。
 - 教訓：呼叫版本控制工具或會間接呼叫它的程式前，先整族清掉它那一族環境變數；查核結論的射程只到實際查過的範圍，掃字面字串不等於掃過呼叫。
-- 來源：PFW #433（2026-08-09）https://github.com/teacherjung/personal-finance-webapp/pull/433 ；PFW #435（2026-08-10）https://github.com/teacherjung/personal-finance-webapp/pull/435#issuecomment-5234813685
+- 來源：PFW #433（2026-08-09）<https://github.com/teacherjung/personal-finance-webapp/pull/433> ；PFW #435（2026-08-10）<https://github.com/teacherjung/personal-finance-webapp/pull/435#issuecomment-5234813685>
 - 相關：[my-own-guards-lied](my-own-guards-lied.md)、[silent-pass-is-worst](silent-pass-is-worst.md)、[guard-claims-vs-evidence](guard-claims-vs-evidence.md)

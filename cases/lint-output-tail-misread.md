@@ -5,5 +5,5 @@
 - 發生什麼：實作者看風格檢查輸出的最後一行判「乾淨」，但那工具的輸出以空行結尾，最後一行永遠是空的，兩個錯誤被看成綠；推送前的鉤子（＝推送時自動跑三道固定檢查的程式）才擋下。
 - 代價：多燒一次推送。
 - 教訓：判關卡一律看退出碼，不看輸出尾巴。
-- 來源：私人紀錄（2026-09-03，無公開原文）；PFW #551（2026-09-03）https://github.com/teacherjung/personal-finance-webapp/pull/551 ——此支只證明事後「一律看退出碼」的做法寫在哪，不是原事故
+- 來源：私人紀錄（2026-09-03，無公開原文）；PFW #551（2026-09-03）<https://github.com/teacherjung/personal-finance-webapp/pull/551> ——此支只證明事後「一律看退出碼」的做法寫在哪，不是原事故
 - 相關：[silent-pass-is-worst](silent-pass-is-worst.md)

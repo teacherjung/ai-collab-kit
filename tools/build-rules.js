@@ -21,6 +21,8 @@
 //     這不是「危險字元黑名單」，是 Markdown 規格說了算的完整集合（反斜線加 ASCII 標點＝
 //     那個字元的字面值）。標點全部失去語法能力，語法就只能由下面這個固定範本提供；
 //     而且解回來（plain）與原文逐字元相同，不會像上一版那樣把文字改掉。
+//     ⚠️ 這個「逐字元相同」只保證**本地解回來**：呈現器對空字元另有規定的替換，所以空字元
+//     由契約直接擋掉；別的呈現差異不在這一支的保證範圍內。
 // 契約與編碼都在這一支，產生器與考題共用，兩邊不會各寫各的。
 'use strict';
 const fs = require('node:fs');
@@ -39,6 +41,9 @@ const ASCII_PUNCT = /[!-/:-@[-`{-~]/gu;
 const ESCAPED_ASCII_PUNCT = /\\([!-/:-@[-`{-~])/gu;
 // 前後空白與定位字元也要擋：縮排四格就會變成程式碼區塊。
 const EDGE_SPACE = /^\s|\s$|\t/u;
+// 空字元不是標點、跳脫不了，而 Markdown 規格明定呈現時會把它換成別的字元——
+// 也就是說本地解回來雖然一樣，讀者看到的卻不是原文。直接擋掉。
+const NUL = /\u0000/u;
 // 規矩至少要有幾條，才算「這份資料還是一份規矩清單」（不是實際條數，寫死會漂）。
 const MIN_RULES = 20;
 
@@ -57,6 +62,10 @@ function checkPlain(value, what, problems) {
   }
   if (EDGE_SPACE.test(value)) {
     problems.push(`${what} 的前後有空白、或裡面有定位字元：縮排會讓它變成程式碼區塊`);
+    return false;
+  }
+  if (NUL.test(value)) {
+    problems.push(`${what} 裡有空字元：呈現時會被換成別的字元，讀者看到的就不是原文`);
     return false;
   }
   return true;

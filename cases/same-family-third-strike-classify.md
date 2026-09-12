@@ -5,5 +5,5 @@
 - 發生什麼：一題「用有限幾組假數字釘算式」的考題，結構上永遠擋不住「只在這幾組上答對、其他地方亂答」的壞法，同族連三輪中刀（＝被審查者抓到問題）。實作者第三刀後沒再加碼，改在下一輪提示裡請審查者表態「這一把是使用者會受害、還是考題可以更漂亮」，後者寫待辦就給通過。審查者照這條界線把新反例判為「考題可以更漂亮、本身不阻擋」，隔日裁示者在對話中同意用這個界線收尾。
 - 代價：連三輪同族返工之後才換問法。
 - 教訓：同族第三刀就換提示詞的問法——請審查者分類、不是請他再找刀，並把「為什麼有限案例關不上這扇門」寫進考題檔頭當劃界。
-- 來源：PFW #552（2026-09-03）https://github.com/teacherjung/personal-finance-webapp/pull/552#issuecomment-5528424188；私人紀錄（2026-09-04，無公開原文）裁示者的同意在隔日對話中。
+- 來源：PFW #552（2026-09-03）<https://github.com/teacherjung/personal-finance-webapp/pull/552#issuecomment-5528424188>；私人紀錄（2026-09-04，無公開原文）裁示者的同意在隔日對話中。
 - 相關：[review-round-budget](review-round-budget.md)、[pin-widening-treadmill](pin-widening-treadmill.md)

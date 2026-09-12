@@ -5,5 +5,5 @@
 - 發生什麼：實作者的指令鏈（＝一口氣接連跑完的一串指令）用「日誌裡沒有失敗記號」當「考題綠」的閘。考題檔本身語法錯時，輸出沒有一般失敗那種「記號＋題名」的行，只有「記號＋檔名」與語法錯誤文字，而檔名那種行被鏈自己濾掉了，閘判「綠」，提交、推送、發審都照跑；同鏈的風格檢查退出碼（＝指令跑完回報成敗的那個數字，零＝成功）非零也只印出來沒擋。獨立審查者拿到一顆連風格檢查都紅的版本。
 - 代價：一輪審查審到壞版本、退回重修。
 - 教訓：閘只認退出碼那個數字，不用「日誌裡有沒有某字樣」代替；提交前的型別與風格檢查要真的擋、不是印出來。
-- 來源：PFW #572（2026-09-06）https://github.com/teacherjung/personal-finance-webapp/pull/572#issuecomment-5553191778
+- 來源：PFW #572（2026-09-06）<https://github.com/teacherjung/personal-finance-webapp/pull/572#issuecomment-5553191778>
 - 相關：[edit-failure-must-block-commit](edit-failure-must-block-commit.md)、[silent-pass-is-worst](silent-pass-is-worst.md)

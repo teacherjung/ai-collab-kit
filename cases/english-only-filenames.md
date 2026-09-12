@@ -5,5 +5,5 @@
 - 發生什麼：裁示者裁「檔名一律用英文」，判準寫成只准英文字母、數字、半形符號；理由是非英文檔名在殼層、版本控制、網址裡都要跳脫，工具鏈各處都可能出錯。既有的二十四個非英文路徑凍結、只出不進，由一條考題盯著已追蹤路徑。
 - 代價：沒有事故；既有非英文路徑留成一份永久例外清單，要等改名逐一清空。
 - 教訓：命名規矩要配一條考題與一份凍結清單，否則只是建議。
-- 來源：PFW #387（2026-08-03）https://github.com/teacherjung/personal-finance-webapp/pull/387
+- 來源：PFW #387（2026-08-03）<https://github.com/teacherjung/personal-finance-webapp/pull/387>
 - 相關：[delete-dead-code](delete-dead-code.md)

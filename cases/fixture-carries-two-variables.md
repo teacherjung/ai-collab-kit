@@ -5,5 +5,5 @@
 - 發生什麼：程式要判斷一段被圍欄（＝包住程式碼的那排連續符號，開頭一排、結尾一排）夾住的內容有沒有真的被關起來，兩個條件各自都能否決：結尾那排比開頭短就不算關門，結尾那排旁邊還黏著標示語言的資訊字串也不算關門。那題的夾具（＝考題自己捏的假資料）把關門那一行同時寫成「比開頭短」又「帶資訊字串」，所以把「記住開頭有多長」整個退化成固定值之後，資訊字串那一條仍然擋得住，全卷照樣全綠——兩個條件互相遮住，那題實際只證明了資訊字串那一條，變更說明卻宣稱它守住長度。獨立審查者第六輪抓到。
 - 代價：一句假保證上了變更說明，多一輪審查。
 - 教訓：一題只考一個條件；兩個條件就兩個夾具，而且各自做一刀突變證明它會紅。
-- 來源：PFW #579（2026-09-07）https://github.com/teacherjung/personal-finance-webapp/pull/579#issuecomment-5561214621
+- 來源：PFW #579（2026-09-07）<https://github.com/teacherjung/personal-finance-webapp/pull/579#issuecomment-5561214621>
 - 相關：[blank-round-control-group](blank-round-control-group.md)、[mutation-per-point](mutation-per-point.md)

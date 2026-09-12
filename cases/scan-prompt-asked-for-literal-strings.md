@@ -5,5 +5,5 @@
 - 發生什麼：掃描發射者在提示詞裡要求掃描器「給具體字串、能寫成考題的那種」，那一遍的回覆被驗屍步驟（＝事後檢查掃描器有沒有越界的固定步驟）判成含有「盒子（＝限制它只能看指定資料夾的沙箱）外才有的內容」＝事故，整遍掃描作廢。事故路徑在寫結果包之前就回傳，工作階段紀錄與回覆原文全沒留下，手上只剩四個長度數字。所以「是提示詞要具體字串、害它照著寫出憑證形狀」只是最可能的成因、證明不了：放在盒子外的活假機密（暗號）一次都沒被碰到，那只說明它沒去翻那裡、反證不了那幾條命中是誤報；而命中之所以排不掉，是因為這一次樹側可比對的材料本來就一條都沒有，前兩次疑似破口都靠重算判成假警報，這次連重算的材料都沒有。
 - 代價：整遍掃描作廢、以「未執行」收口；分辨真假所需的證據被事故路徑一起丟掉。
 - 教訓：問漏報路徑要問機制不問字串，需要例子時請它描述不要寫出；疑似破口的處置要先保全去機密的證據再回傳，否則真假永遠分不出來。
-- 來源：PFW #534（2026-08-31）https://github.com/teacherjung/personal-finance-webapp/pull/534 —— 掃描紀錄在該支變更說明的掃描小標，不在留言。
+- 來源：PFW #534（2026-08-31）<https://github.com/teacherjung/personal-finance-webapp/pull/534> —— 掃描紀錄在該支變更說明的掃描小標，不在留言。
 - 相關：[scan-ledger-lied-move-scan-after-pass](scan-ledger-lied-move-scan-after-pass.md)、[blank-round-control-group](blank-round-control-group.md)、[silent-pass-is-worst](silent-pass-is-worst.md)

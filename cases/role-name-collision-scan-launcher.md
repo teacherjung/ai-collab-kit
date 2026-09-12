@@ -5,5 +5,5 @@
 - 發生什麼：把「誰發射掃描、誰轉正式」從寫死一方改成角色寫法時，新角色沿用了文件裡既有的「發射者」一詞，而那個詞本來指發射審查、備審查樹的那一方。送審前預審抓到撞名、改名「掃描發射者」；掃描器又在程序文件裡找到兩處光禿的「發射者」實指掃描；獨立審查者逐處判讀程序文件裡 25 個「發射者」才確認 17 個指掃描、8 個指審查。裁示者同日裁「甲」，選項原文兩句＝「起得了掃描器的那一方發射；發射掃描的那一方轉正式」（＝轉正式跟著發射走、少一次交接），本專案現況照舊、換專案不必改字；「人名只出現在現況句」是實作者後來的操作化，不是他的話。
 - 代價：一支純文字改動經預審、三輪審查及一次掃描（掃描列 14 個編號），大半在追同一個詞到底指誰。
 - 教訓：角色名是規則的變數：每個角色一個獨有的名字、定義只寫一處，新角色不可沿用既有詞；誰轉正式也寫成角色（發射掃描的那一方），不寫死人名。
-- 來源：PFW #601（2026-09-11）https://github.com/teacherjung/personal-finance-webapp/pull/601#issuecomment-5632426208
+- 來源：PFW #601（2026-09-11）<https://github.com/teacherjung/personal-finance-webapp/pull/601#issuecomment-5632426208>
 - 相關：[whoever-is-grinding-decides](whoever-is-grinding-decides.md)、[next-step-read-as-instruction](next-step-read-as-instruction.md)
