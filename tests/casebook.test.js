@@ -2,17 +2,19 @@
 //
 // ⚠️ 這一題被獨立審查者連三輪打穿，根因始終是同一個：**我用「找得到這串字」代替「那個東西在不在」**。
 //    第一輪：別欄的敘述提到「- 代價：」就能替缺欄代答；表格外補個連結就算列入；重複列被去重抹掉；
-//    名字掃描一遇到網址就放掉整行尾巴。第二輪：案例改成整份照固定形狀讀了，索引那一半卻沒改——
-//    把整列原字塞進檔尾的 HTML 註解或三反引號範例裡照樣算數，連表頭與分隔列都刪掉也照樣「對帳通過」；
-//    而且案例可以用 CR 換行開出隱藏區塊（我只切 LF，看不到），或用 `<!-- -->` 讓空欄通過「非空」。
-//    這一版把索引也做成封閉形狀，並且**先擋掉會製造隱藏內容的字元**，再談形狀。
+//    名字掃描一遇到網址就放掉整行尾巴。第二輪：案例改成整份照固定形狀讀了，索引那一半卻沒改——把整列原字塞進檔尾的 HTML 註解或
+//    三反引號範例裡照樣算數，連表頭與分隔列都刪掉也照樣「對帳通過」。第三輪：索引改成封閉表格了，
+//    但我只驗表格後面、不驗前面——把整張表包進圍欄或 `<pre>` 就整份變成範例，照樣綠。
+//
+//    **所以索引也不再由我去「找出那張表」：它跟本文一樣改成產物。**
+//    `tools/build-casebook-index.js` 從案例檔算出索引，這一題只比「磁碟上的 README 是不是等於
+//    重新算一次的結果」。包進圍欄、搬進註解、多一列少一列、順序不同，全都對不上。
 //
 // 守得到的：
 //   ⓪案例與索引都**不含 CR 等其他換行字元、也不含 HTML 註解記號**——那兩樣都能做出
 //     「我看不到、讀者也看不到」的隱藏內容，不先擋掉，後面的形狀檢查等於白做；
-//   ①索引的**表格本身是封閉形狀**：指定的表頭、分隔列、然後連續的資料列，到表格結束為止；
-//     表格以外任何長得像表格列的文字（註解、範例）一律不算，而且會被當成錯誤。表格列與檔案
-//     **雙向唯一對應**，「共 N 則」要對得上，索引列的日期／標題／條號要跟檔案裡的一致；
+//   ①**cases/README.md 必須與重新產生的結果逐字元相同**——索引是產物，手改就紅；
+//     雙向唯一對應、「共 N 則」、每列的日期／標題／條號，都由產生器算，不再靠比對；
 //   ②每則**整份檔案就是那個固定形狀**：第一行標題、空行、六欄依序各一行、最後可有一行「相關」，
 //     再無別的內容——不是「檔案裡找得到這幾串字」（上一版是那樣寫，於是註解或舉例可以替缺欄代答）；
 //     每則至少一個有效條號、條號都存在；而且**本文每一條都至少有一則案例指著**（進門規則）；
@@ -31,6 +33,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { read } = require('../tools/build-rules.js');
+const { build: buildIndex, outFile: indexOutFile } = require('../tools/build-casebook-index.js');
 
 const root = path.join(__dirname, '..');
 const casesDir = path.join(root, 'cases');
@@ -39,11 +42,6 @@ const indexFile = path.join(casesDir, 'README.md');
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
 // 一份已知的字表；辨認這份以外的名字不是這題的事。
 const FORBIDDEN = ['william', 'codex', 'claude', 'grok', 'gpt', 'anthropic', 'openai'];
-// 索引表格列：| 日期 | [標題](檔名.md) | 條號 |
-const INDEX_ROW = /^\|\s*([^|]+?)\s*\|\s*\[([^\]]+)\]\(([^)]+)\.md\)\s*\|\s*([^|]*?)\s*\|\s*$/u;
-// 索引表格的頭兩列，逐字釘住：形狀變了就不該再自稱「對帳通過」。
-const INDEX_HEAD = '| 日期 | 案例 | 本文條號 |';
-const INDEX_SEP = '|---|---|---|';
 // 會做出「我看不到、讀者也看不到」的隱藏內容：LF 以外的換行、以及 HTML 註解記號。
 const HIDDEN = /[\r\u0085\u2028\u2029\v\f]|<!--|-->/u;
 
@@ -85,30 +83,6 @@ function readCase(file) {
   return fields;
 }
 
-/**
- * 索引只認**那一張表格**：逐字釘住的表頭、分隔列，然後連續的資料列，遇到第一個不是資料列的
- * 行就結束。表格之外任何長得像資料列的文字（註解、範例）都不算，而且直接報錯——
- * 上一版是整檔掃、於是檔尾註解裡的一列也能替真正缺的那一列代答。
- */
-function indexRows() {
-  const lines = fs.readFileSync(indexFile, 'utf8').split('\n');
-  const head = lines.indexOf(INDEX_HEAD);
-  assert.ok(head >= 0, `索引裡找不到逐字相符的表頭「${INDEX_HEAD}」`);
-  assert.equal(lines.indexOf(INDEX_HEAD, head + 1), -1, '索引裡有兩個表頭');
-  assert.equal(lines[head + 1], INDEX_SEP, `索引表頭下一行要是「${INDEX_SEP}」`);
-  const rows = [];
-  let i = head + 2;
-  for (; i < lines.length; i += 1) {
-    const m = INDEX_ROW.exec(lines[i]);
-    if (!m) break;
-    rows.push({ date: m[1], title: m[2], slug: m[3], ids: m[4] });
-  }
-  for (let j = i; j < lines.length; j += 1) {
-    assert.ok(!INDEX_ROW.test(lines[j]), `索引表格之外還有一行長得像資料列（第 ${j + 1} 行）：註解或範例不能替表格列代答`);
-  }
-  return rows;
-}
-
 function ruleIds() {
   const ids = [];
   for (const section of read().sections) for (const rule of section.rules) ids.push(`${section.letter}${rule.n}`);
@@ -127,28 +101,14 @@ test('案例與索引都不含會製造隱藏內容的字元', () => {
   }
 });
 
-test('索引表格列與案例檔雙向唯一對應，欄位一致，總數對得上', () => {
+test('索引與重新產生的結果逐字元相同（索引是產物、不要手改）', () => {
   const files = caseFiles();
   assert.ok(files.length >= 20, `只找到 ${files.length} 則案例：目錄空掉的話下面幾題會變成空包彈`);
-  const rows = indexRows();
-  const bySlug = new Map();
-  for (const row of rows) {
-    assert.ok(!bySlug.has(row.slug), `索引裡有兩列都指向 ${row.slug}`);
-    bySlug.set(row.slug, row);
-  }
-  assert.equal(rows.length, files.length, `索引有 ${rows.length} 列、案例有 ${files.length} 檔`);
-  for (const file of files) {
-    const slug = file.slice(0, -3);
-    const row = bySlug.get(slug);
-    assert.ok(row, `${file} 沒有出現在索引表格裡（表格外的連結不算）`);
-    const fields = readCase(file);
-    assert.equal(row.date, fields['日期'], `${file} 的日期與索引那一列對不上`);
-    assert.equal(row.title, fields.標題, `${file} 的標題與索引那一列對不上`);
-    assert.equal(row.ids, fields['本文條號'], `${file} 的本文條號與索引那一列對不上`);
-  }
-  const declared = /^共 (\d+) 則。$/mu.exec(fs.readFileSync(indexFile, 'utf8'));
-  assert.ok(declared, '索引裡找不到「共 N 則。」那一行');
-  assert.equal(Number(declared[1]), files.length, '索引自報的則數跟實際檔案數對不上');
+  assert.equal(
+    fs.readFileSync(indexOutFile, 'utf8'),
+    buildIndex(),
+    'cases/README.md 跟案例檔對不上：索引是產物，要改請改案例或 cases/index.json，再跑 node tools/build-casebook-index.js',
+  );
 });
 
 test('每則六欄各一個且非空、條號都存在，而且本文每一條都有案例指著', () => {
