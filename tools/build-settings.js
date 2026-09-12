@@ -19,6 +19,7 @@ const outFile = path.join(root, 'PROJECT-SETTINGS.md');
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const NUL = /\u0000/u;
 const STATES = ['未移植', '已安裝未啟用', '已啟用'];
+const PROVIDERS = ['未設定', '無', '工具自帶', '專案自建'];
 
 function plain(value, what, { allowEmpty = false } = {}) {
   if (typeof value !== 'string') throw new Error(`${what} 不是字串`);
@@ -67,6 +68,16 @@ function build(data) {
   out.push(`- 誰指派、登記在哪：${plain(data.scanner.assignedBy, '掃描發射者的指派方式')}`);
   out.push(`- 兩方都起得了時：${plain(data.scanner.tieBreak, '平手規則')}`);
   out.push(`- 沒有合格者時，誰記錄未執行、誰轉正式：${plain(data.scanner.fallback, '無合格者時的替代')}`);
+  const iso = data.scanner.isolation || {};
+  if (!PROVIDERS.includes(iso.provider)) throw new Error(`隔離提供者「${iso.provider}」不在 ${PROVIDERS.join('／')} 裡`);
+  const wrap = Array.isArray(iso.wrap) ? iso.wrap : [];
+  const forbidden = Array.isArray(iso.forbidden) ? iso.forbidden : [];
+  out.push('', '隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前試探與掃後比對兩支小工具）：', '');
+  out.push(`- 由誰提供：${plain(iso.provider, '隔離提供者')}（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」）`);
+  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑）：${plain(wrap.length ? wrap.join(' ') : '未設定', '隔離指令前綴')}`);
+  out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
+  out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；試探在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
+  out.push('- 掃前跑 node tools/scan-probe.js：任一禁區讀得到或寫得進＝隔離是假的，不掃；連試探都做不成＝不掃。掃後跑 node tools/scan-postmortem.js：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
   out.push('', '## 五、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {
@@ -82,7 +93,7 @@ function build(data) {
   out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
   out.push('## 六、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');
-  out.push('## 六、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
+  out.push('## 七、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
   out.push('| 機器 | 規矩 | 狀態 | 驗過的日期 |', '|---|---|---|---|');
   for (const m of data.machines) {
     if (!STATES.includes(m.state)) throw new Error(`機器「${m.name}」的狀態「${m.state}」不在 ${STATES.join('／')} 裡`);
@@ -100,4 +111,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 PROJECT-SETTINGS.md：${data.machines.length} 支機器\n`);
 }
 
-module.exports = { build, read, dataFile, outFile, STATES };
+module.exports = { build, read, dataFile, outFile, STATES, PROVIDERS };
