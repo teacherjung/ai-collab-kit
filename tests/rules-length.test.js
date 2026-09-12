@@ -1,57 +1,31 @@
-// 守「本文一頁」這條：RULES.md 的**規矩正文**去掉空白後不得超過 3,000 字。
+// 守「本文一頁」這條：規矩正文去掉空白後不得超過 3,000 字。
 //
 // 裁示者 2026-09-12 先定「一頁，約三千字」，同日再裁：**只數規矩本身**——
-// 節標題、開頭那句指路、條號（A1、B2…）、句尾的執行者標籤都不算，
-// 因為那些是標示，不是規矩；讓標示去吃規矩的配額，會逼人把規矩壓到變形
-// （已實際發生過一次：為了省幾個字砍掉一條規矩的適用範圍，意思就變了）。
+// 節標題、開頭那句指路、條號、句尾的執行者標籤都不算，因為那些是標示、不是規矩。
 //
-// 算的是「字元數」：中文一字一個、英文一個字母一個；不算空白與換行。
+// ⚠️ 這一題前七版都在自己判斷「RULES.md 的哪幾行算規矩」，等於用土法重做 Markdown
+//    的呈現規則，**連七輪被獨立審查者用不同寫法繞過去**：換星號、換有序清單、縮排、
+//    Tab、不換行空白、引言記號、七個井號、CR 換行。每一次我都補一種寫法，每一次都
+//    撐不到下一輪。實作者在自問表裡寫下停損線：再有一種新的漏算，就不再補寫法、改成
+//    「規矩存成資料、本文由它產生」。第七輪的 CR 換行觸發了它。
 //
-// ⚠️ 這一題連四輪被獨立審查者繞過去，每一次都是同一個病根：
-//    **我先挑出「長得對的行」再檢查，長得不對的就被默默跳過。**
-//    被打穿的順序是：換成星號 → 換成有序清單 → 把條號縮排 → 條號後改用 Tab 或
-//    不換行空白 → 在行首加上引言記號把條號推到第七個字以後。前四次我都用
-//    「再補一種寫法」去堵，每一次都撐不到下一輪；第五次改用「量條號的位置」，
-//    結果門檻本身又成了新的列舉。
-//
-//    **所以這一版改判結構，不判長相**：這份檔案的形狀就是「標題 ＋ 規矩」。
-//    第一個小節標題以後，每一行不是小節標題就必須是合規的規矩行，沒有第三種；
-//    另外，條號不管出現在哪一行，那一行都必須是合規的規矩行。
-//    引言記號、原始 HTML、任何項目符號、任何空白都不必再列舉——它們全都不是
-//    「小節標題」也不是「合規規矩行」，一律紅。
-//    ⚠️ 代價要照實說，而且不要說大：真正的限制只有兩個——**小節裡不收散文**、
-//    **規矩行的寫法固定**。合規規矩行的句子裡提到別條的條號**不會紅**
-//    （上一版的註解寫成「會紅」，獨立審查者實測推翻）。
-//
-// 一共守六件，少一件它就會變成永遠綠的空包彈：
-//   ①規矩正文的字數上限；
-//   ②第一個小節標題以後，只准小節標題與合規的規矩行；
-//   ③帶條號的行一律要是合規的規矩行（含標題與第一個小節標題以前那段）；
-//   ④每條都要有句尾標籤，而且不可以是空的；
-//   ⑤標籤要**以一個已定義的執行者名字開頭**；
-//   ⑥那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的。
+// **所以現在沒有「哪幾行算規矩」這個問題**：規矩住在 rules.json，一則一筆；
+// RULES.md 是產物。這一題只要守四件，全部量得到、不必猜任何呈現規則：
+//   ①字數：直接加總資料裡每一條的正文；
+//   ②每條都有非空的執行者標籤，而且以一個**已定義**的名字開頭；
+//   ③那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的；
+//   ④**RULES.md 必須與產生結果逐字元相同**——手改本文就紅，所以繞不過①②③。
+'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { build, read, dataFile, outFile } = require('../tools/build-rules.js');
 
 const LIMIT = 3000;
-// 下限只是「這檔還是一份規矩清單」的地板，不是實際條數（實際條數會變，寫死會漂）。
+// 下限只是「這份資料還是一份規矩清單」的地板，不是實際條數（實際條數會變，寫死會漂）。
 const MIN_RULES = 20;
-const root = path.join(__dirname, '..');
-const rulesFile = path.join(root, 'RULES.md');
-const machinesFile = path.join(root, 'MACHINES.md');
-
-// 合規的規矩行：行首就是「- 條號 內容」，沒有縮排、沒有別種項目符號。
-const RULE_LINE = /^- ([A-Z]\d+) (.+)$/u;
-// 條號本身（出現在哪一行都算數）。
-// ⚠️ 前後不可以貼著別的拉丁字母，否則像 UTF8 這種字會被誤判成條號、變成看得見的假紅。
-const RULE_ID = /(?<![A-Za-z])[A-Z]\d+(?![A-Za-z])/u;
-// 小節標題。⚠️ 井號最多六個——七個以上在 Markdown 裡根本不是標題、會畫成普通段落，
-//    放它過去等於開一個「不計字的普通段落」後門（獨立審查者實測過）。
-const SECTION_HEADING = /^#{2,6} \S/u;
-// 句尾標籤：全形括號，裡面至少一個字（空括號不算標籤）。
-const TAG_AT_END = /（([^（）]+)）$/u;
+const machinesFile = path.join(__dirname, '..', 'MACHINES.md');
 // MACHINES.md 裡那張定義表的開頭，用來定位（標籤的正本只有那一份）。
 const LABEL_TABLE_ANCHOR = '句尾的執行者標籤，定義在這裡、只在這裡';
 
@@ -74,50 +48,55 @@ function definedLabels() {
   return labels;
 }
 
-/** 逐行挑出規矩；「像規矩卻寫得不合格」的行一律報錯，不准默默跳過。 */
-function ruleBodies(text, labels) {
-  const bodies = [];
-  let inSections = false;
-  for (const line of text.split('\n')) {
-    const m = RULE_LINE.exec(line);
-    if (!m) {
-      // ⚠️ 這一關要在「是不是標題」之前判：不然把條號藏進標題就繞過去了。
-      assert.ok(
-        !RULE_ID.test(line),
-        `這一行帶了條號、卻不是行首「- 條號 內容」的寫法，字數就不會算到它：${line.slice(0, 40)}`,
-      );
-      if (SECTION_HEADING.test(line)) {
-        inSections = true;
-        continue;
-      }
-      assert.ok(
-        !inSections || line.trim() === '',
-        `小節裡出現了既不是小節標題、也不是規矩的一行；這份檔案只放標題與規矩：${line.slice(0, 40)}`,
-      );
-      continue;
-    }
-    const body = m[2];
-    const tag = TAG_AT_END.exec(body);
-    assert.ok(tag, `${m[1]} 少了句尾的執行者標籤，或標籤是空的：${body.slice(-24)}`);
-    assert.ok(
-      labels.some((l) => tag[1].startsWith(l)),
-      `${m[1]} 的標籤「${tag[1]}」沒有以已定義的執行者名字開頭（${labels.join('／')}）`,
-    );
-    bodies.push(body.replace(TAG_AT_END, ''));
+/** 把資料攤平成一條一筆，順便擋掉編號跳號與重複。 */
+function allRules(data) {
+  assert.ok(Array.isArray(data.sections) && data.sections.length > 0, 'rules.json 沒有任何小節');
+  const seen = new Set();
+  const rules = [];
+  for (const section of data.sections) {
+    assert.ok(/^[A-Z]$/u.test(section.letter), `小節代號「${section.letter}」不是單一個大寫英文字母`);
+    assert.ok(Array.isArray(section.rules), `小節 ${section.letter} 沒有規矩清單`);
+    section.rules.forEach((rule, i) => {
+      const id = `${section.letter}${rule.n}`;
+      assert.equal(rule.n, i + 1, `${id} 的編號跳號了：同一節裡要從 1 開始連號`);
+      assert.ok(!seen.has(id), `條號 ${id} 重複了`);
+      seen.add(id);
+      assert.ok(typeof rule.text === 'string' && rule.text.trim() !== '', `${id} 沒有正文`);
+      assert.ok(typeof rule.tag === 'string' && rule.tag.trim() !== '', `${id} 沒有執行者標籤`);
+      rules.push({ id, text: rule.text, tag: rule.tag });
+    });
   }
   assert.ok(
-    bodies.length >= MIN_RULES,
-    `RULES.md 只找到 ${bodies.length} 條規矩（至少要 ${MIN_RULES} 條）：格式整份變了的話字數會算成零、這題就變成永遠綠的空包彈`,
+    rules.length >= MIN_RULES,
+    `rules.json 只找到 ${rules.length} 條規矩（至少要 ${MIN_RULES} 條）：資料整份變形的話字數會算成零、這題就變成永遠綠的空包彈`,
   );
-  return bodies;
+  return rules;
 }
 
 test('規矩正文不超過 3,000 字（標題、條號、句尾標籤不算）', () => {
-  const labels = definedLabels();
-  const bodies = ruleBodies(fs.readFileSync(rulesFile, 'utf8'), labels);
-  const count = bodies.reduce((n, b) => n + Array.from(b.replace(/\s+/g, '')).length, 0);
+  const rules = allRules(read());
+  const count = rules.reduce((n, r) => n + Array.from(r.text.replace(/\s+/g, '')).length, 0);
   assert.ok(
     count <= LIMIT,
-    `規矩正文現在 ${count} 字（${bodies.length} 條），上限 ${LIMIT}：加一條要先砍一條`,
+    `規矩正文現在 ${count} 字（${rules.length} 條），上限 ${LIMIT}：加一條要先砍一條`,
+  );
+});
+
+test('每條規矩的執行者標籤都以一個已定義的名字開頭', () => {
+  const labels = definedLabels();
+  for (const rule of allRules(read())) {
+    assert.ok(
+      labels.some((l) => rule.tag.startsWith(l)),
+      `${rule.id} 的標籤「${rule.tag}」沒有以已定義的執行者名字開頭（${labels.join('／')}）`,
+    );
+  }
+});
+
+test('RULES.md 與 rules.json 產生的結果逐字元相同（本文是產物、不要手改）', () => {
+  const onDisk = fs.readFileSync(outFile, 'utf8');
+  assert.equal(
+    onDisk,
+    build(read()),
+    `RULES.md 跟 ${path.basename(dataFile)} 對不上：本文是產物，要改規矩請改資料再跑 node tools/build-rules.js`,
   );
 });

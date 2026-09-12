@@ -4,6 +4,7 @@
   "private": true,
   "description": "可搬到任何專案的「一個人＋兩個以上 AI」協作架構",
   "scripts": {
+    "build": "node tools/build-rules.js",
     "test": "node --test"
   }
 }
