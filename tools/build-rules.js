@@ -6,11 +6,18 @@
 // 不換行空白、引言記號、七個井號、CR 換行）。改成由資料產生之後，就沒有「哪幾行算規矩」
 // 這個問題：字數直接對資料算，本文只要跟產生結果逐字元相同即可。
 //
-// ⚠️ 但「由資料產生」本身不夠：第八輪實測，**不計字的欄位可以跑出它該待的位置**——
-// 小節標題裡塞一個換行，後面那段就變成獨立的正文段落、完全不計字；句尾標籤裡先關括號再換行，
-// 就能長出一整條沒人數的新規矩。所以下面這份**資料契約**才是這一族真正的收口：
-// 每一個會被輸出的欄位都必須是「單行純文字」，標籤另外不准帶全形括號。
-// 契約由 validate() 一處說了算，產生器與考題都用它，兩邊不會各寫各的。
+// ⚠️ 但「由資料產生」本身不夠，而且不夠的地方有兩層：
+//   第八輪：**不計字的欄位可以跑出它該待的位置**——小節標題裡塞一個換行，後面那段就變成
+//   獨立的正文段落、完全不計字；句尾標籤裡先關括號再換行，就長出一整條沒人數的新規矩。
+//   第九輪：**「單行」不等於「純文字」**——同一個欄位不必換行，只要塞原始 HTML
+//   （`</h2><p>…</p><h2>`）、字元參照（`&#65289;`）或三個反引號，一樣能開出新的區塊、
+//   關掉既有的位置、甚至把後面整份本文吃進程式碼區塊。多禁幾個危險字元是補不完的。
+//
+// 所以收口是兩件一起做，缺一不可：
+//   ①**資料契約**（validate）：每個會被輸出的欄位都要是單行、非空的字串；
+//   ②**輸出時把資料當字面文字編碼**（literal）：Markdown 與 HTML 的語法只能由下面這個
+//     固定範本提供，資料本身一律失去語法能力。
+// 契約與編碼都在這一支，產生器與考題共用，兩邊不會各寫各的。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -21,6 +28,16 @@ const outFile = path.join(root, 'RULES.md');
 
 // 會讓一個欄位跑出它該待的位置的字元：各種換行與分段。
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
+// 把資料編成「字面文字」：& 先換掉，後面插進去的實體才不會又被自己吃掉。
+// `&#96;` 在 Markdown 裡會被解成一個普通的反引號字元、不會變成程式碼標記，所以這樣寫是安全的。
+const ESCAPES = [
+  [/&/gu, '&amp;'],
+  [/</gu, '&lt;'],
+  [/>/gu, '&gt;'],
+  [/`/gu, '&#96;'],
+];
+// 行首的 ASCII 標點會開出區塊（#、>、-、|、數字加點…）。Markdown 允許用反斜線跳脫 ASCII 標點。
+const ASCII_PUNCT_AT_START = /^[!-/:-@[-`{-~]/u;
 // 規矩至少要有幾條，才算「這份資料還是一份規矩清單」（不是實際條數，寫死會漂）。
 const MIN_RULES = 20;
 
@@ -88,17 +105,30 @@ function validate(data) {
   return problems;
 }
 
+/** 把一個欄位編成字面文字：語法由範本提供，資料不准有語法能力。 */
+function literal(value) {
+  let out = value;
+  for (const [from, to] of ESCAPES) out = out.replace(from, to);
+  return out;
+}
+
+/** 整行只有這個欄位時（開頭那句指路），行首的 ASCII 標點還會開出區塊，多跳脫一層。 */
+function literalAtLineStart(value) {
+  const out = literal(value);
+  return ASCII_PUNCT_AT_START.test(out) ? `\\${out}` : out;
+}
+
 /** 由資料產生本文的完整內容（換行一律用 \n）。資料不合契約就直接丟例外，不產生半成品。 */
 function build(data) {
   const problems = validate(data);
   if (problems.length) {
     throw new Error(`rules.json 不合資料契約，沒有產生任何東西：\n- ${problems.join('\n- ')}`);
   }
-  const out = [`# ${data.title}`, '', data.preamble, ''];
+  const out = [`# ${literal(data.title)}`, '', literalAtLineStart(data.preamble), ''];
   for (const section of data.sections) {
-    out.push(`## ${section.letter}、${section.title}`);
+    out.push(`## ${section.letter}、${literal(section.title)}`);
     for (const rule of section.rules) {
-      out.push(`- ${section.letter}${rule.n} ${rule.text}（${rule.tag}）`);
+      out.push(`- ${section.letter}${rule.n} ${literal(rule.text)}（${literal(rule.tag)}）`);
     }
     out.push('');
   }
@@ -116,4 +146,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 RULES.md：${data.sections.length} 節、${n} 條\n`);
 }
 
-module.exports = { build, read, validate, dataFile, outFile, MIN_RULES };
+module.exports = { build, read, validate, literal, dataFile, outFile, MIN_RULES };

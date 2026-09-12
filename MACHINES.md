@@ -38,7 +38,7 @@
 | H4 | `scripts/check-cross-pr-merge.js`＋`test/cross-pr-merge.test.js` | 以主幹為底的每支 open 變更試合併後三關紅就擋；環境查不清退 2 | 重跑次數不計；非主幹底的支；枚舉上限（原腳本 `--limit 100`） | 合併者親手跑 | 尚未移植 |
 | H6 | `scripts/acceptance-tier.js`＋`test/acceptance-tier.test.js` | 算出級別與動作 | 有沒有照做 | 路徑家族表重寫成本專案的 | 尚未移植 |
 | K2 | 本倉庫 `tests/rules-length.test.js`＋`tools/build-rules.js`（規矩存 `rules.json`，本文是產物） | 去空白字元數＞3,000 就紅 | 取捨理由 | 無 | 已就位 |
-| 案例簿 | 本倉庫 `tests/casebook.test.js` | 索引與檔案對不上、條號不存在、本文有條規矩沒案例指著、六欄缺一、出現人名或產品名，就紅 | 事實對不對、一事一檔、來源連結活不活著 | 無 | 已就位 |
+| 案例簿 | 本倉庫 `tests/casebook.test.js` | 索引表格列與案例檔不是雙向唯一對應、索引列的日期／標題／條號與檔案對不上、「共 N 則」不符、六欄不是各恰一個或值是空的、條號不存在、本文有條規矩沒案例指著、案例或索引出現已知字表裡的名字（不分大小寫），就紅 | 事實對不對、一事一檔、來源連結活不活著、條號撐不撐得住那條規矩（字面引用≠事件支撐）、字表以外的新產品名與變形拼寫、其他個人狀況 | 無 | 已就位 |
 | K3 | `test/comment-test-refs.test.js` | 指定考題目錄第一層、帶記號的同檔路標不存在就紅 | 其他目錄與更深層 | 目錄範圍改成本專案的 | 尚未移植 |
 | D1 | `scripts/pending-rulings.js`＋`test/pending-rulings.test.js` | 只印清單、不擋 | 一切 | 留痕形狀要對上它的解析器（templates/ruling-record.md 是形狀正本）；解析器裡寫死的裁示者名字、撤回自報句、只採計擁有者帳號（OWNER）這三處要參數化成 PROJECT-SETTINGS 的值 | 尚未移植 |
 
