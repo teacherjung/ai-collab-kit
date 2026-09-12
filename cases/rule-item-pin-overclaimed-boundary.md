@@ -1,0 +1,9 @@
+# 釘住一條規則的考題，條界說明連補十三輪
+
+- 日期：2026-09-08
+- 本文條號：子4、子3、己10
+- 發生什麼：一顆要保住規則書某一條不被搬走的考題，前五輪每輪被找到一個條界漏洞（整條搬去沿革小節仍綠、漏認合法的下一條、空行判得比標準寬、參考定義語法、多行標題吞掉指路句），第六輪首次通過。通過之後又因說明裡寫的安全保證不成立再被打回：檔頭說「只會早切不會晚切、假綠不從這裡來」，實測在條末追加一行零縮排的散文，被釘的行一字未動、整卷照樣全綠。後半段的輪次幾乎都在把射程句子縮小。
+- 代價：十三輪審查，通過之後還被打回兩次，耗的是說明超出證據而不是程式錯。
+- 教訓：劃界句與安全保證自己也是宣稱，寫之前先實測「說擋得到的真的紅、說擋不到的真的綠」，對不上就是另一句假話。
+- 來源：PFW #585（2026-09-08）https://github.com/teacherjung/personal-finance-webapp/pull/585#issuecomment-5588394155
+- 相關：[guard-claims-vs-evidence](guard-claims-vs-evidence.md)、[pin-widening-treadmill](pin-widening-treadmill.md)、[claims-must-be-earned](claims-must-be-earned.md)

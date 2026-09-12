@@ -1,8 +1,9 @@
 # 護欄的宣稱一直超出證據
 
-- 日期：2026-09-08
+- 日期：2026-09-09
 - 本文條號：子4、子3、己10
-- 發生什麼：連續六支變更、其中四支合計四十輪審查，被抓最多的不是程式錯而是敘述超出證據——「動到任何字元都會紅」「掃了哪些檔」「逐碼位釘死」每句都只多一點點，要拿證據去對才現形；另一支裡同一句話連三輪被抓寬，每次收窄的新句子又超出證據。實作者每輪想找一個「更聰明的護欄」一次做對，每一種都被實測找到沒想到的例外，收斂的訊號反而是獨立審查者開始說「只收窄說明、不要再補」。另一形：查核結論寫「根本沒有明文」，其實只查了一張表，掃描器在規則書別處找到反例。
-- 代價：六支變更、四十多輪審查，大半燒在把話收回到證據涵蓋的範圍。
-- 教訓：兩件並用：能量事實就量事實、不自己列舉；守得住的寫死、每句「守不住」親手跑過；全稱否定句先查再寫，查核結論的射程等於它實際查過的範圍。
-- 來源：#585／#586／#593／#594／#595／#596
+- 發生什麼：一支改換行檢查的變更審了十一輪，被抓的發現多半不是程式錯而是考題註解與說明超出證據：寫「掃了哪些檔」但那份名單是從輸入抄出來的、跟迴圈實際處理了誰沒有連動；寫「逐碼位釘死」（＝一個字元一個字元的編碼位置都比對）但有一類空白字元只取代表值；寫「新題釘住實際宣告」但把原陣列包進註解、真宣告改成讀檔照樣全綠。每句都只多一點點，要拿證據去對才現形。第十一輪審查者接受把話縮回實測範圍，並點出「同一份可被編輯的考題，不能保證自己沒有被繞過」。
+- 代價：十一輪審查，被抓的發現以敘述超出證據為主，不是程式錯。
+- 教訓：寫下護欄的宣稱前先問「拿什麼證明的、證明涵蓋到哪」，涵蓋不到就把話縮回去——縮回去是正解不是失敗，劃界句自己也要實測。
+- 來源：PFW #586（2026-09-09）https://github.com/teacherjung/personal-finance-webapp/pull/586#issuecomment-5595854691
+- 相關：[claims-must-be-earned](claims-must-be-earned.md)、[my-own-guards-lied](my-own-guards-lied.md)、[pin-widening-treadmill](pin-widening-treadmill.md)、[silent-pass-is-worst](silent-pass-is-worst.md)、[benefit-claims-to-decider](benefit-claims-to-decider.md)、[rule-item-pin-overclaimed-boundary](rule-item-pin-overclaimed-boundary.md)、[narrowed-sentence-still-overclaims](narrowed-sentence-still-overclaims.md)、[every-smarter-guard-fell-next-round](every-smarter-guard-fell-next-round.md)、[no-explicit-rule-vs-not-on-this-table](no-explicit-rule-vs-not-on-this-table.md)、[scan-finding-transcribed-backwards](scan-finding-transcribed-backwards.md)
