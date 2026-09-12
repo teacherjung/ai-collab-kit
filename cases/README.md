@@ -3,14 +3,17 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：裁示者／實作者／獨立審查者／掃描器，不寫人名。
 來源欄的 `PFW #n` ＝原專案 personal-finance-webapp 的第 n 支變更。
 
-共 124 則。
+共 127 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
 | 2026-07-10 | [合併時刪基底分支，上層兩支被平台關閉](delete-branch-closed-stacked-pr.md) | 辛2 |
 | 2026-07-18 | [瀏覽器驗證誤套用到真實資料](verify-mutations-on-real-data.md) | 乙4 |
+| 2026-07-24 | [管線吃掉退出碼，四條錯漏網](piped-exit-code-hid-lint-errors.md) | 戊2、戊5 |
 | 2026-07-28 | [堆疊變更合進中間分支](stacked-pr-merged-into-base.md) | 辛2、子1 |
 | 2026-07-30 | [加規則與刪規則混在一份提案](add-and-delete-rules-in-one-change.md) | 丙3 |
+| 2026-07-30 | [實作者不按自己的合併鍵](implementer-never-presses-merge.md) | 甲4 |
+| 2026-07-30 | [審查方切走主幹、主目錄卡住](reviewer-worktree-took-over-main.md) | 甲3 |
 | 2026-08-02 | [不變量寫在沒人讀的檔、平台上也看不出分工](collab-invariant.md) | 甲2、戊1、子1、辛5 |
 | 2026-08-02 | [兩份審查各看一半](two-half-reviews-same-name.md) | 己2、己4、己5 |
 | 2026-08-02 | [列舉繞法三輪補不完，關門才收](enumerate-bypasses-close-the-door.md) | 己10 |
