@@ -7,14 +7,20 @@
 //
 // 算的是「字元數」：中文一字一個、英文一個字母一個；不算空白與換行。
 //
-// ⚠️ 這一題同時守五件事，少一件它就會變成永遠綠的空包彈——前一版只守前三件，
-//    獨立審查者用三種突變證明它可以被繞過去（把某一條的項目符號換掉那條就整行不算、
-//    標籤寫成空括號照樣過、五十七條標籤全部清空也照樣過）：
+// ⚠️ 這一題連兩輪被獨立審查者證明可以繞過去，兩次都是同一個病根：
+//    **我用「挑出長得對的行」來收集，長得不對的就被默默跳過**——於是換個項目符號、
+//    換成有序清單、把條號縮排兩格，那一條就整行不算，正文五千多字照樣綠。
+//    所以這一版反過來寫：**看起來該是一條規矩的行，格式不合就直接紅**，不准跳過。
+//    標籤也一樣：以前只要「包含」一個已定義的名字就過，於是「假考題」這種假名字混得進來；
+//    現在要求**以已定義的名字開頭**，後面才接射程說明。
+//
+// 一共守六件，少一件它就會變成永遠綠的空包彈：
 //   ①規矩正文的字數上限；
-//   ②**每一個清單項目都要是一條合規的規矩行**——換個項目符號就被濾掉不算，是最便宜的繞法；
-//   ③每條都要有句尾標籤，而且**不可以是空的**；
-//   ④標籤裡要出現一個**已定義**的執行者名字，不能自己編一個；
-//   ⑤那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的。
+//   ②每一個清單項目都要是合規的規矩行（不分項目符號的種類、不分有沒有縮排）；
+//   ③任何「像規矩」的行（去掉縮排與項目符號後以條號開頭）也一樣，不合格就紅；
+//   ④每條都要有句尾標籤，而且不可以是空的；
+//   ⑤標籤要**以一個已定義的執行者名字開頭**；
+//   ⑥那份定義的正本在 MACHINES.md，這裡跟它對帳，兩邊不可以各寫各的。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -27,10 +33,14 @@ const root = path.join(__dirname, '..');
 const rulesFile = path.join(root, 'RULES.md');
 const machinesFile = path.join(root, 'MACHINES.md');
 
-const LIST_ITEM = /^\s*[-*+]\s/u;
-const BARE_RULE_ID = /^[甲乙丙丁戊己庚辛壬癸子]\d+[ 　]/u;
+// 合規的規矩行：行首就是「- 條號 內容」，沒有縮排、沒有別種項目符號。
 const RULE_LINE = /^- ([甲乙丙丁戊己庚辛壬癸子]\d+) (.+)$/u;
-// 句尾標籤：全形括號，裡面**至少一個字**（空括號不算標籤）。
+// 任何一種項目符號（含有序清單的各種寫法），含縮排。
+const ANY_LIST_ITEM = /^\s*(?:[-*+•]|[（(]?\d+[.)、）])\s/u;
+// 去掉縮排與項目符號之後，看起來是不是以條號開頭。
+const STRIP_MARKER = /^\s*(?:[-*+•]|[（(]?\d+[.)、）])?\s*/u;
+const STARTS_WITH_RULE_ID = /^[甲乙丙丁戊己庚辛壬癸子]\d+[ 　]/u;
+// 句尾標籤：全形括號，裡面至少一個字（空括號不算標籤）。
 const TAG_AT_END = /（([^（）]+)）$/u;
 // MACHINES.md 裡那張定義表的開頭，用來定位（標籤的正本只有那一份）。
 const LABEL_TABLE_ANCHOR = '句尾的執行者標籤，定義在這裡、只在這裡';
@@ -54,22 +64,26 @@ function definedLabels() {
   return labels;
 }
 
-/** 逐行挑出規矩，順便擋掉「換個寫法就不被算到」的繞法。 */
+/** 逐行挑出規矩；「像規矩卻寫得不合格」的行一律報錯，不准默默跳過。 */
 function ruleBodies(text, labels) {
   const bodies = [];
   for (const line of text.split('\n')) {
-    if (!LIST_ITEM.test(line) && !BARE_RULE_ID.test(line)) continue;
     const m = RULE_LINE.exec(line);
-    assert.ok(
-      m,
-      `這一行看起來是規矩、卻不是「- 條號 內容」的寫法，字數就不會算到它：${line.slice(0, 40)}`,
-    );
+    if (!m) {
+      const looksLikeRule =
+        ANY_LIST_ITEM.test(line) || STARTS_WITH_RULE_ID.test(line.replace(STRIP_MARKER, ''));
+      assert.ok(
+        !looksLikeRule,
+        `這一行看起來是規矩、卻不是行首「- 條號 內容」的寫法，字數就不會算到它：${line.slice(0, 40)}`,
+      );
+      continue;
+    }
     const body = m[2];
     const tag = TAG_AT_END.exec(body);
     assert.ok(tag, `${m[1]} 少了句尾的執行者標籤，或標籤是空的：${body.slice(-24)}`);
     assert.ok(
-      labels.some((l) => tag[1].includes(l)),
-      `${m[1]} 的標籤「${tag[1]}」裡沒有任何一個已定義的執行者名字（${labels.join('／')}）`,
+      labels.some((l) => tag[1].startsWith(l)),
+      `${m[1]} 的標籤「${tag[1]}」沒有以已定義的執行者名字開頭（${labels.join('／')}）`,
     );
     bodies.push(body.replace(TAG_AT_END, ''));
   }
