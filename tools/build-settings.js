@@ -67,7 +67,20 @@ function build(data) {
   out.push(`- 誰指派、登記在哪：${plain(data.scanner.assignedBy, '掃描發射者的指派方式')}`);
   out.push(`- 兩方都起得了時：${plain(data.scanner.tieBreak, '平手規則')}`);
   out.push(`- 沒有合格者時，誰記錄未執行、誰轉正式：${plain(data.scanner.fallback, '無合格者時的替代')}`);
-  out.push('', '## 五、合併預授權（規矩 A5）', '');
+  out.push('', '## 五、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
+  out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
+  (data.gates || []).forEach((gate, i) => {
+    if (!STATES.includes(gate.state)) throw new Error(`閘「${gate.name}」的狀態「${gate.state}」不在 ${STATES.join('／')} 裡`);
+    const cmd = [gate.command, ...(gate.args || [])].join(' ');
+    out.push(
+      `| ${i + 1} | ${plain(gate.name, '閘名稱')} | ${plain(gate.rules, '閘對應的規矩')} | ${plain(cmd, '閘的指令')} | ${plain(gate.state, '閘的狀態')} |`,
+    );
+  });
+  const merge = data.mergeCommand || {};
+  const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
+  out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
+  out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
+  out.push('## 六、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');
   out.push('## 六、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
   out.push('| 機器 | 規矩 | 狀態 | 驗過的日期 |', '|---|---|---|---|');
