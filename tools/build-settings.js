@@ -93,7 +93,17 @@ function build(data) {
     const cmd = Array.isArray(ops[name]) && ops[name].length ? ops[name].join(' ') : '未設定';
     out.push(`| ${plain(name, '動作名稱')} | ${plain(op.what, '動作說明')} | ${plain(cmd, `動作 ${name} 的指令`)} |`);
   }
-  out.push('', '## 六、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
+  out.push('', '## 六、三關（規矩 E2、E3、H4；跨變更試合併閘在臨時樹裡跑的就是這幾條）', '');
+  const checks = data.checks || {};
+  const prep = Array.isArray(checks.prepareWorktree) ? checks.prepareWorktree : [];
+  const cmds = Array.isArray(checks.commands) ? checks.commands : [];
+  out.push(`- 臨時樹的準備指令（在新開的臨時樹裡跑一次，例如安裝相依；沒有就填「無」）：${plain(prep.length && prep[0] !== '未設定' ? prep.join(' ') : (prep[0] || '未設定'), '臨時樹準備指令')}`);
+  out.push('- 三關指令（依序跑、任一非零＝紅；每一條要自己保證執行環境跟合併後的樹一致——套件驗不到這件事）：');
+  cmds.forEach((cmd, i) => {
+    const argv = Array.isArray(cmd) ? cmd : [String(cmd)];
+    out.push(`  ${i + 1}. ${plain(argv.join(' '), `第 ${i + 1} 條三關指令`)}`);
+  });
+  out.push('', '## 七、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {
     if (!STATES.includes(gate.state)) throw new Error(`閘「${gate.name}」的狀態「${gate.state}」不在 ${STATES.join('／')} 裡`);
@@ -106,9 +116,9 @@ function build(data) {
   const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
   out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
   out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
-  out.push('## 七、合併預授權（規矩 A5）', '');
+  out.push('## 八、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');
-  out.push('## 八、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
+  out.push('## 九、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
   out.push('| 機器 | 規矩 | 狀態 | 驗過的日期 |', '|---|---|---|---|');
   for (const m of data.machines) {
     if (!STATES.includes(m.state)) throw new Error(`機器「${m.name}」的狀態「${m.state}」不在 ${STATES.join('／')} 裡`);

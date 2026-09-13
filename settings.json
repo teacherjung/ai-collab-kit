@@ -135,10 +135,10 @@
    "verified": ""
   },
   {
-   "name": "版本控制環境清理共用實作＋呼叫點行為題",
+   "name": "清版本控制環境變數的共用實作（GIT_ 前綴整族清）",
    "rules": "E4",
-   "state": "未移植",
-   "verified": ""
+   "state": "已啟用",
+   "verified": "2026-09-13"
   },
   {
    "name": "閘退出路徑／進入點行為題",
@@ -183,9 +183,9 @@
    "verified": ""
   },
   {
-   "name": "跨變更試合併閘",
+   "name": "跨變更試合併閘（與每支以主幹為底的開著變更真合起來跑三關）",
    "rules": "H4",
-   "state": "未移植",
+   "state": "已安裝未啟用",
    "verified": ""
   },
   {
@@ -275,9 +275,19 @@
    "args": [
     "tools/gates/check-cross-merge.js"
    ],
-   "state": "未移植"
+   "state": "已安裝未啟用"
   }
  ],
+ "checks": {
+  "prepareWorktree": [
+   "未設定"
+  ],
+  "commands": [
+   [
+    "未設定"
+   ]
+  ]
+ },
  "mergeCommand": {
   "command": "未設定",
   "args": []
