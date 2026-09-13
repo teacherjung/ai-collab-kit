@@ -1,55 +1,61 @@
-// 守「哪一段文字算生效」那一支（r2 Medium③、r4 Medium②）。四個消費端（待裁清單、協作欄位閘、結論聯集閘、範本小標）都用它。
-// 守得到的：程式碼圍欄（含長度規則、開頭行後面的字整行屬於圍欄）、引用區塊（含懶續行）裡的字不算生效；沒關閉的圍欄一路到底；
-//   HTML 註解不解讀、只偵測：圍欄外、行內程式碼外的「<!--」回行號；行內程式碼只在整段每行都配得完時才扣掉。
-// ⚠️ 守不到的：縮排式程式碼區塊、HTML 區塊、清單裡縮排四格以上的圍欄、引用裡的圍欄、表格儲存格、行內 HTML 標籤裡的反引號
-//   （兩個方向都可能錯，所以各消費端另要求固定形狀）。
+// 守「機器讀說明與留言，讀哪一段」那一支（r2 Medium③ 起共用；r5 之後換成「只讀開頭那一段」）。
+// 四個消費端（待裁清單、協作欄位閘、結論聯集閘的「像不像結論」提醒、範本小標）都用它。
+// 守得到的：從第一行讀到第一個特殊行為止；特殊行八種各有正反兩面的題；停在哪一行回報得出來；
+//   r3〜r5 審查者給的反例（交錯的註解與圍欄、圍欄開頭行帶註解記號、單行三反引號、引用後直接接標題、行內 HTML 標籤裡的反引號）
+//   都在第一行就停。
+// ⚠️ 守不到的：特殊行清單以外、平台將來新增的語法。清單寬了＝早停（讀得比畫面少，消費端擋下並指出行號）；清單漏了一種開頭＝會讀到容器裡的字——所以清單逐項在這裡有題。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { effectiveLines, effectiveText, htmlCommentLine } = require('../tools/markdown-effective.js');
+const { leadingLines, leadingText, stopNote, isSpecial } = require('../tools/markdown-effective.js');
 
-test('圍欄、引用（含懶續行）裡的字不算生效；空行結束引用', () => {
-  const md = ['a', '```', '圍欄裡', '```', '> 引用', '懶續行也是引用', '', '空行之後回到最外層', '~~~md', '波浪號圍欄', '~~~', 'b'].join('\n');
-  assert.deepEqual(effectiveLines(md).filter(Boolean), ['a', '空行之後回到最外層', 'b']);
-  assert.equal(effectiveText('前\n```\n中\n```\n後'), '前\n後', 'effectiveText 就是接起來');
+test('讀到第一個特殊行為止：之前的行照原文、停的行號回報得出來', () => {
+  assert.deepEqual(leadingLines('a\n\nb\n> 引用\nc'), { lines: ['a', '', 'b'], stopAt: 4 });
+  assert.deepEqual(leadingLines('a\nb'), { lines: ['a', 'b'], stopAt: 0 }, '沒有特殊行＝整份');
+  assert.equal(leadingText('前\n```\n中\n```\n後'), '前', '圍欄開頭那一行就停，圍欄關掉之後的也不讀');
+  assert.equal(leadingText(''), '');
+  assert.equal(leadingText(null), '');
+  assert.match(stopNote('a\n<!-- x -->'), /第 2 行/u);
+  assert.equal(stopNote('a\nb'), '', '沒停就不說');
 });
 
-test('圍欄的關閉行要同一種符號、長度不短於開頭：三個反引號關不掉四個反引號開的', () => {
-  const md = ['````md', '範例', '```', '### 小標', '````', '外面'].join('\n');
-  assert.deepEqual(effectiveLines(md).filter(Boolean), ['外面'], '小標在四反引號的圍欄裡，三個反引號那行不是關閉');
-  assert.deepEqual(effectiveLines('```\n~~~\n裡面\n```\n外').filter(Boolean), ['外'], '波浪號關不掉反引號');
-  assert.deepEqual(effectiveLines('```\n沒關閉\n到底').filter(Boolean), [], '沒關閉就一路到底');
-  assert.deepEqual(effectiveLines('```\n裡\n``` 後面有字\n仍在裡\n```\n外').filter(Boolean), ['外'], '關閉行後面不准有字');
+test('特殊行八種（含清單記號後面的開頭），各有對照組', () => {
+  const special = [
+    ['> 引用', '①引用'], ['   > 縮三格的引用', '①'],
+    ['```', '②圍欄'], ['~~~md', '②波浪號'], ['```node --test```', '②同一行三反引號也先停（r5 反例：寧可早停）'],
+    ['[x]: https://a', '③連結定義'], ['[^1]: 註腳', '③註腳定義'],
+    ['$$', '④數學區塊'],
+    ['    縮排四格', '⑤'], ['\t定位字元', '⑤'],
+    ['文字 <!-- 註解 -->', '⑥註解'], ['<details>', '⑥標籤'], ['x </b>', '⑥收尾標籤'], ['<https://a>', '⑥自動連結'], ['<?x', '⑥'],
+    ['看圖 ![a](b.png)', '⑦圖片'],
+    ['用 ` 包住', '⑧配不完'], ['``a` 長度不同', '⑧'], ['\\`<b>`', '⑧反斜線緊貼的反引號'],
+    ['審查備註 <!-- 用 ` 包住 -->：x `a`', '⑥⑧ r5 反例：註解裡的反引號'],
+    // 清單記號後面的開頭也算（清單項目裡可以放圍欄、引用、定義、數學、縮排程式碼）
+    ['- ```', '②清單裡的圍欄'], ['1. ~~~', '②有序清單裡的波浪號圍欄'], ['1) ```', '②'], ['* > 引用', '①清單裡的引用'], ['- - > 兩層', '①兩層清單'],
+    ['- [x]: /u', '③清單裡的連結定義'], ['[ ]: /u', '③核取框後面接冒號（平台上其實不是定義，寧可早停）'], ['+ $$', '④'], ['-     縮排程式碼', '⑤記號後五個空白'], ['-\t定位字元', '⑤記號後 tab'],
+  ];
+  for (const [line, why] of special) assert.equal(isSpecial(line), true, `${why}：${JSON.stringify(line)}`);
+  const plain = [
+    ['- **實作者**：Alpha', '清單'], ['## 標題', '標題'], ['| a | b |', '表格'], ['---', '分隔線'],
+    ['   縮三格', '三格以內不是縮排程式碼'], ['a < b', '「<」後面是空白'], ['<識別值>', '「<」後面不是英文字母'],
+    ['`<details>` 在行內程式碼裡', '⑥只看行內程式碼以外'], ['`![x]`', '⑦只看行內程式碼以外'],
+    ['``a ` <b>`` 後', '長度不同的反引號在程式碼裡面'], ['`a``<b>`', '等長才配：中間兩個反引號屬於程式碼'],
+    ['x `y` z', '成對的行內程式碼'], ['提到 `<!--` 這個記號', '行內程式碼裡提到註解記號'],
+    ['- [ ] 待辦', '核取清單'], ['- [x] 完成', '核取清單'], ['* * *', '分隔線不是三層清單'], ['*強調*', '強調不是清單記號'], ['2026. 年', '有序清單，後面是普通字'],
+    ['    ', '只有空白＝空行'], ['\t', '只有 tab＝空行'],
+  ];
+  for (const [line, why] of plain) assert.equal(isSpecial(line), false, `${why}：${JSON.stringify(line)}`);
 });
 
-test('r4 反例：圍欄開頭行後面的「<!--」屬於圍欄，不可以改寫外層結構（兩種符號、兩個方向）', () => {
+test('審查者給過的反例，都在第一行就停（兩種圍欄符號）', () => {
   for (const f of ['```', '~~~']) {
-    const hideExample = [`${f}md <!--`, 'code', f, `${f}md`, '-->', '欄位', f].join('\n');
-    assert.deepEqual(effectiveLines(hideExample).filter(Boolean), [], `${f}：第二段圍欄裡的「欄位」是範例，不可以被搬成生效文字`);
-    assert.equal(htmlCommentLine(hideExample), 0, `${f}：圍欄開頭行與圍欄裡的註解記號都不算註解`);
-    const swallow = [`${f}md <!--`, 'code', f, '🤖 壞標頭'].join('\n');
-    assert.deepEqual(effectiveLines(swallow), ['🤖 壞標頭'], `${f}：圍欄關掉之後看得見的那一行不可以被吞掉`);
+    assert.equal(leadingLines([`${f}md <!--`, 'code', f, `${f}md`, '-->', '欄位', f].join('\n')).stopAt, 1, `${f}：r4 範例被搬出來那型`);
+    assert.equal(leadingLines([`${f}md <!--`, 'code', f, '🤖 壞標頭'].join('\n')).stopAt, 1, `${f}：r4 可見行被吞掉那型`);
+    assert.equal(leadingLines([`${f}md`, '<!--', f, '-->', f, '欄位', f].join('\n')).stopAt, 1, `${f}：r3 交錯型`);
   }
-});
-
-test('HTML 註解不解讀：生效文字照原文保留，偵測回第一個註解開頭的行號', () => {
-  assert.deepEqual(effectiveLines('a\n<!-- 藏 -->\nb'), ['a', '<!-- 藏 -->', 'b'], '不剝＝不猜');
-  assert.equal(htmlCommentLine('a\n<!-- 藏 -->\nb'), 2);
-  assert.equal(htmlCommentLine('a\n\n前 <!-- 中 --> 後'), 3, '行內的也算');
-  assert.equal(htmlCommentLine('<!--\n欄位\n沒關閉'), 1, '沒關閉的也算');
-  assert.equal(htmlCommentLine('只有收尾 -->\n'), 0, '只有「-->」不是註解（畫面上看得見）');
-  assert.equal(htmlCommentLine('a\n```\n<!-- 範例 -->\n```\nb'), 0, '圍欄裡的是程式碼');
-  assert.equal(htmlCommentLine(['```md', '<!--', '```', '-->', '```', '欄位', '```'].join('\n')), 0, 'r3 交錯反例：記號全在圍欄裡');
-  assert.equal(htmlCommentLine(''), 0);
-  assert.equal(htmlCommentLine(null), 0);
-});
-
-test('行內程式碼裡提到「<!--」是正常寫法，不算註解；配不完的段落整段照原文找（寧可多報）', () => {
-  assert.equal(htmlCommentLine('註解開頭 `<!--` 沒關，後面 `-->` 也是記號'), 0, '單反引號');
-  assert.equal(htmlCommentLine('雙反引號 ``a ` <!-- b`` 也是'), 0, '反引號串要等長才配對');
-  assert.equal(htmlCommentLine('`a` <!-- 在外面 --> `b`'), 1, '行內程式碼之間的註解仍算');
-  // 跨行配對：前一行多一個反引號，平台會把它跟下一行配成一對，註解就露在外面
-  assert.equal(htmlCommentLine('a ` 多一個\n`<!-- x -->` b'), 2, '同一段有配不完的反引號＝不扣行內程式碼');
-  assert.equal(htmlCommentLine('a ` 多一個\n\n`<!-- x -->` b'), 0, '空行隔開就是另一段，各自配');
-  assert.equal(htmlCommentLine('\\`<!-- x -->`'), 1, '緊貼反斜線的反引號不當開頭＝整段照原文找');
+  assert.equal(leadingLines('```node --test```\n\n🤖 壞標頭').stopAt, 1, 'r5：單行三反引號');
+  assert.equal(leadingLines('> 上輪建議\n## 本輪結論\n🤖 x').stopAt, 1, 'r5：引用後直接接標題');
+  assert.equal(leadingLines(['<span title="`"><!-- `</span>', '欄位', '-->'].join('\n')).stopAt, 1, 'r5 待辦：行內 HTML 標籤裡的反引號');
+  assert.equal(leadingLines('<!--\n> 舊說明\n-->\n🤖 壞標頭').stopAt, 1, 'r5 待辦：HTML 區塊');
+  assert.equal(leadingLines('a ` 多一個\n`<!-- x -->` b').stopAt, 1, '同一段前一行配不完：那一行就停，下一行不會被單行配對騙');
 });

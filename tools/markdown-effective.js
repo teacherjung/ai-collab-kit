@@ -1,75 +1,60 @@
 #!/usr/bin/env node
-// 「哪一段文字算生效」只有這一份（里程碑 3 r2 Medium③：原話行、協作欄位、範本小標三個消費端各自判，
-// 各漏一種容器——程式碼圍欄裡的欄位被當成填了、引用的懶續行被當成最外層、三個反引號提早關掉四個反引號的圍欄）。
+// 「機器讀說明與留言，讀哪一段」只有這一份（r2 Medium③ 起共用；r5 之後換成現在這個形狀）。
 //
-// 防誰：寫說明與留言的人**手滑**——把範例貼進程式碼圍欄、引用了別人的欄位、把一段註解掉忘了拿出來。
-// 不防刻意構造的標記語言（寫這些東西的人本來就能直接改內容，擋不住也不必擋）。
+// 讀法：從第一行往下讀，碰到第一個「特殊行」就停——那一行和它之後都不讀。
+// 特殊行＝有可能開出容器、把字藏起來、或把字變成程式碼的行（只有空白的行算空行、不算特殊行）。
+// ①〜④看「開頭」＝去掉行首空白、再去掉清單記號（- * + 或 1. 1) 加空白，可以疊好幾層）之後的第一個字：
+//   ①以 > 開頭（引用）；②以三個以上反引號或波浪號開頭（程式碼圍欄）；③以 [ 開頭（連結定義、註腳定義；核取清單的「[ ]」「[x]」後面接空白不算——那不可能是定義）；
+//   ④以 $$ 開頭（數學區塊）；
+// ⑤原本的行首有 tab 或四個以上空白，或清單記號後面接 tab 或五個以上空白（縮排式程式碼、清單裡的巢狀內容）；
+//   ⑥行內有「<」緊接英文字母、/、!、?（HTML 標籤、註解、自動連結的開頭）；⑦行內有「![」（圖片）；
+//   ⑧這一行的反引號在本行配不完（行內程式碼會跨行，或本來就是打錯）。
+//   ⑥⑦只看行內程式碼以外的字：⑧先確定這一行的反引號都在本行配完、而且前面的行都不是特殊行（同一段裡沒有
+//   配不完的反引號可以跨行來配），這時本行怎麼配就是平台怎麼配；反引號在「<」之前開頭＝平台也當程式碼（看得見的字）。
 //
-// 兩件事，分開做：
+// 為什麼這樣讀（不再判「平台畫面上看得到哪些字」）：r1〜r5 連五輪都在那個判斷上中刀——註解、圍欄、行內程式碼、
+// 引用誰先誰後，補一格就露下一格，而且兩個方向都錯過。那是在重做平台的標記語言解析器，追不上。
+// 現在問的是一個量得到的東西：**第一個特殊行之前，每一行都是看得見的普通文字**——會開出容器或藏字的開頭一個都還沒出現，
+// 就沒有東西能把這些行收進程式碼、引用或藏起來（後面的行最多把前面的段落變成標題或表格，仍看得見）。
+// 要守的只有這份清單：清單寬了＝早一點停、讀得比畫面少，「要找的東西沒找到」就擋下來、指出行號；清單漏了一種開頭＝會讀到容器裡的字，
+// 所以清單逐項有考題、清單外的寫在誠實劃界。
 //
-// 一、effectiveLines／effectiveText：拿掉兩種容器，剩下的才是生效文字——
-//   ①程式碼圍欄：開頭是 0〜3 個空白加至少三個反引號或波浪號；**關閉行要同一種符號、長度不短於開頭**、
-//     後面只准空白（CommonMark 的規則——三個反引號關不掉四個反引號開的圍欄）；沒關閉就一路到底；
-//     開頭那一行後面的字（資訊字串）整行都屬於圍欄，不再解讀。
-//   ②引用區塊：以 > 開頭的行，加上緊接在後、沒有空行隔開的續行（懶續行），到空行為止。
+// 所以寫的人要配合一件事：**機器要讀的東西寫在最前面**（範本本來就這樣排：協作欄位在說明開頭；裁示的原話與網址
+// 緊接在標題下）。停在哪一行會回報，消費端把行號印進訊息。
 //
-// 二、htmlCommentLine：**HTML 註解不解讀，只偵測**（r4 Medium②之後改的）。回第一個註解開頭「<!--」所在的行號，沒有就回 0。
-//   消費端看到非 0 就停下來、叫人把註解拿掉，不猜註解裡藏的算不算、外面的字有沒有被吞掉。
-//   為什麼不照舊剝掉：r1〜r4 連四輪都在這一族中刀（r1 註解整個沒處理、r2 各端各判、r3 註解與圍欄交錯、
-//   r4 圍欄開頭行先被當成註解），而且兩個方向都錯過（多留：圍欄裡的範例被搬成生效文字；多剝：圍欄開頭行帶記號，
-//   就把後面看得見的壞標頭吞掉——下面量真語料又發現行內程式碼裡提到記號也會吞）。
-//   2026-09-13 量過原專案與本倉庫共 2,393 則留言與變更說明：圍欄外出現「<!--」的 42 則，幾乎都是在行內程式碼裡
-//   **提到**這個記號；舊的剝法改動了其中 41 則的生效文字（14 則少掉兩百字以上）。這支偵測只標出 6 則：
-//   1 則是刻意的整行註解，另 5 則都是在討論這個記號本身的留言（寧可多報的那一側）。剝註解幾乎沒守到東西，卻在正常寫法上出錯。
-//   同一個做法本倉庫早就在用：案例簿那一題也是「看到註解記號就紅」、不解讀。
-//   偵測時不看的地方：圍欄裡（同上①的規則）、行內程式碼裡。行內程式碼的配對只在「同一段（空行或圍欄之間）
-//   每一行的反引號都在本行配得完、而且沒有緊貼反斜線的反引號」時才採用；否則整段不扣掉行內程式碼、照原文找——
-//   同一段裡有配不完的反引號時，平台會跨行去配、配法跟單行不同，那種情況寧可多報。
+// 不經過這一支的兩條窄路：結論閘的標頭讀原文第一個非空行、作廢行讀標頭後緊接的收件區；結論閘找 🤖 讀整份原文、什麼都不剝。
 //
-// 誠實劃界（兩個方向都可能錯，所以各消費端的判準仍要求固定形狀：行首、逐字）：
-//   縮排式程式碼區塊、HTML 區塊、清單裡縮排四格以上的圍欄、引用裡的圍欄、表格儲存格、行內 HTML 標籤裡的反引號，
-//   都不照平台的畫面判。要完全照畫面判就要換真的解析器，那是另一支的題目。
-//   結論閘的標頭（原文第一個非空行）與作廢行（標頭後緊接的收件區）是兩條窄路徑，本來就不經過這一支。
+// 誠實劃界：特殊行的清單是依 CommonMark 與 GitHub 的區塊、行內規則挑的「會開出容器或藏字的開頭」。
+// 清單以外的平台擴充（將來新增的語法）沒有列進來；表格、清單、標題、強調、刪除線都照普通文字讀（畫面上看得見）。
 'use strict';
 
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
-const fenceCloses = (line, fence) => {
-  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-  return Boolean(m && m[1][0] === fence.ch && m[1].length >= fence.len);
-};
-const splitLines = (md) => String(md || '').replace(/\r\n?/g, '\n').split('\n');
-
-function effectiveLines(md) {
-  const out = [];
-  let fence = null;      // { ch, len }
-  let inQuote = false;
-  for (const line of splitLines(md)) {
-    if (fence) {
-      if (fenceCloses(line, fence)) fence = null;
-      continue;
-    }
-    const open = FENCE_OPEN.exec(line);
-    if (open) { fence = { ch: open[1][0], len: open[1].length }; inQuote = false; continue; }
-    if (/^ {0,3}>/.test(line)) { inQuote = true; continue; }
-    if (!line.trim()) { inQuote = false; out.push(line); continue; }
-    if (inQuote) continue;
-    out.push(line);
+/** 這一行是不是特殊行（規則見檔頭①〜⑧）。 */
+function isSpecial(line) {
+  if (!line.trim()) return false;
+  if (/^(?:\t| {0,3}\t| {4,})/.test(line)) return true;
+  let t = line.replace(/^\s+/, '');
+  for (let m; (m = /^(?:[-*+]|\d{1,9}[.)])(\s*)/.exec(t)) && (m[1].length > 0 || m[0].length === t.length);) {
+    if (/\t/.test(m[1]) || m[1].length >= 5) return true;
+    t = t.slice(m[0].length);
   }
-  return out;
+  if (/^(?:>|`{3,}|~{3,}|\$\$)/.test(t) || (t.startsWith('[') && !/^\[[ xX]\](?:\s|$)/.test(t))) return true;
+  const { paired, outside } = codeSpans(line);
+  if (!paired) return true;
+  return /<[A-Za-z/!?]/.test(outside) || outside.includes('![');
 }
 
-const effectiveText = (md) => effectiveLines(md).join('\n');
-
-/** 一行裡的行內程式碼換成一個空白。paired＝這一行的反引號都在本行配完、而且沒有緊貼反斜線的反引號。 */
-function stripCodeSpans(line) {
+/**
+ * 本行的行內程式碼：反引號串要等長才配、由左往右找最近的一個；前面緊貼反斜線的反引號算配不完。
+ * paired＝本行的反引號都配完；outside＝把配到的行內程式碼換成一個空白之後剩下的字。
+ */
+function codeSpans(line) {
   const runAt = (i) => { let n = 0; while (line[i + n] === '`') n += 1; return n; };
-  let text = '';
-  let paired = true;
+  let outside = '';
   let i = 0;
   while (i < line.length) {
-    if (line[i] !== '`') { text += line[i]; i += 1; continue; }
+    if (line[i] !== '`') { outside += line[i]; i += 1; continue; }
     const n = runAt(i);
-    if (line[i - 1] === '\\') { paired = false; text += line.slice(i, i + n); i += n; continue; }
+    if (line[i - 1] === '\\') return { paired: false, outside };
     let j = i + n;
     let close = -1;
     while (j < line.length) {
@@ -78,40 +63,26 @@ function stripCodeSpans(line) {
       if (m === n) { close = j; break; }
       j += m;
     }
-    if (close === -1) { paired = false; text += line.slice(i, i + n); i += n; continue; }
-    text += ' ';
+    if (close === -1) return { paired: false, outside };
+    outside += ' ';
     i = close + n;
   }
-  return { text, paired };
+  return { paired: true, outside };
 }
 
-/** 第一個「<!--」在第幾行（圍欄與行內程式碼裡的不算，規則見檔頭「二」）；沒有＝0。 */
-function htmlCommentLine(md) {
-  let fence = null;
-  let group = [];
-  const flush = () => {
-    const usePairs = group.every((g) => g.paired);
-    const hit = group.find((g) => (usePairs ? g.text : g.raw).includes('<!--'));
-    group = [];
-    return hit ? hit.no : 0;
-  };
-  const lines = splitLines(md);
-  for (let k = 0; k < lines.length; k++) {
-    const line = lines[k];
-    if (fence) {
-      if (fenceCloses(line, fence)) fence = null;
-      continue;
-    }
-    const open = FENCE_OPEN.exec(line);
-    if (open || !line.trim()) {
-      const hit = flush();
-      if (hit) return hit;
-      if (open) fence = { ch: open[1][0], len: open[1].length };
-      continue;
-    }
-    group.push({ no: k + 1, raw: line, ...stripCodeSpans(line) });
-  }
-  return flush();
+/** 讀到第一個特殊行之前。stopAt＝那一行的行號（從 1 起算）；整份都沒有特殊行＝0。 */
+function leadingLines(md) {
+  const all = String(md || '').replace(/\r\n?/g, '\n').split('\n');
+  const k = all.findIndex(isSpecial);
+  return k === -1 ? { lines: all, stopAt: 0 } : { lines: all.slice(0, k), stopAt: k + 1 };
 }
 
-module.exports = { effectiveLines, effectiveText, htmlCommentLine };
+const leadingText = (md) => leadingLines(md).lines.join('\n');
+
+/** 訊息用：停在哪一行，白話說一句（沒停＝空字串）。 */
+const stopNote = (md) => {
+  const { stopAt } = leadingLines(md);
+  return stopAt ? `（機器讀到第 ${stopAt} 行就停了：那一行是引用、程式碼、HTML、圖片、連結定義或縮排之類的特殊行；要讀的東西請寫在它前面）` : '';
+};
+
+module.exports = { leadingLines, leadingText, stopNote, isSpecial };

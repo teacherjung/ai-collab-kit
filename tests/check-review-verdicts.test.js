@@ -13,8 +13,8 @@
 //   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
 //   ⑨同一位同輪次對**不同版本**各給結論＝不明、擋（r2 Medium⑤：原本同為通過時先遇到哪一則就用哪一則，
 //     清單順序改變判決）；判決與清單順序無關，每一種排列都要判一樣。
-//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算；HTML 註解不剝（r4 Medium②：
-//     剝錯會把看得見的壞標頭吞掉；不剝是嚴的一側）；說明裡有註解＝不讀指定審查者、訊息指出第幾行；
+//   ⑩找 🤖 讀整份原文、什麼都不剝（r5：每一種剝法都在正常寫法上吞過看得見的 🤖）；「像不像結論」的提醒與指定審查者
+//     只讀開頭那一段（tools/markdown-effective.js）；圍欄與引用裡的標頭不是結論，但裡面的 🤖 算壞標頭（救法是作廢）；
 //   ⑪同輪的版本碼用集合聚合（r3 Medium③）：短碼相容不可傳遞，三則短長碼的六種排列都要判一樣；
 //   ⑫時間沒帶時區不收（r3 High①）：同一份留言在不同執行時區判一樣。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。獨立審查者用反例推翻（舊版本 01:00、目前版本 02:00、
@@ -142,19 +142,23 @@ test('⑤有 🤖 但標頭讀不出＝擋；作廢可降為提醒；作廢的�
   assert.ok(evaluate([bad, good, noHeader], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('bad1')));
 });
 
-test('⑤hasBotMark：引用與行內程式碼、圍欄裡的 🤖 不算', () => {
-  assert.equal(hasBotMark('> 🤖 引用別人的'), false);
-  assert.equal(hasBotMark('說明：`🤖` 這個記號'), false);
-  assert.equal(hasBotMark('```\n🤖 範例\n```'), false);
+test('⑤hasBotMark：整份原文有 🤖 就算，什麼都不剝（r5：每一種剝法都在正常寫法上吞過看得見的 🤖）', () => {
   assert.equal(hasBotMark('我要試 🤖 這個'), true);
+  assert.equal(hasBotMark('> 🤖 引用別人的'), true, '引用裡的也算（範本：非結論留言不可含 🤖）');
+  assert.equal(hasBotMark('說明：`🤖` 這個記號'), true, '行內程式碼裡的也算');
+  assert.equal(hasBotMark('```\n🤖 範例\n```'), true, '圍欄裡的也算');
+  assert.equal(hasBotMark('<!--\n🤖 藏起來的\n-->'), true, '註解裡的也算');
+  assert.equal(hasBotMark('沒有記號的留言'), false, '對照組');
+  assert.equal(hasBotMark(null), false);
 });
 
 test('⑥沒標頭但看起來像結論＝只提醒；長得像的來源＝提醒不併身分', () => {
   const r = evaluate([c('我的看法：不可合併，還有假綠'), verdict()], HEAD, 'Beta', ROLES);
   assert.deepEqual(r.problems, [], '沒標頭的留言不影響結果');
   assert.ok(r.warnings.some((w) => w.includes('不採計')));
-  assert.equal(looksLikeVerdict('```\n不可合併\n```'), false, '圍欄裡的範例不提醒');
-  assert.equal(looksLikeVerdict('> 不可合併'), false, '引用不提醒');
+  assert.equal(looksLikeVerdict('```\n不可合併\n```'), false, '圍欄開頭就停，範例不提醒（只影響提醒）');
+  assert.equal(looksLikeVerdict('> 不可合併'), false, '引用開頭就停，不提醒');
+  assert.equal(looksLikeVerdict('說明：`不可合併` 是三選一之一'), false, '行內程式碼裡的不提醒');
   assert.equal(looksLikeVerdict('測試全綠'), false);
 
   const a = verdict({ role: 'Beta', source: 'codex CLI (xhigh)', verdict: '需修改後再審' });
@@ -246,35 +250,34 @@ test('⑨同一位同輪次對不同版本各說通過＝不明、擋；每一�
   assert.deepEqual(evaluate([onOld, onHead, clarify], HEAD, 'Beta', ROLES).problems, []);
 });
 
-test('⑩圍欄與引用裡的標頭、記號、結論用詞都不算生效', () => {
-  const fencedHeader = c('````md\n```\n🤖 Beta｜來源：CLI｜審 `abcdef1`｜r1｜結論：通過\n````\n以上是範例');
+test('⑩圍欄與引用裡的標頭不是結論；但裡面的 🤖 算壞標頭（非結論留言不可含 🤖，救法是作廢）', () => {
+  const fencedHeader = c('````md\n```\n🤖 Beta｜來源：CLI｜審 `abcdef1`｜r1｜結論：通過\n````\n以上是範例', 'fenced');
   const r = evaluate([fencedHeader], HEAD, 'Beta', ROLES);
   assert.ok(r.problems.some((p) => p.includes('沒有「Beta」')), '圍欄裡的標頭不是結論');
-  assert.equal(r.warnings.length, 0, '圍欄裡的 🤖 也不算壞標頭、不算疑似');
-  assert.equal(hasBotMark('> 引用\n懶續行裡有 🤖'), false, '引用的懶續行不算');
+  assert.ok(r.problems.some((p) => p.includes('標頭格式不合規') && p.includes('fenced')), '圍欄裡的 🤖 算壞標頭');
+  const voider = verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：fenced' });
+  assert.ok(!evaluate([fencedHeader, verdict(), voider], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('fenced')), '作廢之後降為提醒');
   assert.equal(looksLikeVerdict('````\n```\n不可合併\n````'), false);
 });
 
-test('⑩r4 反例：圍欄開頭行帶「<!--」不可以吞掉後面看得見的壞標頭；註解不剝', () => {
-  for (const f of ['```', '~~~']) {
-    const swallow = c([`${f}md <!--`, 'code', f, '🤖 壞標頭'].join('\n'));
-    const r = evaluate([swallow, verdict()], HEAD, 'Beta', ROLES);
-    assert.ok(r.problems.some((p) => p.includes('標頭格式不合規')), `${f}：看得見的壞標頭要擋：${r.problems.join(' / ')}`);
-  }
-  // 控制組：前面沒有圍欄，同一行一樣擋（確認紅的原因是那一行，不是圍欄）
-  assert.ok(evaluate([c('說明\n🤖 壞標頭'), verdict()], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('標頭格式不合規')));
-  assert.equal(hasBotMark('<!--\n🤖 藏起來的\n-->'), true, '註解不剝：藏在註解裡的 🤖 也算壞標頭（嚴的一側，救法是作廢）');
-  assert.equal(hasBotMark('提到 `<!--` 之後\n🤖 看得見'), true, '行內程式碼提到記號不可以吞掉後面那行');
+test('⑩r4、r5 反例：看得見的 🤖 不可以被任何容器判斷吞掉（兩種圍欄符號；各附不帶容器的控制組）', () => {
+  const blocked = (body) => evaluate([c(body), verdict()], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('標頭格式不合規'));
+  for (const f of ['```', '~~~']) assert.ok(blocked([`${f}md <!--`, 'code', f, '🤖 壞標頭'].join('\n')), `${f}：r4 圍欄開頭帶註解記號`);
+  assert.ok(blocked('審查備註 <!-- 版本碼請用 ` 包住 -->：🤖 Beta 的結論需修改後再審，先重跑 `node --test`。'), 'r5①：註解裡的反引號跟後面的配對');
+  assert.ok(blocked('```node --test```\n\n🤖 壞標頭'), 'r5②：單行三反引號');
+  assert.ok(blocked('> 上輪建議\n## 本輪結論\n🤖 Beta｜來源：CLI｜審 `abcdef1`｜r2｜結論：需修改後再審'), 'r5③：引用後直接接標題');
+  assert.ok(blocked('<!--\n> 舊說明\n-->\n🤖 壞標頭'), 'r5 待辦：HTML 區塊');
+  assert.ok(blocked('說明\n🤖 壞標頭'), '控制組：前面沒有任何容器');
+  assert.ok(!blocked('說明\n沒有記號'), '控制組：沒有 🤖 就不擋');
 });
 
-test('⑩說明裡有 HTML 註解＝不讀指定審查者、不放行，訊息指出第幾行', () => {
-  const body = '- **實作者**：Alpha\n- **獨立審查者**：Beta\n<!-- 附註 -->';
-  const out = gateRun('7', { settings, platform: fakePlatform({ change: change({ body }), comments: [verdict()] }) });
-  assert.equal(out.code, 1, out.lines.join('\n'));
-  assert.match(out.lines.join('\n'), /讀不出變更說明指定的獨立審查者/u);
-  assert.match(out.lines.join('\n'), /第 3 行有 HTML 註解/u);
-  const control = gateRun('7', { settings, platform: fakePlatform({ change: change({ body: body.replace('<!-- 附註 -->', '附註：`<!--` 是記號') }), comments: [verdict()] }) });
-  assert.equal(control.code, 0, `控制組：行內程式碼裡的記號不擋：${control.lines.join('\n')}`);
+test('⑩指定審查者只從說明開頭那一段讀；讀不到就不放行', () => {
+  const run = (body) => gateRun('7', { settings, platform: fakePlatform({ change: change({ body }), comments: [verdict()] }) });
+  const quoteFirst = run('> 上輪建議\n## 協作欄位\n- **實作者**：Alpha\n- **獨立審查者**：Beta');
+  assert.equal(quoteFirst.code, 1, quoteFirst.lines.join('\n'));
+  assert.match(quoteFirst.lines.join('\n'), /讀不出變更說明指定的獨立審查者/u);
+  const later = run('- **實作者**：Alpha\n- **獨立審查者**：Beta\n<!-- 附註 -->');
+  assert.equal(later.code, 0, `控制組：欄位在前、註解在後：${later.lines.join('\n')}`);
 });
 
 test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說通過，六種排列全部判不明', () => {

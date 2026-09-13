@@ -26,7 +26,7 @@
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
-const { effectiveText, htmlCommentLine } = require('../markdown-effective.js');
+const { leadingText } = require('../markdown-effective.js');
 const { parseInstant } = require('../time-point.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
@@ -41,12 +41,6 @@ const HEADER = /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*([A-Za-z]+)｜來源：([^�
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
 const VOID = /^ {0,3}作廢上一則：([A-Za-z0-9_-]+)[^\S\n]*$/u;
 
-/**
- * 生效文字只有一份定義（tools/markdown-effective.js）：圍欄（含長度規則）、引用（含懶續行）裡的字不算。
- * HTML 註解**不剝**（r4 Medium②）：這裡只拿生效文字找「有沒有 🤖」「像不像結論」，不剝是嚴的那一側——
- * 藏在註解裡的 🤖 也算壞標頭（要作廢），而不會因為剝錯把看得見的壞標頭吞掉。
- */
-const stripFences = (md) => effectiveText(md);
 
 /** 從一則留言抽標頭。抓不到就回 null（呼叫端決定那算不算問題）。 */
 function headerOf(body, roles) {
@@ -71,22 +65,25 @@ function headerOf(body, roles) {
   };
 }
 
-/** 這則留言想用標頭但寫壞了——判準是出現 🤖（剝掉引用與行內程式碼之後）。誤判面極小。 */
+/**
+ * 這則留言想用標頭但寫壞了——判準是**整份原文**出現 🤖，什麼都不剝（r5：剝引用、圍欄、註解、行內程式碼，
+ * 每一種剝法都在某種正常寫法上把看得見的 🤖 吞掉過，而吞掉＝壞標頭被放行）。範本本來就寫明非結論留言不可含 🤖，
+ * 所以不剝不增加新的寫作義務；要示範標頭長相時用文字描述，或寫錯了用「作廢上一則」救。
+ */
 function hasBotMark(body) {
-  return stripFences(body)
-    .split('\n')
-    .some((l) => /🤖/u.test(l.replace(/(`+)[^`]*\1/gu, '')));
+  return /🤖/u.test(String(body || ''));
 }
 
 /**
  * 沒標頭的留言看起來像不像在下結論——**只用來提醒，不是判準**。
  * 放行判準不靠它：沒標頭的留言對這道閘沒有效力，既不能放行也不算撤銷。
  * 它防的是「有人以為自己喊了停，但因為沒帶標頭而被無視」。
- * 判法刻意簡單：剝掉圍欄、引用、行內程式碼之後，出現三種結論用詞之一就提醒。
+ * 判法刻意簡單：開頭那一段扣掉行內程式碼之後，出現三種結論用詞之一就提醒。
  * 誤提醒的代價是一句話；原專案為了少提醒幾句寫了一百行、被繞過八輪——那些行不值得搬。
  */
 function looksLikeVerdict(body) {
-  const text = stripFences(body).replace(/(`+)[^`]*\1/gu, '');
+  // 只讀開頭那一段（tools/markdown-effective.js）再扣行內程式碼；這支只影響提醒，讀少了頂多少一句提醒
+  const text = leadingText(body).replace(/(`+)[^`]*\1/gu, '');
   return Object.keys(VERDICTS).some((v) => text.includes(v));
 }
 
@@ -233,9 +230,7 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     }
     throw e;
   }
-  // 說明裡有 HTML 註解時 fieldValue 一欄都不讀（協作欄位閘檔頭①），這裡就判「讀不出指定誰」
   const reviewerRole = canonicalRole(fieldValue(change.body, '獨立審查者'), usable);
-  const commentAt = htmlCommentLine(change.body);
   const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable);
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
   const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
@@ -246,7 +241,6 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   }
   lines.push(`結論聯集閘｜變更 ${changeId}：未通過`);
   for (const p of problems) lines.push(`   ・${p}`);
-  if (commentAt) lines.push(`   ↳ 讀不出指定審查者的原因：說明第 ${commentAt} 行有 HTML 註解，欄位一律不讀；拿掉註解再跑。`);
   lines.push(`現況：${who}`);
   return { code: 1, lines };
 }

@@ -115,27 +115,27 @@ test('本文與機器索引指名的每一份範本都在，而且帶著自己�
   for (const file of onDisk) {
     assert.ok(cited.includes(file), `${file} 在倉庫裡，但機器索引那張表沒指到它——沒人指的範本會靜靜爛掉`);
   }
-  // 固定小標是規矩 E1、G3 指名的字串：範本要真的吐得出來——**在生效的行的行首**，不是藏在註解或圍欄裡
+  // 固定小標是規矩 E1、G3 指名的字串：範本要真的吐得出來——**在機器讀得到的行的行首**，不是藏在註解或圍欄裡
   // （r1 Medium⑮：原本用 includes，把小標改成 HTML 註解照樣綠，填範本後畫面上根本沒有那個小標）
-  // 「哪些行算生效」只有一份實作（r2 Medium③：這裡原本自己寫一份，三個反引號就提早關掉四個反引號的圍欄）
-  // HTML 註解不解讀（r4 Medium②）：範本裡一個都不准有——有的話，填好的說明會被協作欄位閘擋下
-  const { effectiveLines, htmlCommentLine } = require('../tools/markdown-effective.js');
-  const hasHeading = (md, re) => htmlCommentLine(md) === 0 && effectiveLines(md).some((l) => re.test(l));
+  // 「讀哪些行」只有一份實作（r2 Medium③：這裡原本自己寫一份，三個反引號就提早關掉四個反引號的圍欄）
+  // r5 之後只讀開頭那一段：固定小標要出現在範本的第一個特殊行（引用、圍欄、註解、圖片、連結定義、縮排…）之前
+  const { leadingLines } = require('../tools/markdown-effective.js');
+  const hasHeading = (md, re) => leadingLines(md).lines.some((l) => re.test(l));
   const must = [['templates/pr-body.md', /^### 複審後掃\s*$/u], ['templates/scan-record.md', /^\*\*掃描時序\*\*/u]];
   for (const [file, re] of must) {
     const md = fs.readFileSync(path.join(root, file), 'utf8');
-    assert.equal(htmlCommentLine(md), 0, `${file} 第 ${htmlCommentLine(md)} 行有 HTML 註解`);
-    assert.ok(hasHeading(md, re), `${file} 的生效行裡找不到固定小標 ${re}`);
+    assert.ok(hasHeading(md, re), `${file} 開頭那一段裡找不到固定小標 ${re}（讀到第 ${leadingLines(md).stopAt} 行就停了）`);
   }
   const H = /^### 複審後掃\s*$/u;
   assert.ok(hasHeading('a\n### 複審後掃\nb', H), '對照組：正常寫的小標要認得');
   assert.ok(!hasHeading('a\n<!--\n### 複審後掃\n-->\nb', H), '小標包在註解裡＝不算');
-  assert.ok(!hasHeading('```\n### 複審後掃\n```', H), '圍欄裡的行不算生效');
-  assert.ok(!hasHeading('````md\n範例\n```\n### 複審後掃\n````\nb', H), '四反引號圍欄裡的三反引號不是關閉（r2 反例）');
+  assert.ok(!hasHeading('```\n### 複審後掃\n```', H), '圍欄裡的行不算');
+  assert.ok(!hasHeading('````md\n範例\n```\n### 複審後掃\n````\nb', H), '四反引號圍欄（r2 反例）');
   assert.ok(!hasHeading(['```md', '<!--', '```', '-->', '```', '### 複審後掃', '```', 'b'].join('\n'), H), '交錯的註解與圍欄（r3 反例）');
   for (const f of ['```', '~~~']) {
     assert.ok(!hasHeading([`${f}md <!--`, 'x', f, `${f}md`, '-->', '### 複審後掃', f].join('\n'), H), `${f}：圍欄開頭行帶註解記號（r4 反例）`);
   }
+  assert.ok(!hasHeading('> 上輪\n### 複審後掃', H), '引用後直接接小標：不在開頭那一段（r5 反例三；要寫在引用前面）');
 });
 
 test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要有人發現）', () => {

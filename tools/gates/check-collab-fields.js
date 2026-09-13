@@ -8,9 +8,9 @@
 //
 // ## 這支被繞過的每一種寫法，都對應下面一段程式碼，**不要簡化掉**
 //
-// ①**說明裡有 HTML 註解就不判**：註解裡的字畫面上看不見、卻可能長得像欄位（整份四欄藏在註解裡，不剝就通過）；
-//   反過來剝錯了，又會把外面看得見的字吞掉（r4 的圍欄開頭行、實測的行內程式碼裡提到「<!--」，都吞過）。所以不解讀，
-//   看到註解就擋、請人拿掉。偵測規則只有一份＝tools/markdown-effective.js 的 htmlCommentLine。
+// ①**只讀說明開頭那一段**：從第一行讀到第一個特殊行（引用、程式碼圍欄、HTML 與註解、圖片、連結定義、縮排…）為止。
+//   註解、圍欄、引用裡的「範例欄位」因此都讀不到；欄位要寫在最前面（範本本來就這樣排）。讀到哪一行停，印進訊息。
+//   規則只有一份＝tools/markdown-effective.js（r1〜r5 連五輪在「畫面上看得到哪些字」上中刀之後換的做法，理由在那支檔頭）。
 // ②**欄名要錨在行首**：不錨的話「非實作者：某某」也會命中，整份說明一個真欄位都沒有卻judged齊全。
 // ③**冒號後只吃水平空白**：吃掉換行的話，「這一欄留空」會抓到下一行的內容，空範本看起來每欄都填了。
 // ④**角色要剛好命中一個，不可以用「包含」判斷**：用包含的話，「NotClaude」含有「Claude」、
@@ -18,7 +18,7 @@
 // ⑤**正規化只做一次、做在最前面**：否則「外層乾淨、括號裡藏全形或零寬字元」會溜過去。
 //   根因是同一個字串有兩種形式在流動。
 // ⑥**括號裡藏第二個角色不算單一角色**：「甲（乙）」剝掉括號會變成乾淨的「甲」。
-// ⑧**圍欄與引用裡的欄位不算填了**：只有程式碼範例或引用範例裡有四欄，整份說明還是空的（r2 Medium③）。
+// ⑧**圍欄與引用裡的欄位不算填了**：只有程式碼範例或引用範例裡有四欄，整份說明還是空的（r2 Medium③）——由①一併擋住。
 // ⑦**混用文字系統＝看不出是誰**：有些字母在螢幕上跟拉丁字母長得一樣但其實是不同的字，
 //   正規化折不掉。角色名只用拉丁字母，所以拉丁詞裡混進別種字母就整欄判「看不出是誰」。
 //   不做一張對照表——那種表永遠列不完。
@@ -27,7 +27,7 @@
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
-const { effectiveText, htmlCommentLine } = require('../markdown-effective.js');
+const { leadingText, stopNote } = require('../markdown-effective.js');
 
 const UNSET = '未設定';
 
@@ -36,13 +36,12 @@ const REQUIRED_FIELDS = ['實作者', '獨立審查者', '預計修改的共享�
 
 /**
  * 讀一個欄位的值。見檔頭①②③。
- * ⑧（r2 Medium③）：生效文字只有一份定義——程式碼圍欄裡的「範例欄位」、引用（含懶續行）裡的「範例欄位」都不算填了；
+ * ⑧（r2 Medium③）：讀哪一段只有一份定義——程式碼圍欄裡的「範例欄位」、引用裡的「範例欄位」都不算填了（r5 之後：只讀開頭那一段）；
  *    否則整份說明只有一段範例就能通過這道閘，還替結論閘提供一位假的「指定審查者」。
  */
 function fieldValue(body, field) {
-  // ①：有註解就一欄都不讀（結論聯集閘也用這支讀「獨立審查者」，守在這裡就不會有呼叫點漏接）
-  if (htmlCommentLine(body)) return '';
-  const clean = effectiveText(body);
+  // ①：只讀開頭那一段（結論聯集閘也用這支讀「獨立審查者」，守在這裡就不會有呼叫點漏接）
+  const clean = leadingText(body);
   const esc = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 行首可有項目符號（含有序清單）與水平空白，欄名可被粗體記號包住，然後才是冒號。
   // 引言記號刻意不接受：那是引用範例，不該滿足這道閘。
@@ -83,17 +82,13 @@ function canonicalRole(raw, roles) {
  * @param {string[]} roles 專案設定裡的參與者識別值
  */
 function problemsOf(body, roles) {
-  const commentAt = htmlCommentLine(body);
-  if (commentAt) {
-    return [`說明第 ${commentAt} 行有 HTML 註解（<!--）：這道閘不解讀註解——註解裡的欄位算不算、外面的字有沒有被吞掉都不猜。`
-      + '把註解刪掉再跑（要示範這個記號，放進行內程式碼或程式碼圍欄）'];
-  }
   const problems = [];
   const got = {};
   for (const f of REQUIRED_FIELDS) {
     got[f] = fieldValue(body, f);
     if (!got[f]) problems.push(`缺「${f}」`);
   }
+  if (problems.length && stopNote(body)) problems.push(stopNote(body));
   const implRaw = got['實作者'];
   const revRaw = got['獨立審查者'];
   const impl = canonicalRole(implRaw, roles);

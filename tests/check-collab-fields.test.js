@@ -3,7 +3,7 @@
 //
 // 這一支的每一題，都對應原專案實際被繞過的一種寫法。**刪掉任何一題之前，先去讀閘的檔頭。**
 //
-// 守得到的：四欄齊全；實作者與獨立審查者不是同一位；說明裡有 HTML 註解就擋（不解讀）；欄名要錨在行首；
+// 守得到的：四欄齊全；實作者與獨立審查者不是同一位；只讀說明開頭那一段（碰到註解、圍欄、引用等特殊行就停、指出行號）；欄名要錨在行首；
 //   冒號後不吃換行；角色要剛好命中一個（不是「包含」）；括號裡藏第二個角色不算；
 //   混用文字系統＝看不出是誰；平台問不到或設定沒填＝退 2。
 // ⚠️ 守不到的：欄位填的內容是不是真的（寫「某某」不代表真的是某某複審的）；
@@ -38,19 +38,23 @@ test('缺欄位：每一欄各報一次', () => {
   assert.equal(problemsOf('', ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '整份空的＝四欄都缺');
 });
 
-test('①說明裡有 HTML 註解就擋、不解讀（r4 Medium②）；行內程式碼裡提到記號是正常寫法、照常判', () => {
-  const commentProblem = (body) => problemsOf(body, ROLES).some((p) => /HTML 註解/u.test(p));
+test('①只讀說明開頭那一段（r5 之後）：註解、圍欄、引用之後的欄位讀不到，訊息指出停在第幾行；欄位之後才出現的不影響', () => {
+  const missing = (body) => problemsOf(body, ROLES).filter((p) => p.startsWith('缺')).length;
   const template = REQUIRED_FIELDS.map((k) => `- **${k}**：<!-- 請填 ${k} -->`).join('\n');
-  assert.ok(commentProblem(template), '欄位值是註解＝擋');
+  assert.equal(missing(template), REQUIRED_FIELDS.length, '欄位值是註解＝那一行就停，四欄都沒讀到');
   const hidden = `<!--\n${goodBody()}\n-->\n沒有真的欄位`;
-  assert.ok(commentProblem(hidden), '四欄整段藏在註解裡＝擋（不剝就會通過的那一型）');
-  assert.ok(commentProblem(`${goodBody()}\n<!-- 附註 -->`), '欄位齊全、另外有一行註解＝也擋：不猜註解有沒有吞掉什麼');
-  assert.ok(commentProblem(`<!--\n${goodBody()}`), '沒關閉的註解＝擋');
-  assert.equal(fieldValue(`${goodBody()}\n<!-- x -->`, '實作者'), '', '有註解時 fieldValue 一欄都不讀（結論聯集閘也用它）');
-  assert.match(problemsOf(`a\n\n<!-- x -->\n${goodBody()}`, ROLES)[0], /第 3 行/u, '訊息指出第幾行');
-  // 正常寫法：在行內程式碼裡提到記號（舊的剝法會把後面四欄整段吞掉，判成全缺）
-  assert.deepEqual(problemsOf(`說明裡提到 \`<!--\` 這個記號\n${goodBody()}`, ROLES), [], '行內程式碼裡的記號不算註解');
-  assert.equal(fieldValue(`提到 \`<!--\`\n${goodBody()}`, '實作者'), 'Alpha');
+  assert.equal(missing(hidden), REQUIRED_FIELDS.length, '四欄整段藏在註解裡＝讀不到');
+  assert.ok(problemsOf(hidden, ROLES).some((p) => /第 1 行就停了/u.test(p)), '訊息指出停在第幾行');
+  assert.equal(missing(`<!--\n${goodBody()}`), REQUIRED_FIELDS.length, '沒關閉的註解也一樣');
+  assert.deepEqual(problemsOf(`${goodBody()}\n<!-- 附註 -->`, ROLES), [], '欄位寫完之後才出現的註解改不了前面的欄位');
+  assert.deepEqual(problemsOf(`說明裡提到 \`<!--\` 這個記號\n${goodBody()}`, ROLES), [], '行內程式碼裡提到記號不是特殊行');
+  // r5 反例二：欄位之後有單行三反引號與註解——欄位在前，照常通過（後面的東西藏不了前面的欄位）
+  assert.deepEqual(problemsOf(`${goodBody()}\n\n\`\`\`node --test\`\`\`\n\n<!-- 請補驗收 -->`, ROLES), []);
+  // r5 反例三：引用後接小節與四欄——畫面上看得見，但不照「欄位寫在最前面」寫：擋下並指出停在第 1 行
+  const quoteFirst = `> 上輪建議\n## 這次協作欄位\n${goodBody()}`;
+  assert.equal(missing(quoteFirst), REQUIRED_FIELDS.length);
+  assert.ok(problemsOf(quoteFirst, ROLES).some((p) => /第 1 行就停了/u.test(p)));
+  assert.equal(fieldValue(quoteFirst, '實作者'), '', '結論聯集閘讀指定審查者也經過 fieldValue，同一個讀法');
 });
 
 test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只有一段範例）', () => {
@@ -60,7 +64,8 @@ test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只�
   assert.equal(problemsOf(inQuote, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '引用的懶續行裡的欄位不算');
   const longFence = `\`\`\`\`\n\`\`\`\n${goodBody()}\n\`\`\`\``;
   assert.equal(problemsOf(longFence, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '四反引號圍欄裡的三反引號不是關閉');
-  assert.deepEqual(problemsOf(`${inFence}\n\n${goodBody()}`, ROLES), [], '範例之後真的填了就通過');
+  assert.equal(problemsOf(`${inFence}\n\n${goodBody()}`, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '範例放在欄位前面＝讀到範例就停（欄位要寫在最前面）');
+  assert.deepEqual(problemsOf(`${goodBody()}\n\n${inFence}`, ROLES), [], '對照組：欄位在前、範例在後＝通過');
   // r3 反例：圍欄裡的註解符號跟外面的配對，把第二段圍欄翻成生效文字
   const interleaved = ['```md', '<!--', '```', '-->', '```', goodBody(), '```'].join('\n');
   assert.equal(problemsOf(interleaved, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '交錯的註解與圍欄裡的欄位不算');
