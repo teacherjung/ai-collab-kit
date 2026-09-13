@@ -19,7 +19,12 @@ const { read: readSettings } = require('./build-settings.js');
 const UNSET = '未設定';
 const ENABLED = '已啟用';
 
-/** 預設的執行器：真的去跑那道閘。回傳退出碼與輸出，方便考題換掉。 */
+/**
+ * 預設的執行器：真的去跑那道閘。回傳退出碼與輸出，方便考題換掉。
+ * ⚠️ 閘**起不來**（找不到指令、沒有執行權）與**被訊號殺掉／逾時**都回 2，不是 0——
+ *    「跑不起來」不等於「檢查過了」。這兩條路 2026-09-13 稽核前零覆蓋：改成回 0，
+ *    一道根本不存在的閘會被當成綠燈，一路按下合併鍵（端到端重現過）。
+ */
 function runCommand(command, args) {
   const result = spawnSync(command, args, { encoding: 'utf8' });
   if (result.error) return { code: 2, output: String(result.error.message) };
@@ -80,7 +85,11 @@ function mergeRun(changeId, { settings = readSettings(), run = runCommand } = {}
     say(`合併指令回了非零（${code}）：先去查那支變更現在的狀態再決定，不要重跑。`);
     return { code: 1, lines };
   }
-  say('每一道閘都綠、合併已執行。接著照規矩本文 H6 跑分級腳本、照它印的做驗收。');
+  // 量詞只能蓋到這一趟真的跑過的那幾道——登記了但沒啟用的閘沒跑，不可以被這句話蓋進去
+  // （2026-09-13 稽核抓到原本寫「每一道閘都綠」）。
+  const skipped = gates.length - enabled.length;
+  say(`這一趟要跑的 ${enabled.length} 道閘都綠、合併已執行${skipped ? `（另有 ${skipped} 道登記了但沒啟用，這一趟沒跑）` : ''}。`
+    + '接著照規矩本文 H6 跑分級腳本、照它印的做驗收。');
   return { code: 0, lines };
 }
 

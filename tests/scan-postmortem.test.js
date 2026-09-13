@@ -4,17 +4,30 @@
 //   ①沒有機密可比、機密太短、沒有輸出＝退 2（什麼都沒比就說乾淨，比沒有比對更危險）；
 //   ②機密出現在回覆、日誌內容、**檔名**＝退 1；JSON 轉義一層、兩層的寫法也認得；
 //   ③印出來的每一行都不含機密的值；命中只記位置與編號；
-//   ④有輸出驗不了（非 UTF-8、超過單檔或總量上限）＝退 2；但同一趟另有命中時事故優先（退 1）；
-//   ⑤日誌區有符號連結之類的非一般檔案＝退 1；收集器不跟符號連結、超過檔數上限＝回報讀不完。
+//   ④有輸出驗不了（非 UTF-8、超過單檔上限、超過總量上限、讀不到、讀不進）＝退 2；
+//     但同一趟另有命中時事故優先（退 1）；
+//   ⑤日誌區有符號連結之類的非一般檔案＝退 1；收集器不跟符號連結、超過檔數上限＝回報讀不完；
+//   ⑥**指令入口**（cli）：缺參數、機密檔讀不到、回覆讀不到、日誌收不起來都退 2；
+//     回覆與日誌都真的進了比對（把任一邊漏掉就會從退 1 變成退 0，這一格 2026-09-13 稽核抓到過）；
+//   ⑦**任何會印出名字的路徑都先遮蔽**——包含讀不到、讀不進、超過上限的錯誤訊息。
+//     稽核實測過的形狀：日誌區有一個檔名就是機密、而且讀不到，原本會整支炸掉並把未遮蔽的路徑印兩次。
 //
 // ⚠️ 守不到的：編碼過、拆段過、轉義超過兩層的外洩（漏報方向）；憑形狀認機密那一族刻意不搬。
+// ⚠️ 照實記一個**釘不住的地方**：驗不了清單（unverified）那條路上的遮蔽沒有考題撐——
+//    把它改成不遮蔽，全卷仍然全綠。理由是那一格在結構上印不出機密：名字若含機密，掃名字那一步
+//    一定先記成命中、整支走退 1，而驗不了清單只在退 2 時才印。所以那是等價突變，不是缺口；
+//    遮蔽留著是多一層保險（回傳值可能被別人拿去印），不是因為有題在守它。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { compare, collectOutputs, escapeForms, MIN_SECRET } = require('../tools/scan-postmortem.js');
+const { cli, compare, collectOutputs, escapeForms, MIN_SECRET } = require('../tools/scan-postmortem.js');
+const { spawnSync } = require('node:child_process');
+
+const TOOL = path.join(__dirname, '..', 'tools', 'scan-postmortem.js');
+const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'scan-postmortem-cli-'));
 
 const SECRET = 'LIVE-CANARY-k7x9q2-abcdef12';
 const NEEDLE = 'tok"en\\with/quotes-98765';
@@ -82,5 +95,110 @@ test('日誌區的符號連結＝事故；收集器不跟連結、超過檔數�
     assert.ok(r.hits.some((h) => h.where === 'shortcut' && h.part === '非一般檔案'));
     const capped = collectOutputs(dir, { files: 1, depth: 12, fileBytes: 1e6, totalBytes: 1e6 });
     assert.match(capped.over, /檔數超過/u);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('總量上限也算驗不了（不是只有單檔上限）', () => {
+  const r = compare({
+    secrets: [SECRET],
+    outputs: [{ where: 'a', bytes: Buffer.alloc(6) }, { where: 'b', bytes: Buffer.alloc(6) }],
+    caps: { files: 10, depth: 2, fileBytes: 100, totalBytes: 8 },
+  });
+  assert.equal(r.code, 2, '第二份會把總量推過上限＝驗不了');
+  assert.deepEqual(r.unverified, ['b']);
+});
+
+test('讀不到、讀不進的輸出算驗不了，而且名字先遮蔽；不會整支炸掉', () => {
+  const r = compare({
+    secrets: [SECRET],
+    outputs: [{ where: `logs/${SECRET}.jsonl`, unreadable: '讀不進：EACCES' }],
+  });
+  // 名字含機密＝那本身就是命中，事故優先；但印出來的行絕不可以帶機密的值
+  assert.equal(r.code, 1);
+  assert.ok(!r.lines.join('\n').includes(SECRET), '錯誤訊息裡不可以出現機密');
+  assert.match(r.lines.join('\n'), /＜遮蔽＞/u);
+
+  const clean = compare({ secrets: [SECRET], outputs: [{ where: 'logs/a.jsonl', unreadable: '讀不進：EACCES' }] });
+  assert.equal(clean.code, 2, '讀不進＝驗不到＝不能說乾淨');
+});
+
+test('收集器遇到讀不到的檔與進不去的目錄：照實記成驗不了，不丟例外', () => {
+  const dir = tempDir();
+  try {
+    fs.writeFileSync(path.join(dir, 'ok.jsonl'), '{}\n');
+    const locked = path.join(dir, 'locked.jsonl');
+    fs.writeFileSync(locked, 'x\n');
+    fs.chmodSync(locked, 0o000);
+    const lockedDir = path.join(dir, 'lockeddir');
+    fs.mkdirSync(lockedDir);
+    fs.writeFileSync(path.join(lockedDir, 'inner.jsonl'), 'x\n');
+    fs.chmodSync(lockedDir, 0o000);
+    let out;
+    assert.doesNotThrow(() => { out = collectOutputs(dir); }, '讀不到的東西不可以讓收集器丟例外');
+    assert.equal(out.over, '');
+    assert.ok(out.outputs.some((o) => o.where === 'locked.jsonl' && o.unreadable), '讀不到的檔要記成驗不了');
+    assert.ok(out.outputs.some((o) => o.where === 'lockeddir' && o.unreadable), '進不去的目錄要記成驗不了');
+    fs.chmodSync(locked, 0o600);
+    fs.chmodSync(lockedDir, 0o700);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('指令入口：缺參數、機密檔讀不到、回覆讀不到、日誌收不起來，都退 2 且不印路徑', () => {
+  const missing = '/no/such/path/x.txt';
+  for (const argv of [
+    [],
+    ['--secrets', missing, '--reply', TOOL],
+    ['--secrets', TOOL, '--reply', missing],
+    ['--secrets', TOOL, '--logs', missing],
+  ]) {
+    const r = cli(argv);
+    assert.equal(r.code, 2, JSON.stringify(argv));
+    assert.ok(!r.lines.join('\n').includes('/no/such/path'), '錯誤訊息不可以帶路徑');
+  }
+});
+
+test('指令入口：回覆與日誌都真的進了比對（任一邊漏掉就會從事故變成零命中）', () => {
+  const dir = tempDir();
+  try {
+    const secrets = path.join(dir, 'secrets.txt');
+    fs.writeFileSync(secrets, `${SECRET}\n`);
+    const reply = path.join(dir, 'reply.txt');
+    const logs = path.join(dir, 'logs');
+    fs.mkdirSync(logs);
+
+    fs.writeFileSync(reply, `模型說：${SECRET}\n`);
+    fs.writeFileSync(path.join(logs, 'a.jsonl'), '{"ok":true}\n');
+    const viaReply = cli(['--secrets', secrets, '--reply', reply, '--logs', logs]);
+    assert.equal(viaReply.code, 1, '機密在回覆裡＝事故');
+
+    fs.writeFileSync(reply, '乾淨\n');
+    fs.writeFileSync(path.join(logs, 'a.jsonl'), `{"x":"${SECRET}"}\n`);
+    const viaLogs = cli(['--secrets', secrets, '--reply', reply, '--logs', logs]);
+    assert.equal(viaLogs.code, 1, '機密在日誌裡＝事故');
+
+    fs.writeFileSync(path.join(logs, 'a.jsonl'), '{"ok":true}\n');
+    const clean = cli(['--secrets', secrets, '--reply', reply, '--logs', logs]);
+    assert.equal(clean.code, 0, '兩邊都乾淨＝退 0');
+    assert.ok(!clean.lines.join('\n').includes(SECRET));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('真的跑一遍指令：日誌區有一個「檔名就是機密、而且讀不到」的檔，退 2 且兩個輸出流都不帶機密', () => {
+  const dir = tempDir();
+  try {
+    const secrets = path.join(dir, 'secrets.txt');
+    fs.writeFileSync(secrets, `${SECRET}\n`);
+    const logs = path.join(dir, 'logs');
+    fs.mkdirSync(logs);
+    const trap = path.join(logs, `${SECRET}.jsonl`);
+    fs.writeFileSync(trap, 'harmless\n');
+    fs.chmodSync(trap, 0o000);
+    const r = spawnSync(process.execPath, [TOOL, '--secrets', secrets, '--logs', logs], { encoding: 'utf8' });
+    fs.chmodSync(trap, 0o600);
+    const both = `${r.stdout || ''}${r.stderr || ''}`;
+    assert.notEqual(r.status, null, '不可以被訊號殺掉');
+    assert.ok(!both.includes(SECRET), `機密不可以出現在任何輸出流：\n${both}`);
+    assert.equal(r.status, 1, '檔名本身就是機密＝命中＝事故；讀不到只是附帶的驗不了');
+    assert.ok(!/at Object\.<anonymous>/u.test(both), '不可以是未捕捉例外的堆疊');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

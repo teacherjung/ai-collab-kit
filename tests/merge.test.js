@@ -6,14 +6,18 @@
 //   ②主幹分支名還沒填＝不放行；
 //   ③閘照登記的順序跑，**任一道非零就停在那裡**，後面的閘不跑、合併鍵不按；
 //   ④全綠才執行合併；合併指令沒登記＝停下來，不自己猜平台怎麼合；
-//   ⑤合併指令回非零＝照實說「先查那支變更的狀態再決定，不要重跑」。
+//   ⑤合併指令回非零＝照實說「先查那支變更的狀態再決定，不要重跑」；
+//   ⑥**預設執行器**：閘起不來（找不到指令）或被訊號殺掉＝退出碼 2，不是 0——「跑不起來」不等於
+//     「檢查過了」。這一格 2026-09-13 稽核前零覆蓋（八題全部注入假執行器），端到端重現過：
+//     把不存在的指令登記成已啟用的閘，只要 runCommand 回 0，合併鍵就真的被按下去；
+//   ⑦按完合併鍵印的結論，量詞只蓋到這一趟真的跑過的那幾道閘。
 //
 // ⚠️ 守不到的，照實說：它擋不住「不用這支指令、直接按平台的合併鍵」——要擋那個只有平台級的
 //    分支保護。也不驗那幾道閘自己對不對（那是各道閘自己的考題）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mergeRun, UNSET, ENABLED } = require('../tools/merge.js');
+const { mergeRun, runCommand, UNSET, ENABLED } = require('../tools/merge.js');
 
 function settingsWith(gates, extra = {}) {
   return {
@@ -72,6 +76,34 @@ test('每一道都綠才按合併鍵', () => {
   const result = mergeRun('7', { settings: settingsWith([gate('甲'), gate('乙')]), run });
   assert.equal(result.code, 0);
   assert.deepEqual(calls, ['node gates/甲.js 7', 'node gates/乙.js 7', 'platform merge 7']);
+});
+
+test('預設執行器：閘起不來＝退出碼 2，不是 0（跑不起來不等於檢查過了）', () => {
+  const missing = runCommand('/no/such/gate-binary-for-test', ['x']);
+  assert.equal(missing.code, 2, '找不到指令要回 2');
+  assert.notEqual(missing.code, 0);
+  const killed = runCommand(process.execPath, ['-e', 'process.kill(process.pid, "SIGKILL")']);
+  assert.equal(killed.code, 2, '被訊號殺掉要回 2');
+  assert.equal(runCommand(process.execPath, ['-e', 'process.exit(3)']).code, 3, '真的退出碼要照傳');
+  assert.equal(runCommand(process.execPath, ['-e', 'process.exit(0)']).code, 0);
+});
+
+test('端到端：用真的預設執行器跑一道不存在的閘，不放行也不按合併鍵', () => {
+  const settings = settingsWith([{ name: '不存在的閘', command: '/no/such/gate-binary-for-test', args: [], state: ENABLED }]);
+  const result = mergeRun('7', { settings });   // 不注入 run＝走真的 runCommand
+  assert.equal(result.code, 1, '起不來的閘要擋下來');
+  assert.match(result.lines.join('\n'), /擋下來了/u);
+  assert.doesNotMatch(result.lines.join('\n'), /合併已執行/u);
+});
+
+test('按完合併鍵的結論，量詞只蓋這一趟真的跑過的閘', () => {
+  const { run } = fakeRunner([0, 0]);
+  const result = mergeRun('7', { settings: settingsWith([gate('甲'), gate('乙', '未移植'), gate('丙', '已安裝未啟用')]), run });
+  assert.equal(result.code, 0);
+  const text = result.lines.join('\n');
+  assert.doesNotMatch(text, /每一道閘都綠/u, '不可以用蓋到全體的量詞');
+  assert.match(text, /這一趟要跑的 1 道閘都綠/u);
+  assert.match(text, /另有 2 道登記了但沒啟用/u);
 });
 
 test('沒登記啟用的閘不會被跑，但會被列出來提醒', () => {

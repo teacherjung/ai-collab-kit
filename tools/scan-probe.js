@@ -11,13 +11,24 @@
 // 用 cat／sh 而不用掃描器本身去試：掃描器會「選擇」不做，那不是圍欄。
 //
 // 守得到的與守不到的，照實說：
-//   守得到：它埋的那幾個位置，從盒內讀不到、寫不進；盒內讀得到自己的檔（「什麼都失敗」不算擋住）；
-//           盒外讀得到假機密（試探程式本身是活的）。
-//   守不到：隔離有沒有別的洞（網路、剪貼簿、環境變數、沒登記的目錄）——那些由隔離提供者自己證明；
-//           掃描發射本身有沒有把呼叫者的環境變數帶進盒子（這一支自己只帶最少的環境變數）。
+//   守得到：它埋的那幾個位置，用**這一支自己用的那兩個機制**（讀＝/bin/cat、寫＝/bin/sh 重導向）從盒內
+//           讀不到、寫不進；而且兩個機制都先在盒內證明是活的（讀得到、寫得進盒子自己）——
+//           「什麼都失敗」不算擋住；盒外也讀得到假機密（試探程式本身是活的）。
+//   守不到：**別的寫入機制**。這一支用得起 /bin/sh 才判得動；盒內擋掉 shell、但別的程式（例如掃描器
+//           自己就是 node）寫得出去的隔離，這一支測不到——它會照實說測不出，不會說擋住。
+//           （2026-09-13 稽核用真沙盒實測：deny 掉 /bin/sh 之後，一個真的寫入洞原本會被判成「擋住、可以掃」。）
+//           也守不到隔離有沒有別的洞（網路、剪貼簿、環境變數、沒登記的目錄）——那些由隔離提供者自己證明；
+//           以及掃描發射本身有沒有把呼叫者的環境變數帶進盒子（這一支自己只帶最少的環境變數）。
 //
 // 退出碼：0＝全部擋住、可以掃／1＝有禁區碰得到，隔離是假的，不掃／2＝試探做不成（沒有隔離、設定沒填、
-//        假機密埋不進去、對照組不活、盒內連自己的檔都讀不到、有探針測不出），同樣不掃。
+//        假機密埋不進去、對照組不活、盒內連自己的檔都讀不到或寫不進、有探針測不出），同樣不掃。
+//
+// ## 另外兩個動作：埋與收（--plant／--sweep）
+//
+// 掃後比對要比的是「掃描**期間**放在真禁區、每掃現生」的假機密。試探自己埋的那些在試探結束就刪光、
+// 值也從不輸出（刻意的），所以接不到掃描那一段。--plant 埋一批新的並把值寫進一個清單檔給比對用，
+// --sweep 收掉。整條鏈：試探（退 0 才往下走）→ 埋 → 掃 → 比對 → 收。
+// ⚠️ 清單檔裡就是那些值，不要貼進掃描紀錄；收的那一步一定要跑。
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -96,7 +107,8 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
       box = fs.realpathSync(fs.mkdtempSync(path.join(boxRoot, 'scan-probe-box-')));
       fs.mkdirSync(path.join(box, 'tmp'));
     } catch (e) {
-      say(`盒子建不起來（${boxRoot}：${e.code || e.message}）：試探不了，不掃。`);
+      // 只印設定裡的原字串與錯誤代碼：展開後的路徑含使用者帳號名，而這幾行會被貼進掃描紀錄
+      say(`盒子建不起來（設定的位置「${iso.boxRoot || '未設定'}」：${e.code || '建立失敗'}）：試探不了，不掃。`);
       return { code: 2, lines };
     }
     const env = minimalEnv(box);
@@ -125,7 +137,10 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
         return { code: 2, lines };
       }
     }
-    // 正面：盒內讀得到自己的檔——「全部失敗」不算擋住，那是隔離沒套上或整個壞掉
+    // 正面控制：**讀與寫各一道**，而且要在判任何「擋住」之前跑。
+    // 「什麼都失敗」不算擋住——那是隔離沒套上、或這一支用的機制在盒內根本起不來。
+    // ⚠️ 寫那一道是 2026-09-13 稽核補的：原本只有讀有正面控制，於是盒內起不了 /bin/sh 時，
+    //    寫探針的非零退出碼會被當成「擋住」，一個真的寫入洞就被判成可以掃（用真沙盒實測過）。
     const insideFile = path.join(box, 'inside.txt');
     fs.writeFileSync(insideFile, 'INSIDE-OK\n');
     {
@@ -134,7 +149,19 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
         say(`⛔ 盒內連自己的檔都讀不到（status ${r.status}${r.error ? `：${r.error}` : ''}）：隔離沒套上或整個壞掉，不掃。`);
         return { code: 2, lines };
       }
-      say('✅ 盒內讀得到自己的檔');
+      say('✅ 盒內讀得到自己的檔（讀的機制是活的）');
+    }
+    {
+      const target = path.join(box, 'inside-write.txt');
+      const r = inBox([SHELL, '-c', 'echo WRITE-OK > "$1"', 'scan-probe', target]);
+      const landed = fs.existsSync(target);
+      if (r.status !== 0 || !landed) {
+        say(`⛔ 盒內連自己的檔都寫不進（status ${r.status}${landed ? '' : '、檔案沒落地'}${r.error ? `：${r.error}` : ''}）：`
+          + '這一支用的寫入機制在盒內起不來，那就量不出禁區寫不寫得進——測不出，不掃。');
+        say('（這不是「隔離很嚴」的證據：擋掉這一支用的程式，不等於擋掉掃描器自己會用的寫法。）');
+        return { code: 2, lines };
+      }
+      say('✅ 盒內寫得進自己的檔（寫的機制是活的）');
     }
 
     let dead = 0;
@@ -151,7 +178,8 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
       if (landed) { dead += 1; say(`🟢 寫得進（隔離是假的）｜寫「${p.zone}」，檔案真的落地了`); }
       else if (w.status === null) { unknown += 1; say(`⛔ 測不出｜寫「${p.zone}」（逾時或被殺）`); }
       else if (w.status === 0) { unknown += 1; say(`⛔ 測不出｜寫「${p.zone}」回報成功但檔案沒落地：隔離的行為看不懂，不當作擋住`); }
-      else say(`🔴 擋住｜寫「${p.zone}」`);
+      // 判「擋住」的資格來自上面那道寫入正面控制：同一個機制在盒內寫得進、在禁區寫不進，才是隔離在擋。
+      else say(`🔴 擋住｜寫「${p.zone}」（用的是這一支的寫法；別的寫法沒測）`);
     }
     if (dead) {
       say(`試探：${dead} 個探針碰得到禁區＝隔離是假的，不掃；照規矩 G2 通報裁示者。`);
@@ -161,7 +189,7 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
       say(`試探：${unknown} 個探針測不出＝不能說隔離有效，不掃。`);
       return { code: 2, lines, dead, unknown };
     }
-    say(`試探：${planted.length} 個禁區讀不到也寫不進、盒內讀得到自己的檔——可以掃。`);
+    say(`試探：${planted.length} 個禁區用這一支的讀寫機制都碰不到，而同樣的機制在盒內是活的——可以掃。`);
     return { code: 0, lines, dead, unknown };
   } finally {
     // 不管哪條路出去，埋的東西與盒子都清掉；只刪自己建的目錄
@@ -170,10 +198,86 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
   }
 }
 
+// ── 掃描期間的假機密（埋／收）──────────────────────────────────────────────
+// 為什麼要有這兩支：掃後比對（tools/scan-postmortem.js）要比的是「掃描**期間**放在真禁區、
+// 而且每掃現生」的值——那種值不可能出現在給盒子的材料裡，所以它出現在輸出中就是鐵證。
+// 但試探那一支埋的假機密在試探結束就刪光、值也從不輸出（刻意的），掃描開始時它已經不存在。
+// 2026-09-13 稽核抓到：檔頭與專案設定把這條鏈寫得像已經有人在供應，實際上接不起來。
+// 所以補這兩支，讓那條鏈是真的：試探（不掃就停）→ 埋 → 掃 → 比對 → 收。
+//
+// ⚠️ 埋下去的值會落在磁碟上（禁區裡）並寫進一個清單檔。清單檔只給比對用，**不要貼進任何紀錄**；
+//    收的那一步一定要跑，否則假機密會一直留在禁區裡。
+const MANIFEST_SUFFIX = '.planted';
+
+/** 在每個登記的禁區各埋一個「掃描期間」的假機密；值寫進 outFile，埋在哪寫進同名的清單檔。 */
+function plantCanaries({ settings = readSettings(), home = os.homedir(), outFile } = {}) {
+  const lines = [];
+  const iso = (settings.scanner && settings.scanner.isolation) || {};
+  const zones = Array.isArray(iso.forbidden) ? iso.forbidden.filter((x) => typeof x === 'string' && x.trim()) : [];
+  if (!outFile) return { code: 2, lines: ['沒給清單檔的位置：不知道要把值寫到哪裡給比對用。'] };
+  if (!zones.length) return { code: 2, lines: ['禁區清單是空的：沒有地方可埋，掃後比對就沒有鐵證可比。'] };
+  const planted = [];
+  const secrets = [];
+  try {
+    for (const zone of zones) {
+      const dir = fs.mkdtempSync(path.join(expandZone(zone, home), '.scan-canary-'));
+      const secret = `LIVE-CANARY-${Date.now().toString(36)}-${randomBytes(8).toString('hex')}`;
+      const file = path.join(dir, 'canary.txt');
+      fs.writeFileSync(file, `${secret}\n`, { mode: 0o600 });
+      planted.push(dir);
+      secrets.push(secret);
+    }
+  } catch (e) {
+    for (const dir of planted) fs.rmSync(dir, { recursive: true, force: true });
+    return { code: 2, lines: [`埋不進去（${e.code || '寫入失敗'}）：沒有鐵證就不要開始掃。`] };
+  }
+  fs.writeFileSync(outFile, `${secrets.join('\n')}\n`, { mode: 0o600 });
+  fs.writeFileSync(`${outFile}${MANIFEST_SUFFIX}`, `${planted.join('\n')}\n`, { mode: 0o600 });
+  lines.push(`埋好 ${secrets.length} 個掃描期間的假機密（每個禁區各一個）。`);
+  lines.push('掃完之後：先跑 node tools/scan-postmortem.js --secrets <這個清單檔> …，再跑 --sweep 收掉。');
+  lines.push('⚠️ 清單檔本身不要貼進掃描紀錄。');
+  return { code: 0, lines, secrets, planted };
+}
+
+/** 收掉埋下去的假機密。清單檔不見＝不知道埋在哪，照實說（退 2），不要亂刪。 */
+function sweepCanaries({ outFile } = {}) {
+  if (!outFile) return { code: 2, lines: ['沒給清單檔的位置：不知道要收哪些。'] };
+  const manifest = `${outFile}${MANIFEST_SUFFIX}`;
+  let dirs;
+  try { dirs = fs.readFileSync(manifest, 'utf8').split('\n').map((x) => x.trim()).filter(Boolean); }
+  catch (e) { return { code: 2, lines: [`收不掉：清單檔讀不到（${e.code || '讀取失敗'}）——埋在哪不知道，請自己去禁區找 .scan-canary-* 目錄。`] }; }
+  let failed = 0;
+  for (const dir of dirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); }
+    catch { failed += 1; }
+  }
+  fs.rmSync(manifest, { force: true });
+  fs.rmSync(outFile, { force: true });
+  if (failed) return { code: 2, lines: [`有 ${failed} 個假機密收不掉：請自己去禁區找 .scan-canary-* 目錄刪掉。`] };
+  return { code: 0, lines: [`收掉 ${dirs.length} 個假機密，清單檔也刪了。`] };
+}
+
+/**
+ * 指令入口的本體，抽出來讓考題直接考（原本整段寫在 require.main 裡＝零覆蓋，2026-09-13 稽核抓到）。
+ * 任何沒想到的例外都收成退 2：試探做不成就是不掃，不可以讓例外把未遮蔽的路徑丟進 stderr。
+ */
+function cli(opts = {}, argv = []) {
+  const arg = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+  try {
+    const plant = arg('--plant');
+    if (plant) return plantCanaries({ ...opts, outFile: plant });
+    const sweep = arg('--sweep');
+    if (sweep) return sweepCanaries({ ...opts, outFile: sweep });
+    return probeRun(opts);
+  } catch (e) {
+    return { code: 2, lines: [`試探做不成（${(e && e.code) || '未預期的錯誤'}）：不掃。`] };
+  }
+}
+
 if (require.main === module) {
-  const { code, lines } = probeRun();
+  const { code, lines } = cli({}, process.argv.slice(2));
   process.stdout.write(`${lines.join('\n')}\n`);
   process.exit(code);
 }
 
-module.exports = { probeRun, runCommand, isBlocked, expandZone, minimalEnv, UNSET, NONE };
+module.exports = { cli, probeRun, plantCanaries, sweepCanaries, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE };

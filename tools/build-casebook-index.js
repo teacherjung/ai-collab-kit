@@ -50,9 +50,14 @@ function caseFiles() {
     .sort();
 }
 
-/** 讀一則案例的標題與六欄。形狀不合就丟例外，不要產生半成品的索引。 */
-function readCase(file) {
-  const lines = fs.readFileSync(path.join(casesDir, file), 'utf8').split('\n');
+/**
+ * 解析一則案例的內容。形狀不合就丟例外，不要產生半成品的索引。
+ * ⚠️ 跟讀檔分開，是為了讓考題能直接餵壞形狀進來考這些檢查——原本整段綁在讀檔裡，
+ *    要考就得把壞檔寫進 cases/（會污染倉庫），結果是這些檢查一條考題都沒有（2026-09-13 稽核抓到：
+ *    把每一條檢查逐一短路掉，全卷仍然全綠）。
+ */
+function parseCase(text, file) {
+  const lines = String(text).split('\n');
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   if (!lines[0] || !lines[0].startsWith('# ')) throw new Error(`${file} 第一行不是標題`);
   const fields = { slug: file.slice(0, -3), 標題: lines[0].slice(2).trim() };
@@ -71,6 +76,11 @@ function readCase(file) {
   if (!DATE.test(fields.日期)) throw new Error(`${file} 的日期不是 YYYY-MM-DD`);
   if (!RULE_IDS.test(fields['本文條號'])) throw new Error(`${file} 的本文條號寫法不合（要像 A1 或 A1、B2）`);
   return fields;
+}
+
+/** 讀一則案例。解析與檢查都在 parseCase。 */
+function readCase(file) {
+  return parseCase(fs.readFileSync(path.join(casesDir, file), 'utf8'), file);
 }
 
 /** 由案例檔與 index.json 產生索引的完整內容（換行一律用 \n）。 */
@@ -99,4 +109,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 cases/README.md：${caseFiles().length} 則\n`);
 }
 
-module.exports = { build, outFile, notesFile, caseFiles, readCase, FIELDS };
+module.exports = { build, outFile, notesFile, caseFiles, readCase, parseCase, checkPlain, FIELDS };

@@ -77,7 +77,12 @@ function build(data) {
   out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑）：${plain(wrap.length ? wrap.join(' ') : '未設定', '隔離指令前綴')}`);
   out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
   out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；試探在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
-  out.push('- 掃前跑 node tools/scan-probe.js：任一禁區讀得到或寫得進＝隔離是假的，不掃；連試探都做不成＝不掃。掃後跑 node tools/scan-postmortem.js：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
+  out.push('- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：');
+  out.push('  1. node tools/scan-probe.js：任一禁區用它的讀寫機制碰得到＝隔離是假的，不掃；連試探都做不成（含盒內起不了那個機制）＝不掃。');
+  out.push('  2. node tools/scan-probe.js --plant <清單檔>：在每個禁區埋一個掃描期間才有的假機密。清單檔不要貼進任何紀錄。');
+  out.push('  3. 跑掃描器（本套件不代跑）。');
+  out.push('  4. node tools/scan-postmortem.js --secrets <清單檔> --reply <回覆檔> --logs <日誌目錄>：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
+  out.push('  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。');
   out.push('', '## 五、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {

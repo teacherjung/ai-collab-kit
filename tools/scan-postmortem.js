@@ -9,10 +9,16 @@
 // 為什麼要算轉義的寫法：掃描器的日誌常是 JSON，裡面的引號與反斜線會被轉義，命中跟原文對不上（原專案第三次
 // 正式掃描踩到）。深度到兩層是觀察值不是定理。
 //
-// 守不到的照實說：編碼過、拆段過、轉義超過兩層的外洩認不得（方向是漏報）；輸出讀不了（非 UTF-8、超過上限）
-// 的部分驗不到＝不能說乾淨（退 2）；日誌區出現符號連結之類的非一般檔案＝掃描器在日誌區放了捷徑，當事故。
+// 守不到的照實說：編碼過、拆段過、轉義超過兩層的外洩認不得（方向是漏報）；輸出讀不了的部分驗不到＝
+// 不能說乾淨（退 2）；日誌區出現符號連結之類的非一般檔案＝掃描器在日誌區放了捷徑，當事故。
 //
-// 退出碼：0＝乾淨／1＝有命中，事故／2＝比對做不成（沒有機密可比、機密太短、沒有輸出、有輸出驗不了）。
+// ⚠️ **輸出的名字本身可能就是機密**（這支工具存在的理由之一）。所以任何會印出名字的路徑——包含讀不到、
+//    讀不進、超過上限的錯誤訊息——一律先過 redact()。2026-09-13 稽核抓到：原本讀檔沒有 try/catch，
+//    日誌區只要有一個讀不到的檔，整支就未捕捉例外中止，把**未遮蔽的完整路徑印兩次到 stderr**，
+//    而那段訊息照這套流程會被抄進可能公開的變更說明。
+//
+// 退出碼：0＝乾淨／1＝有命中，事故／2＝比對做不成（沒有機密可比、機密太短、沒有輸出、有輸出驗不了、
+//        讀不到或讀不進——**任何 I/O 問題都算做不成，不是事故**）。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -67,6 +73,7 @@ function compare({ secrets, outputs, caps = CAPS } = {}) {
     const where = String(o.where || '');
     if (!where) { say('有一份輸出沒有名字：驗不了。'); unverified.push('（沒有名字）'); continue; }
     if (o.special) { hits.push({ where: redact(where), part: '非一般檔案', kind: String(o.special) }); continue; }
+    if (o.unreadable) { unverified.push(`${redact(where)}（${o.unreadable}）`); scan(where, where, '名字'); continue; }
     scan(where, where, '名字');
     let text;
     if (typeof o.text === 'string') text = o.text;
@@ -93,21 +100,32 @@ function compare({ secrets, outputs, caps = CAPS } = {}) {
   return { code: 0, lines, hits, unverified };
 }
 
-/** 把一個目錄底下的檔案收成 outputs：不跟符號連結、非一般檔案另標；超過上限＝回 over。 */
+/**
+ * 把一個目錄底下的檔案收成 outputs：不跟符號連結、非一般檔案另標；超過上限＝回 over。
+ * ⚠️ 每一次 I/O 都包起來：讀不到的檔或進不去的子目錄**不可以讓整支中止**——那條路會把未遮蔽的路徑
+ *    丟進 stderr，而路徑本身可能就是機密。讀不到的照實記成 unreadable，交給 compare 判「驗不了」。
+ * ⚠️ 深度上限的訊息只回層數、不回路徑（同一個理由）。
+ */
 function collectOutputs(dir, caps = CAPS) {
   const outputs = [];
   let count = 0;
   const walk = (d, depth, rel) => {
-    if (depth > caps.depth) return `深度超過 ${caps.depth}：${rel || '.'}`;
-    for (const name of fs.readdirSync(d)) {
+    if (depth > caps.depth) return `深度超過 ${caps.depth} 層`;
+    let names;
+    try { names = fs.readdirSync(d); }
+    catch (e) { outputs.push({ where: rel || '.', unreadable: `目錄進不去：${e.code || '讀取失敗'}` }); return ''; }
+    for (const name of names) {
       const p = path.join(d, name);
       const rp = rel ? `${rel}/${name}` : name;
-      const st = fs.lstatSync(p);
+      let st;
+      try { st = fs.lstatSync(p); }
+      catch (e) { outputs.push({ where: rp, unreadable: `看不到：${e.code || '讀取失敗'}` }); continue; }
       if (st.isDirectory()) { const over = walk(p, depth + 1, rp); if (over) return over; continue; }
       count += 1;
       if (count > caps.files) return `檔數超過 ${caps.files}`;
       if (!st.isFile()) { outputs.push({ where: rp, special: st.isSymbolicLink() ? '符號連結' : '特殊檔' }); continue; }
-      outputs.push({ where: rp, bytes: fs.readFileSync(p) });
+      try { outputs.push({ where: rp, bytes: fs.readFileSync(p) }); }
+      catch (e) { outputs.push({ where: rp, unreadable: `讀不進：${e.code || '讀取失敗'}` }); }
     }
     return '';
   };
@@ -115,27 +133,44 @@ function collectOutputs(dir, caps = CAPS) {
   return { outputs, over };
 }
 
-if (require.main === module) {
-  const ARGS = process.argv.slice(2);
-  const arg = (flag) => { const i = ARGS.indexOf(flag); return i >= 0 ? ARGS[i + 1] : undefined; };
+/**
+ * 指令入口的本體，抽出來讓考題直接考（原本整段寫在 require.main 裡＝零覆蓋，2026-09-13 稽核抓到：
+ * 把回覆從 outputs 拿掉，這支會印「零命中」退 0，而測試卷一題都不紅）。
+ * 回傳 { code, lines }；任何 I/O 問題都回 2，訊息只帶錯誤代碼、不帶路徑。
+ */
+function cli(argv) {
+  const arg = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
   const secretsFile = arg('--secrets');
   const replyFile = arg('--reply');
   const logsDir = arg('--logs');
   if (!secretsFile || (!replyFile && !logsDir)) {
-    process.stderr.write('用法：node tools/scan-postmortem.js --secrets <每行一個機密的檔> [--reply <回覆檔>] [--logs <日誌目錄>]\n');
-    process.exit(2);
+    return { code: 2, lines: ['用法：node tools/scan-postmortem.js --secrets <每行一個機密的檔> [--reply <回覆檔>] [--logs <日誌目錄>]'] };
   }
-  const secrets = fs.readFileSync(secretsFile, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
+  let secrets;
+  try { secrets = fs.readFileSync(secretsFile, 'utf8').split('\n').map((x) => x.trim()).filter(Boolean); }
+  catch (e) { return { code: 2, lines: [`機密清單讀不到（${e.code || '讀取失敗'}）：沒有機密就比不了，不算通過。`] }; }
   const outputs = [];
-  if (replyFile) outputs.push({ where: '回覆', bytes: fs.readFileSync(replyFile) });
-  if (logsDir) {
-    const { outputs: logs, over } = collectOutputs(logsDir);
-    if (over) { process.stdout.write(`日誌讀不完（${over}）：驗不到就不能說乾淨。\n`); process.exit(2); }
-    outputs.push(...logs);
+  if (replyFile) {
+    try { outputs.push({ where: '回覆', bytes: fs.readFileSync(replyFile) }); }
+    catch (e) { return { code: 2, lines: [`回覆讀不到（${e.code || '讀取失敗'}）：驗不到就不能說乾淨。`] }; }
   }
-  const { code, lines } = compare({ secrets, outputs });
-  process.stdout.write(`${lines.join('\n')}\n`);
-  process.exit(code);
+  if (logsDir) {
+    let collected;
+    try { collected = collectOutputs(logsDir); }
+    catch (e) { return { code: 2, lines: [`日誌收不起來（${e.code || '讀取失敗'}）：驗不到就不能說乾淨。`] }; }
+    if (collected.over) return { code: 2, lines: [`日誌讀不完（${collected.over}）：驗不到就不能說乾淨。`] };
+    outputs.push(...collected.outputs);
+  }
+  return compare({ secrets, outputs });
 }
 
-module.exports = { compare, collectOutputs, escapeForms, CAPS, MIN_SECRET };
+if (require.main === module) {
+  let result;
+  // 最後一層網：任何沒想到的例外都不可以把未遮蔽的路徑丟進 stderr
+  try { result = cli(process.argv.slice(2)); }
+  catch (e) { result = { code: 2, lines: [`比對做不成（${(e && e.code) || '未預期的錯誤'}）：驗不到就不能說乾淨。`] }; }
+  process.stdout.write(`${result.lines.join('\n')}\n`);
+  process.exit(result.code);
+}
+
+module.exports = { cli, compare, collectOutputs, escapeForms, CAPS, MIN_SECRET };
