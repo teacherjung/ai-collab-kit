@@ -105,9 +105,9 @@
    "verified": ""
   },
   {
-   "name": "結論聯集閘",
-   "rules": "A2、F4、F5",
-   "state": "未移植",
+   "name": "結論聯集閘（阻擋各自撤銷、放行只認指定那一位對目前版本的通過）",
+   "rules": "F4、F5",
+   "state": "已安裝未啟用",
    "verified": ""
   },
   {
@@ -239,7 +239,7 @@
    "args": [
     "tools/gates/check-review-verdicts.js"
    ],
-   "state": "未移植"
+   "state": "已安裝未啟用"
   },
   {
    "name": "協作欄位（四欄齊全、實作者不等於獨立審查者）",

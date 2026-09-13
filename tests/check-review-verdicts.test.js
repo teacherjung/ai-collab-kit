@@ -1,0 +1,191 @@
+// 守結論聯集閘（規矩 F4、F5）。原專案實測：同一支變更上兩則都自稱同一角色的複審、結論相反，
+// 平台上顯示同一個帳號、無法分辨——「最後一則說通過」變成事實上的放行。
+//
+// 守得到的：
+//   ①取聯集：任一位的阻擋在同一位用更高輪次撤銷前都有效，別人說通過解不掉；
+//   ②同一位同輪次相反結論＝fail-closed（結果不可以取決於留言順序）；
+//   ③版本一變舊通過失效；放行只認變更說明指定的那一位；讀不出指定誰＝不放行；沒有任何結論＝不放行；
+//   ④標頭：只認第一行、不認引用、來源不可空、角色要在名單上、結論只認三種；
+//   ⑤有 🤖 記號但標頭讀不出＝擋；作廢行（緊跟合規標頭之後）可把它降為提醒——
+//     但作廢不了合規留言、作廢不了不存在的、作廢不了比自己晚的，而且作廢不產生任何結論；
+//   ⑥沒標頭但看起來像結論＝只提醒，不影響退出碼；兩個來源長得像＝提醒、不併身分；
+//   ⑦平台問不到、設定沒填＝退 2。
+//
+// ⚠️ 守不到的：標頭是自我宣告不是身分證明（改來源就能冒充另一位）；留言清單有沒有少給
+//    （分頁是那條登記指令的責任）；作廢比原專案寬——任何一位都能作廢任何壞留言（裁示者裁的方向）。
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
+const { PlatformError } = require('../tools/platform.js');
+
+const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-review-verdicts.js');
+const ROLES = ['Alpha', 'Beta', 'Gamma'];
+const HEAD = 'abcdef1234567890abcdef1234567890abcdef12';
+const OLD = '0123456789abcdef0123456789abcdef01234567';
+
+let seq = 0;
+/** 一則留言。 */
+const c = (body, id = `c${++seq}`) => ({ id, body });
+/** 一則帶合規標頭的結論留言。 */
+const verdict = ({ role = 'Beta', source = 'CLI', sha = HEAD, round = 1, verdict: v = '通過', extra = '' } = {}, id) =>
+  c(`🤖 ${role}｜來源：${source}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}${extra}`, id);
+
+const codes = (r) => r.problems.length ? 1 : 0;
+
+test('基準：指定的那一位對目前版本說通過、沒人阻擋＝通過（對照組）', () => {
+  const r = evaluate([verdict()], HEAD, 'Beta', ROLES);
+  assert.deepEqual(r.problems, [], r.problems.join('\n'));
+});
+
+test('①取聯集：Alpha 阻擋、Beta 通過＝仍然擋；只有 Alpha 自己用更高輪次才能撤', () => {
+  const block = verdict({ role: 'Alpha', source: '桌面', verdict: '需修改後再審' });
+  const pass = verdict({ role: 'Beta' });
+  const r = evaluate([block, pass], HEAD, 'Beta', ROLES);
+  assert.ok(r.problems.some((p) => p.includes('還沒有被同一位撤銷')), '別人說通過解不掉');
+  const retract = verdict({ role: 'Alpha', source: '桌面', round: 2 });
+  assert.deepEqual(evaluate([block, pass, retract], HEAD, 'Beta', ROLES).problems, []);
+  // 同輪次補發不算撤銷
+  const sameRound = verdict({ role: 'Alpha', source: '桌面', round: 1 });
+  assert.ok(evaluate([block, pass, sameRound], HEAD, 'Beta', ROLES).problems.length > 0, '同輪次相反結論不可以放行');
+});
+
+test('②同一位同輪次相反結論＝擋，而且不取決於順序', () => {
+  const a = verdict({ role: 'Beta', round: 3, verdict: '需修改後再審' });
+  const b = verdict({ role: 'Beta', round: 3, verdict: '通過' });
+  for (const order of [[a, b], [b, a]]) {
+    const r = evaluate(order, HEAD, 'Beta', ROLES);
+    assert.ok(r.problems.some((p) => p.includes('相反結論')), '兩種順序都要擋');
+  }
+});
+
+test('③版本一變舊通過失效；放行只認指定的那一位；讀不出指定誰＝不放行；沒結論＝不放行', () => {
+  const stale = evaluate([verdict({ sha: OLD })], HEAD, 'Beta', ROLES);
+  assert.ok(stale.problems.some((p) => p.includes('不再適用')), '舊版本的通過不算');
+  // ⚠️ 兩道檢查互為備援（突變驗過：拿掉其中一道，退出碼不變）。釘訊息是為了讓兩句都在——
+  //    「沒有人對目前版本點頭」與「那則通過是對舊版本說的」是給人看的兩件不同的事。
+  assert.ok(stale.problems.some((p) => p.includes('沒有「Beta」對目前版本')), '要說目前版本沒人點頭');
+  assert.equal(stale.problems.length, 2);
+  const wrongOne = evaluate([verdict({ role: 'Alpha' })], HEAD, 'Beta', ROLES);
+  assert.ok(wrongOne.problems.some((p) => p.includes('放行只認指定的那一位')), '實作者自己說通過不算');
+  const unknown = evaluate([verdict()], HEAD, null, ROLES);
+  assert.ok(unknown.problems.some((p) => p.includes('讀不出')), '讀不出指定誰就不放行');
+  const none = evaluate([c('大家好')], HEAD, 'Beta', ROLES);
+  assert.ok(none.problems.some((p) => p.includes('沒有「Beta」')), '沒有任何結論不可以放行');
+});
+
+test('④標頭：只認第一行、不認引用、來源不可空、角色要在名單上、結論只認三種', () => {
+  assert.ok(headerOf(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`, ROLES));
+  assert.equal(headerOf(`前言\n🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`, ROLES), null, '不是第一行');
+  assert.equal(headerOf(`> 🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`, ROLES), null, '引用不算');
+  assert.equal(headerOf(`🤖 Beta｜來源：   ｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`, ROLES), null, '來源空白');
+  assert.equal(headerOf(`🤖 Betta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`, ROLES), null, '打錯的角色不可以變成幽靈審查者');
+  assert.equal(headerOf(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：大概可以`, ROLES), null, '結論不是三選一');
+  assert.equal(headerOf(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：toString`, ROLES), null, '原型鍵不可以變成第四種結論');
+  const h = headerOf(`**🤖 Beta｜來源：CLI   xhigh｜審 ${HEAD.slice(0, 7)}｜r2｜結論：不可合併。**`, ROLES);
+  assert.equal(h.source, 'CLI xhigh', '來源摺疊空白');
+  assert.equal(h.verdict, '不可合併', '尾端句號要剝掉');
+  assert.equal(h.blocking, true);
+  assert.deepEqual(Object.keys(VERDICTS), ['通過', '需修改後再審', '不可合併'], '三個字串是規矩 F3 逐字要求的');
+});
+
+test('⑤有 🤖 但標頭讀不出＝擋；作廢可降為提醒；作廢的邊界', () => {
+  const bad = c('🤖 Beta｜來源：CLI｜審 ｜r1｜結論：要求修改', 'bad1');
+  const good = verdict({ round: 2 });
+  const blocked = evaluate([bad, good], HEAD, 'Beta', ROLES);
+  assert.ok(blocked.problems.some((p) => p.includes('標頭格式不合規') && p.includes('bad1')), '壞標頭要擋，而且要點名編號');
+
+  const voider = verdict({ role: 'Alpha', round: 2, extra: '\n\n作廢上一則：bad1\n本輪提了 0 條' });
+  const cleared = evaluate([bad, good, voider], HEAD, 'Beta', ROLES);
+  assert.deepEqual(cleared.problems, [], cleared.problems.join('\n'));
+  assert.ok(cleared.warnings.some((w) => w.includes('已被') && w.includes('作廢')), '降為提醒');
+
+  // 作廢不產生結論：作廢者 Alpha 自己的結論照舊是它標頭那一則；壞留言不會變成任何結論
+  assert.equal(Object.keys(cleared.reviewers).length, 2);
+
+  // 作廢不了合規留言
+  const voidGood = verdict({ role: 'Alpha', round: 2, extra: `\n作廢上一則：${good.id}` });
+  const r1 = evaluate([bad, good, voidGood], HEAD, 'Beta', ROLES);
+  assert.ok(r1.problems.some((p) => p.includes('bad1')), '壞留言沒被作廢，仍要擋');
+  assert.ok(r1.warnings.some((w) => w.includes('不是壞標頭')));
+  assert.ok(Object.keys(r1.reviewers).length === 2, '合規留言不可以被作廢掉');
+
+  // 作廢不了不存在的、作廢不了比自己晚的
+  const voidNone = verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：nope' });
+  assert.ok(evaluate([bad, voidNone], HEAD, 'Beta', ROLES).warnings.some((w) => w.includes('沒有那一則')));
+  const early = verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：bad1' });
+  const r3 = evaluate([early, bad, good], HEAD, 'Beta', ROLES);
+  assert.ok(r3.problems.some((p) => p.includes('bad1')), '預先作廢不生效');
+  assert.ok(r3.warnings.some((w) => w.includes('之後')));
+
+  // 作廢行要緊跟在標頭後面：中間夾了別的內容就不算
+  const misplaced = verdict({ role: 'Alpha', round: 2, extra: '\n本輪提了 0 條\n作廢上一則：bad1' });
+  assert.ok(evaluate([bad, good, misplaced], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('bad1')));
+  assert.deepEqual(voidTargets('🤖 x\n\n作廢上一則：a\n作廢上一則：b\n別的\n作廢上一則：c'), ['a', 'b']);
+  // 沒帶合規標頭的留言裡的作廢行不生效
+  const noHeader = c('作廢上一則：bad1');
+  assert.ok(evaluate([bad, good, noHeader], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('bad1')));
+});
+
+test('⑤hasBotMark：引用與行內程式碼、圍欄裡的 🤖 不算', () => {
+  assert.equal(hasBotMark('> 🤖 引用別人的'), false);
+  assert.equal(hasBotMark('說明：`🤖` 這個記號'), false);
+  assert.equal(hasBotMark('```\n🤖 範例\n```'), false);
+  assert.equal(hasBotMark('我要試 🤖 這個'), true);
+});
+
+test('⑥沒標頭但看起來像結論＝只提醒；長得像的來源＝提醒不併身分', () => {
+  const r = evaluate([c('我的看法：不可合併，還有假綠'), verdict()], HEAD, 'Beta', ROLES);
+  assert.deepEqual(r.problems, [], '沒標頭的留言不影響結果');
+  assert.ok(r.warnings.some((w) => w.includes('不採計')));
+  assert.equal(looksLikeVerdict('```\n不可合併\n```'), false, '圍欄裡的範例不提醒');
+  assert.equal(looksLikeVerdict('> 不可合併'), false, '引用不提醒');
+  assert.equal(looksLikeVerdict('測試全綠'), false);
+
+  const a = verdict({ role: 'Beta', source: 'codex CLI (xhigh)', verdict: '需修改後再審' });
+  const b = verdict({ role: 'Beta', source: 'CLI（xhigh）', round: 2 });
+  const two = evaluate([a, b], HEAD, 'Beta', ROLES);
+  assert.ok(two.problems.some((p) => p.includes('還沒有被同一位撤銷')), '兩種寫法＝兩位，阻擋沒被撤');
+  assert.ok(two.warnings.some((w) => w.includes('可能是同一位')), '要提醒');
+  assert.equal(sourceLookalike('CLI', 'codex CLI'), '折全形、轉小寫、只留字母與數字之後，其中一個整個包在另一個裡面');
+  assert.equal(sourceLookalike('桌面', '桌面版'), null, '太短不比');
+  assert.equal(sourceLookalike('codex CLI', 'claude desktop'), null);
+});
+
+/** 假平台 */
+function fakePlatform(answers) {
+  return {
+    ask(op) {
+      const a = answers[op];
+      if (a instanceof Error) throw a;
+      if (a === undefined) throw new PlatformError(`測試沒給 ${op}`);
+      return a;
+    },
+  };
+}
+const settings = { participants: ROLES.map((id) => ({ id })) };
+const change = (over = {}) => ({ headSha: HEAD, body: '- **實作者**：Alpha\n- **獨立審查者**：Beta', ...over });
+
+test('端到端：指定審查者從變更說明讀；通過＝0、有阻擋＝1、提醒不影響退出碼', () => {
+  const ok = gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [verdict(), c('不可合併？我只是問')] }) });
+  assert.equal(ok.code, 0, ok.lines.join('\n'));
+  assert.ok(ok.lines.some((l) => l.startsWith('提醒')), '提醒要印出來');
+  const bad = gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [verdict({ role: 'Alpha' })] }) });
+  assert.equal(bad.code, 1);
+  assert.match(bad.lines.join('\n'), /放行只認指定的那一位/u);
+});
+
+test('平台問不到＝退 2；設定沒填＝退 2；沒給編號＝退 2；不是平台的錯就炸出去', () => {
+  assert.equal(gateRun('7', { settings, platform: fakePlatform({ change: new PlatformError('x') }) }).code, 2);
+  assert.equal(gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: new PlatformError('x') }) }).code, 2);
+  assert.equal(gateRun('7', { settings: { participants: [{ id: 'Alpha' }] }, platform: fakePlatform({}) }).code, 2);
+  assert.equal(gateRun(undefined, { settings, platform: fakePlatform({}) }).code, 2);
+  assert.throws(() => gateRun('7', { settings, platform: fakePlatform({ change: new TypeError('程式寫錯') }) }), TypeError);
+});
+
+test('真的跑一遍指令：本倉庫設定未填，退 2', () => {
+  assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2);
+  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+});
