@@ -11,7 +11,8 @@
 //     回覆與日誌都真的進了比對（把任一邊漏掉就會從退 1 變成退 0，這一格 2026-09-13 稽核抓到過）；
 //   ⑦**任何會印出名字的路徑都先遮蔽**——包含讀不到、讀不進、超過上限的錯誤訊息；
 //   ⑧名字也算輸出：回覆的檔名、日誌裡的目錄名、日誌根是符號連結（r1 High⑤）；
-//   ⑨指令入口：日誌超限時已到手的回覆照樣比，命中優先於驗不了（r1 Medium⑯）。
+//   ⑨指令入口：日誌超限時已到手的回覆照樣比，命中優先於驗不了（r1 Medium⑯）；
+//   ⑩日誌根自己的名字也比（r2 High⑥）；空根又沒回覆＝驗不了（根目錄存在不算有輸出）。
 //     稽核實測過的形狀：日誌區有一個檔名就是機密、而且讀不到，原本會整支炸掉並把未遮蔽的路徑印兩次。
 //
 // ⚠️ 守不到的：編碼過、拆段過、轉義超過兩層的外洩（漏報方向）；憑形狀認機密那一族刻意不搬。
@@ -222,7 +223,7 @@ test('⑧回覆的檔名就是機密＝事故；日誌裡的目錄名是機密�
     fs.symlinkSync(emptyLogs, path.join(dir, 'link2'));
     const r = cli(['--secrets', secrets, '--reply', cleanReply, '--logs', path.join(dir, 'link2')]);
     assert.equal(r.code, 1, '日誌根是符號連結＝掃描器放了捷徑＝事故');
-    assert.match(r.lines.join('\n'), /日誌根目錄/u);
+    assert.match(r.lines.join('\n'), /日誌根（/u, '要說是根出了事，並帶著根的名字（遮蔽過）');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -239,5 +240,23 @@ test('⑨日誌超限時，已到手的回覆照樣比：有命中＝1（事故�
     const r2 = cli(['--secrets', secrets, '--reply', clean, '--logs', logs]);
     assert.equal(r2.code, 2);
     assert.match(r2.lines.join('\n'), /讀不完/u);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('⑩日誌根的名字就是機密＝事故（內容乾淨也一樣）；空根沒回覆＝驗不了；空根有乾淨回覆＝乾淨', () => {
+  const dir = tempDir();
+  try {
+    const secrets = path.join(dir, 'secrets.txt'); fs.writeFileSync(secrets, `${SECRET}\n`);
+    const namedRoot = path.join(dir, SECRET); fs.mkdirSync(namedRoot);
+    fs.writeFileSync(path.join(namedRoot, 'safe.log'), 'safe\n');
+    const clean = path.join(dir, 'ok.txt'); fs.writeFileSync(clean, 'safe\n');
+    const r = cli(['--secrets', secrets, '--reply', clean, '--logs', namedRoot]);
+    assert.equal(r.code, 1, '根目錄的名字含機密');
+    assert.ok(!r.lines.join('\n').includes(SECRET), '印出來要遮蔽');
+    const empty = path.join(dir, 'empty'); fs.mkdirSync(empty);
+    const e = cli(['--secrets', secrets, '--logs', empty]);
+    assert.equal(e.code, 2, '空根、沒回覆＝沒有輸出可驗');
+    assert.match(e.lines.join('\n'), /沒有任何檔案/u);
+    assert.equal(cli(['--secrets', secrets, '--reply', clean, '--logs', empty]).code, 0, '有乾淨回覆就有東西可驗');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

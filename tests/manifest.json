@@ -12,6 +12,7 @@
   "git-env.test.js",
   "ignore-lists.test.js",
   "manifest.test.js",
+  "markdown-effective.test.js",
   "merge.test.js",
   "pending-rulings.test.js",
   "platform.test.js",

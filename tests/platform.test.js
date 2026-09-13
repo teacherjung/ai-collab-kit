@@ -165,6 +165,35 @@ test('預設執行器清掉 GIT_ 那一族：子行程看不到 GIT_DIR（規矩
   } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; delete process.env.GH_TOKEN_TEST; }
 });
 
+test('{project} 記號把倉庫身分釘進指令；設定沒填就丟錯；登記的選倉環境變數會被清掉（r2 High①）', () => {
+  const echo = ['node', '-e', 'process.stdout.write(JSON.stringify({sha: process.argv[1]}))', '{project}', '{branch}'];
+  const settings = allRegistered({ branchSha: echo });
+  settings.platform.project = 'owner/repo';
+  assert.deepEqual(ask('branchSha', { branch: 'main' }, { settings }), { sha: 'owner/repo' }, '記號要被換成設定的值');
+  for (const bad of [undefined, '', '未設定']) {
+    const s2 = allRegistered({ branchSha: echo }); s2.platform.project = bad;
+    assert.throws(() => ask('branchSha', { branch: 'main' }, { settings: s2 }), /platform\.project 還沒填/u, JSON.stringify(bad));
+  }
+  const prev = process.env.PLATFORM_PICK_REPO_TEST; process.env.PLATFORM_PICK_REPO_TEST = 'other/repo';
+  try {
+    const probe = ['node', '-e', 'process.stdout.write(JSON.stringify({sha: String("PLATFORM_PICK_REPO_TEST" in process.env)}))', '{branch}'];
+    const s3 = allRegistered({ branchSha: probe }); s3.platform.clearEnv = ['PLATFORM_PICK_REPO_TEST'];
+    assert.deepEqual(ask('branchSha', { branch: 'main' }, { settings: s3 }), { sha: 'false' }, '登記的選倉變數要被清掉');
+    const s4 = allRegistered({ branchSha: probe });
+    assert.deepEqual(ask('branchSha', { branch: 'main' }, { settings: s4 }), { sha: 'true' }, '沒登記的變數留著（認證用的不能誤殺）');
+  } finally { if (prev === undefined) delete process.env.PLATFORM_PICK_REPO_TEST; else process.env.PLATFORM_PICK_REPO_TEST = prev; }
+});
+
+test('GitHub 範本：每一條讀寫指令都用 {project} 釘倉庫、不用 {owner}/{repo} 佔位；登記要清 GH_REPO 與 GH_HOST', () => {
+  const doc = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'templates', 'platform-github.json'), 'utf8'));
+  for (const [name, argv] of Object.entries(doc.operations)) {
+    const joined = argv.join(' ');
+    assert.ok(joined.includes('{project}'), `${name} 沒有用 {project} 釘倉庫`);
+    assert.ok(!joined.includes('{owner}/{repo}'), `${name} 還在用工具自己的佔位（會被 GH_REPO 改寫）`);
+  }
+  assert.deepEqual([...doc.clearEnv].sort(), ['GH_HOST', 'GH_REPO']);
+});
+
 test('預設執行器：起不來回 status null，不是 0', () => {
   assert.equal(runCommand('/no/such/platform-binary', []).status, null);
   assert.equal(runCommand(process.execPath, ['-e', 'process.exit(5)']).status, 5);

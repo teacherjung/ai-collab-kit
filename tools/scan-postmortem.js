@@ -131,14 +131,18 @@ function collectOutputs(dir, caps = CAPS) {
     }
     return '';
   };
-  // 根目錄自己也先 lstat：根是符號連結時，「不跟符號連結」的政策原本只作用在子項（r1 High⑤）
+  // 根目錄自己也先 lstat：根是符號連結時，「不跟符號連結」的政策原本只作用在子項（r1 High⑤）。
+  // 根的**名字**也進比對（r2 High⑥：原本普通根的名字從沒進過 outputs；錯誤與特殊檔那幾條又把它換成人讀標籤）——
+  // 所以每一種出口的 where 都帶著根的真名字，印出來之前會被遮蔽。
+  const rootLabel = `日誌根（${path.basename(path.resolve(dir))}）`;
   let rootSt;
   try { rootSt = fs.lstatSync(dir); }
-  catch (e) { return { outputs: [{ where: '日誌根目錄', unreadable: `看不到：${e.code || '讀取失敗'}` }], over: '' }; }
-  if (rootSt.isSymbolicLink()) return { outputs: [{ where: '日誌根目錄', special: '符號連結' }], over: '' };
-  if (!rootSt.isDirectory()) return { outputs: [{ where: '日誌根目錄', unreadable: '不是目錄' }], over: '' };
+  catch (e) { return { outputs: [{ where: rootLabel, unreadable: `看不到：${e.code || '讀取失敗'}` }], over: '', files: 0 }; }
+  if (rootSt.isSymbolicLink()) return { outputs: [{ where: rootLabel, special: '符號連結' }], over: '', files: 0 };
+  if (!rootSt.isDirectory()) return { outputs: [{ where: rootLabel, unreadable: '不是目錄' }], over: '', files: 0 };
+  outputs.push({ where: rootLabel, text: '' });
   const over = walk(dir, 0, '');
-  return { outputs, over };
+  return { outputs, over, files: count };
 }
 
 /**
@@ -171,6 +175,8 @@ function cli(argv) {
     outputs.push(...collected.outputs);
     // 超限不提前退：已經收到的回覆與日誌照樣比，命中優先於驗不了（r1 Medium⑯：原本先退 2，把已到手的外洩證據降成普通未執行）
     if (collected.over) outputs.push({ where: '日誌收集', unreadable: `讀不完：${collected.over}` });
+    // 「根目錄存在」不能單獨算成有輸出可驗（r2 High⑥）：空根、又沒有回覆＝什麼都沒掃到＝驗不了
+    if (collected.files === 0 && !replyFile && !collected.over) outputs.push({ where: '日誌收集', unreadable: '日誌目錄裡沒有任何檔案，沒有輸出可驗' });
   }
   return compare({ secrets, outputs });
 }

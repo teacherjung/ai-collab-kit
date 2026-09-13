@@ -47,6 +47,16 @@ test('①註解裡的字不算（範本原封不動送出去不可以通過）',
   assert.equal(problemsOf(hidden, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length);
 });
 
+test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只有一段範例）', () => {
+  const inFence = `\`\`\`md\n${goodBody()}\n\`\`\``;
+  assert.equal(problemsOf(inFence, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '程式碼範例裡的欄位不算');
+  const inQuote = `> 範例：\n${goodBody()}`;
+  assert.equal(problemsOf(inQuote, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '引用的懶續行裡的欄位不算');
+  const longFence = `\`\`\`\`\n\`\`\`\n${goodBody()}\n\`\`\`\``;
+  assert.equal(problemsOf(longFence, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '四反引號圍欄裡的三反引號不是關閉');
+  assert.deepEqual(problemsOf(`${inFence}\n\n${goodBody()}`, ROLES), [], '範例之後真的填了就通過');
+});
+
 test('②欄名要錨在行首（「非實作者」不可以命中「實作者」）', () => {
   assert.equal(fieldValue('- **非實作者**：Alpha', '實作者'), '', '前面多字就不該命中');
   assert.equal(fieldValue('前面有字 實作者：Alpha', '實作者'), '');

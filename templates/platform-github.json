@@ -5,13 +5,17 @@
     "這套架構的記號只有 {change}、{sha}、{branch} 三個，會被換成真值。",
     "會分頁的三個動作（comments、changedFiles、checks）用 --paginate 時是每頁各印一個陣列；這套架構收這種寫法。但『頁數有沒有收齊』是這條指令自己的責任，架構驗不到。",
     "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。",
-    "openChanges 用會分頁的端點而不是 pr list --limit：--limit 是筆數上限，超過就靜靜截斷（r1 Medium⑥）。"
+    "openChanges 用會分頁的端點而不是 pr list --limit：--limit 是筆數上限，超過就靜靜截斷（r1 Medium⑥）。",
+    "每一條指令都用 {project}（設定的 platform.project＝擁有者/倉庫名）釘倉庫，不用工具自己的 {owner}/{repo} 佔位——那個會被 GH_REPO 改寫成別的倉庫（r2 High①）。clearEnv 那兩個變數要抄進 settings.json 的 platform.clearEnv。"
   ],
   "operations": {
     "change": [
       "gh",
       "pr",
       "view",
+      "{change}",
+      "-R",
+      "{project}",
       "{change}",
       "--json",
       "number,title,body,baseRefName,headRefName,headRefOid,state,isDraft,isCrossRepository,autoMergeRequest,changedFiles,author",
@@ -22,7 +26,7 @@
       "gh",
       "api",
       "--paginate",
-      "repos/{owner}/{repo}/pulls?state=open&per_page=100",
+      "repos/{project}/pulls?state=open&per_page=100",
       "--jq",
       "[.[]|{id:(.number|tostring),baseBranch:.base.ref,headBranch:.head.ref,headSha:.head.sha,isDraft:.draft,author:.user.login}]"
     ],
@@ -30,7 +34,7 @@
       "gh",
       "api",
       "--paginate",
-      "repos/{owner}/{repo}/issues/{change}/comments?per_page=100",
+      "repos/{project}/issues/{change}/comments?per_page=100",
       "--jq",
       "[.[]|{id:(.id|tostring),author:.user.login,body:.body,createdAt:.created_at}]"
     ],
@@ -38,7 +42,7 @@
       "gh",
       "api",
       "--paginate",
-      "repos/{owner}/{repo}/pulls/{change}/files?per_page=100",
+      "repos/{project}/pulls/{change}/files?per_page=100",
       "--jq",
       "[.[]|{path:.filename,status:.status,previousPath:(.previous_filename // null)}]"
     ],
@@ -46,21 +50,21 @@
       "gh",
       "api",
       "--paginate",
-      "repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100",
+      "repos/{project}/commits/{sha}/check-runs?per_page=100",
       "--jq",
       "[.check_runs[]|{name:.name,status:.status,conclusion:.conclusion,completedAt:.completed_at,producer:(if .app then (.app.id|tostring) else null end)}]"
     ],
     "requiredChecks": [
       "gh",
       "api",
-      "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
+      "repos/{project}/branches/{branch}/protection/required_status_checks",
       "--jq",
       "[.checks[]|{name:.context,producer:(if .app_id then (.app_id|tostring) else null end)}]"
     ],
     "branchSha": [
       "gh",
       "api",
-      "repos/{owner}/{repo}/git/ref/heads/{branch}",
+      "repos/{project}/git/ref/heads/{branch}",
       "--jq",
       "{sha:.object.sha}"
     ],
@@ -68,15 +72,24 @@
       "gh",
       "pr",
       "ready",
-      "{change}"
+      "{change}",
+      "-R",
+      "{project}"
     ],
     "merge": [
       "gh",
       "pr",
       "merge",
       "{change}",
+      "-R",
+      "{project}",
       "--squash",
       "--delete-branch"
     ]
-  }
+  },
+  "clearEnv": [
+    "GH_REPO",
+    "GH_HOST"
+  ],
+  "project": "未設定"
 }

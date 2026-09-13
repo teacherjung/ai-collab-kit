@@ -11,8 +11,12 @@
 //   ⑥沒標頭但看起來像結論＝只提醒，不影響退出碼；兩個來源長得像＝提醒、不併身分；
 //   ⑦平台問不到、設定沒填＝退 2；
 //   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
-// ⚠️ 照實記一個等價突變：evaluate 開頭那一行「照時間排序」拿掉，全卷仍然全綠——因為作廢的先後已經直接比時間值、
-//    聯集與同輪相反結論都不看順序，排序只剩防禦深度（讓 byId 的索引跟時間一致）。留著它，但不假裝有題在守它。
+//   ⑨同一位同輪次對**不同版本**各給結論＝不明、擋（r2 Medium⑤：原本同為通過時先遇到哪一則就用哪一則，
+//     清單順序改變判決）；判決與清單順序無關，每一種排列都要判一樣。
+//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算。
+// ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。獨立審查者用反例推翻（舊版本 01:00、目前版本 02:00、
+//    反序餵入：有排序退 1、沒排序退 0）——當時同輪同結論異版本是「先遇到哪一則就用哪一則」，排序決定了誰先。
+//    現在同輪異版本一律判不明，判決才真的跟順序無關（⑨那題把每一種排列都跑一遍）。
 //
 // ⚠️ 守不到的：標頭是自我宣告不是身分證明（改來源就能冒充另一位）；留言清單有沒有少給
 //    （分頁是那條登記指令的責任）；作廢比原專案寬——任何一位都能作廢任何壞留言（裁示者裁的方向）。
@@ -215,4 +219,33 @@ test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻�
   const broken = { ...good, createdAt: 'yesterday' };
   const g = gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [broken] }) });
   assert.equal(g.code, 2);
+});
+
+test('⑨同一位同輪次對不同版本各說通過＝不明、擋；每一種排列判決相同', () => {
+  const onOld = { ...verdict({ sha: OLD, round: 1 }), createdAt: '2026-09-13T04:00:00Z' };
+  const onHead = { ...verdict({ sha: HEAD, round: 1 }), createdAt: '2026-09-13T04:00:00Z' };
+  for (const order of [[onOld, onHead], [onHead, onOld]]) {
+    const r = evaluate(order, HEAD, 'Beta', ROLES);
+    assert.ok(r.problems.some((p) => p.includes('對兩個版本各給結論')), `排列 ${order.map((c) => c.id)} 應判不明`);
+  }
+  // 時間不同、清單反序也一樣
+  const early = { ...onOld, createdAt: '2026-09-13T01:00:00Z' };
+  const late = { ...onHead, createdAt: '2026-09-13T02:00:00Z' };
+  assert.deepEqual(evaluate([late, early], HEAD, 'Beta', ROLES).problems, evaluate([early, late], HEAD, 'Beta', ROLES).problems);
+  assert.ok(evaluate([late, early], HEAD, 'Beta', ROLES).problems.length > 0, '同輪異版本不可以放行');
+  // 同一版本的短碼與長碼相容：不算異版本
+  const shortSha = { ...verdict({ sha: HEAD.slice(0, 7), round: 1 }), createdAt: '2026-09-13T04:00:01Z' };
+  assert.deepEqual(evaluate([onHead, shortSha], HEAD, 'Beta', ROLES).problems, []);
+  // 更高輪次澄清後放行
+  const clarify = verdict({ sha: HEAD, round: 2 });
+  assert.deepEqual(evaluate([onOld, onHead, clarify], HEAD, 'Beta', ROLES).problems, []);
+});
+
+test('⑩圍欄與引用裡的標頭、記號、結論用詞都不算生效', () => {
+  const fencedHeader = c('````md\n```\n🤖 Beta｜來源：CLI｜審 `abcdef1`｜r1｜結論：通過\n````\n以上是範例');
+  const r = evaluate([fencedHeader], HEAD, 'Beta', ROLES);
+  assert.ok(r.problems.some((p) => p.includes('沒有「Beta」')), '圍欄裡的標頭不是結論');
+  assert.equal(r.warnings.length, 0, '圍欄裡的 🤖 也不算壞標頭、不算疑似');
+  assert.equal(hasBotMark('> 引用\n懶續行裡有 🤖'), false, '引用的懶續行不算');
+  assert.equal(looksLikeVerdict('````\n```\n不可合併\n````'), false);
 });

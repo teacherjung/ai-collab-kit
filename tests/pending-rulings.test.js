@@ -8,7 +8,9 @@
 //   ⑤已裁與已撤回一定印出來、附配對；長得像但形狀不合＝疑似；
 //   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；
 //   ⑦三種留痕都只採計登記的貼文帳號（r1 Medium⑧：外人不可以撤掉待裁、外人的問也不入）；
-//   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）。
+//   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）；
+//   ⑨生效文字只有一份定義（r2 Medium③）：原話與配對放在程式碼圍欄、引用的懶續行裡都不算；
+//   ⑩時間用時間值比（r2 Medium④）：比問題早的異時區裁示不關題；時間讀不出＝退 2、不移出待裁。
 // ⚠️ 守不到的：只掃開著的變更；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
@@ -122,4 +124,29 @@ test('⑧原話署名包粗體＝不合；原話行與網址藏在 HTML 註解�
   assert.equal(outsideQuotes('> a\nb\n\nc'), '\nc', '懶續行 b 屬於引用，空行之後的 c 不是');
   const afterBlank = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n> 引用\n\n${q.id}`, { author: 'boss-acct' });
   assert.equal(evaluate([q, afterBlank], D).open.length, 0, '空行之後回到最外層，配對成立');
+});
+
+test('⑨原話與配對放在程式碼圍欄裡＝不算；原話放在引用的懶續行＝不算（生效文字只有一份定義）', () => {
+  const q = ask();
+  const fenced = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n\`\`\`md\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n\`\`\``, { author: 'boss-acct' });
+  assert.equal(evaluate([q, fenced], D).open.length, 1, '圍欄裡的原話與網址是範例，不算');
+  const quotedQuote = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n> 引用範例\n原話（對話中，Alpha 轉述）：**「甲」**\n\n${q.id}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, quotedQuote], D).open.length, 1, '原話在引用的懶續行裡，不算；網址雖在最外層也不夠');
+  const longFence = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n\`\`\`\`\n\`\`\`\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n\`\`\`\`\n`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, longFence], D).open.length, 1, '四反引號圍欄裡的三反引號不是關閉');
+});
+
+test('⑩時間用時間值比：異時區但其實較早的裁示不關題；時間讀不出＝退 2 且不移出待裁', () => {
+  const q = ask(); q.createdAt = '2026-09-13T02:00:00Z';
+  const earlier = ruling(q.id); earlier.createdAt = '2026-09-13T03:00:00+02:00';   // ＝01:00Z，比問題早
+  const r = evaluate([q, earlier], D);
+  assert.equal(r.open.length, 1, '字串序會排錯，時間值不會');
+  const later = ruling(q.id); later.createdAt = '2026-09-13T05:00:00+02:00';   // ＝03:00Z，比問題晚
+  assert.equal(evaluate([q, later], D).open.length, 0);
+  const broken = ruling(q.id); broken.createdAt = 'not-a-time';
+  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
+  const platform = { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [q, broken]) };
+  const out = run({ settings, platform });
+  assert.equal(out.code, 2);
+  assert.match(out.lines.join('\n'), /時間讀不出/u);
 });

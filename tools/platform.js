@@ -101,8 +101,12 @@ const OPERATIONS = {
  *    問到的是**那一棵**的變更與留言，而輸出看起來完全正常（里程碑 3 r1 High①，PFW 原版早就防過）。
  *    GITHUB_、GH_TOKEN 不是 GIT_ 前綴，不受影響。
  */
-function runCommand(command, args) {
-  const r = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: gitEnv() });
+function runCommand(command, args, { clearEnv = [] } = {}) {
+  // 除了 GIT_ 那一族，專案還可以登記「平台工具自己的選倉環境變數」一起清掉（r2 High①：GH_REPO 一設，
+  // 同一條指令就問到別的倉庫，退出碼 0、輸出看起來完全正常）。認證用的變數不在清單上就留著。
+  const env = gitEnv();
+  for (const key of clearEnv) delete env[key];
+  const r = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env });
   if (r.error) return { status: null, stdout: '', stderr: String(r.error.message) };
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
@@ -140,8 +144,12 @@ function checkShape(value, shape, where) {
   if (extra.length) throw new PlatformError(`${where} 多了沒約定的欄位：${extra.join('、')}`);
 }
 
-/** 把指令樣板裡的記號換掉。用不到的參數、沒填的參數都當錯，不默默跑一條半成品的指令。 */
-function fill(parts, params, args, opName) {
+/**
+ * 把指令樣板裡的記號換掉。用不到的參數、沒填的參數都當錯，不默默跑一條半成品的指令。
+ * 另有一個全域記號 {project}＝專案設定的 platform.project（例如「擁有者/倉庫名」）：用了它就等於把身分釘死在
+ * 指令裡，不再由環境變數決定問哪個倉庫（r2 High①）。樣板用了 {project} 而設定沒填＝丟錯。
+ */
+function fill(parts, params, args, opName, project) {
   const allowed = new Set(params);
   for (const key of Object.keys(args)) {
     if (!allowed.has(key)) throw new PlatformError(`動作「${opName}」不吃參數 ${key}`);
@@ -153,6 +161,10 @@ function fill(parts, params, args, opName) {
   const used = new Set();
   const out = parts.map((part) => {
     let s = String(part);
+    if (s.includes('{project}')) {
+      if (typeof project !== 'string' || !project.trim() || project === UNSET) throw new PlatformError(`動作「${opName}」的指令用了 {project}，但專案設定的 platform.project 還沒填：不知道要問哪個倉庫，不放行`);
+      s = s.split('{project}').join(project);
+    }
     for (const key of params) {
       const token = `{${key}}`;
       if (s.includes(token)) { used.add(key); s = s.split(token).join(args[key]); }
@@ -179,8 +191,9 @@ function ask(opName, args = {}, { settings = readSettings(), run = runCommand } 
   if (!Array.isArray(registered) || registered.length === 0 || registered[0] === UNSET) {
     throw new PlatformError(`專案設定裡沒有登記「${opName}」（${op.what}）：問不到就不放行，不假裝問過了。`);
   }
-  const argv = fill(registered, op.params, args, opName);
-  const { status, stdout, stderr } = run(argv[0], argv.slice(1));
+  const argv = fill(registered, op.params, args, opName, platform.project);
+  const clearEnv = Array.isArray(platform.clearEnv) ? platform.clearEnv.filter((k) => typeof k === 'string' && k) : [];
+  const { status, stdout, stderr } = run(argv[0], argv.slice(1), { clearEnv });
   if (status === null) throw new PlatformError(`動作「${opName}」的指令起不來或被殺掉：${String(stderr).trim().slice(0, 120)}`);
   if (status !== 0) throw new PlatformError(`動作「${opName}」的指令退了 ${status}：${String(stderr).trim().slice(0, 120)}`);
   if (op.kind === 'action') return null;

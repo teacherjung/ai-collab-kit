@@ -26,6 +26,7 @@
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
+const { effectiveText } = require('../markdown-effective.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
 const VERDICTS = { 通過: false, 需修改後再審: true, 不可合併: true };
@@ -39,17 +40,8 @@ const HEADER = /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*([A-Za-z]+)｜來源：([^�
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
 const VOID = /^ {0,3}作廢上一則：([A-Za-z0-9_-]+)[^\S\n]*$/u;
 
-/** 寬鬆版剝圍欄：別把範例裡的字當成結論；寧可多剝也不要漏。 */
-function stripFences(md) {
-  let open = null;
-  const out = [];
-  for (const line of String(md || '').replace(/\r\n?/g, '\n').split('\n')) {
-    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (m) { open = open && open === m[1][0] ? null : (open || m[1][0]); continue; }
-    if (!open) out.push(line);
-  }
-  return out.join('\n');
-}
+/** 生效文字只有一份定義（tools/markdown-effective.js）：註解、圍欄（含長度規則）、引用（含懶續行）裡的字不算。 */
+const stripFences = (md) => effectiveText(md);
 
 /** 從一則留言抽標頭。抓不到就回 null（呼叫端決定那算不算問題）。 */
 function headerOf(body, roles) {
@@ -77,7 +69,6 @@ function headerOf(body, roles) {
 /** 這則留言想用標頭但寫壞了——判準是出現 🤖（剝掉引用與行內程式碼之後）。誤判面極小。 */
 function hasBotMark(body) {
   return stripFences(body)
-    .replace(/^[^\S\n]*>.*$/gm, '')
     .split('\n')
     .some((l) => /🤖/u.test(l.replace(/(`+)[^`]*\1/gu, '')));
 }
@@ -90,7 +81,7 @@ function hasBotMark(body) {
  * 誤提醒的代價是一句話；原專案為了少提醒幾句寫了一百行、被繞過八輪——那些行不值得搬。
  */
 function looksLikeVerdict(body) {
-  const text = stripFences(body).replace(/^[^\S\n]*>.*$/gm, '').replace(/(`+)[^`]*\1/gu, '');
+  const text = stripFences(body).replace(/(`+)[^`]*\1/gu, '');
   return Object.keys(VERDICTS).some((v) => text.includes(v));
 }
 
@@ -153,10 +144,17 @@ function evaluate(comments, head, reviewerRole, roles) {
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
     const cur = latest[who];
+    const sameSha = (a, b) => a.startsWith(b) || b.startsWith(a);
     if (!cur || h.round > cur.round) latest[who] = { ...h, who };
-    // 同輪次出現相反結論＝fail-closed：用「大於等於」的話，結果會取決於留言順序——那正是這支要根治的病
-    else if (h.round === cur.round && h.blocking !== cur.blocking) {
-      latest[who] = { ...cur, blocking: true, verdict: `同一輪（r${h.round}）出現相反結論：${cur.verdict} vs ${h.verdict}` };
+    else if (h.round === cur.round) {
+      // 同輪次：判決必須跟留言順序無關（r2 Medium⑤：同一輪對兩個版本各說「通過」，原本先遇到哪一則就用哪一則）。
+      // 相反結論＝不明；**不同版本**（短碼不相容）也＝不明——同一輪不可能同時審兩個版本，要更高輪次澄清。
+      if (cur.conflict) { /* 已經標成不明，維持 */ }
+      else if (h.blocking !== cur.blocking) {
+        latest[who] = { ...cur, conflict: true, blocking: true, verdict: `同一輪（r${h.round}）出現相反結論：${cur.verdict} vs ${h.verdict}` };
+      } else if (!sameSha(h.sha, cur.sha)) {
+        latest[who] = { ...cur, conflict: true, blocking: true, verdict: `同一輪（r${h.round}）對兩個版本各給結論（${cur.sha.slice(0, 7)}、${h.sha.slice(0, 7)}）：不明，要更高輪次澄清` };
+      }
     }
   });
 

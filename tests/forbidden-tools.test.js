@@ -6,7 +6,8 @@
 //     唯讀前綴跳過；駝峰、點、連字號都正規化；連接器前綴不同、工具名相同一起擋；
 //   ⑥兩家 AI 的接線範本都呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
 //   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
-//   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字。
+//   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字；
+//   ⑨規則要合各欄位的文法：含空白、非法字元的規則不可能匹配合法工具名，留著只會把「有規則」判成真（r2 High②）＝拒絕。
 // ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有。
 'use strict';
 const test = require('node:test');
@@ -50,6 +51,26 @@ test('⑦只填名字沒有規則＝拒絕；清單型別錯＝拒絕；額外�
     assert.equal(decide('mcp__any__harmless', bad).deny, true, JSON.stringify(bad));
   }
   assert.equal(decide('mcp__any__harmless', { name: 'x', patterns: ['('] }).deny, true, '壞正規式＝設定壞掉＝拒絕');
+});
+
+test('⑨不合文法的規則不算規則：空白項、含空白的連接器、含空白的逐字名，都讓整份設定判壞掉＝拒絕', () => {
+  for (const bad of [
+    { name: 'zone', servers: [' '] },
+    { name: 'zone', servers: ['broker paper'] },
+    { name: 'zone', deny: ['\t'] },
+    { name: 'zone', deny: ['has space'] },
+    { name: 'zone', verbs: ['Create'], nouns: ['order'] },   // 大寫不是正規化後的形狀
+    { name: 'zone', verbs: ['create'], nouns: ['or der'] },
+    { name: 'zone', readPrefixes: ['get_'] },
+    { name: 'zone', patterns: ['a b'] },
+  ]) {
+    const d = decide('mcp__vendor__create_order', bad);
+    assert.equal(d.deny, true, JSON.stringify(bad));
+    assert.match(d.why, /設定壞掉|沒有任何一條有效規則/u);
+  }
+  // 「未設定」佔位值算沒填，不算壞：只剩它＝沒有規則＝拒絕；旁邊有真規則＝正常判
+  assert.equal(decide('mcp__vendor__create_order', { name: 'zone', servers: ['未設定'] }).deny, true);
+  assert.equal(decide('mcp__any__harmless', { name: 'zone', servers: ['未設定'], deny: ['mcp__z'] }).deny, false);
 });
 
 test('⑧連接器名含 __ 也比得到；分隔符的等價寫法一起擋', () => {

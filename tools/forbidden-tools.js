@@ -34,11 +34,27 @@ function normalize(x) {
     .toLowerCase();
 }
 
-/** 清單型欄位：沒填＝空陣列；填了就必須是字串陣列，否則回 null（呼叫端當設定壞掉、拒絕）。 */
+/** 各欄位的詞彙文法：不合文法的規則**根本不可能**匹配合法工具名，留著只會把「有規則」判成真（r2 High②）。 */
+const GRAMMAR = {
+  servers: /^[A-Za-z0-9_.-]+$/u,        // 連接器名：合法工具名的字元集
+  allowlist: /^[A-Za-z0-9_.-]+$/u,
+  deny: /^[A-Za-z0-9_.-]+$/u,
+  verbs: /^[a-z0-9]+(?:_[a-z0-9]+)*$/u,  // 家族網的詞：正規化後的形狀（小寫、底線）
+  nouns: /^[a-z0-9]+(?:_[a-z0-9]+)*$/u,
+  readPrefixes: /^[a-z0-9]+$/u,
+  patterns: /^\S+$/u,                    // 正規式另外試編譯
+};
+
+/**
+ * 清單型欄位：沒填＝空陣列；填了就必須是字串陣列、每一項合文法，否則回 null（呼叫端當設定壞掉、拒絕）。
+ * 「未設定」這個佔位值算沒填。
+ */
 function listField(f, key) {
   if (f[key] === undefined) return [];
   if (!Array.isArray(f[key]) || f[key].some((x) => typeof x !== 'string')) return null;
-  return f[key].filter((x) => x && x !== UNSET);
+  const items = f[key].filter((x) => x !== UNSET);
+  if (items.some((x) => !GRAMMAR[key].test(x))) return null;
+  return items;
 }
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -56,7 +72,7 @@ function decide(toolName, forbidden) {
   const lists = {};
   for (const key of ['servers', 'allowlist', 'deny', 'verbs', 'nouns', 'readPrefixes', 'patterns']) {
     lists[key] = listField(f, key);
-    if (lists[key] === null) return { deny: true, why: `專案設定裡禁區清單的「${key}」不是字串陣列：設定壞掉，一律拒絕` };
+    if (lists[key] === null) return { deny: true, why: `專案設定裡禁區清單的「${key}」不是字串陣列、或有一項不合文法（空白、非法字元）：設定壞掉，一律拒絕` };
   }
   const { servers, verbs, nouns, readPrefixes } = lists;
   const allow = new Set(lists.allowlist);

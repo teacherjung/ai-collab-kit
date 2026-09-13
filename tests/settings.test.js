@@ -117,22 +117,15 @@ test('本文與機器索引指名的每一份範本都在，而且帶著自己�
   }
   // 固定小標是規矩 E1、G3 指名的字串：範本要真的吐得出來——**在生效的行的行首**，不是藏在註解或圍欄裡
   // （r1 Medium⑮：原本用 includes，把小標改成 HTML 註解照樣綠，填範本後畫面上根本沒有那個小標）
-  const effectiveLines = (text) => {
-    const noComments = text.replace(/<!--[\s\S]*?-->/g, '');
-    const out = []; let fence = null;
-    for (const line of noComments.split('\n')) {
-      const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (m) { fence = fence && fence === m[1][0] ? null : (fence || m[1][0]); continue; }
-      if (!fence) out.push(line);
-    }
-    return out;
-  };
+  // 「哪些行算生效」只有一份實作（r2 Medium③：這裡原本自己寫一份，三個反引號就提早關掉四個反引號的圍欄）
+  const { effectiveLines } = require('../tools/markdown-effective.js');
   const must = [['templates/pr-body.md', /^### 複審後掃\s*$/u], ['templates/scan-record.md', /^\*\*掃描時序\*\*/u]];
   for (const [file, re] of must) {
     const lines = effectiveLines(fs.readFileSync(path.join(root, file), 'utf8'));
     assert.ok(lines.some((l) => re.test(l)), `${file} 的生效行裡找不到固定小標 ${re}`);
   }
   assert.deepEqual(effectiveLines('a\n<!-- ### x -->\n```\n### y\n```\nb'), ['a', '', 'b'], '註解與圍欄裡的行不算生效');
+  assert.deepEqual(effectiveLines('````md\n範例\n```\n### 複審後掃\n````\nb').filter(Boolean), ['b'], '四反引號圍欄裡的三反引號不是關閉（r2 反例）');
 });
 
 test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要有人發現）', () => {

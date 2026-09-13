@@ -84,7 +84,7 @@ function build(data) {
   out.push('  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。');
   out.push('', '## 五、平台介面（規矩 E5、H1；閘要問平台的每一件事都走這裡）', '');
   out.push('套件只定「問什麼」與「答案長什麼樣」，每個動作填一條指令，指令要把答案印成約定形狀的 JSON。翻譯是這個專案的事，套件不碰任何平台的語彙。沒登記的動作被問到時一律不放行，不會回一個空答案假裝問過了。', '');
-  out.push(`平台：${plain((data.platform && data.platform.name) || '未設定', '平台名稱')}`, '');
+  out.push(`平台：${plain((data.platform && data.platform.name) || '未設定', '平台名稱')}；倉庫身分（指令裡的 {project}）：${plain((data.platform && data.platform.project) || '未設定', '倉庫身分')}；問平台前要清掉的選倉環境變數：${plain((data.platform && Array.isArray(data.platform.clearEnv) && data.platform.clearEnv.length) ? data.platform.clearEnv.join('、') : '（無）', '選倉環境變數')}`, '');
   out.push('| 動作 | 要問什麼 | 登記的指令 |', '|---|---|---|');
   const ops = (data.platform && data.platform.operations) || {};
   const unknown = Object.keys(ops).filter((k) => !(k in OPERATIONS));

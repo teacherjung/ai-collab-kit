@@ -29,25 +29,14 @@ const WITHDRAW_REASON = /^撤回理由：(題目依附的東西沒了|問題本�
 const NEAR = /❓|⚖|🚫|待裁|裁示|撤回/u;
 
 const realDate = (s) => { const m = DATE.exec(s); if (!m) return false; const d = new Date(`${s}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s; };
-/** 先剝掉 HTML 註解：藏在註解裡的原話行或網址在畫面上看不見，不可以算數（r1 Medium⑨）。 */
-const clean = (body) => String(body || '').replace(/\r\n?/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
-const firstLine = (body) => clean(body).split('\n').find((l) => l.trim()) || '';
+const { effectiveText } = require('./markdown-effective.js');
 /**
- * 引用區塊以外的內文（配對只看這裡：引用別人的網址不算在回答它）。
- * 引用區塊＝以 > 開頭的行，**加上緊接在後、沒有空行隔開的續行**（Markdown 的懶續行；r1 Medium⑨：只刪有 > 的那一行，
- * 網址放在續行就被當成最外層）。
+ * 生效文字只有一份定義（r2 Medium③：原本第一行、原話行、配對各自剝不同的容器——原話放進程式碼範例照樣算數）。
+ * 註解、程式碼圍欄、引用（含懶續行）裡的字一律不算：第一行、原話、撤回理由、自報句、配對，全部從同一份文字取。
  */
-const outsideQuotes = (body) => {
-  const out = [];
-  let inQuote = false;
-  for (const line of clean(body).split('\n')) {
-    if (/^[^\S\n]*>/u.test(line)) { inQuote = true; continue; }
-    if (!line.trim()) { inQuote = false; out.push(line); continue; }
-    if (inQuote) continue;
-    out.push(line);
-  }
-  return out.join('\n');
-};
+const clean = (body) => effectiveText(body);
+const firstLine = (body) => clean(body).split('\n').find((l) => l.trim()) || '';
+const outsideQuotes = clean;
 // 編號要整個對上：前後不可以再接字母或數字（c1 不可以命中 c12）；但連字號與底線算邊界——網址尾碼是「issuecomment-<編號>」。
 const cites = (body, id) => new RegExp(`(?<![0-9A-Za-z])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9A-Za-z])`, 'u').test(outsideQuotes(body));
 
@@ -66,7 +55,12 @@ function deciderOf(settings) {
 /**
  * 純判斷層。comments＝[{ id, author, body, createdAt, change }]（change＝所屬變更編號，只用來印）。
  */
+const at = (c) => Date.parse(String(c.createdAt));
+
 function evaluate(comments, decider) {
+  // 時間契約（r2 Medium④）：每一則的時間都要讀得出，先後用時間值比——字串比會讓不同時區的合法寫法排錯，
+  // 一則其實比問題早的裁示會把後來的問題關掉。讀不出＝整份算不出來，由呼叫端退 2。
+  if (comments.some((c) => !Number.isFinite(at(c)))) return { open: [], ruled: [], withdrawn: [], near: [], unsure: '有留言的時間讀不出來' };
   const ids = decider.ids && decider.ids.length ? decider.ids : [decider.id];
   const accounts = new Set(decider.accounts && decider.accounts.length ? decider.accounts : [decider.account]);
   const idAlt = `(?:${ids.map(esc).join('|')})`;
@@ -78,7 +72,7 @@ function evaluate(comments, decider) {
   const rulings = [];
   const withdraws = [];
   const near = [];
-  const sorted = [...comments].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const sorted = [...comments].sort((a, b) => at(a) - at(b));
   for (const c of sorted) {
     const first = firstLine(c.body);
     // 三種留痕都只採計登記過的貼文帳號（設定的貼文帳號資格；r1 Medium⑧：原本只有裁示看帳號，外人能撤掉待裁）
@@ -114,7 +108,7 @@ function evaluate(comments, decider) {
   const ruled = [];
   const withdrawn = [];
   for (const q of asks) {
-    const later = (x) => String(x.createdAt) > String(q.createdAt);
+    const later = (x) => at(x) > at(q);
     const r = rulings.find((x) => later(x) && cites(x.body, q.id));
     if (r) { ruled.push({ ask: q, by: r }); continue; }
     const w = withdraws.find((x) => later(x) && cites(x.body, q.id));
@@ -154,7 +148,9 @@ function run({ settings = readSettings(), platform = { ask } } = {}) {
     if (e instanceof PlatformError || (e && e.name === 'PlatformError')) return { code: 2, lines: [`待裁清單：問不到平台（${e.message}）——算不出來。`] };
     throw e;
   }
-  const lines = [`待裁清單（掃了 ${changes.length} 支開著的變更、${comments.length} 則留言；只掃開著的）`, ...render(evaluate(comments, decider))];
+  const result = evaluate(comments, decider);
+  if (result.unsure) return { code: 2, lines: [`待裁清單：${result.unsure}——先後判不了，算不出來（不會把任何題移出待裁）。`] };
+  const lines = [`待裁清單（掃了 ${changes.length} 支開著的變更、${comments.length} 則留言；只掃開著的）`, ...render(result)];
   return { code: 0, lines };
 }
 
