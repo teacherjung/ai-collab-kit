@@ -171,9 +171,9 @@
    "verified": ""
   },
   {
-   "name": "堆疊閘",
+   "name": "堆疊閘（底必須是主幹、不可以有別支疊在上面）",
    "rules": "H2",
-   "state": "未移植",
+   "state": "已安裝未啟用",
    "verified": ""
   },
   {
@@ -257,7 +257,7 @@
    "args": [
     "tools/gates/check-stacked.js"
    ],
-   "state": "未移植"
+   "state": "已安裝未啟用"
   },
   {
    "name": "真考卷（必要檢查最新場次真的跑過且成功）",

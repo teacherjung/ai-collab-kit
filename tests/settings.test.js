@@ -98,7 +98,11 @@ test('本文與機器索引指名的每一份範本都在，而且帶著自己�
 
 test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要有人發現）', () => {
   const root = path.join(__dirname, '..');
-  const tools = fs.readdirSync(path.join(root, 'tools')).filter((f) => f.endsWith('.js')).sort();
+  const toolsDir = path.join(root, 'tools');
+  const gatesDir = path.join(toolsDir, 'gates');
+  const tools = fs.readdirSync(toolsDir).filter((f) => f.endsWith('.js')).sort();
+  // 閘住在 tools/gates/，一樣要有同名考題（新增一道閘就一定被數到）
+  const gates = fs.existsSync(gatesDir) ? fs.readdirSync(gatesDir).filter((f) => f.endsWith('.js')).sort() : [];
   const tests = new Set(fs.readdirSync(__dirname).filter((f) => f.endsWith('.test.js')));
   assert.ok(tools.length >= 5, `tools/ 只剩 ${tools.length} 支：這一題自己的前提變了`);
   // 產生器三支共用同一份資料契約，考題另立一支；其餘一支工具對一支考題
@@ -111,6 +115,10 @@ test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要�
   for (const tool of tools) {
     const expected = shared[tool] || tool.replace(/\.js$/u, '.test.js');
     assert.ok(tests.has(expected), `工具 ${tool} 找不到對應的考題檔 ${expected}——被刪掉或改名了嗎`);
+  }
+  for (const gate of gates) {
+    const expected = gate.replace(/\.js$/u, '.test.js');
+    assert.ok(tests.has(expected), `閘 gates/${gate} 找不到對應的考題檔 ${expected}——被刪掉或改名了嗎`);
   }
   assert.ok(tests.has('data-contract.test.js'), '資料契約的負向考題不見了');
 });

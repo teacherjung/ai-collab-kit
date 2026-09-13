@@ -47,12 +47,12 @@ const OPERATIONS = {
     kind: 'object',
     params: ['change'],
     what: '讀一支變更的基本資料',
-    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, author: LINE },
+    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, author: LINE },
   },
   openChanges: {
     kind: 'list',
     params: [],
-    what: '列出目前開著的每一支變更',
+    what: '列出目前開著的每一支變更（⚠️ 必須是全部，分頁要在這條指令裡處理完；套件驗不到少給了幾支）',
     shape: { id: LINE, baseBranch: LINE, headBranch: LINE, headSha: LINE, isDraft: BOOL, author: LINE },
   },
   comments: {

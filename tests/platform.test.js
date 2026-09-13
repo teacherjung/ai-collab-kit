@@ -24,7 +24,7 @@ const NUL = '\u0000';
 
 /** 一份把九個動作都登記好的設定；每個動作回一筆合格的答案。 */
 const GOOD = {
-  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, author: 'someone' },
+  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, author: 'someone' },
   openChanges: [{ id: '7', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', isDraft: false, author: 'someone' }],
   comments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z' }],
   changedFiles: [{ path: 'a.js', status: 'modified' }],
@@ -80,7 +80,9 @@ test('指令起不來、被殺掉、退非零、印的不是 JSON：全部丟錯
   const cases = [
     ['起不來', ['/no/such/platform-binary']],
     ['被訊號殺掉', ['node', '-e', 'process.kill(process.pid,"SIGKILL")']],
-    ['退非零', ['node', '-e', 'process.exit(3)']],
+    // ⚠️ 這一格要印出**合格的 JSON** 再退非零，不然是「不是 JSON」那道先擋下來，
+    //    退出碼那道檢查就沒被考到（突變驗過：原本寫成什麼都不印，拿掉退出碼檢查仍然全綠）。
+    ['退非零但印出合格的答案', ['node', '-e', 'process.stdout.write("[]"); process.exit(3)']],
     ['印的不是 JSON', ['node', '-e', 'process.stdout.write("not json")']],
     ['印的是 JSON 但不是陣列', ['node', '-e', 'process.stdout.write("{}")']],
   ];
