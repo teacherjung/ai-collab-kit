@@ -102,7 +102,12 @@ test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要�
   const tests = new Set(fs.readdirSync(__dirname).filter((f) => f.endsWith('.test.js')));
   assert.ok(tools.length >= 5, `tools/ 只剩 ${tools.length} 支：這一題自己的前提變了`);
   // 產生器三支共用同一份資料契約，考題另立一支；其餘一支工具對一支考題
-  const shared = { 'build-rules.js': 'rules-length.test.js', 'build-casebook-index.js': 'casebook.test.js', 'build-settings.js': 'settings.test.js' };
+  const shared = {
+    'build-rules.js': 'rules-length.test.js',
+    'build-casebook-index.js': 'casebook.test.js',
+    'build-settings.js': 'settings.test.js',
+    'settings-data.js': 'settings.test.js',   // 只有一個讀取函式，跟設定產生器同一支考題
+  };
   for (const tool of tools) {
     const expected = shared[tool] || tool.replace(/\.js$/u, '.test.js');
     assert.ok(tests.has(expected), `工具 ${tool} 找不到對應的考題檔 ${expected}——被刪掉或改名了嗎`);

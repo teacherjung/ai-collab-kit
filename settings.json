@@ -87,6 +87,12 @@
  "mergeAuthorization": "未設定",
  "machines": [
   {
+   "name": "平台介面（閘問平台的九個動作，答案形狀不合就不放行）",
+   "rules": "E5、H1",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
    "name": "合併指令（依序跑完登記的閘，任一道紅就停）",
    "rules": "H1",
    "state": "已啟用",
@@ -275,5 +281,37 @@
  "mergeCommand": {
   "command": "未設定",
   "args": []
+ },
+ "platform": {
+  "name": "未設定",
+  "operations": {
+   "change": [
+    "未設定"
+   ],
+   "openChanges": [
+    "未設定"
+   ],
+   "comments": [
+    "未設定"
+   ],
+   "changedFiles": [
+    "未設定"
+   ],
+   "checks": [
+    "未設定"
+   ],
+   "requiredChecks": [
+    "未設定"
+   ],
+   "branchSha": [
+    "未設定"
+   ],
+   "markReady": [
+    "未設定"
+   ],
+   "merge": [
+    "未設定"
+   ]
+  }
  }
 }

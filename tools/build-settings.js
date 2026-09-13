@@ -11,9 +11,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { literal } = require('./build-rules.js');
+// 平台介面的動作清單正本在 tools/platform.js，這裡只照它排版——不另抄一份會漂的名單
+const { OPERATIONS } = require('./platform.js');
+
+const { read, dataFile } = require('./settings-data.js');
 
 const root = path.join(__dirname, '..');
-const dataFile = path.join(root, 'settings.json');
 const outFile = path.join(root, 'PROJECT-SETTINGS.md');
 
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
@@ -27,10 +30,6 @@ function plain(value, what, { allowEmpty = false } = {}) {
   if (LINE_BREAK.test(value)) throw new Error(`${what} 裡有換行：它會跑出自己該待的位置`);
   if (NUL.test(value)) throw new Error(`${what} 裡有空字元`);
   return literal(value);
-}
-
-function read() {
-  return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
 }
 
 function build(data) {
@@ -83,7 +82,18 @@ function build(data) {
   out.push('  3. 跑掃描器（本套件不代跑）。');
   out.push('  4. node tools/scan-postmortem.js --secrets <清單檔> --reply <回覆檔> --logs <日誌目錄>：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
   out.push('  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。');
-  out.push('', '## 五、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
+  out.push('', '## 五、平台介面（規矩 E5、H1；閘要問平台的每一件事都走這裡）', '');
+  out.push('套件只定「問什麼」與「答案長什麼樣」，每個動作填一條指令，指令要把答案印成約定形狀的 JSON。翻譯是這個專案的事，套件不碰任何平台的語彙。沒登記的動作被問到時一律不放行，不會回一個空答案假裝問過了。', '');
+  out.push(`平台：${plain((data.platform && data.platform.name) || '未設定', '平台名稱')}`, '');
+  out.push('| 動作 | 要問什麼 | 登記的指令 |', '|---|---|---|');
+  const ops = (data.platform && data.platform.operations) || {};
+  const unknown = Object.keys(ops).filter((k) => !(k in OPERATIONS));
+  if (unknown.length) throw new Error(`平台介面登記了套件沒有定義的動作：${unknown.join('、')}`);
+  for (const [name, op] of Object.entries(OPERATIONS)) {
+    const cmd = Array.isArray(ops[name]) && ops[name].length ? ops[name].join(' ') : '未設定';
+    out.push(`| ${plain(name, '動作名稱')} | ${plain(op.what, '動作說明')} | ${plain(cmd, `動作 ${name} 的指令`)} |`);
+  }
+  out.push('', '## 六、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {
     if (!STATES.includes(gate.state)) throw new Error(`閘「${gate.name}」的狀態「${gate.state}」不在 ${STATES.join('／')} 裡`);
@@ -96,9 +106,9 @@ function build(data) {
   const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
   out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
   out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
-  out.push('## 六、合併預授權（規矩 A5）', '');
+  out.push('## 七、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');
-  out.push('## 七、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
+  out.push('## 八、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
   out.push('| 機器 | 規矩 | 狀態 | 驗過的日期 |', '|---|---|---|---|');
   for (const m of data.machines) {
     if (!STATES.includes(m.state)) throw new Error(`機器「${m.name}」的狀態「${m.state}」不在 ${STATES.join('／')} 裡`);
