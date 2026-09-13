@@ -47,7 +47,7 @@ const OPERATIONS = {
     kind: 'object',
     params: ['change'],
     what: '讀一支變更的基本資料',
-    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, author: LINE },
+    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, autoMergeOn: BOOL, author: LINE },
   },
   openChanges: {
     kind: 'list',
@@ -70,14 +70,17 @@ const OPERATIONS = {
   checks: {
     kind: 'list',
     params: ['sha'],
-    what: '讀某一顆版本上跑過的檢查場次',
-    shape: { name: LINE, status: LINE, conclusion: MAYBE },
+    what: '讀某一顆版本上跑過的檢查場次（⚠️ 必須是全部，分頁要在這條指令裡處理完）',
+    // completedAt：完成時間，還沒完成就是 null。用來判「哪一場是最新的」。
+    // producer：這一場是誰產生的（平台的應用識別值）。必過檢查釘了產生者時，別人貼的同名成功不算數。
+    shape: { name: LINE, status: LINE, conclusion: MAYBE, completedAt: MAYBE, producer: MAYBE },
   },
   requiredChecks: {
     kind: 'list',
     params: ['branch'],
     what: '讀主幹設了哪些必過檢查（名單的正本在平台上，不另抄一份會漂的）',
-    shape: { name: LINE },
+    // producer：只認這個產生者貼的場次；null＝平台自己允許任何來源（那是平台的選擇，不是閘放寬）。
+    shape: { name: LINE, producer: MAYBE },
   },
   branchSha: {
     kind: 'object',

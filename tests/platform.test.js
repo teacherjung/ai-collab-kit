@@ -24,12 +24,12 @@ const NUL = '\u0000';
 
 /** 一份把九個動作都登記好的設定；每個動作回一筆合格的答案。 */
 const GOOD = {
-  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, author: 'someone' },
+  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, autoMergeOn: false, author: 'someone' },
   openChanges: [{ id: '7', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', isDraft: false, author: 'someone' }],
   comments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z' }],
   changedFiles: [{ path: 'a.js', status: 'modified' }],
-  checks: [{ name: '三關', status: 'completed', conclusion: 'success' }],
-  requiredChecks: [{ name: '三關' }],
+  checks: [{ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci' }],
+  requiredChecks: [{ name: '三關', producer: 'ci' }],
   branchSha: { sha: 'abc123' },
 };
 
@@ -116,9 +116,9 @@ test('可以多行的欄位真的允許多行與空字串（不要把說明欄�
 });
 
 test('還沒有結論的檢查場次：conclusion 可以是 null，但不可以是別的型別', () => {
-  const pending = [{ name: '三關', status: 'in_progress', conclusion: null }];
+  const pending = [{ name: '三關', status: 'in_progress', conclusion: null, completedAt: null, producer: 'ci' }];
   assert.deepEqual(ask('checks', { sha: 'abc' }, { settings: allRegistered({ checks: [...emit(pending), '{sha}'] }) }), pending);
-  const wrong = [{ name: '三關', status: 'in_progress', conclusion: 7 }];
+  const wrong = [{ name: '三關', status: 'in_progress', conclusion: 7, completedAt: null, producer: 'ci' }];
   assert.throws(() => ask('checks', { sha: 'abc' }, { settings: allRegistered({ checks: [...emit(wrong), '{sha}'] }) }), PlatformError);
 });
 

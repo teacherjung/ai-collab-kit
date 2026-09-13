@@ -177,9 +177,9 @@
    "verified": ""
   },
   {
-   "name": "真考卷閘",
+   "name": "真考卷閘（必過檢查在那顆版本上真的跑過且成功）",
    "rules": "H3",
-   "state": "未移植",
+   "state": "已安裝未啟用",
    "verified": ""
   },
   {
@@ -266,7 +266,7 @@
    "args": [
     "tools/gates/check-checks-really-ran.js"
    ],
-   "state": "未移植"
+   "state": "已安裝未啟用"
   },
   {
    "name": "跨變更試合併（與每支以主幹為底的開著變更真合起來跑三關）",
