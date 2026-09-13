@@ -1,0 +1,86 @@
+{
+  "_說明": "GitHub 的平台介面翻譯範例。不是正本，是給使用這套架構的專案抄過去填進 settings.json 的 platform.operations 的起點。2026-09-13 對真倉庫實跑過：七個唯讀動作全通、兩道閘各一次正面與五次反面判斷都正確。",
+  "_注意": [
+    "指令要在該倉庫的目錄底下跑：{owner} 與 {repo} 是那支工具自己解析的，不是這套架構的記號。",
+    "這套架構的記號只有 {change}、{sha}、{branch} 三個，會被換成真值。",
+    "會分頁的三個動作（comments、changedFiles、checks）用 --paginate 時是每頁各印一個陣列；這套架構收這種寫法。但『頁數有沒有收齊』是這條指令自己的責任，架構驗不到。",
+    "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。"
+  ],
+  "operations": {
+    "change": [
+      "gh",
+      "pr",
+      "view",
+      "{change}",
+      "--json",
+      "number,title,body,baseRefName,headRefName,headRefOid,state,isDraft,isCrossRepository,autoMergeRequest,author",
+      "--jq",
+      "{id:(.number|tostring),title:.title,body:.body,baseBranch:.baseRefName,headBranch:.headRefName,headSha:.headRefOid,state:.state,isDraft:.isDraft,isCrossRepo:.isCrossRepository,autoMergeOn:(.autoMergeRequest!=null),author:.author.login}"
+    ],
+    "openChanges": [
+      "gh",
+      "pr",
+      "list",
+      "--state",
+      "open",
+      "--limit",
+      "200",
+      "--json",
+      "number,baseRefName,headRefName,headRefOid,isDraft,author",
+      "--jq",
+      "[.[]|{id:(.number|tostring),baseBranch:.baseRefName,headBranch:.headRefName,headSha:.headRefOid,isDraft:.isDraft,author:.author.login}]"
+    ],
+    "comments": [
+      "gh",
+      "api",
+      "--paginate",
+      "repos/{owner}/{repo}/issues/{change}/comments?per_page=100",
+      "--jq",
+      "[.[]|{id:(.id|tostring),author:.user.login,body:.body,createdAt:.created_at}]"
+    ],
+    "changedFiles": [
+      "gh",
+      "api",
+      "--paginate",
+      "repos/{owner}/{repo}/pulls/{change}/files?per_page=100",
+      "--jq",
+      "[.[]|{path:.filename,status:.status}]"
+    ],
+    "checks": [
+      "gh",
+      "api",
+      "--paginate",
+      "repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100",
+      "--jq",
+      "[.check_runs[]|{name:.name,status:.status,conclusion:.conclusion,completedAt:.completed_at,producer:(if .app then (.app.id|tostring) else null end)}]"
+    ],
+    "requiredChecks": [
+      "gh",
+      "api",
+      "repos/{owner}/{repo}/branches/{branch}/protection/required_status_checks",
+      "--jq",
+      "[.checks[]|{name:.context,producer:(if .app_id then (.app_id|tostring) else null end)}]"
+    ],
+    "branchSha": [
+      "gh",
+      "api",
+      "repos/{owner}/{repo}/git/ref/heads/{branch}",
+      "--jq",
+      "{sha:.object.sha}"
+    ],
+    "markReady": [
+      "gh",
+      "pr",
+      "ready",
+      "{change}"
+    ],
+    "merge": [
+      "gh",
+      "pr",
+      "merge",
+      "{change}",
+      "--squash",
+      "--delete-branch"
+    ]
+  }
+}

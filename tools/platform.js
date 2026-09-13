@@ -176,17 +176,48 @@ function ask(opName, args = {}, { settings = readSettings(), run = runCommand } 
   if (status !== 0) throw new PlatformError(`動作「${opName}」的指令退了 ${status}：${String(stderr).trim().slice(0, 120)}`);
   if (op.kind === 'action') return null;
 
+  if (op.kind === 'list') {
+    const items = parseList(stdout, opName);
+    items.forEach((item, i) => checkShape(item, op.shape, `「${opName}」第 ${i + 1} 筆`));
+    return items;
+  }
   let parsed;
   try { parsed = JSON.parse(stdout); }
   catch { throw new PlatformError(`動作「${opName}」印出來的不是 JSON：翻譯那一段沒寫對，問不到就不放行`); }
-
-  if (op.kind === 'list') {
-    if (!Array.isArray(parsed)) throw new PlatformError(`動作「${opName}」的答案不是一個陣列`);
-    parsed.forEach((item, i) => checkShape(item, op.shape, `「${opName}」第 ${i + 1} 筆`));
-    return parsed;
-  }
   checkShape(parsed, op.shape, `「${opName}」的答案`);
   return parsed;
+}
+
+/**
+ * 把清單型動作的輸出讀成一個陣列。**兩種寫法都收**：
+ *   ①一整個 JSON 陣列（最單純的情況）；
+ *   ②一行一個 JSON 陣列（分頁時很常見）——全部接起來。
+ *
+ * 為什麼要收第二種（2026-09-13 第一次拿真平台試出來的）：常見的平台工具在分頁時是
+ * **每一頁各印一個陣列**，而它把「取值」跟「把各頁併成一個」做成互斥的兩個選項，
+ * 於是沒有辦法只用它本身就印出單一 JSON。不收第二種的話，專案就被逼著再裝一個外部工具來合併——
+ * 那是把套件的門檻推高，不是把它變嚴。
+ *
+ * ⚠️ 仍然很嚴：每一行都要是合格的 JSON 陣列，有一行不是就整個當查不到；每一筆還是要過形狀檢查。
+ * ⚠️ 照實說：這不能證明**頁數收齊了**。少給幾頁這裡看不出來——那是那條登記指令自己的責任。
+ */
+function parseList(stdout, opName) {
+  const whole = (() => { try { return { ok: true, value: JSON.parse(stdout) }; } catch { return { ok: false }; } })();
+  if (whole.ok) {
+    if (!Array.isArray(whole.value)) throw new PlatformError(`動作「${opName}」的答案不是一個陣列`);
+    return whole.value;
+  }
+  const lines = String(stdout).split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) throw new PlatformError(`動作「${opName}」什麼都沒印出來：問不到就不放行`);
+  const out = [];
+  for (const [i, line] of lines.entries()) {
+    let page;
+    try { page = JSON.parse(line); }
+    catch { throw new PlatformError(`動作「${opName}」第 ${i + 1} 行不是 JSON：翻譯那一段沒寫對，問不到就不放行`); }
+    if (!Array.isArray(page)) throw new PlatformError(`動作「${opName}」第 ${i + 1} 行不是一個陣列`);
+    out.push(...page);
+  }
+  return out;
 }
 
 /** 這個專案把九個動作填齊了沒。閘開跑前先問這個，缺哪個一次講完。 */
@@ -210,4 +241,4 @@ if (require.main === module) {
   process.exit(missing.length ? 2 : 0);
 }
 
-module.exports = { ask, missingOperations, runCommand, checkShape, OPERATIONS, PlatformError, LINE_BREAK, UNSET };
+module.exports = { ask, missingOperations, runCommand, checkShape, parseList, OPERATIONS, PlatformError, LINE_BREAK, UNSET };

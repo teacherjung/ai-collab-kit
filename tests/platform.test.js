@@ -9,14 +9,17 @@
 //   ②指令起不來、被訊號殺掉、退出碼非零、印出來不是 JSON＝丟錯；
 //   ③答案形狀不合就丟錯：少欄位、型別不對、單行欄位裡有換行或空白字串、**多出沒約定的欄位**；
 //   ④指令樣板沒用到它該用的參數＝丟錯（那條指令問的不是我要問的那一支）；參數沒給、給了不吃的也丟錯；
-//   ⑤動作清單只有一份正本：設定產生器照它排版，登記了清單外的動作就紅。
+//   ⑤動作清單只有一份正本：設定產生器照它排版，登記了清單外的動作就紅；
+//   ⑥清單型動作收兩種寫法：一整個陣列、或一行一個陣列（分頁時很常見）——但每一行都要是合格的陣列，
+//     有一行不是就整個當查不到。這一格是 2026-09-13 拿真平台試出來的：常見平台工具分頁時每頁各印一個陣列，
+//     而它的「取值」與「併頁」兩個選項互斥，於是單靠它印不出單一 JSON。
 //
 // ⚠️ 守不到的：**答案是不是真的**。這一層只驗形狀；翻譯寫錯、平台騙人，都擋不住——
 //    原專案那些閘同樣只能相信平台回的東西。也不驗那條指令有沒有副作用。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ask, missingOperations, runCommand, OPERATIONS, PlatformError, LINE_BREAK, UNSET } = require('../tools/platform.js');
+const { ask, missingOperations, runCommand, parseList, OPERATIONS, PlatformError, LINE_BREAK, UNSET } = require('../tools/platform.js');
 const { read: readSettings } = require('../tools/settings-data.js');
 const { build: buildSettings } = require('../tools/build-settings.js');
 
@@ -170,4 +173,29 @@ test('換行那一組跟資料契約那一份逐字元相同（兩邊不可以�
   for (const ch of ['a', '中', ' ', NUL]) {
     assert.equal(LINE_BREAK.test(`前${ch}後`), false, `${JSON.stringify(ch)} 不該被算成換行`);
   }
+});
+
+test('清單型動作：一整個陣列、一行一個陣列都收；壞掉的一行就整個當查不到', () => {
+  const a = { name: 'x', producer: null };
+  assert.deepEqual(parseList('[]', 'requiredChecks'), []);
+  assert.deepEqual(parseList(JSON.stringify([a, a]), 'requiredChecks'), [a, a]);
+  // 分頁：一行一頁
+  assert.deepEqual(parseList(`${JSON.stringify([a])}\n${JSON.stringify([a, a])}\n`, 'requiredChecks'), [a, a, a]);
+  // 排版過的單一陣列（跨行）也要收
+  assert.deepEqual(parseList(JSON.stringify([a], null, 2), 'requiredChecks'), [a]);
+  for (const bad of ['', '   ', 'not json', '{}', `${JSON.stringify([a])}\nnot json`, `${JSON.stringify([a])}\n{}`]) {
+    assert.throws(() => parseList(bad, 'requiredChecks'), PlatformError, JSON.stringify(bad));
+  }
+});
+
+test('分頁的答案照樣逐筆驗形狀（收得寬不等於驗得鬆）', () => {
+  const page1 = JSON.stringify([{ name: 'a', producer: null }]);
+  const page2 = JSON.stringify([{ name: 'b' }]);   // 少了 producer
+  const cmd = (out) => ['node', '-e', 'process.stdout.write(process.argv[1])', out, '{branch}'];
+  const ok = ask('requiredChecks', { branch: 'main' }, { settings: allRegistered({ requiredChecks: cmd(`${page1}\n${page1}`) }) });
+  assert.equal(ok.length, 2);
+  assert.throws(
+    () => ask('requiredChecks', { branch: 'main' }, { settings: allRegistered({ requiredChecks: cmd(`${page1}\n${page2}`) }) }),
+    /少了「producer」/u,
+  );
 });

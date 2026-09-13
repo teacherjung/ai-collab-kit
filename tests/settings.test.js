@@ -79,9 +79,9 @@ test('本文標「靠自覺」的條號，不可以同時有一支「已啟用�
 test('本文與機器索引指名的每一份範本都在，而且帶著自己的固定小標', () => {
   const root = path.join(__dirname, '..');
   const machines = fs.readFileSync(path.join(root, 'MACHINES.md'), 'utf8');
-  const cited = [...machines.matchAll(/`(templates\/[a-z0-9-]+\.md)`/gu)].map((m) => m[1]);
+  const cited = [...machines.matchAll(/`(templates\/[a-z0-9-]+\.(?:md|json))`/gu)].map((m) => m[1]);
   assert.ok(cited.length >= 5, `機器索引只指到 ${cited.length} 份範本：那張表的形狀變了`);
-  const onDisk = fs.readdirSync(path.join(root, 'templates')).filter((f) => f.endsWith('.md')).map((f) => `templates/${f}`);
+  const onDisk = fs.readdirSync(path.join(root, 'templates')).filter((f) => /\.(md|json)$/u.test(f)).map((f) => `templates/${f}`);
   for (const file of new Set(cited)) {
     assert.ok(onDisk.includes(file), `機器索引指到 ${file}，但檔案不在`);
   }

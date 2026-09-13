@@ -55,3 +55,4 @@
 - `templates/third-round-self-check.md`：第三輪自問表五題（F10）。
 - `templates/scan-record.md`：掃描紀錄與未執行收口（G3）。
 - `templates/ruling-record.md`：問裁示者、裁示落地、合規撤回的留痕形狀（I1、I3）。
+- `templates/platform-github.json`：平台介面九個動作的翻譯範例（E5、H1）。**不是正本**，是抄過去填進 `settings.json` 的起點；2026-09-13 對真倉庫實跑過。

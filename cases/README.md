@@ -3,7 +3,7 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：裁示者／實作者／獨立審查者／掃描器，不寫人名。
 來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支變更。
 
-共 136 則。
+共 137 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -143,6 +143,7 @@
 | 2026-09-10 | [轉正式後檢查重跑，拿舊綠就發射合併](stale-green-after-promote.md) | H3、E3 |
 | 2026-09-10 | [誰在磨誰拍板](whoever-is-grinding-decides.md) | A1、F6 |
 | 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | A1、G4 |
+| 2026-09-13 | [九個動作的形狀全是我自己想的，碰真平台第一分鐘就破](designed-shapes-never-touched-a-real-platform.md) | E5、H1 |
 
 ## 不是事故、但值得記的方法
 
