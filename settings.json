@@ -85,152 +85,82 @@
   }
  },
  "mergeAuthorization": "未設定",
- "machines": [
+ "platform": {
+  "name": "未設定",
+  "operations": {
+   "change": [
+    "未設定"
+   ],
+   "openChanges": [
+    "未設定"
+   ],
+   "comments": [
+    "未設定"
+   ],
+   "changedFiles": [
+    "未設定"
+   ],
+   "checks": [
+    "未設定"
+   ],
+   "requiredChecks": [
+    "未設定"
+   ],
+   "branchSha": [
+    "未設定"
+   ],
+   "markReady": [
+    "未設定"
+   ],
+   "merge": [
+    "未設定"
+   ]
+  }
+ },
+ "forbidden": {
+  "name": "未設定",
+  "servers": [],
+  "allowlist": [],
+  "deny": [],
+  "verbs": [],
+  "nouns": [],
+  "readPrefixes": [],
+  "patterns": []
+ },
+ "acceptance": {
+  "tiers": [
+   {
+    "id": "未設定",
+    "action": "未設定"
+   }
+  ],
+  "families": [
+   {
+    "pattern": "未設定",
+    "tier": "未設定"
+   }
+  ],
+  "unknownTier": "未設定"
+ },
+ "ignoreLists": [
   {
-   "name": "平台介面（閘問平台的九個動作，答案形狀不合就不放行）",
-   "rules": "E5、H1",
-   "state": "已啟用",
-   "verified": "2026-09-13"
-  },
-  {
-   "name": "合併指令（依序跑完登記的閘，任一道紅就停）",
-   "rules": "H1",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "協作欄位閘（四欄齊全、實作者不等於獨立審查者）",
-   "rules": "A2、E1",
-   "state": "已安裝未啟用",
-   "verified": ""
-  },
-  {
-   "name": "結論聯集閘（阻擋各自撤銷、放行只認指定那一位對目前版本的通過）",
-   "rules": "F4、F5",
-   "state": "已安裝未啟用",
-   "verified": ""
-  },
-  {
-   "name": "禁區攔截器（每一方各一列）",
-   "rules": "B1",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "忽略／豁免清單一致考題",
-   "rules": "B4、E7",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "推送前鉤子",
-   "rules": "E2",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "雲端三關",
-   "rules": "E3",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "清版本控制環境變數的共用實作（GIT_ 前綴整族清）",
-   "rules": "E4",
-   "state": "已啟用",
-   "verified": "2026-09-13"
-  },
-  {
-   "name": "閘退出路徑／進入點行為題",
-   "rules": "E5",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "檔名考題",
-   "rules": "E6",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "掃描前試探（禁區各埋一個假機密，從盒內試讀試寫；隔離本身由專案設定指定誰提供）",
-   "rules": "G2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "掃描後比對（假機密與未給盒子的真值不得出現在回覆、日誌、檔名）",
-   "rules": "G2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "合併閘登記對帳題",
-   "rules": "H1",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "堆疊閘（底必須是主幹、不可以有別支疊在上面）",
-   "rules": "H2",
-   "state": "已安裝未啟用",
-   "verified": ""
-  },
-  {
-   "name": "真考卷閘（必過檢查在那顆版本上真的跑過且成功）",
-   "rules": "H3",
-   "state": "已安裝未啟用",
-   "verified": ""
-  },
-  {
-   "name": "跨變更試合併閘（與每支以主幹為底的開著變更真合起來跑三關）",
-   "rules": "H4",
-   "state": "已安裝未啟用",
-   "verified": ""
-  },
-  {
-   "name": "驗收分級腳本＋考題",
-   "rules": "H6",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "本文長度考題",
-   "rules": "K2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "案例簿考題＋索引產生器",
-   "rules": "K1、K2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "專案設定產生器",
-   "rules": "K1",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "範本存在與固定小標考題",
-   "rules": "E1、G3",
-   "state": "已啟用",
-   "verified": "2026-09-13"
-  },
-  {
-   "name": "路標考題",
-   "rules": "K3",
-   "state": "未移植",
-   "verified": ""
-  },
-  {
-   "name": "待裁清單工具",
-   "rules": "D1",
-   "state": "未移植",
-   "verified": ""
+   "file": ".gitignore",
+   "patterns": [
+    "node_modules/",
+    ".DS_Store"
+   ]
   }
  ],
+ "checks": {
+  "prepareWorktree": [
+   "未設定"
+  ],
+  "commands": [
+   [
+    "未設定"
+   ]
+  ]
+ },
  "gates": [
   {
    "name": "複審結論聯集（有沒有未撤銷的阻擋、有沒有對目前版本的通過）",
@@ -278,50 +208,154 @@
    "state": "已安裝未啟用"
   }
  ],
- "checks": {
-  "prepareWorktree": [
-   "未設定"
-  ],
-  "commands": [
-   [
-    "未設定"
-   ]
-  ]
- },
  "mergeCommand": {
   "command": "未設定",
   "args": []
  },
- "platform": {
-  "name": "未設定",
-  "operations": {
-   "change": [
-    "未設定"
-   ],
-   "openChanges": [
-    "未設定"
-   ],
-   "comments": [
-    "未設定"
-   ],
-   "changedFiles": [
-    "未設定"
-   ],
-   "checks": [
-    "未設定"
-   ],
-   "requiredChecks": [
-    "未設定"
-   ],
-   "branchSha": [
-    "未設定"
-   ],
-   "markReady": [
-    "未設定"
-   ],
-   "merge": [
-    "未設定"
-   ]
+ "machines": [
+  {
+   "name": "平台介面（閘問平台的九個動作，答案形狀不合就不放行）",
+   "rules": "E5、H1",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "合併指令（依序跑完登記的閘，任一道紅就停）",
+   "rules": "H1",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "協作欄位閘（四欄齊全、實作者不等於獨立審查者）",
+   "rules": "A2、E1",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "結論聯集閘（阻擋各自撤銷、放行只認指定那一位對目前版本的通過）",
+   "rules": "F4、F5",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "禁區攔截器（判斷一份，兩家 AI 的鉤子都呼叫它）",
+   "rules": "B1",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "忽略清單一致考題（登記的每一份忽略檔跟生效的樣式一字不差）",
+   "rules": "B4、E7",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "推送前鉤子範本＋三關執行器（讀設定的三關、前後驗工作樹）",
+   "rules": "E2",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "雲端三關與協作欄位閘的範本",
+   "rules": "E3",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "清版本控制環境變數的共用實作（GIT_ 前綴整族清）",
+   "rules": "E4",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "閘的退出路徑與進入點行為題（每一道閘的考題各有「真的跑一遍指令」與「問不到＝退 2」）",
+   "rules": "E5",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "檔名考題（已追蹤路徑只用可見 ASCII；例外名單寫死、只出不進）",
+   "rules": "E6",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "掃描前試探（禁區各埋一個假機密，從盒內試讀試寫；隔離本身由專案設定指定誰提供）",
+   "rules": "G2",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "掃描後比對（假機密與未給盒子的真值不得出現在回覆、日誌、檔名）",
+   "rules": "G2",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "合併閘登記對帳題（磁碟上的閘 vs 設定登記的閘）",
+   "rules": "H1",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "堆疊閘（底必須是主幹、不可以有別支疊在上面）",
+   "rules": "H2",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "真考卷閘（必過檢查在那顆版本上真的跑過且成功）",
+   "rules": "H3",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "跨變更試合併閘（與每支以主幹為底的開著變更真合起來跑三關）",
+   "rules": "H4",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "驗收分級工具（路徑家族表住設定；只算不擋）",
+   "rules": "H6",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "本文長度考題",
+   "rules": "K2",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "案例簿考題＋索引產生器",
+   "rules": "K1、K2",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "專案設定產生器",
+   "rules": "K1",
+   "state": "已啟用",
+   "verified": "2026-09-12"
+  },
+  {
+   "name": "範本存在與固定小標考題",
+   "rules": "E1、G3",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "路標考題（帶記號的引號路標要指得到）",
+   "rules": "K3",
+   "state": "已啟用",
+   "verified": "2026-09-13"
+  },
+  {
+   "name": "待裁清單工具（只掃開著的變更；只列不擋）",
+   "rules": "D1",
+   "state": "已安裝未啟用",
+   "verified": ""
   }
- }
+ ]
 }

@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+// 合併後驗收分級（規矩 H6）：這一支變更動到哪些路徑家族，就算出合併後要驗到什麼程度、做哪些動作。
+//
+// 為什麼：不是每一支合併後都要請裁示者重啟走一遍；但要不要，靠人記會漏。分級的正本住在專案設定
+// （路徑家族表＋每一級的動作），這支只算不擋。它讓裁示者少做不必要的驗收、也不漏掉必要的。
+//
+// 兩條規矩：①動作累積——命中幾級就做幾級的動作，回報的級別寫最重的那一級；
+//           ②沒列到的路徑一律當設定裡指定的那一級（fail-closed，通常是最重的）並列出來——不確定就往重的算。
+// 改名或複製前的舊路徑也算（那也是這支動到的地方）。
+//
+// 退出碼：0＝算出來了／2＝算不出來（設定沒填、平台問不到、沒有路徑）。⚠️ 不是閘。
+'use strict';
+const { ask, PlatformError } = require('./platform.js');
+const { read: readSettings } = require('./settings-data.js');
+
+const UNSET = '未設定';
+
+/** 讀設定裡的分級表；形狀不對＝null。tiers 從最重排到最輕。 */
+function tableOf(settings) {
+  const a = settings.acceptance || {};
+  const tiers = Array.isArray(a.tiers) ? a.tiers.filter((t) => t && typeof t.id === 'string' && t.id !== UNSET && typeof t.action === 'string' && t.action !== UNSET) : [];
+  const families = Array.isArray(a.families) ? a.families.filter((f) => f && typeof f.pattern === 'string' && f.pattern !== UNSET && typeof f.tier === 'string') : [];
+  if (!tiers.length || !families.length || typeof a.unknownTier !== 'string' || !tiers.some((t) => t.id === a.unknownTier)) return null;
+  if (families.some((f) => !tiers.some((t) => t.id === f.tier))) return null;
+  return { tiers, families: families.map((f) => ({ re: new RegExp(f.pattern, 'u'), tier: f.tier })), unknownTier: a.unknownTier };
+}
+
+/** 純判斷層。 */
+function classify(paths, table) {
+  const hits = paths.map((p) => {
+    const f = table.families.find((x) => x.re.test(p));
+    return f ? { path: p, tier: f.tier, known: true } : { path: p, tier: table.unknownTier, known: false };
+  });
+  const present = new Set(hits.map((h) => h.tier));
+  const level = table.tiers.find((t) => present.has(t.id));
+  const actions = table.tiers.filter((t) => present.has(t.id)).map((t) => ({ tier: t.id, action: t.action }));
+  return { level: level ? level.id : null, hits, unknown: hits.filter((h) => !h.known).map((h) => h.path), actions };
+}
+
+function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
+  if (!changeId) return { code: 2, lines: ['用法：node tools/acceptance-tier.js <變更編號>'] };
+  const table = tableOf(settings);
+  if (!table) return { code: 2, lines: ['專案設定裡的驗收分級表沒填好（tiers、families、unknownTier 要齊、unknownTier 與每個家族的 tier 都要在 tiers 裡）：算不出來。'] };
+  let files;
+  try { files = platform.ask('changedFiles', { change: String(changeId) }, { settings }); }
+  catch (e) {
+    if (e instanceof PlatformError || (e && e.name === 'PlatformError')) return { code: 2, lines: [`驗收分級：問不到平台（${e.message}）——算不出來。`] };
+    throw e;
+  }
+  const paths = [...new Set(files.flatMap((f) => [f.path, f.previousPath].filter(Boolean)))];
+  if (!paths.length) return { code: 2, lines: ['這一支變更沒有動到任何檔案：算不出來（不猜）。'] };
+  const r = classify(paths, table);
+  const lines = [`驗收分級｜變更 ${changeId}：${r.level}（動到 ${paths.length} 個路徑）`];
+  for (const a of r.actions) lines.push(`  ・${a.tier}：${a.action}`);
+  if (r.unknown.length) lines.push(`  ⚠️ 沒列在家族表上的路徑，一律當「${table.unknownTier}」：${r.unknown.join('、')}——改表的人要核對它們該屬哪一級。`);
+  return { code: 0, lines, result: r };
+}
+
+if (require.main === module) {
+  let result;
+  try { result = run(process.argv[2]); } catch (e) { result = { code: 2, lines: [`驗收分級：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] }; }
+  process.stdout.write(`${result.lines.join('\n')}\n`);
+  process.exit(result.code);
+}
+
+module.exports = { run, classify, tableOf };

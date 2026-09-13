@@ -14,7 +14,11 @@
 //     而 K1 確實有機器守（三份產物逐字元比對），所以標籤照實改掉，不再寫「靠自覺」。
 //   ⑥本文與機器索引指名的每一份範本都要真的在，而且帶著它自己的固定小標；
 //   ⑦每一支工具都要有同名的考題檔。2026-09-13 稽核抓到：整支考題檔改名或刪掉，全卷照樣退 0——
-//     沒有任何東西在數考題。這一題就是那個金絲雀。
+//     沒有任何東西在數考題。這一題就是那個金絲雀；
+//   ⑧**閘的登記對帳（規矩 H1）**：tools/gates/ 裡的每一支閘都要登記在 settings.json 的 gates，
+//     登記的每一道閘檔案都要在——磁碟與登記是兩個獨立來源，一邊漏了另一邊就紅。
+//     原專案的對帳題是「腳本自報的閘名 vs 文件點名的閘名」；這裡文件是產物、閘由合併指令從登記讀，
+//     所以第二個獨立來源只剩磁碟上的檔案。合併指令只跑登記的閘，所以「寫了閘卻忘了登記」正是這題要抓的。
 //
 // ⚠️ 守不到的：欄位填的值對不對（填了「未設定」以外的字不代表那台機器真的裝好）、
 //    「已啟用」是不是真的啟用（那要靠人去驗，驗過才把日期填上）、
@@ -79,9 +83,9 @@ test('本文標「靠自覺」的條號，不可以同時有一支「已啟用�
 test('本文與機器索引指名的每一份範本都在，而且帶著自己的固定小標', () => {
   const root = path.join(__dirname, '..');
   const machines = fs.readFileSync(path.join(root, 'MACHINES.md'), 'utf8');
-  const cited = [...machines.matchAll(/`(templates\/[a-z0-9-]+\.(?:md|json))`/gu)].map((m) => m[1]);
+  const cited = [...machines.matchAll(/`(templates\/[a-z0-9-]+(?:\.(?:md|json|yml))?)`/gu)].map((m) => m[1]);
   assert.ok(cited.length >= 5, `機器索引只指到 ${cited.length} 份範本：那張表的形狀變了`);
-  const onDisk = fs.readdirSync(path.join(root, 'templates')).filter((f) => /\.(md|json)$/u.test(f)).map((f) => `templates/${f}`);
+  const onDisk = fs.readdirSync(path.join(root, 'templates')).map((f) => `templates/${f}`);
   for (const file of new Set(cited)) {
     assert.ok(onDisk.includes(file), `機器索引指到 ${file}，但檔案不在`);
   }
@@ -121,4 +125,17 @@ test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要�
     assert.ok(tests.has(expected), `閘 gates/${gate} 找不到對應的考題檔 ${expected}——被刪掉或改名了嗎`);
   }
   assert.ok(tests.has('data-contract.test.js'), '資料契約的負向考題不見了');
+});
+
+test('閘的登記對帳（規矩 H1）：磁碟上的每一支閘都有登記，登記的每一道閘都在磁碟上', () => {
+  const root = path.join(__dirname, '..');
+  const onDisk = fs.readdirSync(path.join(root, 'tools', 'gates')).filter((f) => f.endsWith('.js')).map((f) => `tools/gates/${f}`).sort();
+  const registered = (read().gates || []).map((g) => (g.args || []).find((a) => a.startsWith('tools/gates/'))).filter(Boolean).sort();
+  assert.ok(onDisk.length >= 5, `tools/gates/ 只剩 ${onDisk.length} 支：這一題自己的前提變了`);
+  for (const file of onDisk) assert.ok(registered.includes(file), `磁碟上有 ${file}，但 settings.json 的 gates 沒登記它——合併指令不會跑它`);
+  for (const file of registered) assert.ok(onDisk.includes(file), `settings.json 登記了 ${file}，但磁碟上沒有這支`);
+  for (const g of read().gates) {
+    assert.equal(g.command, 'node', `閘「${g.name}」的指令不是 node：登記的形狀變了`);
+    assert.ok(g.args.length === 1, `閘「${g.name}」的參數不是剛好一個檔案路徑`);
+  }
 });

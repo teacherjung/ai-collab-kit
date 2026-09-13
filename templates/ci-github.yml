@@ -1,0 +1,25 @@
+# 雲端三關範本（規矩 E3）——GitHub Actions 版。放到專案的 .github/workflows/ci.yml。
+# 三關命令的正本在 settings.json（tools/run-checks.js 讀它），這裡不抄。
+# 要在平台上把 job 名設成「必過檢查」而且對管理員一樣生效，否則退化成靠自覺（真考卷閘會讀這個名單）。
+# 草稿也跑：不跑的代價是本機都在同一種作業系統，只有雲端才壞的東西會到轉正式那天才第一次現形。
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    name: 三關
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+      - run: npm ci
+      - name: 三關（照 settings.json 登記的順序）
+        run: node tools/run-checks.js

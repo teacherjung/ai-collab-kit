@@ -1,0 +1,13 @@
+{
+  "description": "禁區攔截器的 Codex 側接線範例（規矩 B1）。放到專案的 .codex/hooks.json，並在 Codex 介面對這個檔案按過「信任」才會執行——檔案在不等於鎖有效（原專案實測：未信任時一聲不吭地放行）。判斷只有一份＝tools/forbidden-tools.js，跟 Claude 側呼叫同一支，所以兩邊不會漂。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__",
+        "hooks": [
+          { "type": "command", "command": "node tools/forbidden-tools.js" }
+        ]
+      }
+    ]
+  }
+}

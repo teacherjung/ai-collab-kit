@@ -1,0 +1,16 @@
+{
+  "_說明": "禁區攔截器的 Claude 側接線範例（規矩 B1）。放到專案的 .claude/settings.json；判斷只有一份＝tools/forbidden-tools.js，這裡不抄判斷。deny 那兩格填逐字禁止的工具名（跟 settings.json 的 forbidden.deny 同一份，這裡只是平台自己的第二道）。鉤子的工作目錄是專案根目錄；沒啟用的那一方等於沒有。",
+  "permissions": {
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__",
+        "hooks": [
+          { "type": "command", "command": "node tools/forbidden-tools.js" }
+        ]
+      }
+    ]
+  }
+}

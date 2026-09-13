@@ -30,7 +30,7 @@ const GOOD = {
   change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, autoMergeOn: false, author: 'someone' },
   openChanges: [{ id: '7', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', isDraft: false, author: 'someone' }],
   comments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z' }],
-  changedFiles: [{ path: 'a.js', status: 'modified' }],
+  changedFiles: [{ path: 'a.js', status: 'modified', previousPath: null }],
   checks: [{ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci' }],
   requiredChecks: [{ name: '三關', producer: 'ci' }],
   branchSha: { sha: 'abc123' },

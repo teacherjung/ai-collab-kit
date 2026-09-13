@@ -103,7 +103,25 @@ function build(data) {
     const argv = Array.isArray(cmd) ? cmd : [String(cmd)];
     out.push(`  ${i + 1}. ${plain(argv.join(' '), `第 ${i + 1} 條三關指令`)}`);
   });
-  out.push('', '## 七、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
+  out.push('', '## 七、禁區（規矩 B1；攔截器的判斷讀這裡，程式裡不寫任何禁區的名字）', '');
+  const fb = data.forbidden || {};
+  const joinList = (xs) => (Array.isArray(xs) && xs.length ? xs.join('、') : '（空）');
+  out.push(`- 禁區叫什麼：${plain(fb.name || '未設定', '禁區名稱')}（未設定＝攔截器一律拒絕）`);
+  out.push(`- 會動到禁區的連接器（白名單制）：${plain(joinList(fb.servers), '禁區連接器')}`);
+  out.push(`- 那些連接器上准用的唯讀工具：${plain(joinList(fb.allowlist), '唯讀名單')}`);
+  out.push(`- 逐字拒絕的工具名：${plain(joinList(fb.deny), '拒絕清單')}`);
+  out.push(`- 家族網的動詞：${plain(joinList(fb.verbs), '動詞')}；名詞：${plain(joinList(fb.nouns), '名詞')}；唯讀前綴（跳過家族網）：${plain(joinList(fb.readPrefixes), '唯讀前綴')}`);
+  out.push(`- 額外樣式：${plain(joinList(fb.patterns), '額外樣式')}`);
+  out.push('', '## 八、合併後驗收分級（規矩 H6；分級工具讀這裡，只算不擋）', '');
+  const acc = data.acceptance || {};
+  out.push('| 級別（從最重到最輕） | 動作 |', '|---|---|');
+  for (const t of (acc.tiers || [])) out.push(`| ${plain(t.id, '級別')} | ${plain(t.action, '動作')} |`);
+  out.push('', '| 路徑家族（正規式） | 級別 |', '|---|---|');
+  for (const f of (acc.families || [])) out.push(`| ${plain(f.pattern, '路徑家族')} | ${plain(f.tier, '家族的級別')} |`);
+  out.push('', `沒列到的路徑一律當：${plain(acc.unknownTier || '未設定', '未知路徑的級別')}`, '');
+  out.push('## 九、忽略清單登記（規矩 B4、E7；考題比對每一份的生效樣式）', '');
+  for (const l of (data.ignoreLists || [])) out.push(`- ${plain(l.file, '忽略檔')}：${plain(joinList(l.patterns), '忽略樣式')}`);
+  out.push('', '## 十、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）', '');
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {
     if (!STATES.includes(gate.state)) throw new Error(`閘「${gate.name}」的狀態「${gate.state}」不在 ${STATES.join('／')} 裡`);
@@ -116,9 +134,9 @@ function build(data) {
   const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
   out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
   out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
-  out.push('## 八、合併預授權（規矩 A5）', '');
+  out.push('## 十一、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');
-  out.push('## 九、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
+  out.push('## 十二、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）', '');
   out.push('| 機器 | 規矩 | 狀態 | 驗過的日期 |', '|---|---|---|---|');
   for (const m of data.machines) {
     if (!STATES.includes(m.state)) throw new Error(`機器「${m.name}」的狀態「${m.state}」不在 ${STATES.join('／')} 裡`);

@@ -44,7 +44,7 @@
       "--paginate",
       "repos/{owner}/{repo}/pulls/{change}/files?per_page=100",
       "--jq",
-      "[.[]|{path:.filename,status:.status}]"
+      "[.[]|{path:.filename,status:.status,previousPath:(.previous_filename // null)}]"
     ],
     "checks": [
       "gh",

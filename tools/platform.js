@@ -65,7 +65,8 @@ const OPERATIONS = {
     kind: 'list',
     params: ['change'],
     what: '讀一支變更動了哪些檔',
-    shape: { path: LINE, status: LINE },
+    // previousPath：改名或複製前的舊路徑，沒有就是 null——分級要連舊路徑一起看
+    shape: { path: LINE, status: LINE, previousPath: MAYBE },
   },
   checks: {
     kind: 'list',
