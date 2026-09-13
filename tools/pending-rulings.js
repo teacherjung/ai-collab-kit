@@ -124,9 +124,10 @@ function evaluate(comments, decider) {
   }
   // r6 Low②：形狀合格、卻沒配到任何問題的裁示或撤回，讀的那段又有停下來＝多半是網址寫在停止點之後。列疑似、說停在第幾行，
   // 不然題目只是靜靜留在待裁、看不出為什麼。沒停下來的照舊不列（可能在回答已關掉的變更上的題）。
-  const used = new Set([...ruled, ...withdrawn].map((x) => x.by));
+  // r7 Low②：「配得到」要看它能不能命中**任一**比它早的問題，不能借用上面選出來的代表——同一題的第二則補充裁示不是代表，卻配得到
+  const matchesAny = (x) => asks.some((q) => at(x) > at(q) && cites(x.body, q.id));
   for (const x of [...rulings, ...withdraws]) {
-    if (!used.has(x) && stopNote(x.body)) near.push({ ...x, why: `沒有配到任何比它早的問題${stopNote(x.body)}` });
+    if (!matchesAny(x) && stopNote(x.body)) near.push({ ...x, why: `沒有配到任何比它早的問題${stopNote(x.body)}` });
   }
   return { open, ruled, withdrawn, near };
 }

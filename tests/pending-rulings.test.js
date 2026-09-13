@@ -28,7 +28,8 @@ const { PlatformError } = require('../tools/platform.js');
 const TOOL = path.join(__dirname, '..', 'tools', 'pending-rulings.js');
 const D = { id: 'Boss', account: 'boss-acct', ids: ['Boss', 'Alpha'], accounts: ['boss-acct', 'ai-acct'] };
 let n = 0;
-const c = (body, over = {}) => ({ id: `c${++n}`, author: 'ai-acct', createdAt: `2026-09-13T00:00:${String(n).padStart(2, '0')}Z`, change: '7', body, ...over });
+// 時間用 Date.UTC 算：第 60 則以後若照舊把編號直接寫進「秒」，會變成不存在的 00:00:60，被時間契約判讀不出（整份退 2）
+const c = (body, over = {}) => ({ id: `c${++n}`, author: 'ai-acct', createdAt: new Date(Date.UTC(2026, 8, 13, 0, 0, n)).toISOString(), change: '7', body, ...over });
 const ask = (title = '要不要做') => c(`## ❓ 待裁（2026-09-13）：${title}\n選項：甲／乙\n建議：甲`);
 const ruling = (askId, over = {}) => c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n落點：https://x/pull/7#issuecomment-${askId}`, { author: 'boss-acct', ...over });
 const withdraw = (askId) => c(`## 🚫 撤回（2026-09-13）：不用問了\n撤回理由：題目依附的東西沒了（那支變更已關）\nAlpha 撤回、Boss 未回；他隨時可以要我重問\nhttps://x/pull/7#issuecomment-${askId}`);
@@ -215,6 +216,13 @@ test('⑬只讀開頭那一段（r5 之後）：原話與網址寫在特殊行�
   const t = evaluate([q, inTable], D);
   assert.equal(t.open.length, 1, '表格裡的網址不配對');
   assert.ok(t.near.some((x) => x.id === inTable.id && /沒有配到/u.test(x.why) && /第 5 行就停了/u.test(x.why)), t.near.map((x) => x.why).join(' / '));
+  // r7 Medium①：單欄表格的分隔列可以沒有豎線，網址在那格被丟掉＝一樣不配對
+  for (const sep of [':---', '---:', ':---:']) {
+    const oneCol = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n\n| 操作紀錄 |\n${sep}\n| \`printf x | cat\`；原題：${q.id} |`, { author: 'boss-acct' });
+    const o = evaluate([q, oneCol], D);
+    assert.equal(o.open.length, 1, `${sep}：單欄表格裡的網址不配對`);
+    assert.ok(o.near.some((x) => x.id === oneCol.id && /第 5 行就停了/u.test(x.why)), `${sep}：${o.near.map((x) => x.why).join(' / ')}`);
+  }
   const beforeTable = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n\n| a | b |\n| --- | --- |\n| \`x | y\` | z |`, { author: 'boss-acct' });
   assert.equal(evaluate([q, beforeTable], D).open.length, 0, '對照組：網址寫在表格前面＝配對成立');
   // r6 Low②：原話在引用前、網址在引用後＝不配對；以前靜靜留在待裁，現在列疑似並指出第 3 行
@@ -222,6 +230,17 @@ test('⑬只讀開頭那一段（r5 之後）：原話與網址寫在特殊行�
   const u = evaluate([q, urlAfterQuote], D);
   assert.equal(u.open.length, 1);
   assert.ok(u.near.some((x) => x.id === urlAfterQuote.id && /第 3 行就停了/u.test(x.why)), u.near.map((x) => x.why).join(' / '));
+  // r7 Low②：同一題的第二則補充裁示配得到那一題、只是不是代表——後面有引用也不可以列成「沒有配到」
+  const first = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });
+  const second = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n\n補充實作依據：\n> 沿用選甲`, { author: 'boss-acct' });
+  for (const order of [[q, first, second], [second, first, q]]) {
+    const s2 = evaluate(order, D);
+    assert.equal(s2.ruled.length, 1, '已裁一則（代表是較早那則）');
+    assert.equal(s2.near.length, 0, `補充裁示配得到，不列疑似：${s2.near.map((x) => x.why).join(' / ')}`);
+  }
+  assert.equal(evaluate([q, second], D).ruled.length, 1, '對照組：第二則單獨存在時照常配對');
+  const earlyWithQuote = { ...second, id: 'early1', createdAt: '2026-09-12T00:00:00Z' };
+  assert.ok(evaluate([q, earlyWithQuote], D).near.some((x) => x.id === 'early1' && /沒有配到/u.test(x.why)), '引到的問題比它晚＝不算配到（先後要看）');
   const unmatchedNoStop = c('## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n別的變更上的題', { author: 'boss-acct' });
   assert.equal(evaluate([q, unmatchedNoStop], D).near.length, 0, '對照組：沒配到、但讀的那段沒停＝照舊不列（可能在回答已關掉的變更上的題）');
   const tagInTitle = c('## ❓ 待裁（2026-09-13）：要不要用 <details> 收合');
