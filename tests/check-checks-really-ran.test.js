@@ -72,7 +72,7 @@ test('只看最新那一刻：舊的失敗不影響，新的失敗要擋', () =>
 
 test('⑩完成了卻沒有合法時間或結論＝退 2；不可以讓沒有時間的成功蓋掉真的失敗', () => {
   const failed = run({ conclusion: 'failure', completedAt: '2026-09-13T20:00:00Z' });
-  for (const bad of [null, 'not-a-time', '', undefined]) {
+  for (const bad of [null, 'not-a-time', '', undefined, '2026-09-13', '2026-09-13T20:00:00']) {
     const ghost = run({ conclusion: 'success', completedAt: bad });
     const r = evaluate([failed, ghost], false, [need()]);
     assert.equal(r.code, 2, `completedAt=${JSON.stringify(bad)} 應該是查不清楚，不是放行`);
@@ -80,6 +80,22 @@ test('⑩完成了卻沒有合法時間或結論＝退 2；不可以讓沒有時
   }
   const noConclusion = run({ conclusion: null });
   assert.equal(evaluate([noConclusion], false, [need()]).code, 2, '完成了卻沒有結論也是不合契約');
+});
+
+test('⑩沒帶時區的完成時間不收＝退 2；同一份資料在不同執行時區判一樣（r3 High①）', () => {
+  const failed = run({ conclusion: 'failure', completedAt: '2026-09-13T02:00:00Z' });
+  const noTz = run({ conclusion: 'success', completedAt: '2026-09-13T03:00:00' });
+  assert.equal(evaluate([failed, noTz], false, [need()]).code, 2, '沒時區的成功不可以被當成比較晚');
+  const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/gates/check-checks-really-ran.js'))});
+    const r = (o) => ({ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci', ...o });
+    const need = { name: '三關', producer: 'ci' };
+    process.stdout.write(JSON.stringify([
+      evaluate([r({ conclusion: 'failure', completedAt: '2026-09-13T02:00:00Z' }), r({ completedAt: '2026-09-13T03:00:00' })], false, [need]).code,
+      evaluate([r({ conclusion: 'failure', completedAt: '2026-09-13T02:00:00Z' }), r({ completedAt: '2026-09-13T03:00:00Z' })], false, [need]).code,
+    ]));`;
+  const outs = ['UTC', 'Asia/Taipei'].map((tz) => spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: tz } }).stdout);
+  assert.equal(outs[0], outs[1], `兩個時區判決不同：${outs.join(' | ')}`);
+  assert.deepEqual(JSON.parse(outs[0]), [2, 0]);
 });
 
 test('⑩時間用時間值比：不同時區的合法寫法要排對', () => {

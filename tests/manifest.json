@@ -21,5 +21,6 @@
   "scan-postmortem.test.js",
   "scan-probe.test.js",
   "settings.test.js",
-  "signposts.test.js"
+  "signposts.test.js",
+  "time-point.test.js"
 ]

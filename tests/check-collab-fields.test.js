@@ -55,6 +55,11 @@ test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只�
   const longFence = `\`\`\`\`\n\`\`\`\n${goodBody()}\n\`\`\`\``;
   assert.equal(problemsOf(longFence, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '四反引號圍欄裡的三反引號不是關閉');
   assert.deepEqual(problemsOf(`${inFence}\n\n${goodBody()}`, ROLES), [], '範例之後真的填了就通過');
+  // r3 反例：圍欄裡的註解符號跟外面的配對，把第二段圍欄翻成生效文字
+  const interleaved = ['```md', '<!--', '```', '-->', '```', goodBody(), '```'].join('\n');
+  assert.equal(problemsOf(interleaved, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '交錯的註解與圍欄裡的欄位不算');
+  const unclosed = `<!--\n${goodBody()}`;
+  assert.equal(problemsOf(unclosed, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '沒關閉的註解裡的欄位不算');
 });
 
 test('②欄名要錨在行首（「非實作者」不可以命中「實作者」）', () => {

@@ -27,6 +27,7 @@ const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
 const { effectiveText } = require('../markdown-effective.js');
+const { parseInstant } = require('../time-point.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
 const VERDICTS = { 通過: false, 需修改後再審: true, 不可合併: true };
@@ -126,9 +127,10 @@ function evaluate(comments, head, reviewerRole, roles) {
   const voids = [];
   // 先後看**留言時間**、不看清單順序（r1 Medium⑩：平台把清單反過來給，同一組事實會判出相反結果）。
   // 時間讀不出的留言＝整支判不了，交給呼叫端退 2（gateRun 先驗過；這裡再守一次）。
-  const at = (c) => Date.parse(String(c.createdAt));
+  // 時間走共用契約（r3 High①）：沒帶時區的時間在不同執行機器會判出不同先後，不收
+  const at = (c) => { const v = parseInstant(c.createdAt); return v === null ? NaN : v; };
   if (comments.some((c) => !Number.isFinite(at(c)))) {
-    return { problems: ['有留言的時間讀不出來：先後判不了，不放行。'], warnings: [], reviewers: {}, unsure: true };
+    return { problems: ['有留言的時間讀不出來或沒帶時區：先後判不了，不放行。'], warnings: [], reviewers: {}, unsure: true };
   }
   comments = [...comments].sort((a, b) => at(a) - at(b));
   const byId = new Map(comments.map((c, i) => [String(c.id), i]));
@@ -144,16 +146,24 @@ function evaluate(comments, head, reviewerRole, roles) {
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
     const cur = latest[who];
-    const sameSha = (a, b) => a.startsWith(b) || b.startsWith(a);
-    if (!cur || h.round > cur.round) latest[who] = { ...h, who };
+    if (!cur || h.round > cur.round) latest[who] = { ...h, who, shas: [h.sha] };
     else if (h.round === cur.round) {
-      // 同輪次：判決必須跟留言順序無關（r2 Medium⑤：同一輪對兩個版本各說「通過」，原本先遇到哪一則就用哪一則）。
-      // 相反結論＝不明；**不同版本**（短碼不相容）也＝不明——同一輪不可能同時審兩個版本，要更高輪次澄清。
+      // 同輪次：判決必須跟留言順序無關（r2 Medium⑤）。相反結論＝不明；不同版本也＝不明。
+      // ⚠️ 版本要用**集合**聚合（r3 Medium③）：短碼相容不是可傳遞的——abcdef1 跟 abcdef12、abcdef13 各自相容，
+      //    但後兩者互不相容；只留「第一筆代表值」再逐一比，會讓短碼先到時把矛盾的長碼都丟掉。
+      //    做法：留下這一輪全部的版本碼，取最長的那一個當代表，每一個都要是它的前綴才算同一版本。
       if (cur.conflict) { /* 已經標成不明，維持 */ }
       else if (h.blocking !== cur.blocking) {
         latest[who] = { ...cur, conflict: true, blocking: true, verdict: `同一輪（r${h.round}）出現相反結論：${cur.verdict} vs ${h.verdict}` };
-      } else if (!sameSha(h.sha, cur.sha)) {
-        latest[who] = { ...cur, conflict: true, blocking: true, verdict: `同一輪（r${h.round}）對兩個版本各給結論（${cur.sha.slice(0, 7)}、${h.sha.slice(0, 7)}）：不明，要更高輪次澄清` };
+      } else {
+        const shas = [...cur.shas, h.sha];
+        const longest = shas.reduce((a, b) => (b.length > a.length ? b : a));
+        if (shas.some((x) => !longest.startsWith(x))) {
+          const distinct = [...new Set(shas.map((x) => x.slice(0, 8)))];
+          latest[who] = { ...cur, shas, conflict: true, blocking: true, verdict: `同一輪（r${h.round}）對不同版本各給結論（${distinct.join('、')}）：不明，要更高輪次澄清` };
+        } else {
+          latest[who] = { ...cur, shas, sha: longest };
+        }
       }
     }
   });
@@ -220,10 +230,8 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     throw e;
   }
   const reviewerRole = canonicalRole(fieldValue(change.body, '獨立審查者'), usable);
-  if (comments.some((c) => !Number.isFinite(Date.parse(String(c.createdAt))))) {
-    return { code: 2, lines: ['結論聯集閘：有留言的時間讀不出來——先後判不了，查不清楚一律當未通過。'] };
-  }
-  const { problems, warnings, reviewers } = evaluate(comments, change.headSha, reviewerRole, usable);
+  const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable);
+  if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
   const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);
   if (!problems.length) {

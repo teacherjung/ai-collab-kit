@@ -124,8 +124,9 @@ test('本文與機器索引指名的每一份範本都在，而且帶著自己�
     const lines = effectiveLines(fs.readFileSync(path.join(root, file), 'utf8'));
     assert.ok(lines.some((l) => re.test(l)), `${file} 的生效行裡找不到固定小標 ${re}`);
   }
-  assert.deepEqual(effectiveLines('a\n<!-- ### x -->\n```\n### y\n```\nb'), ['a', '', 'b'], '註解與圍欄裡的行不算生效');
+  assert.deepEqual(effectiveLines('a\n<!-- ### x -->\n```\n### y\n```\nb'), ['a', 'b'], '註解與圍欄裡的行不算生效（只剩註解的行不當空行）');
   assert.deepEqual(effectiveLines('````md\n範例\n```\n### 複審後掃\n````\nb').filter(Boolean), ['b'], '四反引號圍欄裡的三反引號不是關閉（r2 反例）');
+  assert.deepEqual(effectiveLines(['```md', '<!--', '```', '-->', '```', '### 複審後掃', '```', 'b'].join('\n')).filter(Boolean), ['-->', 'b'], '交錯的註解與圍欄（r3 反例）');
 });
 
 test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要有人發現）', () => {

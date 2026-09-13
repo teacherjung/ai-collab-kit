@@ -55,12 +55,14 @@ function deciderOf(settings) {
 /**
  * 純判斷層。comments＝[{ id, author, body, createdAt, change }]（change＝所屬變更編號，只用來印）。
  */
-const at = (c) => Date.parse(String(c.createdAt));
+const { parseInstant } = require('./time-point.js');
+// 時間走共用契約（r3 High①）：沒帶時區的時間在不同執行機器會判出不同先後，不收
+const at = (c) => { const v = parseInstant(c.createdAt); return v === null ? NaN : v; };
 
 function evaluate(comments, decider) {
   // 時間契約（r2 Medium④）：每一則的時間都要讀得出，先後用時間值比——字串比會讓不同時區的合法寫法排錯，
   // 一則其實比問題早的裁示會把後來的問題關掉。讀不出＝整份算不出來，由呼叫端退 2。
-  if (comments.some((c) => !Number.isFinite(at(c)))) return { open: [], ruled: [], withdrawn: [], near: [], unsure: '有留言的時間讀不出來' };
+  if (comments.some((c) => !Number.isFinite(at(c)))) return { open: [], ruled: [], withdrawn: [], near: [], unsure: '有留言的時間讀不出來或沒帶時區' };
   const ids = decider.ids && decider.ids.length ? decider.ids : [decider.id];
   const accounts = new Set(decider.accounts && decider.accounts.length ? decider.accounts : [decider.account]);
   const idAlt = `(?:${ids.map(esc).join('|')})`;

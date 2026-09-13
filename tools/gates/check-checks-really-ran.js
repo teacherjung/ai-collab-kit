@@ -16,6 +16,7 @@
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
+const { parseInstant } = require('../time-point.js');
 
 const UNSET = '未設定';
 
@@ -43,11 +44,12 @@ function evaluate(runs, autoMergeOn, required) {
     // ⚠️ 完成了的場次要有**合法的完成時間**與**非空的結論**，否則整個判斷是建在沙上（r1 High②：
     //    完成時間是 null 或亂字時，字典序會讓它排到日期後面，一場沒有時間的「成功」就蓋掉了真的失敗）。
     //    時間用**時間值**比、不用字串比：兩個合法但不同時區的寫法，字串序會排錯。
-    const broken = mine.find((r) => typeof r.completedAt !== 'string' || !Number.isFinite(Date.parse(r.completedAt)) || typeof r.conclusion !== 'string' || !r.conclusion);
+    // 時間走共用契約（r3 High①）：沒帶時區的時間在不同執行機器會判出不同先後，不收
+    const broken = mine.find((r) => parseInstant(r.completedAt) === null || typeof r.conclusion !== 'string' || !r.conclusion);
     if (broken) {
-      return { code: 2, reason: `「${name}」有一場標成完成、卻沒有合法的完成時間或結論（時間「${broken.completedAt}」、結論「${broken.conclusion}」）——場次資料不合契約，查不清楚就不放行` };
+      return { code: 2, reason: `「${name}」有一場標成完成、卻沒有合法（帶時區）的完成時間或結論（時間「${broken.completedAt}」、結論「${broken.conclusion}」）——場次資料不合契約，查不清楚就不放行` };
     }
-    const at = (r) => Date.parse(r.completedAt);
+    const at = (r) => parseInstant(r.completedAt);
     const maxAt = Math.max(...mine.map(at));
     const tied = mine.filter((r) => at(r) === maxAt);
     const bad = tied.find((r) => r.conclusion !== 'success');

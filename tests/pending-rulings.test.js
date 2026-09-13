@@ -10,7 +10,9 @@
 //   ⑦三種留痕都只採計登記的貼文帳號（r1 Medium⑧：外人不可以撤掉待裁、外人的問也不入）；
 //   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）；
 //   ⑨生效文字只有一份定義（r2 Medium③）：原話與配對放在程式碼圍欄、引用的懶續行裡都不算；
-//   ⑩時間用時間值比（r2 Medium④）：比問題早的異時區裁示不關題；時間讀不出＝退 2、不移出待裁。
+//   ⑩時間用時間值比（r2 Medium④）：比問題早的異時區裁示不關題；時間讀不出＝退 2、不移出待裁；
+//   ⑪時間沒帶時區也不收（r3 High①）：同一份輸入在不同執行時區要判一樣；
+//   ⑫圍欄裡的註解符號不可以改寫外層結構（r3 Medium②）：交錯的註解與圍欄、沒關閉的註解都不算生效。
 // ⚠️ 守不到的：只掃開著的變更；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
@@ -149,4 +151,30 @@ test('⑩時間用時間值比：異時區但其實較早的裁示不關題；�
   const out = run({ settings, platform });
   assert.equal(out.code, 2);
   assert.match(out.lines.join('\n'), /時間讀不出/u);
+});
+
+test('⑪沒帶時區的裁示不收＝退 2；同一份輸入在 TZ=UTC 與 TZ=Asia/Taipei 判一樣', () => {
+  const q = ask(); q.createdAt = '2026-09-13T02:00:00Z';
+  const noTz = ruling(q.id); noTz.createdAt = '2026-09-13T03:00:00';
+  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
+  const platform = { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [q, noTz]) };
+  assert.equal(run({ settings, platform }).code, 2);
+  const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/pending-rulings.js'))});
+    const D = ${JSON.stringify(D)};
+    const q = ${JSON.stringify(q)};
+    const r = ${JSON.stringify({ ...ruling(q.id), createdAt: '2026-09-13T03:00:00Z' })};
+    const bad = ${JSON.stringify({ ...ruling(q.id), createdAt: '2026-09-13T03:00:00' })};
+    process.stdout.write(JSON.stringify([evaluate([q, r], D).open.length, evaluate([q, bad], D).unsure ? 'unsure' : 'ok']));`;
+  const outs = ['UTC', 'Asia/Taipei'].map((tz) => spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: tz } }).stdout);
+  assert.equal(outs[0], outs[1], `兩個時區結果不同：${outs.join(' | ')}`);
+  assert.deepEqual(JSON.parse(outs[0]), [0, 'unsure']);
+});
+
+test('⑫圍欄裡的註解符號不可以改寫外層結構；沒關閉的註解一路不算', () => {
+  const q = ask();
+  const payload = `原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}`;
+  const interleaved = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n${['```md', '<!--', '```', '-->', '```', payload, '```'].join('\n')}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, interleaved], D).open.length, 1, '第二段圍欄裡的原話是範例，不算');
+  const unclosed = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n<!--\n${payload}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, unclosed], D).open.length, 1, '沒關閉的註解裡什麼都不算');
 });

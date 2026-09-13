@@ -192,6 +192,19 @@ test('GitHub 範本：每一條讀寫指令都用 {project} 釘倉庫、不用 {
     assert.ok(!joined.includes('{owner}/{repo}'), `${name} 還在用工具自己的佔位（會被 GH_REPO 改寫）`);
   }
   assert.deepEqual([...doc.clearEnv].sort(), ['GH_HOST', 'GH_REPO']);
+  // 可執行性（r3 Medium④：change 多貼了一個 {change}，填完設定仍跑不起來）：每個記號每條指令最多出現一次，
+  // 該動作的參數記號要剛好一次；展開後的 argv 沒有殘留記號
+  for (const [name, argv] of Object.entries(doc.operations)) {
+    const joined = argv.join(' ');
+    for (const token of ['{change}', '{sha}', '{branch}', '{project}']) {
+      assert.ok(joined.split(token).length - 1 <= 1, `${name} 的 ${token} 出現超過一次`);
+    }
+    for (const p of OPERATIONS[name].params) assert.equal(joined.split(`{${p}}`).length - 1, 1, `${name} 少了或多了參數記號 {${p}}`);
+    const settings = { platform: { project: 'o/r', operations: { [name]: argv } } };
+    const seen = [];
+    try { ask(name, Object.fromEntries(OPERATIONS[name].params.map((p) => [p, 'x'])), { settings, run: (cmd, args) => { seen.push([cmd, ...args]); return { status: 0, stdout: OPERATIONS[name].kind === 'list' ? '[]' : '{}', stderr: '' }; } }); } catch { /* 物件型答案會因形狀不合丟錯，這裡只看展開 */ }
+    assert.ok(seen.length === 1 && !seen[0].some((a) => /\{(change|sha|branch|project)\}/u.test(a)), `${name} 展開後還有記號：${JSON.stringify(seen[0])}`);
+  }
 });
 
 test('預設執行器：起不來回 status null，不是 0', () => {

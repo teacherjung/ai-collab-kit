@@ -13,7 +13,9 @@
 //   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
 //   ⑨同一位同輪次對**不同版本**各給結論＝不明、擋（r2 Medium⑤：原本同為通過時先遇到哪一則就用哪一則，
 //     清單順序改變判決）；判決與清單順序無關，每一種排列都要判一樣。
-//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算。
+//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算；
+//   ⑪同輪的版本碼用集合聚合（r3 Medium③）：短碼相容不可傳遞，三則短長碼的六種排列都要判一樣；
+//   ⑫時間沒帶時區不收（r3 High①）：同一份留言在不同執行時區判一樣。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。獨立審查者用反例推翻（舊版本 01:00、目前版本 02:00、
 //    反序餵入：有排序退 1、沒排序退 0）——當時同輪同結論異版本是「先遇到哪一則就用哪一則」，排序決定了誰先。
 //    現在同輪異版本一律判不明，**判決**跟順序無關（⑨那題把每一種排列都跑一遍、比對整份 problems）。
@@ -228,7 +230,7 @@ test('⑨同一位同輪次對不同版本各說通過＝不明、擋；每一�
   const onHead = { ...verdict({ sha: HEAD, round: 1 }), createdAt: '2026-09-13T04:00:00Z' };
   for (const order of [[onOld, onHead], [onHead, onOld]]) {
     const r = evaluate(order, HEAD, 'Beta', ROLES);
-    assert.ok(r.problems.some((p) => p.includes('對兩個版本各給結論')), `排列 ${order.map((c) => c.id)} 應判不明`);
+    assert.ok(r.problems.some((p) => p.includes('對不同版本各給結論')), `排列 ${order.map((c) => c.id)} 應判不明`);
   }
   // 時間不同、清單反序也一樣
   const early = { ...onOld, createdAt: '2026-09-13T01:00:00Z' };
@@ -250,4 +252,38 @@ test('⑩圍欄與引用裡的標頭、記號、結論用詞都不算生效', ()
   assert.equal(r.warnings.length, 0, '圍欄裡的 🤖 也不算壞標頭、不算疑似');
   assert.equal(hasBotMark('> 引用\n懶續行裡有 🤖'), false, '引用的懶續行不算');
   assert.equal(looksLikeVerdict('````\n```\n不可合併\n````'), false);
+});
+
+test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說通過，六種排列全部判不明', () => {
+  const head12 = 'abcdef12' + '0'.repeat(32);
+  // ⚠️ 這裡不能用 verdict()：它把版本碼切成七碼，三個樣本就變成同一個字（第一版考題就這樣假綠過）
+  const mk = (sha) => ({ ...c(`🤖 Beta｜來源：CLI｜審 \`${sha}\`｜r1｜結論：通過`), createdAt: '2026-09-13T04:00:00Z' });
+  const a = mk('abcdef1'); const b = mk('abcdef12'); const d = mk('abcdef13');
+  const perms = [[a, b, d], [a, d, b], [b, a, d], [b, d, a], [d, a, b], [d, b, a]];
+  for (const p of perms) {
+    const r = evaluate(p, head12, 'Beta', ROLES);
+    assert.ok(r.problems.some((x) => x.includes('對不同版本各給結論')), `排列 ${p.map((c) => c.body.match(/審 `([^`]+)`/)[1])} 應判不明`);
+  }
+  // 只有相容的短碼＋長碼：兩種排列都放行，代表值取最長的那一個
+  for (const p of [[a, b], [b, a]]) assert.deepEqual(evaluate(p, head12, 'Beta', ROLES).problems, [], '相容的短長碼不是異版本');
+  // 短碼＋一個不匹配目前版本的長碼：兩種排列都要擋（不可以短碼先到就放行）
+  for (const p of [[a, d], [d, a]]) assert.ok(evaluate(p, head12, 'Beta', ROLES).problems.length > 0, '代表值是長碼，跟目前版本對不上');
+  // 更高輪次澄清後放行
+  assert.deepEqual(evaluate([a, b, d, verdict({ sha: head12, round: 2 })], head12, 'Beta', ROLES).problems, []);
+});
+
+test('⑫沒帶時區的留言時間不收＝退 2；同一份留言在 TZ=UTC 與 TZ=Asia/Taipei 判一樣', () => {
+  const bad = c('🤖 Beta｜來源：CLI｜審 ｜r1｜結論：要求修改', 'bad1'); bad.createdAt = '2026-09-13T02:00:00Z';
+  const good = verdict({ round: 2 }); good.createdAt = '2026-09-13T02:30:00Z';
+  const voider = verdict({ role: 'Alpha', round: 2, extra: '\n\n作廢上一則：bad1' });
+  const settings = { participants: ROLES.map((id) => ({ id })) };
+  const noTz = { ...voider, createdAt: '2026-09-13T03:00:00' };
+  assert.equal(gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [bad, good, noTz] }) }).code, 2);
+  const withTz = { ...voider, createdAt: '2026-09-13T03:00:00Z' };
+  const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/gates/check-review-verdicts.js'))});
+    const r = evaluate(${JSON.stringify([bad, good, withTz])}, ${JSON.stringify(HEAD)}, 'Beta', ${JSON.stringify(ROLES)});
+    process.stdout.write(JSON.stringify(r.problems));`;
+  const outs = ['UTC', 'Asia/Taipei'].map((tz) => spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: tz } }).stdout);
+  assert.equal(outs[0], outs[1], `兩個時區判決不同：${outs.join(' | ')}`);
+  assert.deepEqual(JSON.parse(outs[0]), [], '帶時區的作廢在兩個時區都生效');
 });

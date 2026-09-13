@@ -20,5 +20,15 @@ test('圍欄的關閉行要同一種符號、長度不短於開頭：三個反�
 });
 
 test('跨行的 HTML 註解也剝掉；effectiveText 就是接起來', () => {
-  assert.equal(effectiveText('前\n<!--\n藏\n-->\n後'), '前\n\n後');
+  assert.equal(effectiveText('前\n<!--\n藏\n-->\n後'), '前\n後', '只因為剝掉註解才變空的行不算空行');
+  assert.deepEqual(effectiveLines('> 引用\n<!-- 註解 -->\n續行仍是引用\n\n外'), ['', '外'], '一行註解不可以把引用切開');
+});
+
+test('圍欄裡的註解符號不可以改寫外層結構（r3 反例：交錯的註解與圍欄）；沒關閉的註解一路不算', () => {
+  const interleaved = ['```md', '<!--', '```', '-->', '```', '欄位', '```', '外面'].join('\n');
+  assert.deepEqual(effectiveLines(interleaved).filter(Boolean), ['-->', '外面'], '「欄位」在第二段圍欄裡，不算；外層那個孤兒的 --> 是普通文字');
+  assert.deepEqual(effectiveLines('<!--\n欄位\n沒關閉').filter(Boolean), [], '沒關閉的註解裡什麼都不算');
+  assert.deepEqual(effectiveLines('前 <!-- 中 --> 後\n<!-- 跨\n行 --> 尾').filter(Boolean), ['前  後', ' 尾'], '行內與跨行的完整註解剝掉、前後保留');
+  assert.deepEqual(effectiveLines('<!-- a --> ```\n裡\n```\n外').filter(Boolean), ['外'], '註解剝掉後剩下的「 ```」（一個空白）仍是合法的圍欄開頭');
+  assert.deepEqual(effectiveLines('<!-- a -->x\n裡').filter(Boolean), ['x', '裡'], '註解剝掉後的殘餘照常當文字');
 });
