@@ -26,7 +26,7 @@
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
-const { leadingText } = require('../markdown-effective.js');
+const { leadingText, stopNote } = require('../markdown-effective.js');
 const { parseInstant } = require('../time-point.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
@@ -241,6 +241,7 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   }
   lines.push(`結論聯集閘｜變更 ${changeId}：未通過`);
   for (const p of problems) lines.push(`   ・${p}`);
+  if (!reviewerRole && stopNote(change.body)) lines.push(`   ↳ 讀不出指定審查者：${stopNote(change.body)}`);
   lines.push(`現況：${who}`);
   return { code: 1, lines };
 }

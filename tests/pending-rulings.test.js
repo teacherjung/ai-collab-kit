@@ -210,6 +210,20 @@ test('⑬只讀開頭那一段（r5 之後）：原話與網址寫在特殊行�
   assert.equal(evaluate([q, c('前言\n  ## ⚖️ 縮排的範例標題')], D).near.length, 0, '縮排的標題是範例，不列疑似');
   const askWithComment = c('## ❓ 待裁（2026-09-13）：要不要做\n<!-- 備註 -->');
   assert.equal(evaluate([askWithComment], D).open.length, 1, '問只讀第一行，內文的特殊行不影響它在待裁裡');
+  // r6 Medium①：網址放在表格分隔列以下（行內程式碼裡的豎線把格子切多、網址那格被丟掉）＝不配對；沒配到又停過＝疑似、指出第 5 行
+  const inTable = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n\n| 驗證命令 | 原題 |\n| --- | --- |\n| \`printf x | cat\` | ${q.id} |`, { author: 'boss-acct' });
+  const t = evaluate([q, inTable], D);
+  assert.equal(t.open.length, 1, '表格裡的網址不配對');
+  assert.ok(t.near.some((x) => x.id === inTable.id && /沒有配到/u.test(x.why) && /第 5 行就停了/u.test(x.why)), t.near.map((x) => x.why).join(' / '));
+  const beforeTable = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n\n| a | b |\n| --- | --- |\n| \`x | y\` | z |`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, beforeTable], D).open.length, 0, '對照組：網址寫在表格前面＝配對成立');
+  // r6 Low②：原話在引用前、網址在引用後＝不配對；以前靜靜留在待裁，現在列疑似並指出第 3 行
+  const urlAfterQuote = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n> 上輪建議\n\n${q.id}`, { author: 'boss-acct' });
+  const u = evaluate([q, urlAfterQuote], D);
+  assert.equal(u.open.length, 1);
+  assert.ok(u.near.some((x) => x.id === urlAfterQuote.id && /第 3 行就停了/u.test(x.why)), u.near.map((x) => x.why).join(' / '));
+  const unmatchedNoStop = c('## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n別的變更上的題', { author: 'boss-acct' });
+  assert.equal(evaluate([q, unmatchedNoStop], D).near.length, 0, '對照組：沒配到、但讀的那段沒停＝照舊不列（可能在回答已關掉的變更上的題）');
   const tagInTitle = c('## ❓ 待裁（2026-09-13）：要不要用 <details> 收合');
   assert.equal(evaluate([tagInTitle], D).open.length, 1, '第一行讀原文、不經過「開頭那一段」：標題裡有特殊記號也照樣是問');
   const mention = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n背景：\`<!--\` 那個記號的事\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });

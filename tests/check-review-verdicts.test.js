@@ -276,6 +276,7 @@ test('⑩指定審查者只從說明開頭那一段讀；讀不到就不放行',
   const quoteFirst = run('> 上輪建議\n## 協作欄位\n- **實作者**：Alpha\n- **獨立審查者**：Beta');
   assert.equal(quoteFirst.code, 1, quoteFirst.lines.join('\n'));
   assert.match(quoteFirst.lines.join('\n'), /讀不出變更說明指定的獨立審查者/u);
+  assert.match(quoteFirst.lines.join('\n'), /第 1 行就停了/u, 'r6 Low②：結論閘自己也說停在第幾行');
   const later = run('- **實作者**：Alpha\n- **獨立審查者**：Beta\n<!-- 附註 -->');
   assert.equal(later.code, 0, `控制組：欄位在前、註解在後：${later.lines.join('\n')}`);
 });

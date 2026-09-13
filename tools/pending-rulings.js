@@ -13,7 +13,7 @@
 //   撤回＝第一行「## 🚫 撤回（YYYY-MM-DD）：〈標題〉」＋「撤回理由：〈三選一〉（依據）」＋「〈識別值〉 撤回、〈裁示者〉 未回；他隨時可以要我重問」
 // 配對＝裁示或撤回的內文（引用區塊以外）出現原 ❓ 留言的編號（貼網址就自然含有），而且比 ❓ 晚。
 // 已裁與已撤回一定印出來、附配對，讓錯的配對看得見；長得像但形狀不合的另列成疑似。
-// 第一行＝原文第一個非空行；原話、撤回理由、自報句、配對只讀**開頭那一段**（讀到第一個引用、程式碼、HTML、圖片、
+// 第一行＝原文第一個非空行；原話、撤回理由、自報句、配對只讀**開頭那一段**（讀到第一個引用、程式碼、表格分隔列、HTML、圖片、
 // 連結定義、縮排之類的特殊行為止；規則只有一份＝tools/markdown-effective.js）。所以這些要緊接在標題下寫。
 //
 // 誠實劃界：只掃開著的變更（裁示貼在已關掉的變更上看不到）；「已裁」是推導不是事實（引了編號不等於
@@ -121,6 +121,12 @@ function evaluate(comments, decider) {
     const w = withdraws.find((x) => later(x) && cites(x.body, q.id));
     if (w) { withdrawn.push({ ask: q, by: w }); continue; }
     open.push(q);
+  }
+  // r6 Low②：形狀合格、卻沒配到任何問題的裁示或撤回，讀的那段又有停下來＝多半是網址寫在停止點之後。列疑似、說停在第幾行，
+  // 不然題目只是靜靜留在待裁、看不出為什麼。沒停下來的照舊不列（可能在回答已關掉的變更上的題）。
+  const used = new Set([...ruled, ...withdrawn].map((x) => x.by));
+  for (const x of [...rulings, ...withdraws]) {
+    if (!used.has(x) && stopNote(x.body)) near.push({ ...x, why: `沒有配到任何比它早的問題${stopNote(x.body)}` });
   }
   return { open, ruled, withdrawn, near };
 }
