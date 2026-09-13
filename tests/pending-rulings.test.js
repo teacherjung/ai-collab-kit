@@ -9,10 +9,12 @@
 //   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；
 //   ⑦三種留痕都只採計登記的貼文帳號（r1 Medium⑧：外人不可以撤掉待裁、外人的問也不入）；
 //   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）；
+//     裁示與撤回的內文有 HTML 註解＝不解讀、列成疑似（r4 Medium②）；問只讀第一行、照常收；行內程式碼裡提到記號照常判；
 //   ⑨生效文字只有一份定義（r2 Medium③）：原話與配對放在程式碼圍欄、引用的懶續行裡都不算；
 //   ⑩時間用時間值比（r2 Medium④）：比問題早的異時區裁示不關題；時間讀不出＝退 2、不移出待裁；
 //   ⑪時間沒帶時區也不收（r3 High①）：同一份輸入在不同執行時區要判一樣；
-//   ⑫圍欄裡的註解符號不可以改寫外層結構（r3 Medium②）：交錯的註解與圍欄、沒關閉的註解都不算生效。
+//   ⑫圍欄裡的註解符號不可以改寫外層結構（r3 Medium②）：交錯的註解與圍欄、沒關閉的註解都不算生效；
+//     圍欄開頭行後面的「<!--」也屬於圍欄（r4 Medium②）。
 // ⚠️ 守不到的：只掃開著的變更；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
@@ -159,6 +161,10 @@ test('⑪沒帶時區的裁示不收＝退 2；同一份輸入在 TZ=UTC 與 TZ=
   const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
   const platform = { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [q, noTz]) };
   assert.equal(run({ settings, platform }).code, 2);
+  // r4 Medium①：不存在的日子會被轉換器進位成較晚的真日子，「較晚」的裁示就把問題關掉
+  const qMar = { ...q, createdAt: '2026-03-01T02:00:00Z' };
+  const impossible = { ...ruling(q.id), createdAt: '2026-02-30T03:00:00Z' };
+  assert.equal(run({ settings, platform: { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [qMar, impossible]) } }).code, 2, '不存在的日子＝時間讀不出＝退 2、不移出待裁');
   const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/pending-rulings.js'))});
     const D = ${JSON.stringify(D)};
     const q = ${JSON.stringify(q)};
@@ -177,4 +183,27 @@ test('⑫圍欄裡的註解符號不可以改寫外層結構；沒關閉的註�
   assert.equal(evaluate([q, interleaved], D).open.length, 1, '第二段圍欄裡的原話是範例，不算');
   const unclosed = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n<!--\n${payload}`, { author: 'boss-acct' });
   assert.equal(evaluate([q, unclosed], D).open.length, 1, '沒關閉的註解裡什麼都不算');
+  for (const f of ['```', '~~~']) {
+    const r4 = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n${[`${f}md <!--`, 'code', f, `${f}md`, '-->', payload, f].join('\n')}`, { author: 'boss-acct' });
+    const r = evaluate([q, r4], D);
+    assert.equal(r.open.length, 1, `${f}：r4 反例——第二段圍欄裡的原話是範例，不關題`);
+    assert.equal(r.ruled.length, 0);
+  }
+});
+
+test('⑬內文有 HTML 註解＝不解讀、列疑似（問照收）；行內程式碼裡提到記號是正常寫法、照常配對（r4 Medium②）', () => {
+  const q = ask();
+  const withComment = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n<!-- 附註 -->`, { author: 'boss-acct' });
+  const r = evaluate([q, withComment], D);
+  assert.equal(r.open.length, 1, '有註解的裁示不關題');
+  assert.ok(r.near.some((x) => x.id === withComment.id && /第 4 行有 HTML 註解/u.test(x.why)), '要列成疑似、指出第幾行');
+  const hiddenHeader = c(`<!--\n## ⚖️ Boss 裁示（2026-09-13）：選甲\n-->\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });
+  assert.ok(evaluate([q, hiddenHeader], D).near.some((x) => x.id === hiddenHeader.id), '第一行被註解遮住的裁示也不可以靜靜不見');
+  const askWithComment = c('## ❓ 待裁（2026-09-13）：要不要做\n<!-- 備註 -->');
+  assert.equal(evaluate([askWithComment], D).open.length, 1, '問只讀第一行，內文的註解不影響它在待裁裡');
+  // 正常寫法：原話之前提到 `<!--`（舊的剝法會把後面的原話與網址整段吞掉，題目關不掉）
+  const mention = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n背景：\`<!--\` 那個記號的事\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });
+  const m = evaluate([q, mention], D);
+  assert.equal(m.open.length, 0, '行內程式碼裡的記號不擋、原話照常算');
+  assert.equal(m.near.length, 0);
 });

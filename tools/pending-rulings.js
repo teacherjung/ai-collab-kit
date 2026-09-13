@@ -13,6 +13,7 @@
 //   撤回＝第一行「## 🚫 撤回（YYYY-MM-DD）：〈標題〉」＋「撤回理由：〈三選一〉（依據）」＋「〈識別值〉 撤回、〈裁示者〉 未回；他隨時可以要我重問」
 // 配對＝裁示或撤回的內文（引用區塊以外）出現原 ❓ 留言的編號（貼網址就自然含有），而且比 ❓ 晚。
 // 已裁與已撤回一定印出來、附配對，讓錯的配對看得見；長得像但形狀不合的另列成疑似。
+// 裁示與撤回的內文有 HTML 註解＝不判讀、列成疑似（不猜註解裡藏的算不算；問只讀第一行，所以問不受影響）。
 //
 // 誠實劃界：只掃開著的變更（裁示貼在已關掉的變更上看不到）；「已裁」是推導不是事實（引了編號不等於
 // 在回答它）；原話那一行只驗形狀，驗不出引號裡是不是他真的說的；分頁是那條登記指令的責任。
@@ -29,10 +30,11 @@ const WITHDRAW_REASON = /^撤回理由：(題目依附的東西沒了|問題本�
 const NEAR = /❓|⚖|🚫|待裁|裁示|撤回/u;
 
 const realDate = (s) => { const m = DATE.exec(s); if (!m) return false; const d = new Date(`${s}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s; };
-const { effectiveText } = require('./markdown-effective.js');
+const { effectiveText, htmlCommentLine } = require('./markdown-effective.js');
 /**
  * 生效文字只有一份定義（r2 Medium③：原本第一行、原話行、配對各自剝不同的容器——原話放進程式碼範例照樣算數）。
- * 註解、程式碼圍欄、引用（含懶續行）裡的字一律不算：第一行、原話、撤回理由、自報句、配對，全部從同一份文字取。
+ * 程式碼圍欄、引用（含懶續行）裡的字一律不算：第一行、原話、撤回理由、自報句、配對，全部從同一份文字取。
+ * HTML 註解不剝，改成偵測（r4 Medium②）：見 evaluate 迴圈開頭。
  */
 const clean = (body) => effectiveText(body);
 const firstLine = (body) => clean(body).split('\n').find((l) => l.trim()) || '';
@@ -77,6 +79,13 @@ function evaluate(comments, decider) {
   const sorted = [...comments].sort((a, b) => at(a) - at(b));
   for (const c of sorted) {
     const first = firstLine(c.body);
+    // r4 Medium②：內文有 HTML 註解就不判讀——剝錯了兩個方向都會錯（範例被當成原話、看得見的原話被吞掉）。
+    // 問只讀第一行，照常收；其餘長得像留痕的列成疑似，所以一則裁示不會因為註解而靜靜關掉或靜靜不見。
+    const commentAt = htmlCommentLine(c.body);
+    if (commentAt && !ASK.test(first)) {
+      if (NEAR.test(c.body)) near.push({ ...c, why: `第 ${commentAt} 行有 HTML 註解：不解讀（註解裡藏的算不算、外面有沒有被吞掉都不猜），不採計；拿掉註解重貼` });
+      continue;
+    }
     // 三種留痕都只採計登記過的貼文帳號（設定的貼文帳號資格；r1 Medium⑧：原本只有裁示看帳號，外人能撤掉待裁）
     if (!accounts.has(c.author) && (ASK.test(first) || WITHDRAW.test(first) || rulingRe.test(first))) {
       near.push({ ...c, why: `不是登記的貼文帳號貼的（${c.author}），不採計` });

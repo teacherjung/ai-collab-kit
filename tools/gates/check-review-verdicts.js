@@ -26,7 +26,7 @@
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
-const { effectiveText } = require('../markdown-effective.js');
+const { effectiveText, htmlCommentLine } = require('../markdown-effective.js');
 const { parseInstant } = require('../time-point.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
@@ -41,7 +41,11 @@ const HEADER = /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*([A-Za-z]+)｜來源：([^�
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
 const VOID = /^ {0,3}作廢上一則：([A-Za-z0-9_-]+)[^\S\n]*$/u;
 
-/** 生效文字只有一份定義（tools/markdown-effective.js）：註解、圍欄（含長度規則）、引用（含懶續行）裡的字不算。 */
+/**
+ * 生效文字只有一份定義（tools/markdown-effective.js）：圍欄（含長度規則）、引用（含懶續行）裡的字不算。
+ * HTML 註解**不剝**（r4 Medium②）：這裡只拿生效文字找「有沒有 🤖」「像不像結論」，不剝是嚴的那一側——
+ * 藏在註解裡的 🤖 也算壞標頭（要作廢），而不會因為剝錯把看得見的壞標頭吞掉。
+ */
 const stripFences = (md) => effectiveText(md);
 
 /** 從一則留言抽標頭。抓不到就回 null（呼叫端決定那算不算問題）。 */
@@ -229,7 +233,9 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     }
     throw e;
   }
+  // 說明裡有 HTML 註解時 fieldValue 一欄都不讀（協作欄位閘檔頭①），這裡就判「讀不出指定誰」
   const reviewerRole = canonicalRole(fieldValue(change.body, '獨立審查者'), usable);
+  const commentAt = htmlCommentLine(change.body);
   const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable);
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
   const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
@@ -240,6 +246,7 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   }
   lines.push(`結論聯集閘｜變更 ${changeId}：未通過`);
   for (const p of problems) lines.push(`   ・${p}`);
+  if (commentAt) lines.push(`   ↳ 讀不出指定審查者的原因：說明第 ${commentAt} 行有 HTML 註解，欄位一律不讀；拿掉註解再跑。`);
   lines.push(`現況：${who}`);
   return { code: 1, lines };
 }

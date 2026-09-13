@@ -86,6 +86,9 @@ test('⑩沒帶時區的完成時間不收＝退 2；同一份資料在不同執
   const failed = run({ conclusion: 'failure', completedAt: '2026-09-13T02:00:00Z' });
   const noTz = run({ conclusion: 'success', completedAt: '2026-09-13T03:00:00' });
   assert.equal(evaluate([failed, noTz], false, [need()]).code, 2, '沒時區的成功不可以被當成比較晚');
+  const impossible = run({ conclusion: 'success', completedAt: '2026-02-30T03:00:00Z' });
+  assert.equal(evaluate([run({ conclusion: 'failure', completedAt: '2026-03-01T02:00:00Z' }), impossible], false, [need()]).code, 2,
+    '不存在的日子（轉換器會進位成 3 月 2 日）不可以被當成比較晚的成功（r4 Medium①）');
   const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/gates/check-checks-really-ran.js'))});
     const r = (o) => ({ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci', ...o });
     const need = { name: '三關', producer: 'ci' };

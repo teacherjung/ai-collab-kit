@@ -13,7 +13,8 @@
 //   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
 //   ⑨同一位同輪次對**不同版本**各給結論＝不明、擋（r2 Medium⑤：原本同為通過時先遇到哪一則就用哪一則，
 //     清單順序改變判決）；判決與清單順序無關，每一種排列都要判一樣。
-//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算；
+//   ⑩生效文字只有一份定義：圍欄（含長度規則）與引用（含懶續行）裡的 🤖 與結論用詞不算；HTML 註解不剝（r4 Medium②：
+//     剝錯會把看得見的壞標頭吞掉；不剝是嚴的一側）；說明裡有註解＝不讀指定審查者、訊息指出第幾行；
 //   ⑪同輪的版本碼用集合聚合（r3 Medium③）：短碼相容不可傳遞，三則短長碼的六種排列都要判一樣；
 //   ⑫時間沒帶時區不收（r3 High①）：同一份留言在不同執行時區判一樣。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。獨立審查者用反例推翻（舊版本 01:00、目前版本 02:00、
@@ -254,6 +255,28 @@ test('⑩圍欄與引用裡的標頭、記號、結論用詞都不算生效', ()
   assert.equal(looksLikeVerdict('````\n```\n不可合併\n````'), false);
 });
 
+test('⑩r4 反例：圍欄開頭行帶「<!--」不可以吞掉後面看得見的壞標頭；註解不剝', () => {
+  for (const f of ['```', '~~~']) {
+    const swallow = c([`${f}md <!--`, 'code', f, '🤖 壞標頭'].join('\n'));
+    const r = evaluate([swallow, verdict()], HEAD, 'Beta', ROLES);
+    assert.ok(r.problems.some((p) => p.includes('標頭格式不合規')), `${f}：看得見的壞標頭要擋：${r.problems.join(' / ')}`);
+  }
+  // 控制組：前面沒有圍欄，同一行一樣擋（確認紅的原因是那一行，不是圍欄）
+  assert.ok(evaluate([c('說明\n🤖 壞標頭'), verdict()], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('標頭格式不合規')));
+  assert.equal(hasBotMark('<!--\n🤖 藏起來的\n-->'), true, '註解不剝：藏在註解裡的 🤖 也算壞標頭（嚴的一側，救法是作廢）');
+  assert.equal(hasBotMark('提到 `<!--` 之後\n🤖 看得見'), true, '行內程式碼提到記號不可以吞掉後面那行');
+});
+
+test('⑩說明裡有 HTML 註解＝不讀指定審查者、不放行，訊息指出第幾行', () => {
+  const body = '- **實作者**：Alpha\n- **獨立審查者**：Beta\n<!-- 附註 -->';
+  const out = gateRun('7', { settings, platform: fakePlatform({ change: change({ body }), comments: [verdict()] }) });
+  assert.equal(out.code, 1, out.lines.join('\n'));
+  assert.match(out.lines.join('\n'), /讀不出變更說明指定的獨立審查者/u);
+  assert.match(out.lines.join('\n'), /第 3 行有 HTML 註解/u);
+  const control = gateRun('7', { settings, platform: fakePlatform({ change: change({ body: body.replace('<!-- 附註 -->', '附註：`<!--` 是記號') }), comments: [verdict()] }) });
+  assert.equal(control.code, 0, `控制組：行內程式碼裡的記號不擋：${control.lines.join('\n')}`);
+});
+
 test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說通過，六種排列全部判不明', () => {
   const head12 = 'abcdef12' + '0'.repeat(32);
   // ⚠️ 這裡不能用 verdict()：它把版本碼切成七碼，三個樣本就變成同一個字（第一版考題就這樣假綠過）
@@ -279,6 +302,11 @@ test('⑫沒帶時區的留言時間不收＝退 2；同一份留言在 TZ=UTC �
   const settings = { participants: ROLES.map((id) => ({ id })) };
   const noTz = { ...voider, createdAt: '2026-09-13T03:00:00' };
   assert.equal(gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [bad, good, noTz] }) }).code, 2);
+  // r4 Medium①：不存在的日子會被轉換器進位成較晚的真日子，壞標頭就被「較晚」的作廢蓋掉
+  const badMar = { ...bad, createdAt: '2026-03-01T02:00:00Z' };
+  const goodMar = { ...good, createdAt: '2026-03-01T02:30:00Z' };
+  const impossible = { ...voider, createdAt: '2026-02-30T03:00:00Z' };
+  assert.equal(gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [badMar, goodMar, impossible] }) }).code, 2, '不存在的日子＝時間讀不出＝退 2');
   const withTz = { ...voider, createdAt: '2026-09-13T03:00:00Z' };
   const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/gates/check-review-verdicts.js'))});
     const r = evaluate(${JSON.stringify([bad, good, withTz])}, ${JSON.stringify(HEAD)}, 'Beta', ${JSON.stringify(ROLES)});

@@ -3,7 +3,7 @@
 //
 // 這一支的每一題，都對應原專案實際被繞過的一種寫法。**刪掉任何一題之前，先去讀閘的檔頭。**
 //
-// 守得到的：四欄齊全；實作者與獨立審查者不是同一位；註解裡的字不算；欄名要錨在行首；
+// 守得到的：四欄齊全；實作者與獨立審查者不是同一位；說明裡有 HTML 註解就擋（不解讀）；欄名要錨在行首；
 //   冒號後不吃換行；角色要剛好命中一個（不是「包含」）；括號裡藏第二個角色不算；
 //   混用文字系統＝看不出是誰；平台問不到或設定沒填＝退 2。
 // ⚠️ 守不到的：欄位填的內容是不是真的（寫「某某」不代表真的是某某複審的）；
@@ -38,13 +38,19 @@ test('缺欄位：每一欄各報一次', () => {
   assert.equal(problemsOf('', ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '整份空的＝四欄都缺');
 });
 
-test('①註解裡的字不算（範本原封不動送出去不可以通過）', () => {
+test('①說明裡有 HTML 註解就擋、不解讀（r4 Medium②）；行內程式碼裡提到記號是正常寫法、照常判', () => {
+  const commentProblem = (body) => problemsOf(body, ROLES).some((p) => /HTML 註解/u.test(p));
   const template = REQUIRED_FIELDS.map((k) => `- **${k}**：<!-- 請填 ${k} -->`).join('\n');
-  const problems = problemsOf(template, ROLES);
-  assert.equal(problems.filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '註解不算填了');
-  // 註解裡整段藏一份假欄位也不算
+  assert.ok(commentProblem(template), '欄位值是註解＝擋');
   const hidden = `<!--\n${goodBody()}\n-->\n沒有真的欄位`;
-  assert.equal(problemsOf(hidden, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length);
+  assert.ok(commentProblem(hidden), '四欄整段藏在註解裡＝擋（不剝就會通過的那一型）');
+  assert.ok(commentProblem(`${goodBody()}\n<!-- 附註 -->`), '欄位齊全、另外有一行註解＝也擋：不猜註解有沒有吞掉什麼');
+  assert.ok(commentProblem(`<!--\n${goodBody()}`), '沒關閉的註解＝擋');
+  assert.equal(fieldValue(`${goodBody()}\n<!-- x -->`, '實作者'), '', '有註解時 fieldValue 一欄都不讀（結論聯集閘也用它）');
+  assert.match(problemsOf(`a\n\n<!-- x -->\n${goodBody()}`, ROLES)[0], /第 3 行/u, '訊息指出第幾行');
+  // 正常寫法：在行內程式碼裡提到記號（舊的剝法會把後面四欄整段吞掉，判成全缺）
+  assert.deepEqual(problemsOf(`說明裡提到 \`<!--\` 這個記號\n${goodBody()}`, ROLES), [], '行內程式碼裡的記號不算註解');
+  assert.equal(fieldValue(`提到 \`<!--\`\n${goodBody()}`, '實作者'), 'Alpha');
 });
 
 test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只有一段範例）', () => {
@@ -58,8 +64,11 @@ test('⑧圍欄與引用裡的欄位不算填了（r2 反例：整份說明只�
   // r3 反例：圍欄裡的註解符號跟外面的配對，把第二段圍欄翻成生效文字
   const interleaved = ['```md', '<!--', '```', '-->', '```', goodBody(), '```'].join('\n');
   assert.equal(problemsOf(interleaved, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '交錯的註解與圍欄裡的欄位不算');
-  const unclosed = `<!--\n${goodBody()}`;
-  assert.equal(problemsOf(unclosed, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, '沒關閉的註解裡的欄位不算');
+  // r4 反例：圍欄開頭行後面的「<!--」屬於圍欄，不可以把第二段圍欄裡的欄位搬出來（兩種符號）
+  for (const f of ['```', '~~~']) {
+    const r4 = [`${f}md <!--`, 'code', f, `${f}md`, '-->', goodBody(), f].join('\n');
+    assert.equal(problemsOf(r4, ROLES).filter((p) => p.startsWith('缺')).length, REQUIRED_FIELDS.length, `${f}：r4 反例裡的欄位是範例，不算`);
+  }
 });
 
 test('②欄名要錨在行首（「非實作者」不可以命中「實作者」）', () => {

@@ -8,8 +8,9 @@
 //
 // ## 這支被繞過的每一種寫法，都對應下面一段程式碼，**不要簡化掉**
 //
-// ①**註解裡的字不算**：範本自己就把填寫說明放在註解裡，而那些說明也出現「實作者」這些字。
-//   不剝註解的話，範本原封不動送出去也會通過＝這道閘等於沒有。
+// ①**說明裡有 HTML 註解就不判**：註解裡的字畫面上看不見、卻可能長得像欄位（整份四欄藏在註解裡，不剝就通過）；
+//   反過來剝錯了，又會把外面看得見的字吞掉（r4 的圍欄開頭行、實測的行內程式碼裡提到「<!--」，都吞過）。所以不解讀，
+//   看到註解就擋、請人拿掉。偵測規則只有一份＝tools/markdown-effective.js 的 htmlCommentLine。
 // ②**欄名要錨在行首**：不錨的話「非實作者：某某」也會命中，整份說明一個真欄位都沒有卻judged齊全。
 // ③**冒號後只吃水平空白**：吃掉換行的話，「這一欄留空」會抓到下一行的內容，空範本看起來每欄都填了。
 // ④**角色要剛好命中一個，不可以用「包含」判斷**：用包含的話，「NotClaude」含有「Claude」、
@@ -26,7 +27,7 @@
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
-const { effectiveText } = require('../markdown-effective.js');
+const { effectiveText, htmlCommentLine } = require('../markdown-effective.js');
 
 const UNSET = '未設定';
 
@@ -39,6 +40,8 @@ const REQUIRED_FIELDS = ['實作者', '獨立審查者', '預計修改的共享�
  *    否則整份說明只有一段範例就能通過這道閘，還替結論閘提供一位假的「指定審查者」。
  */
 function fieldValue(body, field) {
+  // ①：有註解就一欄都不讀（結論聯集閘也用這支讀「獨立審查者」，守在這裡就不會有呼叫點漏接）
+  if (htmlCommentLine(body)) return '';
   const clean = effectiveText(body);
   const esc = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 行首可有項目符號（含有序清單）與水平空白，欄名可被粗體記號包住，然後才是冒號。
@@ -80,6 +83,11 @@ function canonicalRole(raw, roles) {
  * @param {string[]} roles 專案設定裡的參與者識別值
  */
 function problemsOf(body, roles) {
+  const commentAt = htmlCommentLine(body);
+  if (commentAt) {
+    return [`說明第 ${commentAt} 行有 HTML 註解（<!--）：這道閘不解讀註解——註解裡的欄位算不算、外面的字有沒有被吞掉都不猜。`
+      + '把註解刪掉再跑（要示範這個記號，放進行內程式碼或程式碼圍欄）'];
+  }
   const problems = [];
   const got = {};
   for (const f of REQUIRED_FIELDS) {
