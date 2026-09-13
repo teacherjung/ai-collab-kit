@@ -99,9 +99,9 @@
    "verified": "2026-09-12"
   },
   {
-   "name": "協作欄位閘（雲端＋變更說明範本）",
-   "rules": "A2、E1、D3",
-   "state": "未移植",
+   "name": "協作欄位閘（四欄齊全、實作者不等於獨立審查者）",
+   "rules": "A2、E1",
+   "state": "已安裝未啟用",
    "verified": ""
   },
   {
@@ -248,7 +248,7 @@
    "args": [
     "tools/gates/check-collab-fields.js"
    ],
-   "state": "未移植"
+   "state": "已安裝未啟用"
   },
   {
    "name": "堆疊（底是主幹、上面沒有疊別支）",

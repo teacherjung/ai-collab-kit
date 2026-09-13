@@ -23,7 +23,7 @@
 
 | 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |
 |---|---|---|---|---|---|
-| A2、E1、D3 | `scripts/check-pr-collab-fields.js`＋`.github/workflows/collab-fields.yml`＋`.github/pull_request_template.md`＋`test/collab-fields-cli.test.js` | 四欄任一缺、角色識別值不在名單、實作者＝獨立審查者 | 真實身分、是否真的複審過、誰按鍵、預約秩序 | 平台上設成必過檢查且對管理員生效；識別值名單改成本專案的 | 尚未移植 |
+| A2、E1 | 本倉庫 `tools/gates/check-collab-fields.js`＋`tests/check-collab-fields.test.js`＋`templates/pr-body.md`（平台的事全走 `tools/platform.js`；角色名單來自專案設定的參與者識別值） | 四欄任一缺、角色看不出是剛好哪一位、實作者等於獨立審查者＝退 1；可用的識別值不到兩個、平台問不到、沒給編號＝退 2 | 欄位填的**內容是不是真的**（寫了某某不代表真的是某某複審的）；誰按的鍵；預約秩序；「共享檔案」「最糟失去什麼」兩欄只驗非空 | 專案設定填至少兩個純拉丁字母的參與者識別值；平台介面的 change 動作要登記好 | 已安裝未啟用（等專案填設定） |
 | A2、F4、F5 | `scripts/check-review-verdicts.js`＋`test/review-verdicts.test.js`＋`test/review-verdicts-cli.test.js` | 有未撤銷的阻擋、沒有針對目前版本的合規通過、有 🤖 記號但標頭寫壞（普通補發救不了，要正式重述或豁免）＝退 1；查不清＝退 2 | 沒有 🤖 記號的留言只提醒不擋；來源是否在標準表上；有沒有人跑 | 合併者親手跑；來源字串規矩照 templates/verdict-header.md；識別值只收純拉丁字母 | 尚未移植（要改：識別值名單、豁免句裡寫死的裁示者名字） |
 | B1 | `.claude/settings.json` deny＋PreToolUse hook、`.codex/hooks.json`、`test/money-boundary.test.js`、`test/codex-money-hook.test.js` | 命中清單上的工具名／家族即拒絕 | 清單外的任何能力；沒安裝那一方 | 每一方各自安裝、信任、啟用；清單改成本專案的 | 尚未移植 |
 | B4、E7 | `test/no-hiding-places.test.js` | 指定忽略／豁免清單被改就紅 | 資料是否被讀；子目錄另設清單、其他豁免通道 | 清單重列 | 尚未移植 |
