@@ -29,26 +29,51 @@ const WITHDRAW_REASON = /^撤回理由：(題目依附的東西沒了|問題本�
 const NEAR = /❓|⚖|🚫|待裁|裁示|撤回/u;
 
 const realDate = (s) => { const m = DATE.exec(s); if (!m) return false; const d = new Date(`${s}T00:00:00Z`); return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s; };
-const firstLine = (body) => String(body || '').replace(/\r\n?/g, '\n').split('\n').find((l) => l.trim()) || '';
-/** 引用區塊以外的內文（配對只看這裡：引用別人的網址不算在回答它）。 */
-const outsideQuotes = (body) => String(body || '').replace(/\r\n?/g, '\n').split('\n').filter((l) => !/^[^\S\n]*>/u.test(l)).join('\n');
+/** 先剝掉 HTML 註解：藏在註解裡的原話行或網址在畫面上看不見，不可以算數（r1 Medium⑨）。 */
+const clean = (body) => String(body || '').replace(/\r\n?/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
+const firstLine = (body) => clean(body).split('\n').find((l) => l.trim()) || '';
+/**
+ * 引用區塊以外的內文（配對只看這裡：引用別人的網址不算在回答它）。
+ * 引用區塊＝以 > 開頭的行，**加上緊接在後、沒有空行隔開的續行**（Markdown 的懶續行；r1 Medium⑨：只刪有 > 的那一行，
+ * 網址放在續行就被當成最外層）。
+ */
+const outsideQuotes = (body) => {
+  const out = [];
+  let inQuote = false;
+  for (const line of clean(body).split('\n')) {
+    if (/^[^\S\n]*>/u.test(line)) { inQuote = true; continue; }
+    if (!line.trim()) { inQuote = false; out.push(line); continue; }
+    if (inQuote) continue;
+    out.push(line);
+  }
+  return out.join('\n');
+};
 // 編號要整個對上：前後不可以再接字母或數字（c1 不可以命中 c12）；但連字號與底線算邊界——網址尾碼是「issuecomment-<編號>」。
 const cites = (body, id) => new RegExp(`(?<![0-9A-Za-z])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9A-Za-z])`, 'u').test(outsideQuotes(body));
 
-/** 裁示者：角色以「裁示者」開頭的那一位；識別值與帳號都要填。 */
+const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 裁示者：角色以「裁示者」開頭的那一位；識別值與帳號都要填。順便帶回全部登記的識別值與帳號。 */
 function deciderOf(settings) {
-  const p = (settings.participants || []).find((x) => x && typeof x.role === 'string' && x.role.startsWith('裁示者'));
+  const all = Array.isArray(settings.participants) ? settings.participants : [];
+  const p = all.find((x) => x && typeof x.role === 'string' && x.role.startsWith('裁示者'));
   if (!p || !p.id || p.id === UNSET || !p.account || p.account === UNSET) return null;
-  return { id: p.id, account: p.account };
+  const ids = all.map((x) => x && x.id).filter((v) => typeof v === 'string' && v && v !== UNSET);
+  const accounts = all.map((x) => x && x.account).filter((v) => typeof v === 'string' && v && v !== UNSET);
+  return { id: p.id, account: p.account, ids, accounts };
 }
 
 /**
  * 純判斷層。comments＝[{ id, author, body, createdAt, change }]（change＝所屬變更編號，只用來印）。
  */
 function evaluate(comments, decider) {
-  const rulingRe = new RegExp(`^## ⚖️? ${decider.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} 裁示（(\\d{4}-\\d{2}-\\d{2})）：(\\S.*)$`, 'u');
-  const quoteRe = /^原話（對話中，\S+ 轉述）：\*\*「.+」\*\*[ \t]*$/mu;
-  const withdrawSelf = new RegExp(`^\\S+ 撤回、${decider.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} 未回；他隨時可以要我重問[ \\t]*$`, 'mu');
+  const ids = decider.ids && decider.ids.length ? decider.ids : [decider.id];
+  const accounts = new Set(decider.accounts && decider.accounts.length ? decider.accounts : [decider.account]);
+  const idAlt = `(?:${ids.map(esc).join('|')})`;
+  const rulingRe = new RegExp(`^## ⚖️? ${esc(decider.id)} 裁示（(\\d{4}-\\d{2}-\\d{2})）：(\\S.*)$`, 'u');
+  // 轉述者的識別值必須是登記過的、不帶任何記號（範本明說角色包粗體＝不合；r1 Medium⑨）
+  const quoteRe = new RegExp(`^原話（對話中，${idAlt} 轉述）：\\*\\*「.+」\\*\\*[ \\t]*$`, 'mu');
+  const withdrawSelf = new RegExp(`^${idAlt} 撤回、${esc(decider.id)} 未回；他隨時可以要我重問[ \\t]*$`, 'mu');
   const asks = [];
   const rulings = [];
   const withdraws = [];
@@ -56,6 +81,11 @@ function evaluate(comments, decider) {
   const sorted = [...comments].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   for (const c of sorted) {
     const first = firstLine(c.body);
+    // 三種留痕都只採計登記過的貼文帳號（設定的貼文帳號資格；r1 Medium⑧：原本只有裁示看帳號，外人能撤掉待裁）
+    if (!accounts.has(c.author) && (ASK.test(first) || WITHDRAW.test(first) || rulingRe.test(first))) {
+      near.push({ ...c, why: `不是登記的貼文帳號貼的（${c.author}），不採計` });
+      continue;
+    }
     const a = ASK.exec(first);
     if (a) {
       if (!realDate(a[1])) { near.push({ ...c, why: '日期不是真的日子' }); continue; }
@@ -66,15 +96,15 @@ function evaluate(comments, decider) {
     if (r) {
       if (!realDate(r[1])) { near.push({ ...c, why: '日期不是真的日子' }); continue; }
       if (c.author !== decider.account) { near.push({ ...c, why: `裁示不是裁示者的帳號貼的（${c.author}）` }); continue; }
-      if (!quoteRe.test(String(c.body))) { near.push({ ...c, why: '少了「原話（對話中，… 轉述）：**「…」**」那一行' }); continue; }
+      if (!quoteRe.test(clean(c.body))) { near.push({ ...c, why: '少了「原話（對話中，〈登記的識別值〉 轉述）：**「…」**」那一行（轉述者要是登記的識別值、不帶記號）' }); continue; }
       rulings.push({ ...c, date: r[1], title: r[2].trim() });
       continue;
     }
     const w = WITHDRAW.exec(first);
     if (w) {
       if (!realDate(w[1])) { near.push({ ...c, why: '日期不是真的日子' }); continue; }
-      if (!WITHDRAW_REASON.test(String(c.body))) { near.push({ ...c, why: '撤回理由不是三選一、或沒有具體依據' }); continue; }
-      if (!withdrawSelf.test(String(c.body))) { near.push({ ...c, why: '少了「〈識別值〉 撤回、〈裁示者〉 未回；他隨時可以要我重問」那一行' }); continue; }
+      if (!WITHDRAW_REASON.test(clean(c.body))) { near.push({ ...c, why: '撤回理由不是三選一、或沒有具體依據' }); continue; }
+      if (!withdrawSelf.test(clean(c.body))) { near.push({ ...c, why: '少了「〈登記的識別值〉 撤回、〈裁示者〉 未回；他隨時可以要我重問」那一行' }); continue; }
       withdraws.push({ ...c, date: w[1], title: w[2].trim() });
       continue;
     }
@@ -135,4 +165,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, render, deciderOf, cites, realDate };
+module.exports = { run, evaluate, render, deciderOf, cites, realDate, outsideQuotes };

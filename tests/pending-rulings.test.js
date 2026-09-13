@@ -6,18 +6,20 @@
 //   ③撤回要有三選一的理由（附依據）與自報句；缺一＝疑似；
 //   ④配對：裁示或撤回要引到原 ❓ 的留言編號、在引用區塊以外、而且比 ❓ 晚；引在引用區塊裡不算；先貼的不算；
 //   ⑤已裁與已撤回一定印出來、附配對；長得像但形狀不合＝疑似；
-//   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）。
+//   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；
+//   ⑦三種留痕都只採計登記的貼文帳號（r1 Medium⑧：外人不可以撤掉待裁、外人的問也不入）；
+//   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）。
 // ⚠️ 守不到的：只掃開著的變更；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { run, evaluate, deciderOf, cites, realDate } = require('../tools/pending-rulings.js');
+const { run, evaluate, deciderOf, cites, realDate, outsideQuotes } = require('../tools/pending-rulings.js');
 const { PlatformError } = require('../tools/platform.js');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'pending-rulings.js');
-const D = { id: 'Boss', account: 'boss-acct' };
+const D = { id: 'Boss', account: 'boss-acct', ids: ['Boss', 'Alpha'], accounts: ['boss-acct', 'ai-acct'] };
 let n = 0;
 const c = (body, over = {}) => ({ id: `c${++n}`, author: 'ai-acct', createdAt: `2026-09-13T00:00:${String(n).padStart(2, '0')}Z`, change: '7', body, ...over });
 const ask = (title = '要不要做') => c(`## ❓ 待裁（2026-09-13）：${title}\n選項：甲／乙\n建議：甲`);
@@ -83,7 +85,7 @@ test('⑤長得像但不合形狀＝疑似，並說原因', () => {
 test('⑥裁示者沒填＝退 2；平台問不到＝退 2；算出來＝退 0，掃每一支開著的變更', () => {
   assert.equal(deciderOf({ participants: [{ role: '裁示者（人）', id: 'Boss', account: '未設定' }] }), null);
   assert.equal(run({ settings: { participants: [] }, platform: { ask() { throw new Error('不該問'); } } }).code, 2);
-  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }] };
+  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
   assert.equal(run({ settings, platform: { ask() { throw new PlatformError('x'); } } }).code, 2);
   const q = ask();
   const asked = [];
@@ -94,4 +96,30 @@ test('⑥裁示者沒填＝退 2；平台問不到＝退 2；算出來＝退 0�
   assert.match(r.lines.join('\n'), /還沒回：1 則/u);
   assert.throws(() => run({ settings, platform: { ask() { throw new TypeError('程式寫錯'); } } }), TypeError);
   assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2, '本倉庫設定未填');
+});
+
+test('⑦外人的撤回關不了題、外人的問不入待裁；都列成疑似', () => {
+  const q = ask();
+  const outsiderWithdraw = withdraw(q.id); outsiderWithdraw.author = 'outsider';
+  const r = evaluate([q, outsiderWithdraw], D);
+  assert.equal(r.open.length, 1, '外人撤不掉');
+  assert.ok(r.near.some((x) => x.why.includes('不是登記的貼文帳號')));
+  const outsiderAsk = ask(); outsiderAsk.author = 'outsider';
+  const r2 = evaluate([outsiderAsk], D);
+  assert.equal(r2.open.length, 0); assert.equal(r2.near.length, 1);
+});
+
+test('⑧原話署名包粗體＝不合；原話行與網址藏在 HTML 註解＝不算；引用的懶續行也是引用', () => {
+  const q = ask();
+  const bold = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，**Alpha** 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, bold], D).open.length, 1, '包粗體的署名範本明說不合');
+  const unknownId = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Nobody 轉述）：**「甲」**\n${q.id}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, unknownId], D).open.length, 1, '轉述者要是登記的識別值');
+  const hidden = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n<!--\n原話（對話中，Alpha 轉述）：**「甲」**\n${q.id}\n-->`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, hidden], D).open.length, 1, '註解裡的東西畫面上看不見，不算');
+  const lazy = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n> 引用別人說的\n見 ${q.id} 這一則`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, lazy], D).open.length, 1, '緊接在 > 後面沒有空行隔開的行仍是引用');
+  assert.equal(outsideQuotes('> a\nb\n\nc'), '\nc', '懶續行 b 屬於引用，空行之後的 c 不是');
+  const afterBlank = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n> 引用\n\n${q.id}`, { author: 'boss-acct' });
+  assert.equal(evaluate([q, afterBlank], D).open.length, 0, '空行之後回到最外層，配對成立');
 });

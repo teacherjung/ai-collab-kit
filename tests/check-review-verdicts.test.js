@@ -9,7 +9,8 @@
 //   ⑤有 🤖 記號但標頭讀不出＝擋；作廢行（緊跟合規標頭之後）可把它降為提醒——
 //     但作廢不了合規留言、作廢不了不存在的、作廢不了比自己晚的，而且作廢不產生任何結論；
 //   ⑥沒標頭但看起來像結論＝只提醒，不影響退出碼；兩個來源長得像＝提醒、不併身分；
-//   ⑦平台問不到、設定沒填＝退 2。
+//   ⑦平台問不到、設定沒填＝退 2；
+//   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
 //
 // ⚠️ 守不到的：標頭是自我宣告不是身分證明（改來源就能冒充另一位）；留言清單有沒有少給
 //    （分頁是那條登記指令的責任）；作廢比原專案寬——任何一位都能作廢任何壞留言（裁示者裁的方向）。
@@ -28,7 +29,7 @@ const OLD = '0123456789abcdef0123456789abcdef01234567';
 
 let seq = 0;
 /** 一則留言。 */
-const c = (body, id = `c${++seq}`) => ({ id, body });
+const c = (body, id = `c${++seq}`) => ({ id, body, createdAt: new Date(Date.UTC(2026, 8, 13, 0, 0, seq)).toISOString() });
 /** 一則帶合規標頭的結論留言。 */
 const verdict = ({ role = 'Beta', source = 'CLI', sha = HEAD, round = 1, verdict: v = '通過', extra = '' } = {}, id) =>
   c(`🤖 ${role}｜來源：${source}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}${extra}`, id);
@@ -115,10 +116,11 @@ test('⑤有 🤖 但標頭讀不出＝擋；作廢可降為提醒；作廢的�
   // 作廢不了不存在的、作廢不了比自己晚的
   const voidNone = verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：nope' });
   assert.ok(evaluate([bad, voidNone], HEAD, 'Beta', ROLES).warnings.some((w) => w.includes('沒有那一則')));
-  const early = verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：bad1' });
+  // 「預先作廢」＝作廢者的**時間**比壞留言早（r1 之後先後看時間、不看清單順序）
+  const early = { ...verdict({ role: 'Alpha', round: 2, extra: '\n作廢上一則：bad1' }), createdAt: '2026-09-12T00:00:00Z' };
   const r3 = evaluate([early, bad, good], HEAD, 'Beta', ROLES);
   assert.ok(r3.problems.some((p) => p.includes('bad1')), '預先作廢不生效');
-  assert.ok(r3.warnings.some((w) => w.includes('之後')));
+  assert.ok(r3.warnings.some((w) => w.includes('不比作廢宣告早')));
 
   // 作廢行要緊跟在標頭後面：中間夾了別的內容就不算
   const misplaced = verdict({ role: 'Alpha', round: 2, extra: '\n本輪提了 0 條\n作廢上一則：bad1' });
@@ -188,4 +190,27 @@ test('平台問不到＝退 2；設定沒填＝退 2；沒給編號＝退 2；�
 test('真的跑一遍指令：本倉庫設定未填，退 2', () => {
   assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2);
   assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+});
+
+test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻＝作廢不生效；時間讀不出＝退 2', () => {
+  const bad = c('🤖 Beta｜來源：CLI｜審 ｜r1｜結論：要求修改', 'bad1');
+  const good = verdict({ round: 2 });
+  const voider = verdict({ role: 'Alpha', round: 2, extra: '\n\n作廢上一則：bad1' });
+  const forward = evaluate([bad, good, voider], HEAD, 'Beta', ROLES);
+  const reversed = evaluate([voider, good, bad], HEAD, 'Beta', ROLES);
+  assert.deepEqual(forward.problems, []);
+  assert.deepEqual(reversed.problems, forward.problems, '清單順序不可以改變判決');
+  // 作廢者的時間比壞留言早＝預先作廢，不生效
+  const early = { ...voider, createdAt: '2026-09-12T00:00:00Z' };
+  assert.ok(evaluate([bad, good, early], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('bad1')));
+  // 同一刻＝證明不了先後＝不生效
+  const same = { ...voider, createdAt: bad.createdAt };
+  const r = evaluate([bad, good, same], HEAD, 'Beta', ROLES);
+  assert.ok(r.problems.some((p) => p.includes('bad1')));
+  assert.ok(r.warnings.some((w) => w.includes('不比作廢宣告早')));
+  // 時間讀不出＝退 2
+  const settings = { participants: ROLES.map((id) => ({ id })) };
+  const broken = { ...good, createdAt: 'yesterday' };
+  const g = gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [broken] }) });
+  assert.equal(g.code, 2);
 });

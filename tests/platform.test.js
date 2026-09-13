@@ -27,7 +27,7 @@ const NUL = '\u0000';
 
 /** 一份把九個動作都登記好的設定；每個動作回一筆合格的答案。 */
 const GOOD = {
-  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, autoMergeOn: false, author: 'someone' },
+  change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, autoMergeOn: false, changedFileCount: '3', author: 'someone' },
   openChanges: [{ id: '7', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', isDraft: false, author: 'someone' }],
   comments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z' }],
   changedFiles: [{ path: 'a.js', status: 'modified', previousPath: null }],
@@ -144,6 +144,25 @@ test('參數真的被換進指令裡（不是換了個地方寫死）', () => {
   ask('comments', { change: '12345' }, { settings, run: (cmd, args) => { seen.push([cmd, ...args]); return { status: 0, stdout: '[]', stderr: '' }; } });
   assert.ok(seen[0].includes('12345'), `指令裡應該出現變更編號：${JSON.stringify(seen[0])}`);
   assert.ok(!seen[0].some((x) => x.includes('{change}')), '記號要被換掉');
+});
+
+test('多出來的欄位：連原型鏈上的名字也算多出來（constructor、toString、__proto__）', () => {
+  for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    const out = `{"sha":"abc1234","${key}":"extra"}`;
+    const settings = allRegistered({ branchSha: ['node', '-e', 'process.stdout.write(process.argv[1])', out, '{branch}'] });
+    assert.throws(() => ask('branchSha', { branch: 'main' }, { settings }), /多了沒約定的欄位/u, key);
+  }
+});
+
+test('預設執行器清掉 GIT_ 那一族：子行程看不到 GIT_DIR（規矩 E4；r1 High①）', () => {
+  const prev = process.env.GIT_DIR; process.env.GIT_DIR = '/no/such/repo';
+  try {
+    const r = runCommand(process.execPath, ['-e', 'process.stdout.write(String("GIT_DIR" in process.env))']);
+    assert.equal(r.stdout, 'false');
+    process.env.GH_TOKEN_TEST = 'keep';
+    const keep = runCommand(process.execPath, ['-e', 'process.stdout.write(String("GH_TOKEN_TEST" in process.env))']);
+    assert.equal(keep.stdout, 'true', '平台自己的環境變數要留著');
+  } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; delete process.env.GH_TOKEN_TEST; }
 });
 
 test('預設執行器：起不來回 status null，不是 0', () => {

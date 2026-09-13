@@ -133,6 +133,13 @@ function evaluate(comments, head, reviewerRole, roles) {
   const latest = {};
   const malformed = [];
   const voids = [];
+  // 先後看**留言時間**、不看清單順序（r1 Medium⑩：平台把清單反過來給，同一組事實會判出相反結果）。
+  // 時間讀不出的留言＝整支判不了，交給呼叫端退 2（gateRun 先驗過；這裡再守一次）。
+  const at = (c) => Date.parse(String(c.createdAt));
+  if (comments.some((c) => !Number.isFinite(at(c)))) {
+    return { problems: ['有留言的時間讀不出來：先後判不了，不放行。'], warnings: [], reviewers: {}, unsure: true };
+  }
+  comments = [...comments].sort((a, b) => at(a) - at(b));
   const byId = new Map(comments.map((c, i) => [String(c.id), i]));
 
   comments.forEach((c, idx) => {
@@ -159,7 +166,8 @@ function evaluate(comments, head, reviewerRole, roles) {
     if (tIdx === undefined) { warnings.push(`${v.who} 要作廢留言 ${v.target}，但這支變更底下沒有那一則——不生效`); continue; }
     const m = malformed.find((x) => x.idx === tIdx);
     if (!m) { warnings.push(`${v.who} 要作廢留言 ${v.target}，但那一則不是壞標頭（合規留言與沒帶記號的留言都作廢不了）——不生效`); continue; }
-    if (tIdx >= v.idx) { warnings.push(`${v.who} 要作廢留言 ${v.target}，但那一則出現在作廢宣告之後（不可以預先作廢還沒出現的留言）——不生效`); continue; }
+    // 目標要**確實比作廢者早**（時間值嚴格小於）；同一刻證明不了先後＝不生效
+    if (!(at(comments[tIdx]) < at(comments[v.idx]))) { warnings.push(`${v.who} 要作廢留言 ${v.target}，但那一則不比作廢宣告早（同刻或更晚；不可以預先作廢還沒出現的留言）——不生效`); continue; }
     m.voidedBy = v.who;
   }
   for (const m of malformed) {
@@ -214,6 +222,9 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     throw e;
   }
   const reviewerRole = canonicalRole(fieldValue(change.body, '獨立審查者'), usable);
+  if (comments.some((c) => !Number.isFinite(Date.parse(String(c.createdAt))))) {
+    return { code: 2, lines: ['結論聯集閘：有留言的時間讀不出來——先後判不了，查不清楚一律當未通過。'] };
+  }
   const { problems, warnings, reviewers } = evaluate(comments, change.headSha, reviewerRole, usable);
   const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);

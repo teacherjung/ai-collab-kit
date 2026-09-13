@@ -63,7 +63,25 @@ test('啟用表裡每一支機器標的規矩條號都存在', () => {
   }
 });
 
-test('本文標「靠自覺」的條號，不可以同時有一支「已啟用」的機器登記在它名下', () => {
+/** 從 MACHINES.md 的標籤定義表抽名字（跟 rules-length 那題同一個來源），再判一個標籤的**名字**是哪一個。 */
+function labelNames() {
+  const text = fs.readFileSync(path.join(__dirname, '..', 'MACHINES.md'), 'utf8');
+  const at = text.indexOf('句尾的執行者標籤，定義在這裡、只在這裡');
+  assert.ok(at >= 0, '找不到標籤定義表');
+  const names = [];
+  for (const line of text.slice(at).split('\n')) {
+    if (!line.startsWith('|')) { if (names.length) break; continue; }
+    const first = line.split('|')[1].trim();
+    if (!first || first.startsWith('---') || first === '標籤') continue;
+    names.push(first);
+  }
+  assert.ok(names.includes('靠自覺'), '定義表裡要有「靠自覺」');
+  return names;
+}
+const labelOf = (tag, names) => names.filter((n) => tag.startsWith(n)).sort((a, b) => b.length - a.length)[0] || null;
+
+test('本文標「靠自覺」的條號，不可以同時有一支「已啟用」的機器登記在它名下（看標籤的名字，不看整串）', () => {
+  const names = labelNames();
   const tags = new Map();
   for (const section of readRules().sections) {
     for (const rule of section.rules) tags.set(`${section.letter}${rule.n}`, rule.tag);
@@ -71,13 +89,18 @@ test('本文標「靠自覺」的條號，不可以同時有一支「已啟用�
   for (const machine of read().machines) {
     if (machine.state !== '已啟用') continue;
     for (const id of machine.rules.split('、').map((x) => x.trim()).filter(Boolean)) {
+      const tag = tags.get(id);
+      assert.ok(tag, `機器「${machine.name}」標了不存在的條號 ${id}`);
+      // r1 Medium⑭：原本只比整串等於「靠自覺」，加一句射程說明（「靠自覺；尚未接線」）就繞過去了
       assert.notEqual(
-        tags.get(id),
+        labelOf(tag, names),
         '靠自覺',
-        `機器「${machine.name}」登記成已啟用、標的是 ${id}，但本文說 ${id} 靠自覺——兩份說法必須擇一改正，不可以並存`,
+        `機器「${machine.name}」登記成已啟用、標的是 ${id}，但本文說 ${id} 靠自覺（「${tag}」）——兩份說法必須擇一改正，不可以並存`,
       );
     }
   }
+  assert.equal(labelOf('靠自覺；尚未接線', names), '靠自覺', '帶射程說明的標籤名字還是靠自覺');
+  assert.equal(labelOf('考題只守清單一致；合理性靠自覺', names), '考題', '名字看開頭，不看後面提到的字');
 });
 
 test('本文與機器索引指名的每一份範本都在，而且帶著自己的固定小標', () => {
@@ -92,12 +115,24 @@ test('本文與機器索引指名的每一份範本都在，而且帶著自己�
   for (const file of onDisk) {
     assert.ok(cited.includes(file), `${file} 在倉庫裡，但機器索引那張表沒指到它——沒人指的範本會靜靜爛掉`);
   }
-  // 固定小標是規矩 E1、G3 指名的字串：範本要真的吐得出來，改名就紅
-  const must = [['templates/pr-body.md', '### 複審後掃'], ['templates/scan-record.md', '掃描時序']];
-  for (const [file, heading] of must) {
-    const text = fs.readFileSync(path.join(root, file), 'utf8');
-    assert.ok(text.includes(heading), `${file} 裡找不到固定小標「${heading}」`);
+  // 固定小標是規矩 E1、G3 指名的字串：範本要真的吐得出來——**在生效的行的行首**，不是藏在註解或圍欄裡
+  // （r1 Medium⑮：原本用 includes，把小標改成 HTML 註解照樣綠，填範本後畫面上根本沒有那個小標）
+  const effectiveLines = (text) => {
+    const noComments = text.replace(/<!--[\s\S]*?-->/g, '');
+    const out = []; let fence = null;
+    for (const line of noComments.split('\n')) {
+      const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (m) { fence = fence && fence === m[1][0] ? null : (fence || m[1][0]); continue; }
+      if (!fence) out.push(line);
+    }
+    return out;
+  };
+  const must = [['templates/pr-body.md', /^### 複審後掃\s*$/u], ['templates/scan-record.md', /^\*\*掃描時序\*\*/u]];
+  for (const [file, re] of must) {
+    const lines = effectiveLines(fs.readFileSync(path.join(root, file), 'utf8'));
+    assert.ok(lines.some((l) => re.test(l)), `${file} 的生效行裡找不到固定小標 ${re}`);
   }
+  assert.deepEqual(effectiveLines('a\n<!-- ### x -->\n```\n### y\n```\nb'), ['a', '', 'b'], '註解與圍欄裡的行不算生效');
 });
 
 test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要有人發現）', () => {
@@ -125,17 +160,27 @@ test('每一支工具都有同名的考題檔（考題檔被刪掉或改名要�
     assert.ok(tests.has(expected), `閘 gates/${gate} 找不到對應的考題檔 ${expected}——被刪掉或改名了嗎`);
   }
   assert.ok(tests.has('data-contract.test.js'), '資料契約的負向考題不見了');
+  // 跟 tests/manifest.test.js 互相盯著（r1 Medium⑫：這一支自己被刪掉時原本沒有人數考題）
+  assert.ok(tests.has('manifest.test.js'), '考題清單那一支不見了');
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.includes('settings.test.js'), '這一支要在清單上');
 });
 
 test('閘的登記對帳（規矩 H1）：磁碟上的每一支閘都有登記，登記的每一道閘都在磁碟上', () => {
   const root = path.join(__dirname, '..');
   const onDisk = fs.readdirSync(path.join(root, 'tools', 'gates')).filter((f) => f.endsWith('.js')).map((f) => `tools/gates/${f}`).sort();
-  const registered = (read().gates || []).map((g) => (g.args || []).find((a) => a.startsWith('tools/gates/'))).filter(Boolean).sort();
   assert.ok(onDisk.length >= 5, `tools/gates/ 只剩 ${onDisk.length} 支：這一題自己的前提變了`);
-  for (const file of onDisk) assert.ok(registered.includes(file), `磁碟上有 ${file}，但 settings.json 的 gates 沒登記它——合併指令不會跑它`);
-  for (const file of registered) assert.ok(onDisk.includes(file), `settings.json 登記了 ${file}，但磁碟上沒有這支`);
+  // 每一筆登記先驗形狀、再對帳；不先濾掉看不懂的登記（r1 Medium⑬：濾掉＝登記了不存在的閘也全綠）
+  const registered = [];
   for (const g of read().gates) {
     assert.equal(g.command, 'node', `閘「${g.name}」的指令不是 node：登記的形狀變了`);
-    assert.ok(g.args.length === 1, `閘「${g.name}」的參數不是剛好一個檔案路徑`);
+    assert.ok(Array.isArray(g.args) && g.args.length === 1 && typeof g.args[0] === 'string', `閘「${g.name}」的參數不是剛好一個檔案路徑`);
+    assert.ok(g.args[0].startsWith('tools/gates/') && g.args[0].endsWith('.js'), `閘「${g.name}」登記的路徑「${g.args[0]}」不在 tools/gates/ 底下`);
+    assert.ok(fs.existsSync(path.join(root, g.args[0])), `閘「${g.name}」登記的檔案「${g.args[0]}」不存在`);
+    assert.ok(!registered.includes(g.args[0]), `閘「${g.name}」的檔案「${g.args[0]}」被登記了兩次`);
+    registered.push(g.args[0]);
   }
+  registered.sort();
+  for (const file of onDisk) assert.ok(registered.includes(file), `磁碟上有 ${file}，但 settings.json 的 gates 沒登記它——合併指令不會跑它`);
+  assert.deepEqual(registered, onDisk, '登記的集合要跟磁碟一模一樣');
 });

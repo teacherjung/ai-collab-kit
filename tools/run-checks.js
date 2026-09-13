@@ -30,8 +30,13 @@ function treeState(run, cwd) {
 
 function runChecks({ settings = readSettings(), run = runCommand, cwd = process.cwd(), tree = treeState } = {}) {
   const lines = [];
-  const cmds = Array.isArray(settings.checks && settings.checks.commands) ? settings.checks.commands.filter((x) => Array.isArray(x) && x.length && x[0] !== UNSET) : [];
-  if (!cmds.length) return { code: 2, lines: ['專案設定裡沒有登記三關指令：什麼都沒跑就放行，比不跑更危險。'] };
+  const raw = settings.checks && settings.checks.commands;
+  if (!Array.isArray(raw) || !raw.length) return { code: 2, lines: ['專案設定裡沒有登記三關指令：什麼都沒跑就放行，比不跑更危險。'] };
+  // 逐筆驗、不濾掉（r1 Medium⑪）：登記裡有一條是「未設定」、空陣列或形狀錯，代表有一關還沒接好——
+  // 靜靜濾掉等於讓那一關消失。要停用某一關就把它從登記拿掉，不要用壞資料代表停用。
+  const badAt = raw.findIndex((x) => !Array.isArray(x) || !x.length || x.some((a) => typeof a !== 'string' || !a) || x[0] === UNSET);
+  if (badAt !== -1) return { code: 2, lines: [`三關登記的第 ${badAt + 1} 條是「未設定」、空的或形狀不對：有一關還沒接好，不放行（要停用就從登記拿掉）。`] };
+  const cmds = raw;
   const before = tree(run, cwd);
   if (before !== 'ok') return { code: 2, lines: [before === 'bare' ? '這棵樹在跑三關之前就已經是裸倉庫了：先還原再推。' : '這裡不是版本控制的工作樹。'] };
   for (const [i, cmd] of cmds.entries()) {

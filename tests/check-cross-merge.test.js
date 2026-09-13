@@ -71,9 +71,11 @@ test('cantRunSignal：起不來、被殺、126／127＝執行不起來；其餘�
   assert.equal(cantRunSignal({ status: 2 }), null);
 });
 
-test('checksOf：準備指令填「無」或未設定＝不跑；三關至少一條', () => {
+test('checksOf：準備指令填「無」或未設定＝不跑；三關至少一條；登記裡混一條壞的＝整個不算數', () => {
   assert.equal(checksOf({}), null);
   assert.equal(checksOf({ checks: { commands: [['未設定']] } }), null);
+  for (const mixed of [[['a'], ['未設定']], [['a'], []], [['a'], 'b'], [['a'], ['']]]) assert.equal(checksOf({ checks: { commands: mixed } }), null, JSON.stringify(mixed));
+  assert.equal(checksOf({ checks: { prepareWorktree: [''], commands: [['a']] } }), null, '準備指令形狀錯也不算數');
   assert.deepEqual(checksOf({ checks: { prepareWorktree: ['無'], commands: [['a'], ['b']] } }), { prepare: null, commands: [['a'], ['b']] });
   assert.deepEqual(checksOf({ checks: { prepareWorktree: ['npm', 'ci'], commands: [['a']] } }).prepare, ['npm', 'ci']);
 });

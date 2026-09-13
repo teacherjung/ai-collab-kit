@@ -30,8 +30,15 @@ function normalize(x) {
   return String(x)
     .replace(/(?<=[a-z0-9])(?=[A-Z])/gu, '_')
     .replace(/(?<=[A-Z])(?=[A-Z][a-z])/gu, '_')
-    .replace(/[.-]+/gu, '_')
+    .replace(/[._-]+/gu, '_')    // 點、連字號、**連續底線**都折成一個底線：order__create 跟 order_create 是同一個字（r1 High④）
     .toLowerCase();
+}
+
+/** 清單型欄位：沒填＝空陣列；填了就必須是字串陣列，否則回 null（呼叫端當設定壞掉、拒絕）。 */
+function listField(f, key) {
+  if (f[key] === undefined) return [];
+  if (!Array.isArray(f[key]) || f[key].some((x) => typeof x !== 'string')) return null;
+  return f[key].filter((x) => x && x !== UNSET);
 }
 
 const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -45,24 +52,33 @@ function decide(toolName, forbidden) {
   if (typeof toolName !== 'string') return { deny: true, why: '輸入缺工具名（fail-closed）' };
   if (!LEGAL_NAME.test(toolName)) return { deny: true, why: '工具名不符合合法字元集（fail-closed）' };
   const f = forbidden && typeof forbidden === 'object' ? forbidden : {};
-  const list = (k) => (Array.isArray(f[k]) ? f[k].filter((x) => typeof x === 'string' && x && x !== UNSET) : []);
   if (!f.name || f.name === UNSET) return { deny: true, why: '專案設定裡的禁區清單還沒填：裝了攔截器卻沒填清單，一律拒絕' };
-  const servers = list('servers');
-  const allow = new Set(list('allowlist'));
-  const deny = new Set(list('deny'));
-  const verbs = list('verbs');
-  const nouns = list('nouns');
-  const readPrefixes = list('readPrefixes');
-  const patterns = list('patterns').map((p) => new RegExp(p, 'u'));
+  const lists = {};
+  for (const key of ['servers', 'allowlist', 'deny', 'verbs', 'nouns', 'readPrefixes', 'patterns']) {
+    lists[key] = listField(f, key);
+    if (lists[key] === null) return { deny: true, why: `專案設定裡禁區清單的「${key}」不是字串陣列：設定壞掉，一律拒絕` };
+  }
+  const { servers, verbs, nouns, readPrefixes } = lists;
+  const allow = new Set(lists.allowlist);
+  const deny = new Set(lists.deny);
+  let patterns;
+  try { patterns = lists.patterns.map((p) => new RegExp(p, 'u')); }
+  catch { return { deny: true, why: '專案設定裡禁區清單的額外樣式不是合法的正規式：設定壞掉，一律拒絕' }; }
+  // 只填名字、沒有任何一條有效規則＝跟沒填一樣（r1 High③：原本只看 name，其餘全空就全部放行）
+  const hasRule = servers.length || deny.size || (verbs.length && nouns.length) || patterns.length;
+  if (!hasRule) return { deny: true, why: `禁區「${f.name}」沒有任何一條有效規則（連接器、拒絕清單、家族網、額外樣式都是空的）：裝了攔截器卻沒有規則，一律拒絕` };
 
   if (deny.has(toolName)) return { deny: true, why: `工具「${toolName}」在拒絕清單上` };
-  const segs = toolName.split('__');
-  for (let i = 0; i < segs.length - 1; i++) {
-    if (servers.includes(segs[i])) {
-      const tool = segs.slice(i + 1).join('__');
-      if (!allow.has(tool)) return { deny: true, why: `連接器「${segs[i]}」會動到${f.name}，採白名單制；「${tool}」不在唯讀名單上` };
-      break;
+  // 連接器比對用**完整登記名稱**與分段邊界（r1 High④：登記名含 __ 時，逐段比對永遠找不到它）
+  for (const server of servers) {
+    for (const prefix of [`mcp__${server}__`, `${server}__`]) {
+      if (toolName.startsWith(prefix)) {
+        const tool = toolName.slice(prefix.length);
+        if (!allow.has(tool)) return { deny: true, why: `連接器「${server}」會動到${f.name}，採白名單制；「${tool}」不在唯讀名單上` };
+        return { deny: false };
+      }
     }
+    if (toolName === `mcp__${server}` || toolName === server) return { deny: true, why: `連接器「${server}」會動到${f.name}，沒有指定工具名，一律拒絕` };
   }
   // 家族網：工具名的每一個「__」之後的尾段都試一次（連接器前綴不同、工具名相同的要一起擋）
   const rest = toolName.startsWith('mcp__') ? toolName.slice(5) : toolName;

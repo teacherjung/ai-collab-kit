@@ -15,6 +15,7 @@
 'use strict';
 const { spawnSync } = require('node:child_process');
 const { read: readSettings } = require('./build-settings.js');
+const { gitEnv } = require('./git-env.js');
 
 const UNSET = '未設定';
 const ENABLED = '已啟用';
@@ -26,7 +27,8 @@ const ENABLED = '已啟用';
  *    一道根本不存在的閘會被當成綠燈，一路按下合併鍵（端到端重現過）。
  */
 function runCommand(command, args) {
-  const result = spawnSync(command, args, { encoding: 'utf8' });
+  // 環境先清 GIT_ 那一族（規矩 E4；r1 High①）：閘會叫 git，繼承來的 GIT_DIR 會讓它們查到別棵倉庫
+  const result = spawnSync(command, args, { encoding: 'utf8', env: gitEnv() });
   if (result.error) return { code: 2, output: String(result.error.message) };
   return { code: result.status === null ? 2 : result.status, output: `${result.stdout || ''}${result.stderr || ''}` };
 }

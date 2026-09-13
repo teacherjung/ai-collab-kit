@@ -4,7 +4,8 @@
     "指令要在該倉庫的目錄底下跑：{owner} 與 {repo} 是那支工具自己解析的，不是這套架構的記號。",
     "這套架構的記號只有 {change}、{sha}、{branch} 三個，會被換成真值。",
     "會分頁的三個動作（comments、changedFiles、checks）用 --paginate 時是每頁各印一個陣列；這套架構收這種寫法。但『頁數有沒有收齊』是這條指令自己的責任，架構驗不到。",
-    "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。"
+    "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。",
+    "openChanges 用會分頁的端點而不是 pr list --limit：--limit 是筆數上限，超過就靜靜截斷（r1 Medium⑥）。"
   ],
   "operations": {
     "change": [
@@ -13,22 +14,17 @@
       "view",
       "{change}",
       "--json",
-      "number,title,body,baseRefName,headRefName,headRefOid,state,isDraft,isCrossRepository,autoMergeRequest,author",
+      "number,title,body,baseRefName,headRefName,headRefOid,state,isDraft,isCrossRepository,autoMergeRequest,changedFiles,author",
       "--jq",
-      "{id:(.number|tostring),title:.title,body:.body,baseBranch:.baseRefName,headBranch:.headRefName,headSha:.headRefOid,state:.state,isDraft:.isDraft,isCrossRepo:.isCrossRepository,autoMergeOn:(.autoMergeRequest!=null),author:.author.login}"
+      "{id:(.number|tostring),title:.title,body:.body,baseBranch:.baseRefName,headBranch:.headRefName,headSha:.headRefOid,state:.state,isDraft:.isDraft,isCrossRepo:.isCrossRepository,autoMergeOn:(.autoMergeRequest!=null),changedFileCount:(.changedFiles|tostring),author:.author.login}"
     ],
     "openChanges": [
       "gh",
-      "pr",
-      "list",
-      "--state",
-      "open",
-      "--limit",
-      "200",
-      "--json",
-      "number,baseRefName,headRefName,headRefOid,isDraft,author",
+      "api",
+      "--paginate",
+      "repos/{owner}/{repo}/pulls?state=open&per_page=100",
       "--jq",
-      "[.[]|{id:(.number|tostring),baseBranch:.baseRefName,headBranch:.headRefName,headSha:.headRefOid,isDraft:.isDraft,author:.author.login}]"
+      "[.[]|{id:(.number|tostring),baseBranch:.base.ref,headBranch:.head.ref,headSha:.head.sha,isDraft:.draft,author:.user.login}]"
     ],
     "comments": [
       "gh",

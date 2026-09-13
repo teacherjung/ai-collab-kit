@@ -9,6 +9,7 @@
 // 為什麼要算轉義的寫法：掃描器的日誌常是 JSON，裡面的引號與反斜線會被轉義，命中跟原文對不上（原專案第三次
 // 正式掃描踩到）。深度到兩層是觀察值不是定理。
 //
+// 名字也算輸出：回覆的檔名、日誌裡每一個檔與**目錄**的名字、日誌根本身（根是符號連結＝事故）。
 // 守不到的照實說：編碼過、拆段過、轉義超過兩層的外洩認不得（方向是漏報）；輸出讀不了的部分驗不到＝
 // 不能說乾淨（退 2）；日誌區出現符號連結之類的非一般檔案＝掃描器在日誌區放了捷徑，當事故。
 //
@@ -120,7 +121,8 @@ function collectOutputs(dir, caps = CAPS) {
       let st;
       try { st = fs.lstatSync(p); }
       catch (e) { outputs.push({ where: rp, unreadable: `看不到：${e.code || '讀取失敗'}` }); continue; }
-      if (st.isDirectory()) { const over = walk(p, depth + 1, rp); if (over) return over; continue; }
+      // 目錄的**名字**也是掃描器寫的東西：機密只出現在目錄名時，原本從不進 outputs（r1 High⑤）
+      if (st.isDirectory()) { outputs.push({ where: rp, text: '' }); const over = walk(p, depth + 1, rp); if (over) return over; continue; }
       count += 1;
       if (count > caps.files) return `檔數超過 ${caps.files}`;
       if (!st.isFile()) { outputs.push({ where: rp, special: st.isSymbolicLink() ? '符號連結' : '特殊檔' }); continue; }
@@ -129,6 +131,12 @@ function collectOutputs(dir, caps = CAPS) {
     }
     return '';
   };
+  // 根目錄自己也先 lstat：根是符號連結時，「不跟符號連結」的政策原本只作用在子項（r1 High⑤）
+  let rootSt;
+  try { rootSt = fs.lstatSync(dir); }
+  catch (e) { return { outputs: [{ where: '日誌根目錄', unreadable: `看不到：${e.code || '讀取失敗'}` }], over: '' }; }
+  if (rootSt.isSymbolicLink()) return { outputs: [{ where: '日誌根目錄', special: '符號連結' }], over: '' };
+  if (!rootSt.isDirectory()) return { outputs: [{ where: '日誌根目錄', unreadable: '不是目錄' }], over: '' };
   const over = walk(dir, 0, '');
   return { outputs, over };
 }
@@ -151,15 +159,18 @@ function cli(argv) {
   catch (e) { return { code: 2, lines: [`機密清單讀不到（${e.code || '讀取失敗'}）：沒有機密就比不了，不算通過。`] }; }
   const outputs = [];
   if (replyFile) {
-    try { outputs.push({ where: '回覆', bytes: fs.readFileSync(replyFile) }); }
-    catch (e) { return { code: 2, lines: [`回覆讀不到（${e.code || '讀取失敗'}）：驗不到就不能說乾淨。`] }; }
+    // 回覆檔的**檔名**也要比對（r1 High⑤：原本換成人讀的「回覆」標籤，真名字從沒進過比對）
+    const label = `回覆（${path.basename(replyFile)}）`;
+    try { outputs.push({ where: label, bytes: fs.readFileSync(replyFile) }); }
+    catch (e) { outputs.push({ where: label, unreadable: `讀不到：${e.code || '讀取失敗'}` }); }
   }
   if (logsDir) {
     let collected;
     try { collected = collectOutputs(logsDir); }
-    catch (e) { return { code: 2, lines: [`日誌收不起來（${e.code || '讀取失敗'}）：驗不到就不能說乾淨。`] }; }
-    if (collected.over) return { code: 2, lines: [`日誌讀不完（${collected.over}）：驗不到就不能說乾淨。`] };
+    catch (e) { collected = { outputs: [{ where: '日誌根目錄', unreadable: `收不起來：${e.code || '讀取失敗'}` }], over: '' }; }
     outputs.push(...collected.outputs);
+    // 超限不提前退：已經收到的回覆與日誌照樣比，命中優先於驗不了（r1 Medium⑯：原本先退 2，把已到手的外洩證據降成普通未執行）
+    if (collected.over) outputs.push({ where: '日誌收集', unreadable: `讀不完：${collected.over}` });
   }
   return compare({ secrets, outputs });
 }

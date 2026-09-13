@@ -136,13 +136,15 @@ function tryMerge({ repo, run, root, selfSha, otherSha, otherId, prepare, comman
   }
 }
 
-/** 讀設定裡的三關。沒填＝null。 */
+/** 讀設定裡的三關。沒填、或登記裡有壞條目＝null（r1 Medium⑪：不濾掉，壞一條就整個不算數）。 */
 function checksOf(settings) {
   const c = settings.checks || {};
-  const cmds = Array.isArray(c.commands) ? c.commands.filter((x) => Array.isArray(x) && x.length && x[0] !== UNSET) : [];
-  if (!cmds.length) return null;
-  const prep = Array.isArray(c.prepareWorktree) && c.prepareWorktree.length && c.prepareWorktree[0] !== UNSET && c.prepareWorktree[0] !== NONE ? c.prepareWorktree : null;
-  return { prepare: prep, commands: cmds };
+  const isArgv = (x) => Array.isArray(x) && x.length > 0 && x.every((a) => typeof a === 'string' && a) && x[0] !== UNSET;
+  if (!Array.isArray(c.commands) || !c.commands.length || !c.commands.every(isArgv)) return null;
+  const p = c.prepareWorktree;
+  if (p === undefined || (Array.isArray(p) && p.length === 1 && (p[0] === UNSET || p[0] === NONE))) return { prepare: null, commands: c.commands };
+  if (!isArgv(p)) return null;
+  return { prepare: p, commands: c.commands };
 }
 
 function gateRun(changeId, { settings = readSettings(), platform = { ask }, run = runCommand, repo = realRepo(run), cwd = process.cwd() } = {}) {

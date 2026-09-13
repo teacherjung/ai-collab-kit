@@ -42,15 +42,28 @@ function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
   const table = tableOf(settings);
   if (!table) return { code: 2, lines: ['專案設定裡的驗收分級表沒填好（tiers、families、unknownTier 要齊、unknownTier 與每個家族的 tier 都要在 tiers 裡）：算不出來。'] };
   let files;
-  try { files = platform.ask('changedFiles', { change: String(changeId) }, { settings }); }
-  catch (e) {
+  let change;
+  try {
+    change = platform.ask('change', { change: String(changeId) }, { settings });
+    files = platform.ask('changedFiles', { change: String(changeId) }, { settings });
+  } catch (e) {
     if (e instanceof PlatformError || (e && e.name === 'PlatformError')) return { code: 2, lines: [`驗收分級：問不到平台（${e.message}）——算不出來。`] };
     throw e;
+  }
+  // 改名或複製的檔沒帶舊路徑＝清單不合契約（r1 Medium⑦）：舊路徑驗不到就不能只算輕的那一半
+  const halfRenamed = files.find((f) => /^(renamed|copied)$/u.test(String(f.status)) && !f.previousPath);
+  if (halfRenamed) return { code: 2, lines: [`檔案清單裡「${halfRenamed.path}」標成 ${halfRenamed.status} 卻沒帶舊路徑：舊路徑驗不到，算不出來。`] };
+  // 平台有自報總數就對帳：少給幾筆就不能印出一個看起來很輕的級別（平台的檔案端點有筆數上限）
+  let countNote = '（平台沒自報總數，清單完整性沒對帳）';
+  if (change.changedFileCount !== null) {
+    if (!/^\d+$/u.test(change.changedFileCount)) return { code: 2, lines: [`平台自報的檔數「${change.changedFileCount}」不是數字：對不了帳，算不出來。`] };
+    if (Number(change.changedFileCount) !== files.length) return { code: 2, lines: [`平台自報這支動了 ${change.changedFileCount} 個檔，清單只拿到 ${files.length} 筆：清單不完整（可能超過平台的筆數上限），算不出來。`] };
+    countNote = `（清單 ${files.length} 筆與平台自報總數相符）`;
   }
   const paths = [...new Set(files.flatMap((f) => [f.path, f.previousPath].filter(Boolean)))];
   if (!paths.length) return { code: 2, lines: ['這一支變更沒有動到任何檔案：算不出來（不猜）。'] };
   const r = classify(paths, table);
-  const lines = [`驗收分級｜變更 ${changeId}：${r.level}（動到 ${paths.length} 個路徑）`];
+  const lines = [`驗收分級｜變更 ${changeId}：${r.level}（動到 ${paths.length} 個路徑）${countNote}`];
   for (const a of r.actions) lines.push(`  ・${a.tier}：${a.action}`);
   if (r.unknown.length) lines.push(`  ⚠️ 沒列在家族表上的路徑，一律當「${table.unknownTier}」：${r.unknown.join('、')}——改表的人要核對它們該屬哪一級。`);
   return { code: 0, lines, result: r };

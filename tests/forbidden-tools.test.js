@@ -4,7 +4,9 @@
 //   ①輸入拿不到工具名、工具名不合法＝拒絕；②禁區清單沒設＝拒絕（裝了卻沒填比沒裝更危險）；
 //   ③動禁區的連接器採白名單制；④逐字拒絕清單；⑤家族網（動詞名詞、名詞動詞、額外樣式），
 //     唯讀前綴跳過；駝峰、點、連字號都正規化；連接器前綴不同、工具名相同一起擋；
-//   ⑥兩家 AI 的接線範本都呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印。
+//   ⑥兩家 AI 的接線範本都呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
+//   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
+//   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字。
 // ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有。
 'use strict';
 const test = require('node:test');
@@ -34,6 +36,30 @@ test('①輸入不合法＝拒絕；②清單沒設＝拒絕', () => {
     const d = decide('mcp__anything__get_something', bad);
     assert.equal(d.deny, true, JSON.stringify(bad));
     assert.match(d.why, /還沒填/u);
+  }
+});
+
+test('⑦只填名字沒有規則＝拒絕；清單型別錯＝拒絕；額外樣式不是合法正規式＝拒絕', () => {
+  const nameOnly = decide('mcp__vendor__create_order', { name: 'test zone' });
+  assert.equal(nameOnly.deny, true, '只填名字等於沒填');
+  assert.match(nameOnly.why, /沒有任何一條有效規則/u);
+  assert.equal(decide('mcp__vendor__create_order', { name: 'x', servers: [], deny: [], verbs: [], nouns: [], patterns: [] }).deny, true);
+  assert.equal(decide('mcp__vendor__anything', { name: 'x', servers: ['vendor'] }).deny, true, '只有連接器清單也算一條規則：白名單空＝全拒');
+  assert.equal(decide('mcp__any__harmless', { name: 'x', deny: ['mcp__z'] }).deny, false, '有一條規則就正常判');
+  for (const bad of [{ name: 'x', servers: 'broker' }, { name: 'x', deny: [1] }, { name: 'x', verbs: [['a']], nouns: ['b'] }]) {
+    assert.equal(decide('mcp__any__harmless', bad).deny, true, JSON.stringify(bad));
+  }
+  assert.equal(decide('mcp__any__harmless', { name: 'x', patterns: ['('] }).deny, true, '壞正規式＝設定壞掉＝拒絕');
+});
+
+test('⑧連接器名含 __ 也比得到；分隔符的等價寫法一起擋', () => {
+  const f = { name: '錢', servers: ['broker__paper'], allowlist: ['get_balance'] };
+  assert.equal(decide('mcp__broker__paper__get_balance', f).deny, false);
+  assert.equal(decide('mcp__broker__paper__market_order', f).deny, true, '登記名含 __ 時原本永遠比不到（r1 High④）');
+  assert.equal(decide('mcp__broker__paper', f).deny, true, '只有連接器沒有工具名也拒絕');
+  assert.equal(decide('mcp__brokerx__paper__get_balance', f).deny, false, '不是那個連接器就不套白名單');
+  for (const t of ['mcp__any__order__create', 'mcp__any__create__order', 'mcp__any__order-create', 'mcp__any__create___order']) {
+    assert.equal(decide(t, FORBIDDEN).deny, true, `${t} 是 create_order 的等價寫法`);
   }
 });
 

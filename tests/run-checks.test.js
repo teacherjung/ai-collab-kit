@@ -1,6 +1,7 @@
 // 守三關執行器（規矩 E2、E3）與兩份呼叫它的範本。
 //
-// 守得到的：①三關沒登記＝退 2；②依序跑、第一關紅就停＝退 1；③起不來＝退 2；④全綠＝退 0；
+// 守得到的：①三關沒登記＝退 2；登記裡混一條「未設定」、空的或形狀錯＝退 2、一條都不跑（r1 Medium⑪）；
+//   ②依序跑、第一關紅就停＝退 1；③起不來＝退 2；④全綠＝退 0；
 //   ⑤跑之前是裸倉庫＝退 2、跑完變裸倉庫＝退 1（真的用臨時倉庫驗）；⑥子行程看不到 GIT_ 那一族；
 //   ⑦推送前鉤子與雲端範本都呼叫這一支、不抄三關。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查。
@@ -26,6 +27,14 @@ test('①沒登記＝2；②第一關紅就停＝1；③起不來＝2；④全�
   assert.deepEqual(calls, ['a', 'red'], '紅了就停，第三關不跑');
   assert.equal(runChecks({ settings: { checks: { commands: [['gone']] } }, run, tree: okTree }).code, 2);
   assert.equal(runChecks({ settings: { checks: { commands: [['a'], ['c']] } }, run, tree: okTree }).code, 0);
+  // 混一條壞的：整個退 2，而且一條都不跑（原本會靜靜濾掉、印「全綠（1 關）」）
+  for (const mixed of [[['a'], ['未設定']], [['a'], []], [['a'], 'b'], [['a'], ['']], [['a'], [1]]]) {
+    calls.length = 0;
+    const r = runChecks({ settings: { checks: { commands: mixed } }, run, tree: okTree });
+    assert.equal(r.code, 2, JSON.stringify(mixed));
+    assert.equal(calls.length, 0, '有一關沒接好就一條都不跑');
+    assert.match(r.lines.join('\n'), /還沒接好/u);
+  }
 });
 
 test('⑤裸倉庫絆線：跑之前壞＝2；跑完變壞＝1（真的用臨時倉庫）', () => {

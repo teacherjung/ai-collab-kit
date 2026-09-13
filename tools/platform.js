@@ -24,6 +24,7 @@
 'use strict';
 const { spawnSync } = require('node:child_process');
 const { read: readSettings } = require('./settings-data.js');
+const { gitEnv } = require('./git-env.js');
 
 const UNSET = '未設定';
 // 會讓一個欄位跑出它該待的位置的字元。⚠️ 這一組必須跟資料契約那一份**完全一樣**；
@@ -47,7 +48,8 @@ const OPERATIONS = {
     kind: 'object',
     params: ['change'],
     what: '讀一支變更的基本資料',
-    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, autoMergeOn: BOOL, author: LINE },
+    // changedFileCount：平台自報這支動了幾個檔（數字寫成字串），沒有就 null——驗收分級拿它對帳清單有沒有少給
+    shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, autoMergeOn: BOOL, changedFileCount: MAYBE, author: LINE },
   },
   openChanges: {
     kind: 'list',
@@ -93,9 +95,14 @@ const OPERATIONS = {
   merge: { kind: 'action', params: ['change'], what: '按下合併鍵' },
 };
 
-/** 預設執行器。起不來或被訊號殺掉都回 status null——呼叫端一律當查不到。 */
+/**
+ * 預設執行器。起不來或被訊號殺掉都回 status null——呼叫端一律當查不到。
+ * ⚠️ 環境先清掉 GIT_ 那一族（規矩 E4）：平台工具會自己再去叫 git，繼承來的 GIT_DIR 指到另一棵倉庫時，
+ *    問到的是**那一棵**的變更與留言，而輸出看起來完全正常（里程碑 3 r1 High①，PFW 原版早就防過）。
+ *    GITHUB_、GH_TOKEN 不是 GIT_ 前綴，不受影響。
+ */
 function runCommand(command, args) {
-  const r = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  const r = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: gitEnv() });
   if (r.error) return { status: null, stdout: '', stderr: String(r.error.message) };
   return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
@@ -124,11 +131,12 @@ function checkShape(value, shape, where) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new PlatformError(`${where} 不是一個物件`);
   }
+  // 用 hasOwn 不用 in：in 會沿原型鏈找，「constructor」「toString」會被當成約定過的欄位（r1 Low⑰）
   for (const [field, type] of Object.entries(shape)) {
-    if (!(field in value)) throw new PlatformError(`${where} 少了「${field}」這一格`);
+    if (!Object.hasOwn(value, field)) throw new PlatformError(`${where} 少了「${field}」這一格`);
     checkField(value[field], type, `${where} 的「${field}」`);
   }
-  const extra = Object.keys(value).filter((k) => !(k in shape));
+  const extra = Object.keys(value).filter((k) => !Object.hasOwn(shape, k));
   if (extra.length) throw new PlatformError(`${where} 多了沒約定的欄位：${extra.join('、')}`);
 }
 

@@ -9,7 +9,9 @@
 //   ⑤日誌區有符號連結之類的非一般檔案＝退 1；收集器不跟符號連結、超過檔數上限＝回報讀不完；
 //   ⑥**指令入口**（cli）：缺參數、機密檔讀不到、回覆讀不到、日誌收不起來都退 2；
 //     回覆與日誌都真的進了比對（把任一邊漏掉就會從退 1 變成退 0，這一格 2026-09-13 稽核抓到過）；
-//   ⑦**任何會印出名字的路徑都先遮蔽**——包含讀不到、讀不進、超過上限的錯誤訊息。
+//   ⑦**任何會印出名字的路徑都先遮蔽**——包含讀不到、讀不進、超過上限的錯誤訊息；
+//   ⑧名字也算輸出：回覆的檔名、日誌裡的目錄名、日誌根是符號連結（r1 High⑤）；
+//   ⑨指令入口：日誌超限時已到手的回覆照樣比，命中優先於驗不了（r1 Medium⑯）。
 //     稽核實測過的形狀：日誌區有一個檔名就是機密、而且讀不到，原本會整支炸掉並把未遮蔽的路徑印兩次。
 //
 // ⚠️ 守不到的：編碼過、拆段過、轉義超過兩層的外洩（漏報方向）；憑形狀認機密那一族刻意不搬。
@@ -200,5 +202,42 @@ test('真的跑一遍指令：日誌區有一個「檔名就是機密、而且�
     assert.ok(!both.includes(SECRET), `機密不可以出現在任何輸出流：\n${both}`);
     assert.equal(r.status, 1, '檔名本身就是機密＝命中＝事故；讀不到只是附帶的驗不了');
     assert.ok(!/at Object\.<anonymous>/u.test(both), '不可以是未捕捉例外的堆疊');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('⑧回覆的檔名就是機密＝事故；日誌裡的目錄名是機密＝事故；日誌根是符號連結＝事故', () => {
+  const dir = tempDir();
+  try {
+    const secrets = path.join(dir, 'secrets.txt');
+    fs.writeFileSync(secrets, `${SECRET}\n`);
+    const namedReply = path.join(dir, `${SECRET}.txt`);
+    fs.writeFileSync(namedReply, 'safe\n');
+    assert.equal(cli(['--secrets', secrets, '--reply', namedReply]).code, 1, '回覆檔名含機密');
+    const logs = path.join(dir, 'logs'); fs.mkdirSync(logs);
+    fs.mkdirSync(path.join(logs, SECRET));
+    const cleanReply = path.join(dir, 'ok.txt'); fs.writeFileSync(cleanReply, 'safe\n');
+    assert.equal(cli(['--secrets', secrets, '--reply', cleanReply, '--logs', logs]).code, 1, '空目錄的名字含機密');
+    const link = path.join(dir, 'logs-link'); fs.symlinkSync(logs, link);
+    const emptyLogs = path.join(dir, 'empty'); fs.mkdirSync(emptyLogs);
+    fs.symlinkSync(emptyLogs, path.join(dir, 'link2'));
+    const r = cli(['--secrets', secrets, '--reply', cleanReply, '--logs', path.join(dir, 'link2')]);
+    assert.equal(r.code, 1, '日誌根是符號連結＝掃描器放了捷徑＝事故');
+    assert.match(r.lines.join('\n'), /日誌根目錄/u);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('⑨日誌超限時，已到手的回覆照樣比：有命中＝1（事故優先），沒命中＝2', () => {
+  const dir = tempDir();
+  try {
+    const secrets = path.join(dir, 'secrets.txt'); fs.writeFileSync(secrets, `${SECRET}\n`);
+    const logs = path.join(dir, 'logs'); let d = logs; fs.mkdirSync(d);
+    for (let i = 0; i < 14; i++) { d = path.join(d, `l${i}`); fs.mkdirSync(d); }
+    const leak = path.join(dir, 'reply.txt'); fs.writeFileSync(leak, `x ${SECRET} y\n`);
+    const r1 = cli(['--secrets', secrets, '--reply', leak, '--logs', logs]);
+    assert.equal(r1.code, 1, '回覆裡有機密，日誌讀不完不可以把它降成驗不了');
+    const clean = path.join(dir, 'clean.txt'); fs.writeFileSync(clean, 'ok\n');
+    const r2 = cli(['--secrets', secrets, '--reply', clean, '--logs', logs]);
+    assert.equal(r2.code, 2);
+    assert.match(r2.lines.join('\n'), /讀不完/u);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

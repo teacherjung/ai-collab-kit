@@ -8,7 +8,9 @@
 //   ⑥**同一刻並列**時，只要有一場不是成功就當不明、擋下來（不去猜平台沒承諾的順序）；
 //   ⑦**身分**：必過檢查釘了產生者時，別人貼的同名成功不算數；名單說不限才放寬；
 //   ⑧平台問不到、主幹名沒填、沒給編號＝退 2，不是退 0；
-//   ⑨問場次時用的是這一支的頭，不是別顆版本。
+//   ⑨問場次時用的是這一支的頭，不是別顆版本；
+//   ⑩完成了的場次要有合法的完成時間與非空結論，否則退 2（r1 High②：null 或亂字在字典序裡會排到日期後面，
+//     一場沒有時間的成功會蓋掉真的失敗）；時間用時間值比，不同時區的合法寫法要排對。
 //
 // ⚠️ 守不到的：平台回的答案是不是真的；場次清單**有沒有少給**（分頁是那條登記指令的責任，
 //    少給會讓「找不到正牌場次」變成退 2、或讓最新那一場被漏掉，方向前者保守、後者危險，照實寫在這裡）。
@@ -66,6 +68,28 @@ test('只看最新那一刻：舊的失敗不影響，新的失敗要擋', () =>
   assert.equal(evaluate([older, run()], false, [need()]).code, 0, '舊的失敗、新的成功＝放行');
   const newerBad = run({ conclusion: 'skipped', completedAt: '2026-09-13T02:00:00Z' });
   assert.equal(evaluate([run(), newerBad], false, [need()]).code, 1, '新的是跳過＝擋');
+});
+
+test('⑩完成了卻沒有合法時間或結論＝退 2；不可以讓沒有時間的成功蓋掉真的失敗', () => {
+  const failed = run({ conclusion: 'failure', completedAt: '2026-09-13T20:00:00Z' });
+  for (const bad of [null, 'not-a-time', '', undefined]) {
+    const ghost = run({ conclusion: 'success', completedAt: bad });
+    const r = evaluate([failed, ghost], false, [need()]);
+    assert.equal(r.code, 2, `completedAt=${JSON.stringify(bad)} 應該是查不清楚，不是放行`);
+    assert.match(r.reason, /不合契約/u);
+  }
+  const noConclusion = run({ conclusion: null });
+  assert.equal(evaluate([noConclusion], false, [need()]).code, 2, '完成了卻沒有結論也是不合契約');
+});
+
+test('⑩時間用時間值比：不同時區的合法寫法要排對', () => {
+  const failedUtc = run({ conclusion: 'failure', completedAt: '2026-09-13T01:00:00Z' });
+  const laterButLexSmaller = run({ conclusion: 'success', completedAt: '2026-09-13T00:30:00-01:00' });   // ＝01:30Z，比失敗晚
+  assert.equal(evaluate([failedUtc, laterButLexSmaller], false, [need()]).code, 0, '01:30Z 的成功比 01:00Z 的失敗晚，應放行');
+  const earlierButLexBigger = run({ conclusion: 'success', completedAt: '2026-09-13T02:00:00+02:00' });   // ＝00:00Z，比失敗早
+  assert.equal(evaluate([failedUtc, earlierButLexBigger], false, [need()]).code, 1, '00:00Z 的成功比 01:00Z 的失敗早，最新是失敗');
+  const sameInstant = run({ conclusion: 'skipped', completedAt: '2026-09-13T03:00:00+02:00' });   // ＝01:00Z，跟失敗同刻
+  assert.equal(evaluate([run({ completedAt: '2026-09-13T01:00:00Z' }), sameInstant], false, [need()]).code, 1, '同一刻不同寫法也算並列');
 });
 
 test('同一刻並列：只要有一場不是成功就當不明、擋下來', () => {

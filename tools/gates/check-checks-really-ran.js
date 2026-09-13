@@ -40,8 +40,16 @@ function evaluate(runs, autoMergeOn, required) {
     if (mine.some((r) => r.status !== 'completed')) {
       return { code: 1, reason: `「${name}」還有場次在跑——等它跑完再判` };
     }
-    const maxAt = mine.reduce((m, r) => (String(r.completedAt) > m ? String(r.completedAt) : m), '');
-    const tied = mine.filter((r) => String(r.completedAt) === maxAt);
+    // ⚠️ 完成了的場次要有**合法的完成時間**與**非空的結論**，否則整個判斷是建在沙上（r1 High②：
+    //    完成時間是 null 或亂字時，字典序會讓它排到日期後面，一場沒有時間的「成功」就蓋掉了真的失敗）。
+    //    時間用**時間值**比、不用字串比：兩個合法但不同時區的寫法，字串序會排錯。
+    const broken = mine.find((r) => typeof r.completedAt !== 'string' || !Number.isFinite(Date.parse(r.completedAt)) || typeof r.conclusion !== 'string' || !r.conclusion);
+    if (broken) {
+      return { code: 2, reason: `「${name}」有一場標成完成、卻沒有合法的完成時間或結論（時間「${broken.completedAt}」、結論「${broken.conclusion}」）——場次資料不合契約，查不清楚就不放行` };
+    }
+    const at = (r) => Date.parse(r.completedAt);
+    const maxAt = Math.max(...mine.map(at));
+    const tied = mine.filter((r) => at(r) === maxAt);
     const bad = tied.find((r) => r.conclusion !== 'success');
     if (bad) {
       return { code: 1, reason: `「${name}」最新那一刻的場次結論是「${bad.conclusion}」——跳過就是沒真跑，其餘就是沒過；同一刻結論不一致也算不明。重跑到真的成功再合併` };

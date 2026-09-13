@@ -88,6 +88,14 @@ test('預設執行器：閘起不來＝退出碼 2，不是 0（跑不起來不�
   assert.equal(runCommand(process.execPath, ['-e', 'process.exit(0)']).code, 0);
 });
 
+test('預設執行器清掉 GIT_ 那一族：閘的子行程看不到 GIT_DIR（規矩 E4；r1 High①）', () => {
+  const prev = process.env.GIT_DIR; process.env.GIT_DIR = '/no/such/repo';
+  try {
+    const r = runCommand(process.execPath, ['-e', 'process.stdout.write(String("GIT_DIR" in process.env))']);
+    assert.equal(r.output, 'false');
+  } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; }
+});
+
 test('端到端：用真的預設執行器跑一道不存在的閘，不放行也不按合併鍵', () => {
   const settings = settingsWith([{ name: '不存在的閘', command: '/no/such/gate-binary-for-test', args: [], state: ENABLED }]);
   const result = mergeRun('7', { settings });   // 不注入 run＝走真的 runCommand
