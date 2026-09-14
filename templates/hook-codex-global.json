@@ -1,0 +1,16 @@
+{
+  "description": "禁區攔截器的 Codex 側接線範例（規矩 B1）——全域層裝法。放到家目錄的 .codex/hooks.json，按過「信任」才會執行；跟專案層裝法（templates/hook-codex.json）二擇一。全域層會套到**每一個** Codex session（包括別的專案），所以不能用相對路徑或版本控制根目錄：把 {kitRoot} 換成一份**固定、不切分支**的套件複本的絕對路徑。攔截器讀的是那份複本旁邊的 settings.json，也就是說全域的禁區清單＝那一個專案的清單。{kitRoot} 沒換掉、那份複本不在、起不來，一律轉成退 2＝所有 mcp__ 工具都被擋（看得見的失敗，不是靜靜放行）。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"{kitRoot}/tools/forbidden-tools.js\" || { echo '禁區攔截器起不來（找不到檔、沒有 node、載入就崩）：一律當成拒絕' >&2; exit 2; }"
+          }
+        ]
+      }
+    ]
+  }
+}

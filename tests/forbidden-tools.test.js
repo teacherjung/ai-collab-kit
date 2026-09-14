@@ -4,20 +4,28 @@
 //   ①輸入拿不到工具名、工具名不合法＝拒絕；②禁區清單沒設＝拒絕（裝了卻沒填比沒裝更危險）；
 //   ③動禁區的連接器採白名單制；④逐字拒絕清單；⑤家族網（動詞名詞、名詞動詞、額外樣式），
 //     唯讀前綴跳過；駝峰、點、連字號都正規化；連接器前綴不同、工具名相同一起擋；
-//   ⑥兩家 AI 的接線範本都呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
+//   ⑥三份接線範本（Claude、Codex 專案層、Codex 全域層）都只呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
+//   ⑩連接器在名字的任何一段都認得（多一層前綴照樣白名單制；邊界要真的是邊界）；
+//   ⑪雙保險：唯讀名單誤放了動禁區的工具，家族網照樣擋；
+//   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、專案根沒給＝退 2 帶錯誤輸出。
 //   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
 //   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字；
 //   ⑨規則要合各欄位的文法：含空白、非法字元的規則不可能匹配合法工具名，留著只會把「有規則」判成真（r2 High②）＝拒絕。
-// ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有。
+// ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有；
+//   ⑫是用 /bin/sh 模擬鉤子，**沒有在真的 Claude Code／Codex session 裡掛上去驗過**；鉤子逾時兩家都不擋。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { decide, normalize, cli } = require('../tools/forbidden-tools.js');
+const { gitEnv } = require('../tools/git-env.js');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'forbidden-tools.js');
+const HOOK_TEMPLATES = ['hook-claude.json', 'hook-codex.json', 'hook-codex-global.json'];
+const FAIL_CLOSED_TAIL = "|| { echo '禁區攔截器起不來（找不到檔、沒有 node、載入就崩）：一律當成拒絕' >&2; exit 2; }";
 const FORBIDDEN = {
   name: '錢', servers: ['broker-x'], allowlist: ['get_account_balances', 'get_watchlist', 'create_alert'],
   // ⚠️ 逐字清單要放一個**家族網抓不到**的名字，不然拿掉逐字清單也照樣被擋、那道檢查等於沒考（突變驗過）
@@ -92,6 +100,33 @@ test('③動禁區的連接器採白名單制：唯讀名單上的放行、其�
   assert.equal(decide('mcp__broker-x__get_account_balances__extra', FORBIDDEN).deny, true, '多一段就不是名單上那一個');
 });
 
+test('⑩連接器不在開頭那一段也要認得：多一層前綴照樣白名單制（搬家驗屋 09-13）', () => {
+  // 原專案的探針搬過來、連接器換成考題的假名。market_order／limit_order／buy 家族網接不到（單側命名），
+  // 所以只有「認出這是連接器」擋得住——原本只比開頭那一段，這三個全放行。
+  for (const t of ['mcp__prefix__broker-x__market_order', 'mcp__a__broker-x__limit_order', 'mcp__x__broker-x__buy', 'mcp__a__b__broker-x__sell']) {
+    assert.equal(decide(t, FORBIDDEN).deny, true, `${t}：連接器在第二段以後也是那個連接器`);
+    assert.equal(decide(t.replace(/^mcp__[^_]+(?:__[^_]+)?__broker-x__/u, 'mcp__other__'), FORBIDDEN).deny, false, `對照組：同一個工具名不在連接器底下，家族網接不到＝放行（${t}）`);
+  }
+  assert.equal(decide('mcp__x___broker-x__market_order', FORBIDDEN).deny, true, '三個底線：邊界照樣認得（寧可認成連接器）');
+  assert.equal(decide('mcp__a__broker-x', FORBIDDEN).deny, true, '多一層前綴、沒有工具名＝拒絕');
+  assert.equal(decide('mcp__p__broker__paper__market_order', { name: '錢', servers: ['broker__paper'], allowlist: ['get_balance'] }).deny, true, '登記名含 __ 又多一層前綴');
+  // 反向對照組：多一層前綴下，名單內的唯讀工具照常放行（不可以退化成「不在開頭就一律拒絕」）
+  for (const t of ['mcp__prefix__broker-x__get_account_balances', 'mcp__a__broker-x__create_alert']) {
+    assert.equal(decide(t, FORBIDDEN).deny, false, `${t}：名單內要放行`);
+  }
+  // 邊界要真的是邊界：名字只是「包含」連接器名，不算那個連接器
+  for (const t of ['mcp__xbroker-x__market_order', 'mcp__broker-xy__market_order', 'mcp__a__broker-x_v2__market_order']) {
+    assert.equal(decide(t, FORBIDDEN).deny, false, `${t}：不是那個連接器（家族網也接不到）`);
+  }
+});
+
+test('⑪雙保險：唯讀名單誤放了動禁區的工具，家族網照樣擋（搬家驗屋 09-13）', () => {
+  const misfilled = { ...FORBIDDEN, allowlist: [...FORBIDDEN.allowlist, 'create_order_instruction'] };
+  assert.equal(decide('mcp__broker-x__create_order_instruction', misfilled).deny, true, '名單上有它，家族網還是要擋');
+  assert.equal(decide('mcp__prefix__broker-x__create_order_instruction', misfilled).deny, true, '多一層前綴也一樣');
+  assert.equal(decide('mcp__broker-x__get_watchlist', misfilled).deny, false, '對照組：名單內、家族網接不到的照常放行');
+});
+
 test('④逐字拒絕清單；⑤家族網與唯讀前綴；駝峰、點、連字號正規化', () => {
   assert.equal(decide('mcp__other__place_order_now', FORBIDDEN).deny, true, '逐字在清單上');
   assert.equal(decide('mcp__other__harmless_looking_tool', FORBIDDEN).deny, true, '逐字在清單上，家族網抓不到它——只有逐字清單擋得住');
@@ -114,12 +149,74 @@ test('⑤連接器前綴不同、工具名相同也一起擋（尾段逐一試�
   assert.equal(decide('mcp__vendor__get__create_order', FORBIDDEN).deny, true, '中段的唯讀字不可以替尾段脫罪');
 });
 
-test('⑥兩家 AI 的接線範本都呼叫同一支判斷，範本裡不抄判斷', () => {
-  for (const f of ['hook-claude.json', 'hook-codex.json']) {
+test('⑥三份接線範本都只呼叫同一支判斷，範本裡不抄判斷；起不來的尾巴一致', () => {
+  for (const f of HOOK_TEMPLATES) {
     const doc = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8'));
     const cmds = doc.hooks.PreToolUse.flatMap((h) => h.hooks.map((x) => x.command));
-    assert.deepEqual(cmds, ['node tools/forbidden-tools.js'], `${f} 要呼叫同一支`);
+    assert.equal(cmds.length, 1, `${f} 要剛好一條指令`);
+    assert.equal(cmds[0].split('tools/forbidden-tools.js').length, 2, `${f} 要呼叫同一支、而且只呼叫一次`);
+    assert.ok(cmds[0].endsWith(FAIL_CLOSED_TAIL), `${f} 的尾巴要把起不來轉成退 2`);
     assert.ok(!JSON.stringify(doc).includes('python3'), `${f} 不可以自己抄一份判斷`);
+  }
+});
+
+test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一律擋（搬家驗屋 09-13）', () => {
+  // 原本三份範本都是 node tools/forbidden-tools.js（相對路徑）：鉤子在 AI 當下所在的目錄執行，
+  // 從子目錄或別的專案起就找不到檔、退 1——兩家 AI 都把退 1 當「不擋」。
+  const cmd = (f) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8')).hooks.PreToolUse[0].hooks[0].command;
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-hook-'));
+  const proj = path.join(scratch, 'proj');
+  const elsewhere = path.join(scratch, 'elsewhere');
+  const broken = path.join(scratch, 'broken');
+  try {
+    for (const dir of [proj, broken]) {
+      fs.cpSync(path.join(__dirname, '..', 'tools'), path.join(dir, 'tools'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ forbidden: FORBIDDEN }));
+    }
+    fs.mkdirSync(elsewhere);
+    // 載入就崩的那一份：根目錄宣告 type:module、工具目錄的宣告拿掉
+    fs.writeFileSync(path.join(broken, 'package.json'), JSON.stringify({ type: 'module' }));
+    fs.rmSync(path.join(broken, 'tools', 'package.json'));
+    const git = spawnSync('git', ['init', '-q'], { cwd: proj, env: gitEnv(), encoding: 'utf8' });
+    assert.equal(git.status, 0, `前提：暫存專案要是版本控制目錄（${git.stderr}）`);
+    const notRepo = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: elsewhere, env: gitEnv(), encoding: 'utf8' });
+    assert.notEqual(notRepo.status, 0, '前提：另一個目錄不在任何版本控制目錄裡');
+
+    const base = gitEnv();
+    delete base.CLAUDE_PROJECT_DIR;
+    const sh = (command, { cwd, env = {}, tool = 'mcp__prefix__broker-x__market_order' }) =>
+      spawnSync('/bin/sh', ['-c', command], { cwd, env: { ...base, ...env }, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+    const denies = (r, why) => {
+      assert.equal(r.status, 0, `${why}：${r.stderr}`);
+      assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny', why);
+    };
+    const blocks = (r, why) => {
+      assert.equal(r.status, 2, `${why}：退出碼 ${r.status}（${r.stderr}）`);
+      assert.equal(r.stdout, '', why);
+      assert.match(r.stderr, /起不來/u, `${why}：退 2 要帶錯誤輸出（Codex 要有才擋）`);
+    };
+    const subdir = path.join(proj, 'tools');
+
+    const claude = cmd('hook-claude.json');
+    denies(sh(claude, { cwd: subdir, env: { CLAUDE_PROJECT_DIR: proj } }), 'Claude：從子目錄起');
+    const allowed = sh(claude, { cwd: subdir, env: { CLAUDE_PROJECT_DIR: proj }, tool: 'mcp__broker-x__get_watchlist' });
+    assert.deepEqual([allowed.status, allowed.stdout], [0, ''], '對照組：該放行的照樣放行（尾巴不可以把放行變成擋）');
+    blocks(sh(claude, { cwd: subdir, env: { CLAUDE_PROJECT_DIR: elsewhere } }), 'Claude：專案根底下沒有攔截器');
+    blocks(sh(claude, { cwd: subdir }), 'Claude：專案根變數沒給');
+    blocks(sh(claude, { cwd: subdir, env: { CLAUDE_PROJECT_DIR: proj, PATH: elsewhere } }), 'Claude：找不到 node');
+    blocks(sh(claude, { cwd: broken, env: { CLAUDE_PROJECT_DIR: broken } }), 'Claude：攔截器載入就崩');
+
+    const codex = cmd('hook-codex.json');
+    denies(sh(codex, { cwd: subdir }), 'Codex 專案層：從子目錄起');
+    blocks(sh(codex, { cwd: elsewhere }), 'Codex 專案層：不在版本控制目錄裡');
+    blocks(sh(codex, { cwd: subdir, env: { PATH: elsewhere } }), 'Codex 專案層：找不到 node 與 git');
+
+    const global = cmd('hook-codex-global.json');
+    assert.equal(global.split('{kitRoot}').length, 2, '全域層要留一個 {kitRoot} 讓安裝的人換成絕對路徑');
+    denies(sh(global.replace('{kitRoot}', proj), { cwd: elsewhere }), 'Codex 全域層：從別的專案起');
+    blocks(sh(global, { cwd: elsewhere }), 'Codex 全域層：{kitRoot} 忘了換');
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
   }
 });
 

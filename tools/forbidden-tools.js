@@ -12,14 +12,16 @@
 // 判斷（全部讀專案設定的 forbidden 那一塊，程式裡不寫任何禁區的名字）：
 //   ①輸入拿不到工具名、工具名不是合法字元集＝拒絕（fail-closed）；
 //   ②禁區清單沒設＝拒絕（裝了攔截器卻沒填清單，比沒裝更危險——它會讓人以為有在擋）；
-//   ③工具屬於「動禁區的連接器」＝白名單制：不在唯讀名單上就拒絕；
+//   ③工具屬於「動禁區的連接器」＝白名單制：不在唯讀名單上就拒絕（名字裡**任何一段**是連接器都算，
+//     不只開頭那一段）；在唯讀名單上也不直接放行，照樣走下面的家族網（雙保險）；
 //   ④工具名逐字在拒絕清單上＝拒絕；
 //   ⑤家族網：工具名正規化（駝峰拆底線、點與連字號換底線、轉小寫）後，動詞接名詞、或名詞接動詞、
 //     或額外樣式命中＝拒絕；唯讀前綴開頭的跳過家族網（get／list／search 那一類）。
 //   其餘放行（不印任何東西）。
 //
 // 誠實劃界：只認工具名，不看參數；家族網是列舉的詞表，沒列到的動詞或名詞擋不住（詞表由專案維護）；
-// 每一方的鉤子要各自安裝、信任、啟用，沒啟用的那一方等於沒有。
+// 每一方的鉤子要各自安裝、信任、啟用，沒啟用的那一方等於沒有；家族網會蓋過唯讀名單（名單上的工具若命中家族網，
+// 一樣拒絕——要放行就改家族網，不是加名單）。
 'use strict';
 const { read: readSettings } = require('./settings-data.js');
 
@@ -85,16 +87,19 @@ function decide(toolName, forbidden) {
   if (!hasRule) return { deny: true, why: `禁區「${f.name}」沒有任何一條有效規則（連接器、拒絕清單、家族網、額外樣式都是空的）：裝了攔截器卻沒有規則，一律拒絕` };
 
   if (deny.has(toolName)) return { deny: true, why: `工具「${toolName}」在拒絕清單上` };
-  // 連接器比對用**完整登記名稱**與分段邊界（r1 High④：登記名含 __ 時，逐段比對永遠找不到它）
+  // 連接器比對用**完整登記名稱**與分段邊界（r1 High④：登記名含 __ 時，逐段比對永遠找不到它）。
+  // 名字裡**每一個**分段邊界上的出現都要比（搬家驗屋 09-13：原本只認開頭那一段，
+  // mcp__prefix__<連接器>__market_order 這種多一層前綴的名字整層不開火、退回家族網而放行；
+  // 原專案 Grok 掃到過同一個洞並已補上）。邊界＝前面是名字開頭或 __、後面是名字結尾或 __。
   for (const server of servers) {
-    for (const prefix of [`mcp__${server}__`, `${server}__`]) {
-      if (toolName.startsWith(prefix)) {
-        const tool = toolName.slice(prefix.length);
-        if (!allow.has(tool)) return { deny: true, why: `連接器「${server}」會動到${f.name}，採白名單制；「${tool}」不在唯讀名單上` };
-        return { deny: false };
-      }
+    for (let at = toolName.indexOf(server); at !== -1; at = toolName.indexOf(server, at + 1)) {
+      const after = toolName.slice(at + server.length);
+      if (!(at === 0 || toolName.slice(at - 2, at) === '__') || !(after === '' || after.startsWith('__'))) continue;
+      if (after === '') return { deny: true, why: `連接器「${server}」會動到${f.name}，沒有指定工具名，一律拒絕` };
+      const tool = after.slice(2);
+      if (!allow.has(tool)) return { deny: true, why: `連接器「${server}」會動到${f.name}，採白名單制；「${tool}」不在唯讀名單上` };
+      // 在唯讀名單上也**不在這裡放行**：往下照樣走家族網（雙保險——名單誤填了動禁區的工具時，家族網還擋得住）
     }
-    if (toolName === `mcp__${server}` || toolName === server) return { deny: true, why: `連接器「${server}」會動到${f.name}，沒有指定工具名，一律拒絕` };
   }
   // 家族網：工具名的每一個「__」之後的尾段都試一次（連接器前綴不同、工具名相同的要一起擋）
   const rest = toolName.startsWith('mcp__') ? toolName.slice(5) : toolName;
