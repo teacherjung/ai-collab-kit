@@ -56,7 +56,8 @@ function treeState(run, cwd) {
   const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
   if (common.status !== 0) return 'not-a-repo';
   const sharedFile = path.join(common.stdout.trim(), 'config');
-  const readShared = (key) => spawnSync('git', ['config', '--file', sharedFile, '--type=bool', '--get-all', key], { encoding: 'utf8', env: gitEnv() });
+  // --includes：共用檔用 include 引進來的值也要算（指名讀檔時 git 預設不展開 include）
+  const readShared = (key) => spawnSync('git', ['config', '--file', sharedFile, '--includes', '--type=bool', '--get-all', key], { encoding: 'utf8', env: gitEnv() });
   const wtc = readShared('extensions.worktreeConfig');
   if (wtc.status === 0 && wtc.stdout.split('\n').some((v) => v.trim() === 'true')) {
     const shared = readShared('core.bare');

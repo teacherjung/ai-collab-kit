@@ -139,6 +139,13 @@ test('⑨共用設定被寫成裸倉庫、卻被這棵樹自己的設定蓋住�
     assert.match(masked.lines.join('\n'), /共用設定裡 core\.bare 不是 false/u);
     g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'false');
     assert.equal(runChecks({ settings, cwd: linked }).code, 0, '還原後照常');
+    // 同一個壞值經由 include 引進共用檔：指名讀檔要展開 include 才看得到
+    const inc = path.join(main, '.git', 'shared-extra.inc');
+    fs.writeFileSync(inc, '[core]\n\tbare = true\n');
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'include.path', inc);
+    assert.equal(runChecks({ settings, cwd: linked }).code, 2, '經由 include 引進的共用 core.bare=true 也要抓到');
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), '--unset', 'include.path');
+    assert.equal(runChecks({ settings, cwd: linked }).code, 0, '拿掉 include 後照常');
 
     // 跑完才被寫壞＝1
     const breaker = { checks: { commands: [['git', 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'true']] } };
