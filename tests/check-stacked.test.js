@@ -13,7 +13,6 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const { gateRun, evaluate } = require('../tools/gates/check-stacked.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');

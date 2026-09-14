@@ -11,7 +11,6 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const { gateRun, problemsOf, fieldValue, canonicalRole, rolesOf, REQUIRED_FIELDS } = require('../tools/gates/check-collab-fields.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');

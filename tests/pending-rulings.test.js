@@ -21,7 +21,6 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { run, evaluate, deciderOf, cites, realDate, readPart } = require('../tools/pending-rulings.js');
 const { PlatformError } = require('../tools/platform.js');
