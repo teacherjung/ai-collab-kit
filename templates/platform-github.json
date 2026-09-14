@@ -6,7 +6,8 @@
     "clearEnv 那兩個變數（GH_REPO、GH_HOST）要抄進 settings.json 的 platform.clearEnv，執行器問平台前會清掉它們；GH_TOKEN 是認證用的，不在清單上、會留著。",
     "會分頁的動作（openChanges、comments、changedFiles、checks）用 --paginate，每頁各印一個陣列；這套架構收這種寫法。但『頁數有沒有收齊』是這條指令自己的責任，架構驗不到。openChanges 用會分頁的端點而不是 pr list --limit：--limit 是筆數上限，超過就靜靜截斷（r1 Medium⑥）。",
     "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。",
-    "2026-09-13 對真倉庫實跑過七個唯讀動作（r3 之後含 change 那一條的修正）。"
+    "2026-09-13 對真倉庫實跑過七個唯讀動作（r3 之後含 change 那一條的修正）。",
+    "合併指令另外抄進 settings.json 的 mergeCommand（tools/merge.js 全綠之後按的是這一條，不是 operations.merge）。它多認兩個記號：{reviewer}＝變更說明「獨立審查者」欄那一位、{merger}＝跑 node tools/merge.js <編號> --merger <識別值> 時自報的那一位；帶 --body 才留得下誰審誰合（規矩 H5；平台上的合併者永遠是共用的那個帳號，這兩行是事後唯一查得到的痕跡）。{sha}＝按鍵前核過的版本，帶 --match-head-commit 平台才會替你擋最後一刻被推上來的新版本。"
   ],
   "operations": {
     "change": [
@@ -90,5 +91,21 @@
     "GH_REPO",
     "GH_HOST"
   ],
-  "project": "未設定"
+  "project": "未設定",
+  "mergeCommand": {
+    "command": "gh",
+    "args": [
+      "pr",
+      "merge",
+      "{change}",
+      "-R",
+      "{project}",
+      "--squash",
+      "--delete-branch",
+      "--match-head-commit",
+      "{sha}",
+      "--body",
+      "Reviewed-By: {reviewer}\nMerged-By: {merger}"
+    ]
+  }
 }

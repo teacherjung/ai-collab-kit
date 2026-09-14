@@ -34,6 +34,8 @@
 
 3. 接禁區攔截器（B1），兩家 AI 各接一次。Claude 側：`templates/hook-claude.json` 的內容放進專案的 `.claude/settings.json`。Codex 側二擇一：專案層＝`templates/hook-codex.json` 放進專案的 `.codex/hooks.json`；全域層＝`templates/hook-codex-global.json` 放進家目錄的 `.codex/hooks.json`，並把 `{kitRoot}` 換成一份**固定、不切分支**的套件複本的絕對路徑（全域的禁區清單就是那份複本的清單）。放好之後在 Codex 按「信任」，之後每改一次鉤子檔都要重按。漏了＝那一方沒有攔截；三份範本的指令都不靠當下目錄、起不來一律擋（`tests/forbidden-tools.test.js` ⑫）。
 
+4. 合併指令（`settings.json` 的 mergeCommand）從 `templates/platform-github.json` 的 mergeCommand 起抄，保留 `{reviewer}`、`{merger}`、`{sha}`；合併時跑 `node tools/merge.js <編號> --merger <按鍵那一方的識別值>`。漏了 `{reviewer}`／`{merger}`＝合併紀錄留不下誰審、誰合；漏了 `{sha}`＝最後一刻被推上來的新版本平台不替你擋（兩種都會印提醒，不擋）。
+
 ## 進門規則
 
 一條規矩要進本文，三件都要有，缺一不進：

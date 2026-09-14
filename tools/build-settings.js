@@ -133,6 +133,9 @@ function build(data) {
   const merge = data.mergeCommand || {};
   const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
   out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
+  out.push('合併指令認得的記號：{change}（變更編號）、{sha}（按鍵前核過的版本）、{project}（platform.project）、'
+    + '{reviewer}（變更說明「獨立審查者」欄那一位）、{merger}（跑 node tools/merge.js <編號> --merger <識別值> 自報的那一位）。'
+    + '帶上 {reviewer}／{merger} 合併紀錄才留得下誰審、誰合（H5）；帶上 {sha} 平台才會替你擋最後一刻被推上來的新版本。認不得的記號＝不放行。', '');
   out.push('⚠️ 沒有任何一道閘登記成「已啟用」時，合併指令不放行：一支什麼都沒檢查就按合併鍵的指令比沒有更危險。', '');
   out.push('## 十一、合併預授權（規矩 A5）', '');
   out.push(`${plain(data.mergeAuthorization, '合併預授權')}。預授權不取代 A5 列的其餘條件。`, '');

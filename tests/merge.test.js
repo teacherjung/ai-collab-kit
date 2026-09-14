@@ -10,19 +10,44 @@
 //   ⑥**預設執行器**：閘起不來（找不到指令）或被訊號殺掉＝退出碼 2，不是 0——「跑不起來」不等於
 //     「檢查過了」。這一格 2026-09-13 稽核前零覆蓋（八題全部注入假執行器），端到端重現過：
 //     把不存在的指令登記成已啟用的閘，只要 runCommand 回 0，合併鍵就真的被按下去；
-//   ⑦按完合併鍵印的結論，量詞只蓋到這一趟真的跑過的那幾道閘。
+//   ⑦按完合併鍵印的結論，量詞只蓋到這一趟真的跑過的那幾道閘；
+//   ⑧**版本鎖**（搬家驗屋 09-13）：開跑前記下變更的版本、按鍵前再讀一次，不一樣＝不按（原本五道閘各自重讀、
+//     彼此不比對，跑閘途中推上來的新版本照樣被合併）；問不到版本＝不放行；
+//   ⑨**合併指令的記號**：{change}、{sha}、{project}、{reviewer}（說明的「獨立審查者」欄）、{merger}（--merger 自報、
+//     要是登記過的參與者）；認不得的記號、該填填不出來＝不放行；跑閘前驗得了的先驗；沒帶誰審誰合／版本要提醒；
+//   ⑩閘退 1＝擋下（退 1）；退 2 或其他非零（含起不來）＝查不清楚（退 2），不叫人去找「紅的是哪一題」。
 //
 // ⚠️ 守不到的，照實說：它擋不住「不用這支指令、直接按平台的合併鍵」——要擋那個只有平台級的
-//    分支保護。也不驗那幾道閘自己對不對（那是各道閘自己的考題）。
+//    分支保護。也不驗那幾道閘自己對不對（那是各道閘自己的考題）。{merger} 是自報的：驗得到「是登記過的參與者」，
+//    驗不到「真的是他」。版本鎖只比頭尾兩次：途中被推了新版又推回原版，看不出來。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mergeRun, runCommand, UNSET, ENABLED } = require('../tools/merge.js');
+const { mergeRun: realMergeRun, runCommand, parseArgs, UNSET, ENABLED } = require('../tools/merge.js');
+
+const HEAD = 'a'.repeat(40);
+const PEOPLE = [{ role: 'AI 甲', id: 'Alpha' }, { role: 'AI 乙', id: 'Beta' }];
+/** 假平台：change 依序回 shas 裡的版本（用完就一直回最後一個）；記下被問了什麼。 */
+function fakePlatform({ shas = [HEAD], body = '實作者：Alpha\n獨立審查者：Beta\n', fail = [] } = {}) {
+  const asked = [];
+  return {
+    asked,
+    ask(op, args) {
+      asked.push(op);
+      const n = asked.filter((x) => x === 'change').length;
+      if (fail.includes(n)) { const e = new Error('問不到'); e.name = 'PlatformError'; throw e; }
+      return { id: args.change, headSha: shas[Math.min(n, shas.length) - 1], body };
+    },
+  };
+}
+/** 沒特別給平台的題，一律用一個版本不變的假平台（這支指令現在一定會問平台版本）。 */
+const mergeRun = (id, opts = {}) => realMergeRun(id, { platform: fakePlatform(), ...opts });
 
 function settingsWith(gates, extra = {}) {
   return {
     mainBranch: 'main',
     gates,
+    participants: PEOPLE,
     mergeCommand: { command: 'platform', args: ['merge', '{change}'] },
     ...extra,
   };
@@ -99,8 +124,9 @@ test('預設執行器清掉 GIT_ 那一族：閘的子行程看不到 GIT_DIR（
 test('端到端：用真的預設執行器跑一道不存在的閘，不放行也不按合併鍵', () => {
   const settings = settingsWith([{ name: '不存在的閘', command: '/no/such/gate-binary-for-test', args: [], state: ENABLED }]);
   const result = mergeRun('7', { settings });   // 不注入 run＝走真的 runCommand
-  assert.equal(result.code, 1, '起不來的閘要擋下來');
-  assert.match(result.lines.join('\n'), /擋下來了/u);
+  assert.equal(result.code, 2, '起不來的閘＝查不清楚（退 2），不是判定擋下');
+  assert.match(result.lines.join('\n'), /查不清楚或根本起不來/u);
+  assert.doesNotMatch(result.lines.join('\n'), /紅的是哪一題/u, '沒有紅的那一題可以找');
   assert.doesNotMatch(result.lines.join('\n'), /合併已執行/u);
 });
 
@@ -137,4 +163,92 @@ test('合併指令回非零時照實說「先查狀態、不要重跑」', () =>
   const result = mergeRun('7', { settings: settingsWith([gate('甲')]), run });
   assert.equal(result.code, 1);
   assert.match(result.lines.join('\n'), /先去查那支變更現在的狀態再決定，不要重跑/u);
+});
+
+test('⑧版本鎖：跑閘途中版本變了＝不按合併鍵（退 2）；頭尾一致才按', () => {
+  const moved = fakePlatform({ shas: [HEAD, 'b'.repeat(40)] });
+  const { run, calls } = fakeRunner([0, 0]);
+  const r = realMergeRun('7', { settings: settingsWith([gate('甲'), gate('乙')]), run, platform: moved });
+  assert.equal(r.code, 2);
+  assert.deepEqual(calls, ['node gates/甲.js 7', 'node gates/乙.js 7'], '閘照跑，但合併鍵不按');
+  assert.match(r.lines.join('\n'), /跑閘途中版本變了/u);
+  assert.deepEqual(moved.asked, ['change', 'change'], '開跑前讀一次、按鍵前再讀一次');
+  const same = fakePlatform({ shas: [HEAD, HEAD] });
+  const ok = fakeRunner([0, 0]);
+  assert.equal(realMergeRun('7', { settings: settingsWith([gate('甲')]), run: ok.run, platform: same }).code, 0, '對照組：版本沒變就照常合併');
+  assert.deepEqual(ok.calls, ['node gates/甲.js 7', 'platform merge 7']);
+});
+
+test('⑧問不到版本＝不放行：開跑前問不到就不跑閘；按鍵前問不到就不按', () => {
+  const first = fakeRunner([]);
+  const r1 = realMergeRun('7', { settings: settingsWith([gate('甲')]), run: first.run, platform: fakePlatform({ fail: [1] }) });
+  assert.equal(r1.code, 2);
+  assert.deepEqual(first.calls, [], '連要驗哪一版都不知道，閘也不跑');
+  const second = fakeRunner([0]);
+  const r2 = realMergeRun('7', { settings: settingsWith([gate('甲')]), run: second.run, platform: fakePlatform({ fail: [2] }) });
+  assert.equal(r2.code, 2);
+  assert.deepEqual(second.calls, ['node gates/甲.js 7'], '閘跑了，但核不了版本就不按');
+});
+
+test('⑨記號：{sha}、{project}、{reviewer}、{merger} 都填進合併指令（誰審、誰合、只合這一版）', () => {
+  const args = ['merge', '{change}', '-R', '{project}', '--match-head-commit', '{sha}', '--body', 'Reviewed-By: {reviewer}\nMerged-By: {merger}'];
+  const settings = settingsWith([gate('甲')], { platform: { project: 'owner/repo' }, mergeCommand: { command: 'platform', args } });
+  const { run, calls } = fakeRunner([0]);
+  const r = realMergeRun('7', { settings, run, platform: fakePlatform(), merger: 'alpha' });
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  assert.equal(calls[1], `platform merge 7 -R owner/repo --match-head-commit ${HEAD} --body Reviewed-By: Beta\nMerged-By: Alpha`);
+  assert.doesNotMatch(r.lines.join('\n'), /⚠️ 合併指令沒有帶/u, '都帶了就不提醒');
+  const plain = mergeRun('7', { settings: settingsWith([gate('甲')]), run: fakeRunner([0]).run });
+  assert.match(plain.lines.join('\n'), /沒有帶 \{reviewer\}／\{merger\}/u, '沒帶誰審誰合要提醒');
+  assert.match(plain.lines.join('\n'), /沒有帶 \{sha\}/u, '沒帶版本要提醒');
+});
+
+test('⑨記號填不出來就不放行；跑閘前驗得了的先驗', () => {
+  const withArgs = (args, extra = {}) => settingsWith([gate('甲')], { platform: { project: 'owner/repo' }, mergeCommand: { command: 'platform', args }, ...extra });
+  const cases = [
+    ['沒報合併者', withArgs(['merge', '{change}', '{merger}']), {}, /沒有用 --merger 報名字/u],
+    ['合併者不是登記過的參與者', withArgs(['merge', '{change}', '{merger}']), { merger: 'Mallory' }, /不是登記過的參與者/u],
+    ['認不得的記號', withArgs(['merge', '{change}', '--match-head-commit', '{hash}']), {}, /認不得的記號：\{hash\}/u],
+    ['專案名沒填', withArgs(['merge', '{change}', '{project}'], { platform: { project: UNSET } }), {}, /platform\.project 還沒填/u],
+  ];
+  for (const [why, settings, opts, re] of cases) {
+    const { run, calls } = fakeRunner([0]);
+    const r = mergeRun('7', { settings, run, ...opts });
+    assert.equal(r.code, 2, why);
+    assert.deepEqual(calls, [], `${why}：跑閘前就該停`);
+    assert.match(r.lines.join('\n'), re, why);
+  }
+  // 審查者要讀變更說明，只能在按鍵前驗：讀不出來＝閘跑了、鍵不按
+  const { run, calls } = fakeRunner([0]);
+  const r = realMergeRun('7', { settings: withArgs(['merge', '{change}', '{reviewer}']), run, platform: fakePlatform({ body: '實作者：Alpha\n' }) });
+  assert.equal(r.code, 2);
+  assert.deepEqual(calls, ['node gates/甲.js 7']);
+  assert.match(r.lines.join('\n'), /讀不出一位登記過的參與者/u);
+});
+
+test('⑩閘退 1＝擋下（退 1）；退 2 或其他非零＝查不清楚（退 2）', () => {
+  for (const [gateCode, want, re] of [[1, 1, /擋下來了/u], [2, 2, /查不清楚或根本起不來/u], [127, 2, /查不清楚或根本起不來/u]]) {
+    const { run, calls } = fakeRunner([gateCode]);
+    const r = mergeRun('7', { settings: settingsWith([gate('甲'), gate('乙')]), run });
+    assert.equal(r.code, want, `閘退 ${gateCode}`);
+    assert.deepEqual(calls, ['node gates/甲.js 7'], `閘退 ${gateCode}：停在那一道`);
+    assert.match(r.lines.join('\n'), re);
+  }
+});
+
+test('指令列：編號與 --merger 的位置不拘', () => {
+  assert.deepEqual(parseArgs(['7', '--merger', 'Beta']), { changeId: '7', merger: 'Beta' });
+  assert.deepEqual(parseArgs(['--merger', 'Beta', '7']), { changeId: '7', merger: 'Beta' });
+  assert.deepEqual(parseArgs([]), { changeId: undefined, merger: undefined });
+});
+
+test('⑨GitHub 範本的合併指令真的填得完：誰審、誰合兩行＋只合核過的那一版，沒有殘留記號', () => {
+  const doc = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'templates', 'platform-github.json'), 'utf8'));
+  const settings = settingsWith([gate('甲')], { platform: { project: 'owner/repo' }, mergeCommand: doc.mergeCommand });
+  const { run, calls } = fakeRunner([0]);
+  const r = realMergeRun('7', { settings, run, platform: fakePlatform(), merger: 'Alpha' });
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  assert.doesNotMatch(calls[1], /\{[a-z]+\}/u, `展開後還有記號：${calls[1]}`);
+  assert.match(calls[1], new RegExp(`--match-head-commit ${HEAD}`, 'u'));
+  assert.match(calls[1], /--body Reviewed-By: Beta\nMerged-By: Alpha$/u);
 });
