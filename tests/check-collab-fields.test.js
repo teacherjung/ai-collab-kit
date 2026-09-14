@@ -11,12 +11,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { gateRun, problemsOf, fieldValue, canonicalRole, rolesOf, REQUIRED_FIELDS } = require('../tools/gates/check-collab-fields.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-collab-fields.js');
 const ROLES = ['Alpha', 'Beta', 'Gamma'];
 
 /** 一份四欄齊全、實作者不等於審查者的說明。 */
@@ -194,7 +193,7 @@ test('端到端：四欄齊全＝退 0；自審＝退 1 並說明理由', () => 
   assert.match(self.lines.join('\n'), /由寫它的人放行/u);
 });
 
-test('真的跑一遍指令：本倉庫的識別值還是未設定，退 2 不放行', () => {
-  assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2);
-  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）：識別值未設定，退 2 不放行', () => {
+  assert.equal(runInCopy('tools/gates/check-collab-fields.js', ['7']).status, 2);
+  assert.equal(runInCopy('tools/gates/check-collab-fields.js').status, 2);
 });

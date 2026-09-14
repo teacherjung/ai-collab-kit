@@ -13,12 +13,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { gateRun, evaluate } = require('../tools/gates/check-stacked.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-stacked.js');
 const change = (over = {}) => ({ baseBranch: 'main', headBranch: 'topic', isCrossRepo: false, ...over });
 const open = (id, baseBranch) => ({ id, baseBranch });
 
@@ -117,10 +116,10 @@ test('純判斷層可以直接考，不必碰平台', () => {
   assert.equal(evaluate(change({ isCrossRepo: true }), [], 'main').code, 2);
 });
 
-test('真的跑一遍指令：本倉庫還沒填設定，退 2 不放行', () => {
-  const r = spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' });
+test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）：還沒填設定，退 2 不放行', () => {
+  const r = runInCopy('tools/gates/check-stacked.js', ['7']);
   assert.equal(r.status, 2);
   assert.match(r.stdout, /不放行|主幹分支名/u);
-  const noArg = spawnSync(process.execPath, [TOOL], { encoding: 'utf8' });
+  const noArg = runInCopy('tools/gates/check-stacked.js');
   assert.equal(noArg.status, 2, '沒給編號也要退 2');
 });

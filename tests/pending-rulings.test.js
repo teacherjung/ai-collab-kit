@@ -24,8 +24,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { run, evaluate, deciderOf, cites, realDate, readPart } = require('../tools/pending-rulings.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'pending-rulings.js');
 const D = { id: 'Boss', account: 'boss-acct', ids: ['Boss', 'Alpha'], accounts: ['boss-acct', 'ai-acct'] };
 let n = 0;
 // 時間用 Date.UTC 算：第 60 則以後若照舊把編號直接寫進「秒」，會變成不存在的 00:00:60，被時間契約判讀不出（整份退 2）
@@ -103,7 +103,7 @@ test('⑥裁示者沒填＝退 2；平台問不到＝退 2；算出來＝退 0�
   assert.deepEqual(asked.map((x) => x[0]), ['openChanges', 'comments', 'comments'], '每一支開著的變更都要掃');
   assert.match(r.lines.join('\n'), /還沒回：1 則/u);
   assert.throws(() => run({ settings, platform: { ask() { throw new TypeError('程式寫錯'); } } }), TypeError);
-  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2, '本倉庫設定未填');
+  assert.equal(runInCopy('tools/pending-rulings.js').status, 2, '空白設定的複本：設定未填');
 });
 
 test('⑦外人的撤回關不了題、外人的問不入待裁；都列成疑似', () => {

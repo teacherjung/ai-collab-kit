@@ -20,6 +20,10 @@
 //     原專案的對帳題是「腳本自報的閘名 vs 文件點名的閘名」；這裡文件是產物、閘由合併指令從登記讀，
 //     所以第二個獨立來源只剩磁碟上的檔案。合併指令只跑登記的閘，所以「寫了閘卻忘了登記」正是這題要抓的。
 //
+//   ⑨**考題用的空白設定跟得上真設定**（2026-09-13 搬家驗屋）：「真的跑一遍指令」的題改在複本裡、配一份空白設定跑，
+//     不讀本倉庫那份（專案填了真設定之後，讀它＝紅燈、問真平台、在真禁區埋假機密）。那份空白設定的欄位名與型別
+//     要跟 settings.json 一模一樣，而且對外動作的欄位真的都是「未設定」——不然複本裡跑的就不是「沒填」那條路。
+//
 // ⚠️ 守不到的：欄位填的值對不對（填了「未設定」以外的字不代表那台機器真的裝好）、
 //    「已啟用」是不是真的啟用（那要靠人去驗，驗過才把日期填上）、
 //    以及機器索引 MACHINES.md 與這張啟用表有沒有漏對——那兩份的表是不同軸（一份按規矩條號、
@@ -31,6 +35,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { build, read, outFile, STATES } = require('../tools/build-settings.js');
 const { read: readRules } = require('../tools/build-rules.js');
+const { unfilled, UNFILLED_FILE } = require('./helpers/kit-copy.js');
 
 test('PROJECT-SETTINGS.md 與 settings.json 產生的結果逐字元相同（設定說明是產物、不要手改）', () => {
   assert.equal(
@@ -186,4 +191,25 @@ test('閘的登記對帳（規矩 H1）：磁碟上的每一支閘都有登記�
   registered.sort();
   for (const file of onDisk) assert.ok(registered.includes(file), `磁碟上有 ${file}，但 settings.json 的 gates 沒登記它——合併指令不會跑它`);
   assert.deepEqual(registered, onDisk, '登記的集合要跟磁碟一模一樣');
+});
+
+test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外動作的欄位真的沒填', () => {
+  // 形狀＝欄位名與型別；陣列只看「是陣列」（填設定會改長度）
+  const shape = (v) => (Array.isArray(v) ? 'array'
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, shape(v[k])])) : typeof v);
+  assert.deepEqual(shape(unfilled()), shape(read()), `${path.basename(UNFILLED_FILE)} 的形狀跟 settings.json 不一樣：設定多了或少了一欄，空白設定要一起改`);
+  assert.notDeepEqual(shape({ a: { b: 1 } }), shape({ a: { b: '1' } }), '對照組：型別變了要看得出來');
+  assert.notDeepEqual(shape({ a: {} }), shape({ a: { b: [] } }), '對照組：多一欄要看得出來');
+
+  const u = unfilled();
+  const UNSET = '未設定';
+  assert.equal(u.mainBranch, UNSET);
+  assert.equal(u.platform.project, UNSET);
+  for (const [op, argv] of Object.entries(u.platform.operations)) assert.deepEqual(argv, [UNSET], `平台動作 ${op} 要沒填`);
+  assert.equal(u.forbidden.name, UNSET);
+  assert.equal(u.scanner.isolation.provider, UNSET);
+  assert.deepEqual(u.scanner.isolation.forbidden, [], '空白設定不可以登記任何禁區（複本裡跑試探才不會去埋）');
+  assert.equal(u.mergeCommand.command, UNSET);
+  assert.deepEqual(u.checks.commands, [[UNSET]]);
+  for (const p of u.participants) assert.equal(p.id, UNSET, `身分「${p.role}」要沒填`);
 });

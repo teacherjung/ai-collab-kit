@@ -22,6 +22,7 @@ const assert = require('node:assert/strict');
 const { ask, missingOperations, runCommand, parseList, OPERATIONS, PlatformError, LINE_BREAK, UNSET } = require('../tools/platform.js');
 const { read: readSettings } = require('../tools/settings-data.js');
 const { build: buildSettings } = require('../tools/build-settings.js');
+const { unfilled } = require('./helpers/kit-copy.js');
 
 const NUL = '\u0000';
 
@@ -74,8 +75,8 @@ test('沒登記的動作＝丟錯，絕不回一個空答案', () => {
   assert.equal(returned, 'no-return', '沒登記的時候絕對不可以有回傳值');
 });
 
-test('本倉庫現在一個動作都沒登記，missingOperations 要照實說九個', () => {
-  assert.deepEqual(missingOperations(readSettings()), Object.keys(OPERATIONS));
+test('空白設定一個動作都沒登記，missingOperations 要照實說九個（不讀本倉庫那份：專案填了就不是空的）', () => {
+  assert.deepEqual(missingOperations(unfilled()), Object.keys(OPERATIONS));
   assert.equal(missingOperations(allRegistered()).length, 0);
 });
 

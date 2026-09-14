@@ -21,8 +21,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { gateRun, evaluate, cantRunSignal, checksOf, runCommand } = require('../tools/gates/check-cross-merge.js');
 const { PlatformError } = require('../tools/platform.js');
+const { gitEnv } = require('../tools/git-env.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-cross-merge.js');
 const ok = (id) => ({ id, ok: true, why: '' });
 const bad = (id, kind) => ({ id, ok: false, kind, why: `${kind} 的原因` });
 
@@ -93,7 +94,7 @@ test('⑥預設執行器清掉 GIT_ 那一族環境變數（規矩 E4；起不�
 /** 建一個臨時倉庫：主幹一顆、三支分支——相容、文字衝突、規則擋內容。回各分支的 sha 與根路徑。 */
 function tempRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-merge-repo-'));
-  const git = (...args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }); if (r.status !== 0) throw new Error(`git ${args.join(' ')}：${r.stderr}`); return r.stdout.trim(); };
+  const git = (...args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...gitEnv(), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }); if (r.status !== 0) throw new Error(`git ${args.join(' ')}：${r.stderr}`); return r.stdout.trim(); };
   const write = (f, s) => fs.writeFileSync(path.join(root, f), s);
   git('init', '-q', '-b', 'main');
   // 三關＝這支腳本：規則檔說不准的字不可以出現在內容檔裡
@@ -127,7 +128,7 @@ test('⑦真的跑一遍：相容＝綠、文字衝突＝1、一支的規則擋�
     assert.equal(all.code, 1);
     assert.match(all.lines.join('\n'), /conflict/u); assert.match(all.lines.join('\n'), /forbids/u);
     // 臨時樹要清掉：倉庫的 worktree 清單只剩主樹
-    const wt = spawnSync('git', ['worktree', 'list'], { cwd: repo.root, encoding: 'utf8' }).stdout.trim().split('\n');
+    const wt = spawnSync('git', ['worktree', 'list'], { cwd: repo.root, encoding: 'utf8', env: gitEnv() }).stdout.trim().split('\n');
     assert.equal(wt.length, 1, `臨時樹沒清乾淨：\n${wt.join('\n')}`);
     // 三關起不來＝2，不是 1
     const cant = gateRun('self', { settings: { ...settings, checks: { commands: [['/no/such/check-binary']] } }, platform: platformFor([['compatible', repo.compatible]]), cwd: repo.root });
@@ -138,7 +139,7 @@ test('⑦真的跑一遍：相容＝綠、文字衝突＝1、一支的規則擋�
   } finally { fs.rmSync(repo.root, { recursive: true, force: true }); }
 });
 
-test('真的跑一遍指令：本倉庫設定未填，退 2', () => {
-  assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2);
-  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）：設定未填，退 2', () => {
+  assert.equal(runInCopy('tools/gates/check-cross-merge.js', ['7']).status, 2);
+  assert.equal(runInCopy('tools/gates/check-cross-merge.js').status, 2);
 });

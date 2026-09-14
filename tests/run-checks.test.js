@@ -13,6 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { runChecks, runCommand } = require('../tools/run-checks.js');
+const { gitEnv } = require('../tools/git-env.js');
 
 const ROOT = path.join(__dirname, '..');
 const okTree = () => 'ok';
@@ -40,7 +41,7 @@ test('①沒登記＝2；②第一關紅就停＝1；③起不來＝2；④全�
 test('⑤裸倉庫絆線：跑之前壞＝2；跑完變壞＝1（真的用臨時倉庫）', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-'));
   try {
-    const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8', env: gitEnv() });   // 規矩 E4：鉤子帶著 GIT_DIR 跑考題時，不清就寫進真倉庫
     git('init', '-q');
     const settings = { checks: { commands: [[process.execPath, '-e', 'process.exit(0)']] } };
     assert.equal(runChecks({ settings, cwd: dir }).code, 0, '正常的工作樹全綠');

@@ -21,8 +21,8 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { gateRun, evaluate } = require('../tools/gates/check-checks-really-ran.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-checks-really-ran.js');
 const run = (over = {}) => ({ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci', ...over });
 const need = (over = {}) => ({ name: '三關', producer: 'ci', ...over });
 
@@ -190,8 +190,8 @@ test('平台丟的不是平台的錯，就讓它炸出去', () => {
   assert.throws(() => gateRun('7', { settings, platform: fakePlatform({ change: new TypeError('程式寫錯') }) }), TypeError);
 });
 
-test('真的跑一遍指令：本倉庫還沒填設定，退 2 不放行', () => {
-  const r = spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' });
+test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）：還沒填設定，退 2 不放行', () => {
+  const r = runInCopy('tools/gates/check-checks-really-ran.js', ['7']);
   assert.equal(r.status, 2);
-  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+  assert.equal(runInCopy('tools/gates/check-checks-really-ran.js').status, 2);
 });

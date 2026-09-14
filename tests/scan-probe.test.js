@@ -23,9 +23,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { cli, probeRun, plantCanaries, sweepCanaries, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE } = require('../tools/scan-probe.js');
-const { spawnSync } = require('node:child_process');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'scan-probe.js');
 
 const FAKE = path.join(__dirname, 'helpers', 'fake-isolation.js');
 
@@ -294,8 +293,8 @@ test('指令入口：例外收成退 2，訊息不帶路徑；真的跑一遍指
   assert.match(boom.lines.join('\n'), /EBOOM/u);
   assert.ok(!boom.lines.join('\n').includes('/Users/someone'), '例外訊息不可以帶路徑');
 
-  const r = spawnSync(process.execPath, [TOOL], { encoding: 'utf8' });
-  assert.equal(r.status, 2, '本倉庫沒設隔離＝不掃');
+  const r = runInCopy('tools/scan-probe.js');
+  assert.equal(r.status, 2, '空白設定的複本：沒設隔離＝不掃（不讀本倉庫那份——填了真設定會在真禁區埋假機密）');
   assert.match(`${r.stdout || ''}`, /沒有隔離/u);
 });
 

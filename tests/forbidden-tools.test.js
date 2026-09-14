@@ -22,8 +22,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { decide, normalize, cli } = require('../tools/forbidden-tools.js');
 const { gitEnv } = require('../tools/git-env.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'forbidden-tools.js');
 const HOOK_TEMPLATES = ['hook-claude.json', 'hook-codex.json', 'hook-codex-global.json'];
 const FAIL_CLOSED_TAIL = "|| { echo '禁區攔截器起不來（找不到檔、沒有 node、載入就崩）：一律當成拒絕' >&2; exit 2; }";
 const FORBIDDEN = {
@@ -229,8 +229,12 @@ test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是�
   assert.equal(cli(JSON.stringify({ tool_name: 'mcp__any__get_order' }), settings).output, '', '放行不印');
   assert.equal(JSON.parse(cli('not json', settings).output).hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(JSON.parse(cli(JSON.stringify({}), settings).output).hookSpecificOutput.permissionDecision, 'deny');
-  // 真的跑一遍：本倉庫的禁區清單未設＝一律拒絕
-  const r = spawnSync(process.execPath, [TOOL], { input: JSON.stringify({ tool_name: 'mcp__any__get_order' }), encoding: 'utf8' });
+  // 真的跑一遍（在複本裡，不讀本倉庫那份）：空白設定＝一律拒絕；填了清單＝照清單判。
+  // 兩種設定結果不同，才證明指令入口真的讀了給它的那份（填了真設定的專案跑這題也照樣綠）
+  const probe = JSON.stringify({ tool_name: 'mcp__any__get_order' });
+  const r = runInCopy('tools/forbidden-tools.js', [], { input: probe });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /還沒填/u);
+  const filled = runInCopy('tools/forbidden-tools.js', [], { input: probe, settings: { forbidden: FORBIDDEN } });
+  assert.deepEqual([filled.status, filled.stdout], [0, ''], '對照組：填了清單、唯讀工具放行');
 });

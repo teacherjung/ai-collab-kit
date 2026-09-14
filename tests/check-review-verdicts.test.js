@@ -32,8 +32,8 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'gates', 'check-review-verdicts.js');
 const ROLES = ['Alpha', 'Beta', 'Gamma'];
 const HEAD = 'abcdef1234567890abcdef1234567890abcdef12';
 const OLD = '0123456789abcdef0123456789abcdef01234567';
@@ -200,9 +200,9 @@ test('平台問不到＝退 2；設定沒填＝退 2；沒給編號＝退 2；�
   assert.throws(() => gateRun('7', { settings, platform: fakePlatform({ change: new TypeError('程式寫錯') }) }), TypeError);
 });
 
-test('真的跑一遍指令：本倉庫設定未填，退 2', () => {
-  assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2);
-  assert.equal(spawnSync(process.execPath, [TOOL], { encoding: 'utf8' }).status, 2);
+test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）：設定未填，退 2', () => {
+  assert.equal(runInCopy('tools/gates/check-review-verdicts.js', ['7']).status, 2);
+  assert.equal(runInCopy('tools/gates/check-review-verdicts.js').status, 2);
 });
 
 test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻＝作廢不生效；時間讀不出＝退 2', () => {

@@ -8,11 +8,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const { run, classify, tableOf } = require('../tools/acceptance-tier.js');
 const { PlatformError } = require('../tools/platform.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
-const TOOL = path.join(__dirname, '..', 'tools', 'acceptance-tier.js');
 const ACC = {
   tiers: [{ id: '重啟走流程', action: '重啟並走一遍核心流程' }, { id: '重新整理', action: '重新整理頁面看一眼' }, { id: '不需驗收', action: '回報不需驗收' }],
   families: [{ pattern: '^lib/', tier: '重啟走流程' }, { pattern: '^public/', tier: '重新整理' }, { pattern: '^docs/', tier: '不需驗收' }, { pattern: '^[^/]+\\.md$', tier: '不需驗收' }],
@@ -60,5 +59,5 @@ test('③改名前的舊路徑也算；④設定沒填好、平台問不到、�
   assert.equal(run('7', { settings, platform: fake([]) }).code, 2, '沒有路徑不猜');
   assert.equal(run(undefined, { settings, platform }).code, 2);
   assert.throws(() => run('7', { settings, platform: { ask() { throw new TypeError('程式寫錯'); } } }), TypeError);
-  assert.equal(spawnSync(process.execPath, [TOOL, '7'], { encoding: 'utf8' }).status, 2, '本倉庫設定未填');
+  assert.equal(runInCopy('tools/acceptance-tier.js', ['7']).status, 2, '空白設定的複本：設定未填');
 });
