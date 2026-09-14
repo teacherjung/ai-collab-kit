@@ -7,13 +7,18 @@
 //
 // 做法：在暫存目錄搭一份套件複本，設定**每一欄都填成假的**——對外的指令（平台動作、合併指令、三關、隔離前綴）
 // 換成只記錄、退 97 的錄音機，禁區與家目錄換成暫存目錄，PATH 最前面放一個只記錄的假 gh——整份考卷跑一遍。
-// 要：全綠、錄音機零次、禁區與家目錄零新檔。對照組：同一份假設定直接跑一支工具，錄音機要真的記到（證明設定填得夠滿、
+// 要：全綠、錄音機零次、禁區與家目錄**零寫入**。對照組：同一份假設定直接跑一支工具，錄音機要真的記到（證明設定填得夠滿、
 // 錄音機真的在錄）。
+// 「零寫入」不是只看最後有沒有殘留（搬家前準備 r1 B1：原事故正是「埋進去再收乾淨」，最後一看是空的）：
+// 禁區與家目錄一開始都是空的，所以任何寫入一定在它們的**第一層**新增過一筆——那會改掉目錄自己的修改時間。
+// 跑之前先把修改時間設成一個過去的固定值，跑完要一模一樣；再自己寫一筆又刪掉，確認這個檔案系統上真的看得出來（對照組）。
 // 為什麼不在真樹上跑：真設定的禁區可能是絕對路徑（例如 /private/tmp），換家目錄護不到；而且那正是要防的事。
 //
 // ⚠️ 巢狀：複本裡的這一題與「誘餌倉庫」那題（也會整份考卷重跑）看到 KIT_NESTED_SUITE=1 就標成跳過，
 //    免得無限巢狀；跳過在報告裡是 skipped，不是靜靜通過。
-// ⚠️ 守不到的：考題沒走到的分支；考題自己寫死、既不讀設定也不叫 gh 的外部呼叫；cases/ 不在複本裡時案例簿那幾題的結果。
+// ⚠️ 守不到的：考題沒走到的分支；考題自己寫死、既不讀設定也不叫 gh 的外部呼叫；cases/ 不在複本裡時案例簿那幾題的結果；
+//   假 gh 只攔「保留測試環境 PATH 的 gh 呼叫」——用絕對路徑叫 gh、或經過會重建 PATH 的 shell（例如 sh -lc）就攔不到，
+//   這不是程序層級的禁止連網（r1 T2）；禁區與家目錄以外的地方被寫，這一題看不到。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -49,7 +54,7 @@ function fakeFilled({ log, box, zones }) {
   };
   s.forbidden = { name: '錢', servers: ['broker-x'], allowlist: ['get_watchlist'], deny: ['mcp__o__x'], verbs: ['create', 'place'], nouns: ['order'], readPrefixes: ['get'], patterns: [] };
   s.acceptance = { tiers: [{ id: '重', action: '重啟' }, { id: '輕', action: '看一眼' }], families: [{ pattern: '^lib/', tier: '重' }, { pattern: '^docs/', tier: '輕' }], unknownTier: '重' };
-  s.checks = { prepareWorktree: ['無'], commands: [recorder(log, 'check')] };
+  s.checks = { prepareWorktree: recorder(log, 'prepare'), commands: [recorder(log, 'check')] };   // 準備指令也填成有動作的（r1 T1：填「無」＝這一格沒考到）
   s.gates = s.gates.map((g) => ({ ...g, state: '已啟用' }));
   s.mergeCommand = { command: process.execPath, args: [...recorder(log, 'merge').slice(1), '{change}', '--match-head-commit', '{sha}', '--body', 'Reviewed-By: {reviewer}\nMerged-By: {merger}'] };
   s.machines = s.machines.map((m) => (m.state === '未移植' ? m : { ...m, state: '已啟用', verified: '2026-09-15' }));
@@ -66,6 +71,10 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     const zones = [path.join(scratch, 'zone-a'), path.join(scratch, 'zone-b')];
     const log = path.join(scratch, 'outside-calls.log');
     for (const d of [copy, home, bin, box, ...zones]) fs.mkdirSync(d, { recursive: true });
+    // 修改時間設成過去的固定值：之後在第一層新增或刪除任何一筆都會把它改成「現在」
+    const PAST = new Date('2001-02-03T04:05:06Z');
+    const watched = [...zones, home];
+    const stamp = (d) => fs.statSync(d).mtimeMs;
     for (const d of ROOT_DIRS) if (fs.existsSync(path.join(ROOT, d))) fs.cpSync(path.join(ROOT, d), path.join(copy, d), { recursive: true });
     for (const f of ROOT_FILES) fs.copyFileSync(path.join(ROOT, f), path.join(copy, f));
     const settings = fakeFilled({ log, box, zones });
@@ -80,13 +89,22 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     assert.equal(build.status, 0, `前提：假設定產得出設定說明（${build.stderr}）`);
     for (const step of [['git', 'init', '-q'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
 
+    for (const d of watched) fs.utimesSync(d, PAST, PAST);
     const r = sh([process.execPath, '--test']);
     const failing = r.stdout.split('\n').filter((l) => /^✖|^not ok/u.test(l)).slice(0, 12).join('\n');
     assert.equal(r.status, 0, `填了假設定的整份考卷不是全綠：\n${failing}`);
     const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim() : '';
     assert.equal(calls, '', `有考題照設定去叫了外面（平台、合併、三關、隔離或 gh）：\n${calls.split('\n').slice(0, 8).join('\n')}`);
-    for (const z of zones) assert.deepEqual(fs.readdirSync(z), [], `禁區 ${path.basename(z)} 被寫了東西`);
-    assert.deepEqual(fs.readdirSync(home), [], '家目錄被寫了東西');
+    for (const d of watched) {
+      const name = d === home ? '家目錄' : `禁區 ${path.basename(d)}`;
+      assert.deepEqual(fs.readdirSync(d), [], `${name}被留下了東西`);
+      assert.equal(stamp(d), PAST.getTime(), `${name}被寫過（第一層新增或刪除過東西，就算最後收乾淨了）`);
+    }
+    // 對照組：自己在禁區寫一筆又刪掉，修改時間要真的變——不然上面的「一模一樣」在這個檔案系統上證明不了什麼
+    fs.writeFileSync(path.join(zones[0], 'control.txt'), 'x');
+    fs.rmSync(path.join(zones[0], 'control.txt'));
+    assert.deepEqual(fs.readdirSync(zones[0]), [], '對照組：寫了又刪，最後是空的');
+    assert.notEqual(stamp(zones[0]), PAST.getTime(), '對照組：寫了又刪，修改時間要變（看不出來的話這一題的零寫入不成立）');
 
     // 對照組：同一份假設定直接跑一支會問平台的工具，錄音機要真的記到——不然上面的「零次」證明不了什麼
     const probe = sh([process.execPath, 'tools/pending-rulings.js']);
