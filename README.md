@@ -36,6 +36,8 @@
 
 4. 合併指令（`settings.json` 的 mergeCommand）從 `templates/platform-github.json` 的 mergeCommand 起抄，保留 `{reviewer}`、`{merger}`、`{sha}`；合併時跑 `node tools/merge.js <編號> --merger <按鍵那一方的識別值>`。漏了 `{reviewer}`／`{merger}`＝合併紀錄留不下誰審、誰合；漏了 `{sha}`＝最後一刻被推上來的新版本平台不替你擋（兩種都會印提醒，不擋）。
 
+5. 換雲端設定之前，先把專案原本雲端的 job 名逐一列出來；換成 `templates/ci-github.yml` 之後逐一對，範本沒有的（例如相依套件的安全通報、另一個版本的執行環境）照原樣搬進範本最後那一段。漏了不會有任何東西變紅＝那一道靜靜消失。
+
 ## 進門規則
 
 一條規矩要進本文，三件都要有，缺一不進：

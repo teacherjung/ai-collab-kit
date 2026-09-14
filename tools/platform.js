@@ -4,7 +4,8 @@
 // 為什麼需要它（2026-09-13 量出來的）：原專案那七支閘全部直接呼叫 GitHub 的指令列工具，
 // 合計三千多行、裡面散著讀變更、列變更、讀留言、讀檢查場次那些呼叫。照搬等於把套件釘死在一個平台上，
 // 而這個套件的整個賣點是搬得動。但實際量過，它們只用到平台的**九個動作**——所以不是搬三千行，
-// 是定九個問題。
+// 是定九個問題。（2026-09-14 加第十個 allComments：待裁清單要掃整個專案的留言，題目所屬的變更關了，題目還在——
+// 搬家驗屋抓到只掃開著的變更，真語料 12 題裡 4 題會從清單消失。）
 //
 // ## 分工：套件定問題，專案定怎麼問
 //
@@ -62,6 +63,13 @@ const OPERATIONS = {
     params: ['change'],
     what: '讀一支變更底下的留言（結論、裁示、撤回都靠它）',
     shape: { id: LINE, author: LINE, body: TEXT, createdAt: LINE },
+  },
+  allComments: {
+    kind: 'list',
+    params: [],
+    what: '讀整個專案的每一則一般留言，各帶它所屬的變更編號（⚠️ 必須是全部、含已關的變更，分頁要在這條指令裡處理完）',
+    // change：這則留言掛在哪一支變更底下。待裁清單靠它把「問」與「裁」配起來，不管那一支還開不開著。
+    shape: { id: LINE, author: LINE, body: TEXT, createdAt: LINE, change: LINE },
   },
   changedFiles: {
     kind: 'list',
@@ -242,7 +250,7 @@ function parseList(stdout, opName) {
   return out;
 }
 
-/** 這個專案把九個動作填齊了沒。閘開跑前先問這個，缺哪個一次講完。 */
+/** 這個專案把每個動作都填齊了沒。閘開跑前先問這個，缺哪個一次講完。 */
 function missingOperations(settings = readSettings()) {
   const registered = (settings.platform || {}).operations || {};
   return Object.keys(OPERATIONS).filter((name) => {

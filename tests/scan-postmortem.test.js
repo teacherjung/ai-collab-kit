@@ -4,7 +4,8 @@
 //   ①沒有機密可比、機密太短、沒有輸出＝退 2（什麼都沒比就說乾淨，比沒有比對更危險）；
 //   ②機密出現在回覆、日誌內容、**檔名**＝退 1；JSON 轉義一層、兩層的寫法也認得；
 //   ③印出來的每一行都不含機密的值；命中只記位置與編號；
-//   ④有輸出驗不了（非 UTF-8、超過單檔上限、超過總量上限、讀不到、讀不進）＝退 2；
+//   ④有輸出驗不了（非 UTF-8、超過單檔上限、超過總量上限、讀不到、讀不進）＝退 2；**非 UTF-8 的檔照樣逐位元組比，
+//     裡面有完整的假機密＝事故（退 1）**（搬家驗屋 09-13：原本整份當驗不了，外洩從事故降成沒驗到）；
 //     但同一趟另有命中時事故優先（退 1）；
 //   ⑤日誌區有符號連結之類的非一般檔案＝退 1；收集器不跟符號連結、超過檔數上限＝回報讀不完；
 //   ⑥**指令入口**（cli）：缺參數、機密檔讀不到、回覆讀不到、日誌收不起來都退 2；
@@ -81,6 +82,19 @@ test('有輸出驗不了：退 2；同一趟另有命中時事故優先', () => 
   assert.equal(r1.code, 1);
   const big = compare({ secrets: [SECRET], outputs: [{ where: 'huge', bytes: Buffer.alloc(10) }], caps: { files: 10, depth: 2, fileBytes: 5, totalBytes: 100 } });
   assert.equal(big.code, 2, '超過單檔上限＝驗不了');
+});
+
+test('非 UTF-8 的輸出裡有完整的假機密＝事故（退 1），不是驗不了（搬家驗屋 09-13）', () => {
+  const junk = Buffer.from([0xff, 0xfe]);
+  assert.throws(() => new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat([junk, Buffer.from(SECRET)])), '前提：這一份真的解不成 UTF-8');
+  for (const [i, form] of [SECRET, JSON.stringify(SECRET).slice(1, -1), JSON.stringify(JSON.stringify(SECRET).slice(1, -1)).slice(1, -1)].entries()) {
+    const r = compare({ secrets: [SECRET], outputs: [{ where: 'log/blob.bin', bytes: Buffer.concat([junk, Buffer.from(`x${form}y`), junk]) }] });
+    assert.equal(r.code, 1, `寫法 ${i}：非 UTF-8 裡的機密要算事故`);
+    assert.ok(r.hits.some((h) => h.part.includes('非 UTF-8') && h.form === i), `寫法 ${i} 要記成非 UTF-8 的位元組命中`);
+    assert.ok(!r.lines.join('\n').includes(SECRET), '不回聲命中的值');
+  }
+  const clean = compare({ secrets: [SECRET], outputs: [{ where: 'log/blob.bin', bytes: Buffer.concat([junk, Buffer.from('無害的內容'), junk]) }] });
+  assert.deepEqual([clean.code, clean.hits.length], [2, 0], '對照組：非 UTF-8、比不到＝仍是驗不了（別的編碼認不得，不能說乾淨）');
 });
 
 test('日誌區的符號連結＝事故；收集器不跟連結、超過檔數＝讀不完', () => {

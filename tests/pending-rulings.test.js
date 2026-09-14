@@ -6,7 +6,8 @@
 //   ③撤回要有三選一的理由（附依據）與自報句；缺一＝疑似；
 //   ④配對：裁示或撤回要引到原 ❓ 的留言編號、在引用區塊以外、而且比 ❓ 晚；引在引用區塊裡不算；先貼的不算；
 //   ⑤已裁與已撤回一定印出來、附配對；長得像但形狀不合＝疑似；
-//   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；
+//   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；掃**整個專案**的留言（allComments），題目所屬的變更關了照樣列、
+//     裁示貼在別支變更上照樣配得起來（搬家驗屋 09-13：原本只掃開著的變更，真語料 12 題裡 4 題會從清單消失）；
 //   ⑦三種留痕都只採計登記的貼文帳號（r1 Medium⑧：外人不可以撤掉待裁、外人的問也不入）；
 //   ⑧轉述者要是登記的識別值、不帶記號；藏在 HTML 註解裡的原話行與網址不算；引用區塊的懶續行也算引用（r1 Medium⑨）；
 //     原話、撤回理由、自報句、配對只讀開頭那一段（r5 之後）：碰到引用、圍欄、註解等特殊行就停，疑似的原因附停在第幾行；
@@ -16,7 +17,7 @@
 //   ⑪時間沒帶時區也不收（r3 High①）：同一份輸入在不同執行時區要判一樣；
 //   ⑫圍欄裡的註解符號不可以改寫外層結構（r3 Medium②）：交錯的註解與圍欄、沒關閉的註解都不算生效；
 //     圍欄開頭行後面的「<!--」也屬於圍欄（r4 Medium②）。
-// ⚠️ 守不到的：只掃開著的變更；已裁是推導不是事實；原話只驗形狀。
+// ⚠️ 守不到的：整個專案的留言有沒有給齊（分頁收齊是那條登記指令的責任）；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -90,18 +91,23 @@ test('⑤長得像但不合形狀＝疑似，並說原因', () => {
   assert.equal(evaluate([c('普通留言')], D).near.length, 0);
 });
 
-test('⑥裁示者沒填＝退 2；平台問不到＝退 2；算出來＝退 0，掃每一支開著的變更', () => {
+test('⑥裁示者沒填＝退 2；平台問不到＝退 2；算出來＝退 0，掃整個專案的留言（含已關的變更）', () => {
   assert.equal(deciderOf({ participants: [{ role: '裁示者（人）', id: 'Boss', account: '未設定' }] }), null);
   assert.equal(run({ settings: { participants: [] }, platform: { ask() { throw new Error('不該問'); } } }).code, 2);
   const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
   assert.equal(run({ settings, platform: { ask() { throw new PlatformError('x'); } } }).code, 2);
-  const q = ask();
+  const q = { ...ask(), change: '5' };   // 題目掛在 5 號，而 5 號已經合併關掉了
   const asked = [];
-  const platform = { ask(op, args) { asked.push([op, args]); return op === 'openChanges' ? [{ id: '7' }, { id: '8' }] : (args.change === '7' ? [q] : []); } };
+  const platform = { ask(op) { asked.push(op); if (op !== 'allComments') throw new Error(`不該問 ${op}`); return [q]; } };
   const r = run({ settings, platform });
   assert.equal(r.code, 0);
-  assert.deepEqual(asked.map((x) => x[0]), ['openChanges', 'comments', 'comments'], '每一支開著的變更都要掃');
-  assert.match(r.lines.join('\n'), /還沒回：1 則/u);
+  assert.deepEqual(asked, ['allComments'], '一次問整個專案，不是逐支問開著的變更');
+  assert.match(r.lines.join('\n'), /還沒回：1 則/u, '所屬的變更關了，題目還在');
+  assert.match(r.lines.join('\n'), /含已關的變更/u);
+  // 裁示貼在別支變更上（原專案真語料的形狀：問在 #577、裁在 #578）照樣配得起來
+  const answered = run({ settings, platform: { ask: () => [q, { ...ruling(q.id), change: '6' }] } });
+  assert.match(answered.lines.join('\n'), /還沒回：0 則/u);
+  assert.match(answered.lines.join('\n'), /已裁：1 則/u);
   assert.throws(() => run({ settings, platform: { ask() { throw new TypeError('程式寫錯'); } } }), TypeError);
   assert.equal(runInCopy('tools/pending-rulings.js').status, 2, '空白設定的複本：設定未填');
 });
@@ -153,7 +159,7 @@ test('⑩時間用時間值比：異時區但其實較早的裁示不關題；�
   assert.equal(evaluate([q, later], D).open.length, 0);
   const broken = ruling(q.id); broken.createdAt = 'not-a-time';
   const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
-  const platform = { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [q, broken]) };
+  const platform = { ask: () => [q, broken] };
   const out = run({ settings, platform });
   assert.equal(out.code, 2);
   assert.match(out.lines.join('\n'), /時間讀不出/u);
@@ -163,12 +169,12 @@ test('⑪沒帶時區的裁示不收＝退 2；同一份輸入在 TZ=UTC 與 TZ=
   const q = ask(); q.createdAt = '2026-09-13T02:00:00Z';
   const noTz = ruling(q.id); noTz.createdAt = '2026-09-13T03:00:00';
   const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
-  const platform = { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [q, noTz]) };
+  const platform = { ask: () => [q, noTz] };
   assert.equal(run({ settings, platform }).code, 2);
   // r4 Medium①：不存在的日子會被轉換器進位成較晚的真日子，「較晚」的裁示就把問題關掉
   const qMar = { ...q, createdAt: '2026-03-01T02:00:00Z' };
   const impossible = { ...ruling(q.id), createdAt: '2026-02-30T03:00:00Z' };
-  assert.equal(run({ settings, platform: { ask: (op) => (op === 'openChanges' ? [{ id: '7' }] : [qMar, impossible]) } }).code, 2, '不存在的日子＝時間讀不出＝退 2、不移出待裁');
+  assert.equal(run({ settings, platform: { ask: () => [qMar, impossible] } }).code, 2, '不存在的日子＝時間讀不出＝退 2、不移出待裁');
   const script = `const { evaluate } = require(${JSON.stringify(require.resolve('../tools/pending-rulings.js'))});
     const D = ${JSON.stringify(D)};
     const q = ${JSON.stringify(q)};

@@ -2,6 +2,7 @@
 //
 // 為什麼有這一層：原專案七支閘直接呼叫某一個平台的指令列工具，合計三千多行。實際量過，
 // 它們只用到平台的九個動作。所以套件定九個問題與答案形狀，各專案自己填一條指令去問。
+// （2026-09-14 加第十個 allComments：待裁清單要掃整個專案的留言。）
 //
 // 守得到的：
 //   ①沒登記的動作被問到＝丟錯，**絕不回空答案**——空陣列會讓「沒有未撤銷的阻擋」「沒有別支疊在上面」
@@ -26,11 +27,12 @@ const { unfilled } = require('./helpers/kit-copy.js');
 
 const NUL = '\u0000';
 
-/** 一份把九個動作都登記好的設定；每個動作回一筆合格的答案。 */
+/** 一份把每個動作都登記好的設定；每個動作回一筆合格的答案。 */
 const GOOD = {
   change: { id: '7', title: '標題', body: '說明\n可以多行', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', state: 'OPEN', isDraft: false, isCrossRepo: false, autoMergeOn: false, changedFileCount: '3', author: 'someone' },
   openChanges: [{ id: '7', baseBranch: 'main', headBranch: 'topic', headSha: 'abc123', isDraft: false, author: 'someone' }],
   comments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z' }],
+  allComments: [{ id: 'c1', author: 'someone', body: '通過', createdAt: '2026-09-13T00:00:00Z', change: '7' }],
   changedFiles: [{ path: 'a.js', status: 'modified', previousPath: null }],
   checks: [{ name: '三關', status: 'completed', conclusion: 'success', completedAt: '2026-09-13T01:00:00Z', producer: 'ci' }],
   requiredChecks: [{ name: '三關', producer: 'ci' }],
@@ -54,7 +56,7 @@ function allRegistered(overrides = {}) {
 const ARGS = { change: '7', sha: 'abc123', branch: 'main' };
 const argsFor = (name) => Object.fromEntries(OPERATIONS[name].params.map((p) => [p, ARGS[p]]));
 
-test('九個動作都問得到，而且答案就是登記的指令印出來的東西', () => {
+test('每個動作都問得到，而且答案就是登記的指令印出來的東西', () => {
   const settings = allRegistered();
   for (const [name, op] of Object.entries(OPERATIONS)) {
     const got = ask(name, argsFor(name), { settings });
@@ -75,7 +77,7 @@ test('沒登記的動作＝丟錯，絕不回一個空答案', () => {
   assert.equal(returned, 'no-return', '沒登記的時候絕對不可以有回傳值');
 });
 
-test('空白設定一個動作都沒登記，missingOperations 要照實說九個（不讀本倉庫那份：專案填了就不是空的）', () => {
+test('空白設定一個動作都沒登記，missingOperations 要照實列出每一個（不讀本倉庫那份：專案填了就不是空的）', () => {
   assert.deepEqual(missingOperations(unfilled()), Object.keys(OPERATIONS));
   assert.equal(missingOperations(allRegistered()).length, 0);
 });
@@ -193,6 +195,7 @@ test('GitHub 範本：每一條讀寫指令都用 {project} 釘倉庫、不用 {
     assert.ok(!joined.includes('{owner}/{repo}'), `${name} 還在用工具自己的佔位（會被 GH_REPO 改寫）`);
   }
   assert.deepEqual([...doc.clearEnv].sort(), ['GH_HOST', 'GH_REPO']);
+  assert.deepEqual(Object.keys(doc.operations).sort(), Object.keys(OPERATIONS).sort(), '範本要涵蓋每一個動作（新增動作時範本沒跟上，抄的人就少一條）');
   // 可執行性（r3 Medium④：change 多貼了一個 {change}，填完設定仍跑不起來）：每個記號每條指令最多出現一次，
   // 該動作的參數記號要剛好一次；展開後的 argv 沒有殘留記號
   for (const [name, argv] of Object.entries(doc.operations)) {

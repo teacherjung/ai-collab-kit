@@ -3,7 +3,8 @@
 // 守得到的：①三關沒登記＝退 2；登記裡混一條「未設定」、空的或形狀錯＝退 2、一條都不跑（r1 Medium⑪）；
 //   ②依序跑、第一關紅就停＝退 1；③起不來＝退 2；④全綠＝退 0；
 //   ⑤跑之前是裸倉庫＝退 2、跑完變裸倉庫＝退 1（真的用臨時倉庫驗）；⑥子行程看不到 GIT_ 那一族；
-//   ⑦推送前鉤子與雲端範本都呼叫這一支、不抄三關。
+//   ⑦推送前鉤子與雲端範本都呼叫這一支、不抄三關；
+//   ⑧版本控制認的工作樹根目錄不是這裡（樹被指到別處、或在子目錄跑）：跑之前＝退 2、跑完才歪＝退 1（搬家驗屋 09-13）。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查。
 'use strict';
 const test = require('node:test');
@@ -56,6 +57,31 @@ test('⑤裸倉庫絆線：跑之前壞＝2；跑完變壞＝1（真的用臨時
     assert.equal(runChecks({ settings, cwd: dir }).code, 0);
     assert.equal(runChecks({ settings, cwd: os.tmpdir() }).code, 2, '不在倉庫裡');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('⑧樹被指到別處＝不放行：跑之前就歪＝2；跑完才歪＝1；不在根目錄跑＝2（搬家驗屋 09-13）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-wt-'));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-else-'));
+  try {
+    const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8', env: gitEnv() });
+    git('init', '-q');
+    const settings = { checks: { commands: [[process.execPath, '-e', 'process.exit(0)']] } };
+    assert.equal(runChecks({ settings, cwd: dir }).code, 0, '對照組：正常的樹全綠');
+    fs.mkdirSync(path.join(dir, 'sub'));
+    const sub = runChecks({ settings, cwd: path.join(dir, 'sub') });
+    assert.equal(sub.code, 2, '在子目錄跑＝根目錄不是這裡');
+    assert.match(sub.lines.join('\n'), /根目錄不是這裡/u);
+    const pointer = { checks: { commands: [['git', 'config', 'core.worktree', elsewhere]] } };
+    const moved = runChecks({ settings: pointer, cwd: dir });
+    assert.equal(moved.code, 1, '一關把樹指到別處：跑完要抓到');
+    assert.match(moved.lines.join('\n'), /被指到別處了/u);
+    assert.equal(runChecks({ settings, cwd: dir }).code, 2, '現在跑之前就是歪的');
+    git('config', '--unset', 'core.worktree');
+    assert.equal(runChecks({ settings, cwd: dir }).code, 0, '還原後照常');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
 });
 
 test('⑥子行程看不到 GIT_ 那一族', () => {

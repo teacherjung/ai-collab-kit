@@ -151,20 +151,19 @@ function render({ open, ruled, withdrawn, near }) {
 function run({ settings = readSettings(), platform = { ask } } = {}) {
   const decider = deciderOf(settings);
   if (!decider) return { code: 2, lines: ['專案設定裡的裁示者識別值或貼文帳號還沒填：分不出誰的裁示算數，算不出來。'] };
-  let changes;
-  const comments = [];
+  // 掃整個專案的留言，不是只掃開著的變更（搬家驗屋 09-13：題目問在某支變更上、那一支先合併了而裁示者還沒回，
+  // 只掃開著的就讓那一題從清單消失、印「還沒回：0 則」；原專案真語料 12 題裡 4 題是這個形狀）
+  let comments;
   try {
-    changes = platform.ask('openChanges', {}, { settings });
-    for (const ch of changes) {
-      for (const c of platform.ask('comments', { change: ch.id }, { settings })) comments.push({ ...c, change: ch.id });
-    }
+    comments = platform.ask('allComments', {}, { settings });
   } catch (e) {
     if (e instanceof PlatformError || (e && e.name === 'PlatformError')) return { code: 2, lines: [`待裁清單：問不到平台（${e.message}）——算不出來。`] };
     throw e;
   }
   const result = evaluate(comments, decider);
   if (result.unsure) return { code: 2, lines: [`待裁清單：${result.unsure}——先後判不了，算不出來（不會把任何題移出待裁）。`] };
-  const lines = [`待裁清單（掃了 ${changes.length} 支開著的變更、${comments.length} 則留言；只掃開著的）`, ...render(result)];
+  const changes = new Set(comments.map((c) => c.change));
+  const lines = [`待裁清單（掃了整個專案 ${changes.size} 支變更、${comments.length} 則留言；含已關的變更）`, ...render(result)];
   return { code: 0, lines };
 }
 

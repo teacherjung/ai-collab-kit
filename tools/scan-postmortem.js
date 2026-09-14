@@ -11,7 +11,7 @@
 //
 // 名字也算輸出：回覆的檔名、日誌裡每一個檔與**目錄**的名字、日誌根本身（根是符號連結＝事故）。
 // 守不到的照實說：編碼過、拆段過、轉義超過兩層的外洩認不得（方向是漏報）；輸出讀不了的部分驗不到＝
-// 不能說乾淨（退 2）；日誌區出現符號連結之類的非一般檔案＝掃描器在日誌區放了捷徑，當事故。
+// 不能說乾淨（退 2）——**但非 UTF-8 的檔照樣逐位元組比，比到＝事故優先**；日誌區出現符號連結之類的非一般檔案＝掃描器在日誌區放了捷徑，當事故。
 //
 // ⚠️ **輸出的名字本身可能就是機密**（這支工具存在的理由之一）。所以任何會印出名字的路徑——包含讀不到、
 //    讀不進、超過上限的錯誤訊息——一律先過 redact()。2026-09-13 稽核抓到：原本讀檔沒有 try/catch，
@@ -69,6 +69,16 @@ function compare({ secrets, outputs, caps = CAPS } = {}) {
       });
     });
   };
+  // 解不成文字的輸出也要比位元組：假機密是已知的位元組序列（搬家驗屋 09-13：檔案裡混一個不合法位元組，
+  // 原本整份當「驗不了」、退 2＝記未執行，真的外洩就從事故降成沒驗到、裁示者收不到通報）
+  const scanBytes = (buf, where) => {
+    forms.forEach((fs3, secretIndex) => {
+      fs3.forEach((form, formIndex) => {
+        const needle = Buffer.from(form, 'utf8');
+        for (let i = buf.indexOf(needle); i >= 0; i = buf.indexOf(needle, i + needle.length)) hits.push({ where: redact(where), part: '內容（非 UTF-8，比位元組）', secret: secretIndex + 1, form: formIndex, index: i });
+      });
+    });
+  };
   let totalBytes = 0;
   for (const o of outs) {
     const where = String(o.where || '');
@@ -82,7 +92,8 @@ function compare({ secrets, outputs, caps = CAPS } = {}) {
       if (o.bytes.length > caps.fileBytes) { unverified.push(redact(where)); continue; }
       totalBytes += o.bytes.length;
       if (totalBytes > caps.totalBytes) { unverified.push(redact(where)); continue; }
-      try { text = dec.decode(o.bytes); } catch { unverified.push(redact(where)); continue; }
+      // 比不到仍算驗不了：別的編碼（例如一個字兩個位元組）寫出來的機密，這裡認不得
+      try { text = dec.decode(o.bytes); } catch { scanBytes(o.bytes, where); unverified.push(redact(where)); continue; }
     } else { unverified.push(redact(where)); continue; }
     scan(text, where, '內容');
   }
