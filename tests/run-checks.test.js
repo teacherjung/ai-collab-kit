@@ -4,7 +4,8 @@
 //   ②依序跑、第一關紅就停＝退 1；③起不來＝退 2；④全綠＝退 0；
 //   ⑤跑之前是裸倉庫＝退 2、跑完變裸倉庫＝退 1（真的用臨時倉庫驗）；⑥子行程看不到 GIT_ 那一族；
 //   ⑦推送前鉤子與雲端範本都呼叫這一支、不抄三關；
-//   ⑧版本控制認的工作樹根目錄不是這裡（樹被指到別處、或在子目錄跑）：跑之前＝退 2、跑完才歪＝退 1（搬家驗屋 09-13）。
+//   ⑧版本控制認的工作樹根目錄不是這裡（樹被指到別處、或在子目錄跑）：跑之前＝退 2、跑完才歪＝退 1（搬家驗屋 09-13）；
+//   ⑨共用設定檔的 core.bare 被寫成 true、而這棵樹自己的 config.worktree 把它蓋住；索引列不出任何檔：跑之前＝2、跑完才壞＝1（搬家前準備）。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查。
 'use strict';
 const test = require('node:test');
@@ -112,4 +113,49 @@ test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 G
   assert.match(cf, /types: \[.*edited.*\]/u, '改說明也要重跑');
   assert.match(cf, /tools\/gates\/check-collab-fields\.js/u);
   assert.doesNotMatch(cf, /\|\| true|continue-on-error/u, '不可以有永遠放行的接法');
+});
+
+test('⑨共用設定被寫成裸倉庫、卻被這棵樹自己的設定蓋住；索引列不出檔：跑之前＝2、跑完才壞＝1（搬家前準備）', () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-shared-'));
+  try {
+    const main = path.join(scratch, 'main');
+    const linked = path.join(scratch, 'linked');
+    fs.mkdirSync(main);
+    const env = { ...gitEnv(), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
+    const g = (cwd, ...a) => { const r = spawnSync('git', a, { cwd, encoding: 'utf8', env }); assert.equal(r.status, 0, `git ${a.join(' ')}：${r.stderr}`); return r.stdout.trim(); };
+    g(main, 'init', '-q'); fs.writeFileSync(path.join(main, 'a.txt'), 'x\n'); g(main, 'add', '.'); g(main, 'commit', '-q', '-m', 'base');
+    g(main, 'config', 'extensions.worktreeConfig', 'true');
+    g(main, 'worktree', 'add', '-q', '--detach', linked);
+    const settings = { checks: { commands: [[process.execPath, '-e', 'process.exit(0)']] } };
+    assert.equal(runChecks({ settings, cwd: linked }).code, 0, '對照組：健康的連結工作樹全綠');
+
+    // 共用設定寫成裸倉庫，連結工作樹自己用 config.worktree 蓋回 false
+    g(linked, 'config', '--worktree', 'core.bare', 'false');
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'true');
+    assert.equal(g(linked, 'rev-parse', '--is-bare-repository'), 'false', '前提：從這棵樹看生效值，被蓋住了（只看生效值會判健康）');
+    const masked = runChecks({ settings, cwd: linked });
+    assert.equal(masked.code, 2);
+    assert.match(masked.lines.join('\n'), /共用的倉庫設定裡 core\.bare 是 true/u);
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'false');
+    assert.equal(runChecks({ settings, cwd: linked }).code, 0, '還原後照常');
+
+    // 跑完才被寫壞＝1
+    const breaker = { checks: { commands: [['git', 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'true']] } };
+    const broke = runChecks({ settings: breaker, cwd: linked });
+    assert.equal(broke.code, 1);
+    assert.match(broke.lines.join('\n'), /共用的倉庫設定被寫成裸倉庫/u);
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'false');
+
+    // 索引不見：git ls-files 不報錯、只回空清單
+    const indexFile = g(main, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    fs.rmSync(indexFile);
+    assert.equal(spawnSync('git', ['ls-files'], { cwd: main, encoding: 'utf8', env }).stdout, '', '前提：索引不見時 ls-files 靜靜回空');
+    const noIndex = runChecks({ settings, cwd: main });
+    assert.equal(noIndex.code, 2);
+    assert.match(noIndex.lines.join('\n'), /索引卻一個檔都列不出來/u);
+    g(main, 'read-tree', 'HEAD');
+    assert.equal(runChecks({ settings, cwd: main }).code, 0, '重建索引後照常');
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });
