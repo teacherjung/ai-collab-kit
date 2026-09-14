@@ -16,6 +16,8 @@
 // ⚠️ 沒有任何一道閘登記成「已啟用」時，這支指令**不放行**（退出碼 2）。
 //    一支什麼都沒檢查就按下合併鍵的指令，比沒有這支指令更危險。
 'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { read: readSettings } = require('./build-settings.js');
 const { gitEnv } = require('./git-env.js');
@@ -34,6 +36,12 @@ const TOKENS = ['change', 'sha', 'project', 'reviewer', 'merger'];
  *    一道根本不存在的閘會被當成綠燈，一路按下合併鍵（端到端重現過）。
  */
 function runCommand(command, args) {
+  // node 本身在、閘的檔案不在：node 會退 1，跟「閘判定擋下」同一個碼（搬家修正 r1 B3）。跑之前先看檔在不在。
+  // ⚠️ 只擋得住「檔案不在或讀不到」；檔在、但載入就崩（語法錯、相依缺）node 一樣退 1，這裡分不出來。
+  if (path.basename(command) === 'node' && typeof args[0] === 'string' && /\.c?js$/u.test(args[0])) {
+    try { fs.accessSync(path.resolve(args[0]), fs.constants.R_OK); }
+    catch { return { code: 2, output: `閘的檔案不在或讀不到：${args[0]}（在 ${process.cwd()} 底下找的；合併指令要在專案根目錄跑）` }; }
+  }
   // 環境先清 GIT_ 那一族（規矩 E4；r1 High①）：閘會叫 git，繼承來的 GIT_DIR 會讓它們查到別棵倉庫
   const result = spawnSync(command, args, { encoding: 'utf8', env: gitEnv() });
   if (result.error) return { code: 2, output: String(result.error.message) };

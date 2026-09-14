@@ -121,6 +121,23 @@ test('預設執行器清掉 GIT_ 那一族：閘的子行程看不到 GIT_DIR（
   } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; }
 });
 
+test('端到端：node 在、閘的 JS 檔不在＝查不清楚（退 2），不是擋下（搬家修正 r1 B3：原重現的形狀）', () => {
+  const missing = require('node:path').join(require('node:os').tmpdir(), `no-such-gate-${process.pid}.js`);
+  const raw = require('node:child_process').spawnSync(process.execPath, [missing], { encoding: 'utf8' });
+  assert.equal(raw.status, 1, '前提：node 跑不存在的檔就是退 1——跟閘判定擋下同一個碼');
+  const settings = settingsWith([{ name: '檔案不在的閘', command: 'node', args: [missing], state: ENABLED }]);
+  const result = mergeRun('7', { settings });   // 真的預設執行器
+  assert.equal(result.code, 2, result.lines.join('\n'));
+  assert.match(result.lines.join('\n'), /閘的檔案不在或讀不到/u);
+  assert.doesNotMatch(result.lines.join('\n'), /紅的是哪一題/u);
+  const real = require('node:path').join(require('node:os').tmpdir(), `real-gate-${process.pid}.js`);
+  require('node:fs').writeFileSync(real, 'process.exit(1)');
+  try {
+    const blocked = mergeRun('7', { settings: settingsWith([{ name: '真的判擋下的閘', command: 'node', args: [real], state: ENABLED }]) });
+    assert.equal(blocked.code, 1, '對照組：檔在、閘自己退 1＝擋下');
+  } finally { require('node:fs').rmSync(real, { force: true }); }
+});
+
 test('端到端：用真的預設執行器跑一道不存在的閘，不放行也不按合併鍵', () => {
   const settings = settingsWith([{ name: '不存在的閘', command: '/no/such/gate-binary-for-test', args: [], state: ENABLED }]);
   const result = mergeRun('7', { settings });   // 不注入 run＝走真的 runCommand

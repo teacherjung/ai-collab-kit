@@ -32,6 +32,16 @@ function plain(value, what, { allowEmpty = false } = {}) {
   return literal(value);
 }
 
+/**
+ * 一條指令（argv 陣列）排成說明書裡的一行。含空白、引號、反斜線、換行或空字串的那一格用 JSON 字串寫，
+ * 換行就變成看得見的 \n——說明書那一格不能真的換行，但指令本身可以（搬家修正 r1 B1：合併範本的 --body
+ * 要兩行，原本整條 join 起來送進「不准換行」的欄位，照 README 抄完設定產生器就停在那裡）。
+ * 只是顯示：執行用的永遠是 settings.json 裡的陣列本身。
+ */
+function argvText(argv) {
+  return argv.map((a) => (typeof a === 'string' && a !== '' && !/[\s"'\\]/u.test(a) ? a : JSON.stringify(a))).join(' ');
+}
+
 function build(data) {
   const out = [
     '# 專案設定（每個使用這套架構的專案填一份；規矩本文與機器都從這裡取值）',
@@ -73,7 +83,7 @@ function build(data) {
   const forbidden = Array.isArray(iso.forbidden) ? iso.forbidden : [];
   out.push('', '隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前試探與掃後比對兩支小工具）：', '');
   out.push(`- 由誰提供：${plain(iso.provider, '隔離提供者')}（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」）`);
-  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑）：${plain(wrap.length ? wrap.join(' ') : '未設定', '隔離指令前綴')}`);
+  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑）：${plain(wrap.length ? argvText(wrap) : '未設定', '隔離指令前綴')}`);
   out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
   out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；試探在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
   out.push('- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：');
@@ -90,18 +100,18 @@ function build(data) {
   const unknown = Object.keys(ops).filter((k) => !(k in OPERATIONS));
   if (unknown.length) throw new Error(`平台介面登記了套件沒有定義的動作：${unknown.join('、')}`);
   for (const [name, op] of Object.entries(OPERATIONS)) {
-    const cmd = Array.isArray(ops[name]) && ops[name].length ? ops[name].join(' ') : '未設定';
+    const cmd = Array.isArray(ops[name]) && ops[name].length ? argvText(ops[name]) : '未設定';
     out.push(`| ${plain(name, '動作名稱')} | ${plain(op.what, '動作說明')} | ${plain(cmd, `動作 ${name} 的指令`)} |`);
   }
   out.push('', '## 六、三關（規矩 E2、E3、H4；跨變更試合併閘在臨時樹裡跑的就是這幾條）', '');
   const checks = data.checks || {};
   const prep = Array.isArray(checks.prepareWorktree) ? checks.prepareWorktree : [];
   const cmds = Array.isArray(checks.commands) ? checks.commands : [];
-  out.push(`- 臨時樹的準備指令（在新開的臨時樹裡跑一次，例如安裝相依；沒有就填「無」）：${plain(prep.length && prep[0] !== '未設定' ? prep.join(' ') : (prep[0] || '未設定'), '臨時樹準備指令')}`);
+  out.push(`- 臨時樹的準備指令（在新開的臨時樹裡跑一次，例如安裝相依；沒有就填「無」）：${plain(prep.length && prep[0] !== '未設定' ? argvText(prep) : (prep[0] || '未設定'), '臨時樹準備指令')}`);
   out.push('- 三關指令（依序跑、任一非零＝紅；每一條要自己保證執行環境跟合併後的樹一致——套件驗不到這件事）：');
   cmds.forEach((cmd, i) => {
     const argv = Array.isArray(cmd) ? cmd : [String(cmd)];
-    out.push(`  ${i + 1}. ${plain(argv.join(' '), `第 ${i + 1} 條三關指令`)}`);
+    out.push(`  ${i + 1}. ${plain(argvText(argv), `第 ${i + 1} 條三關指令`)}`);
   });
   out.push('', '## 七、禁區（規矩 B1；攔截器的判斷讀這裡，程式裡不寫任何禁區的名字）', '');
   const fb = data.forbidden || {};
@@ -125,13 +135,13 @@ function build(data) {
   out.push('| 順序 | 閘 | 規矩 | 指令 | 狀態 |', '|---|---|---|---|---|');
   (data.gates || []).forEach((gate, i) => {
     if (!STATES.includes(gate.state)) throw new Error(`閘「${gate.name}」的狀態「${gate.state}」不在 ${STATES.join('／')} 裡`);
-    const cmd = [gate.command, ...(gate.args || [])].join(' ');
+    const cmd = argvText([gate.command, ...(gate.args || [])]);
     out.push(
       `| ${i + 1} | ${plain(gate.name, '閘名稱')} | ${plain(gate.rules, '閘對應的規矩')} | ${plain(cmd, '閘的指令')} | ${plain(gate.state, '閘的狀態')} |`,
     );
   });
   const merge = data.mergeCommand || {};
-  const mergeCmd = [merge.command, ...(merge.args || [])].join(' ');
+  const mergeCmd = argvText([merge.command, ...(merge.args || [])]);
   out.push('', `全綠之後執行的合併指令：${plain(mergeCmd, '合併指令')}`, '');
   out.push('合併指令認得的記號：{change}（變更編號）、{sha}（按鍵前核過的版本）、{project}（platform.project）、'
     + '{reviewer}（變更說明「獨立審查者」欄那一位）、{merger}（跑 node tools/merge.js <編號> --merger <識別值> 自報的那一位）。'

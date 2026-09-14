@@ -208,6 +208,15 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
 
     const codex = cmd('hook-codex.json');
     denies(sh(codex, { cwd: subdir }), 'Codex 專案層：從子目錄起');
+    // 環境裡的 GIT_DIR 指向另一個清單很鬆的倉庫：找根目錄前沒清的話會讀到它的清單而放行（搬家修正 r1 T5）
+    const loose = path.join(scratch, 'loose');
+    fs.cpSync(path.join(__dirname, '..', 'tools'), path.join(loose, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(loose, 'settings.json'), JSON.stringify({ forbidden: { name: '錢', deny: ['mcp__z__only'] } }));
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: loose, env: gitEnv(), encoding: 'utf8' }).status, 0);
+    const looseEnv = { GIT_DIR: path.join(loose, '.git'), GIT_WORK_TREE: loose };
+    const viaLoose = sh(codex.replace(/^root="\$\(.*?git rev-parse/u, 'root="$(git rev-parse'), { cwd: subdir, env: looseEnv });
+    assert.deepEqual([viaLoose.status, viaLoose.stdout], [0, ''], '對照組：不清環境的寫法真的會讀到鬆的清單而放行');
+    denies(sh(codex, { cwd: subdir, env: looseEnv }), 'Codex 專案層：環境指向別的倉庫也照自己的清單判');
     blocks(sh(codex, { cwd: elsewhere }), 'Codex 專案層：不在版本控制目錄裡');
     blocks(sh(codex, { cwd: subdir, env: { PATH: elsewhere } }), 'Codex 專案層：找不到 node 與 git');
 

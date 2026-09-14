@@ -85,25 +85,40 @@ function labelNames() {
 }
 const labelOf = (tag, names) => names.filter((n) => tag.startsWith(n)).sort((a, b) => b.length - a.length)[0] || null;
 
-test('本文標「靠自覺」的條號，不可以同時有一支「已啟用」的機器登記在它名下（看標籤的名字，不看整串）', () => {
+/**
+ * 標籤與登記互相矛盾的清單（空＝沒矛盾）。已安裝未啟用的也算（搬家修正 r1 B2）：專案填完設定就會把它改成已啟用——
+ * 只看已啟用的話，套件倉庫裡永遠綠、專案一啟用才紅（待裁清單工具就是這樣撞上的）。只有還沒移植的不算。
+ */
+function contradictions(machines, tags, names) {
+  const out = [];
+  for (const machine of machines) {
+    if (machine.state === '未移植') continue;
+    for (const id of machine.rules.split('、').map((x) => x.trim()).filter(Boolean)) {
+      const tag = tags.get(id);
+      if (!tag) { out.push(`機器「${machine.name}」標了不存在的條號 ${id}`); continue; }
+      // r1 Medium⑭：原本只比整串等於「靠自覺」，加一句射程說明（「靠自覺；尚未接線」）就繞過去了
+      if (labelOf(tag, names) === '靠自覺') {
+        out.push(`機器「${machine.name}」登記成${machine.state}、標的是 ${id}，但本文說 ${id} 靠自覺（「${tag}」）——兩份說法必須擇一改正，不可以並存`);
+      }
+    }
+  }
+  return out;
+}
+
+test('本文標「靠自覺」的條號，不可以同時有一支已安裝或已啟用的機器登記在它名下（看標籤的名字，不看整串）', () => {
   const names = labelNames();
   const tags = new Map();
   for (const section of readRules().sections) {
     for (const rule of section.rules) tags.set(`${section.letter}${rule.n}`, rule.tag);
   }
-  for (const machine of read().machines) {
-    if (machine.state !== '已啟用') continue;
-    for (const id of machine.rules.split('、').map((x) => x.trim()).filter(Boolean)) {
-      const tag = tags.get(id);
-      assert.ok(tag, `機器「${machine.name}」標了不存在的條號 ${id}`);
-      // r1 Medium⑭：原本只比整串等於「靠自覺」，加一句射程說明（「靠自覺；尚未接線」）就繞過去了
-      assert.notEqual(
-        labelOf(tag, names),
-        '靠自覺',
-        `機器「${machine.name}」登記成已啟用、標的是 ${id}，但本文說 ${id} 靠自覺（「${tag}」）——兩份說法必須擇一改正，不可以並存`,
-      );
-    }
-  }
+  assert.deepEqual(contradictions(read().machines, tags, names), []);
+  // 判準本身（假資料）：已安裝未啟用的也要抓；還沒移植的不抓；標籤名字看開頭
+  const fakeTags = new Map([['Z1', '靠自覺；工具只列清單'], ['Z2', '清單腳本列；照做靠自覺']]);
+  const m = (state, rules = 'Z1') => ({ name: `假機器（${state}）`, rules, state });
+  assert.equal(contradictions([m('已安裝未啟用')], fakeTags, names).length, 1, '已安裝未啟用、掛在靠自覺底下＝矛盾（專案一啟用就撞）');
+  assert.equal(contradictions([m('已啟用')], fakeTags, names).length, 1);
+  assert.equal(contradictions([m('未移植')], fakeTags, names).length, 0, '還沒移植的不算');
+  assert.equal(contradictions([m('已啟用', 'Z2')], fakeTags, names).length, 0, '標籤開頭是機器名字＝不矛盾');
   assert.equal(labelOf('靠自覺；尚未接線', names), '靠自覺', '帶射程說明的標籤名字還是靠自覺');
   assert.equal(labelOf('考題只守清單一致；合理性靠自覺', names), '考題', '名字看開頭，不看後面提到的字');
 });
@@ -212,4 +227,20 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
   assert.equal(u.mergeCommand.command, UNSET);
   assert.deepEqual(u.checks.commands, [[UNSET]]);
   for (const p of u.participants) assert.equal(p.id, UNSET, `身分「${p.role}」要沒填`);
+});
+
+test('照 GitHub 範本填完平台動作與合併指令，設定說明書照樣產得出來；合併訊息的換行留在指令裡（搬家修正 r1 B1）', () => {
+  const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', 'platform-github.json'), 'utf8'));
+  const filled = JSON.parse(JSON.stringify(read()));
+  filled.platform = { ...filled.platform, name: 'GitHub', project: 'owner/repo', clearEnv: tpl.clearEnv, operations: tpl.operations };
+  filled.mergeCommand = tpl.mergeCommand;
+  assert.ok(filled.mergeCommand.args.some((a) => a.includes('\n')), '前提：範本的合併訊息真的是兩行');
+  let md;
+  assert.doesNotThrow(() => { md = build(filled); }, '照範本抄完，產生器不可以停在「有換行」');
+  const line = md.split('\n').find((l) => l.startsWith('全綠之後執行的合併指令：'));
+  assert.ok(line, '說明書裡要有合併指令那一行');
+  // 說明書把 ASCII 標點一律跳脫（字面編碼），所以比對跳脫後的樣子
+  assert.ok(line.includes('Reviewed\\-By'), `說明書那一行要看得到 Reviewed-By：${line}`);
+  assert.ok(line.includes('\\\\n'), '換行在說明書裡寫成看得見的 \\n（跳脫後是兩個反斜線加 n）');
+  assert.ok(md.includes('allComments'), '十個動作都排得出來');
 });
