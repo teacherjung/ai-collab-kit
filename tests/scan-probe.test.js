@@ -387,3 +387,24 @@ test('整條鏈接得起來：埋出來的值餵給掃後比對，混進輸出�
     for (const d of [zone, work]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('前綴裡的 {projectRoot} 換成專案根目錄：隔離設定檔住在專案裡時不必寫完整路徑（搬家前準備）', () => {
+  const zone = tempZone();
+  const boxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-probe-root-'));
+  const noRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-probe-noroot-'));
+  try {
+    const rel = path.relative(path.join(__dirname, '..'), FAKE);
+    const withToken = settingsWith({ provider: '專案自建', wrap: [process.execPath, `{projectRoot}/${rel}`, '{box}'], boxRoot, forbidden: [zone] });
+    const ok = probeRun({ settings: withToken });
+    assert.equal(ok.code, 0, `記號換成專案根目錄、找得到假隔離＝照常試探：\n${ok.lines.join('\n')}`);
+    // 對照組：專案根目錄給錯＝那支檔找不到＝測不出（不是靜靜當成擋住）
+    const wrongRoot = probeRun({ settings: withToken, projectRoot: noRoot });
+    assert.equal(wrongRoot.code, 2, wrongRoot.lines.join('\n'));
+    assert.deepEqual(plantedIn(zone), []);
+    assert.deepEqual(fs.readdirSync(boxRoot), [], '盒子要清掉');
+  } finally {
+    fs.rmSync(zone, { recursive: true, force: true });
+    fs.rmSync(boxRoot, { recursive: true, force: true });
+    fs.rmSync(noRoot, { recursive: true, force: true });
+  }
+});

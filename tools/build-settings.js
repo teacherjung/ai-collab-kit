@@ -85,7 +85,7 @@ function build(data) {
   const forbidden = Array.isArray(iso.forbidden) ? iso.forbidden : [];
   out.push('', '隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前試探與掃後比對兩支小工具）：', '');
   out.push(`- 由誰提供：${plain(iso.provider, '隔離提供者')}（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」）`);
-  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑）：${plain(wrap.length ? argvText(wrap) : '未設定', '隔離指令前綴')}`);
+  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑、{projectRoot} 會換成專案根目錄）：${plain(wrap.length ? argvText(wrap) : '未設定', '隔離指令前綴')}`);
   out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
   out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；試探在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
   out.push('- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：');

@@ -78,7 +78,7 @@ function isBlocked(r, secret) {
  * 跑完整試探。回傳 { code, lines }；settings／run／home／tmp 都可以換掉，考題不必碰真的家目錄。
  * lines 裡不會出現假機密本身。
  */
-function probeRun({ settings = readSettings(), run = runCommand, home = os.homedir(), tmp = os.tmpdir() } = {}) {
+function probeRun({ settings = readSettings(), run = runCommand, home = os.homedir(), tmp = os.tmpdir(), projectRoot = path.join(__dirname, '..') } = {}) {
   const lines = [];
   const say = (text) => lines.push(text);
   const iso = settings.scanner && settings.scanner.isolation;
@@ -112,7 +112,9 @@ function probeRun({ settings = readSettings(), run = runCommand, home = os.homed
       return { code: 2, lines };
     }
     const env = minimalEnv(box);
-    const inBox = (argv) => run([...wrap.map((w) => w.split('{box}').join(box)), ...argv], { cwd: box, env });
+    // {projectRoot}＝專案根目錄（這支工具所在的 tools/ 的上一層；搬家前準備）：隔離設定檔若住在專案裡，設定寫相對位置就好——
+    // 試探與實際掃描用的是同一份檔，設定裡也不必寫出含帳號名與資料夾名的完整路徑
+    const inBox = (argv) => run([...wrap.map((w) => w.split('{box}').join(box).split('{projectRoot}').join(projectRoot)), ...argv], { cwd: box, env });
     const outside = (argv) => run(argv, { cwd: box, env });
 
     for (const zone of zones) {
