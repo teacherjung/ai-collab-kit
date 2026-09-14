@@ -4,8 +4,9 @@
 // 為什麼要有一支：鉤子（sh）與雲端（yml）各自寫一遍三關，兩份就會漂。三關命令的正本只有一份（settings.json
 // 的 checks.commands），這支讀它、兩邊都呼叫這支。
 //
-// 兩件事夾在三關前後（原專案的裸倉庫事故）：跑之前與跑完之後各驗一次「這棵樹還是不是工作樹、根目錄是不是這裡」——
-// 考題各跑各的子行程、順序不保證，某一題把倉庫弄成裸倉庫這件事只有跑完再驗一次才抓得到。
+// 兩件事夾在三關前後（原專案的裸倉庫事故）：跑之前與跑完之後各驗一次「這棵樹還是不是工作樹、根目錄是不是這裡、索引在不在」，
+// 外加「倉庫設定有沒有被改過」（前後比對設定檔的位元組）——考題各跑各的子行程、順序不保證，某一題把倉庫寫壞
+// 這件事只有跑完再驗一次才抓得到；而寫壞共用設定時從這棵樹看生效值可能照樣健康，所以直接比「有沒有被寫」。
 // 所有外部指令的環境先清掉 GIT_ 那一族（規矩 E4）。
 //
 // 退出碼：0＝全綠／1＝有一關紅（或跑完樹壞了）／2＝三關沒登記、不在工作樹裡、指令起不來。
@@ -24,20 +25,15 @@ function runCommand(argv, cwd) {
 }
 
 /**
- * 這棵樹還是工作樹嗎？回 'ok'／'bare'／'not-a-repo'／'wrong-tree'／'shared-bare'／'index-unusable'。
+ * 這棵樹還是工作樹嗎？回 'ok'／'bare'／'not-a-repo'／'wrong-tree'／'index-unusable'。
  * wrong-tree＝版本控制認的工作樹根目錄不是這裡：樹被指到別處（例如設定裡的 core.worktree），或不在專案根目錄跑。
  * 搬家驗屋 09-13：原本只查裸倉庫；樹被指到別處時照樣回報三關全綠，而依賴版本控制的考題量的是另一棵樹。
- * shared-bare＝開著 extensions.worktreeConfig 時，**共用設定檔**裡 core.bare 不是 false（true 或不是合法布林），
- *   即使這棵樹自己的 config.worktree 把它蓋成 false。開著這個擴充時共用檔的 core.bare 會套到每一棵沒覆寫的樹
- *   （Git 官方文件因此要求把它搬進主工作樹的 config.worktree）；只看生效值會被蓋住：這棵樹看起來健康，
- *   其他沒覆寫的樹（含主目錄）卻全部打不開（原專案 08-09 事故就是這個擴充開著的倉庫）。
- *   **沒開**這個擴充時共用檔的 core.bare 只作用在主工作樹——「裸儲存庫＋連結工作樹」是 Git 支援的正常形狀，不判壞
- *   （搬家前準備 r2 B1）；那時主工作樹自己被弄成裸倉庫，在主工作樹跑就會被上面的 bare 抓到。
  * index-unusable＝倉庫有提交，這棵樹自己的**索引檔卻不存在**，或 git 讀不了索引：索引不見時 git ls-files 不報錯、
- *   只回空清單，靠它掃全樹的考題會掃到零個檔然後回報零違規。**索引存在但是空的**（例如暫存刪除了全部檔案）是合法狀態，
- *   不判壞（搬家前準備 r2 B2）。
- * ⚠️ 守不到的：索引檔在、但只壞一部分；別棵樹自己的 config.worktree 被寫壞（只有在那棵樹裡跑才看得到）；
- *   沒開擴充時主工作樹被弄成裸倉庫、而檢查是在連結工作樹裡跑（這棵樹沒事，主工作樹要在主工作樹跑才看得到）。
+ *   只回空清單，靠它掃全樹的考題會掃到零個檔然後回報零違規。**索引存在但是空的**（例如暫存刪除了全部檔案）是合法狀態
+ *   （搬家前準備 r2 B2）。
+ * ⚠️ 這裡只問 Git 對**這棵樹**怎麼判（生效值），不自己解讀設定檔：搬家前準備 r2〜r3 試過直讀共用設定判「別棵樹會不會壞」，
+ *   連兩輪都在重做 Git 讀設定的規則（擴充何時生效、include、最後一筆、條件式 include）而且每輪都誤擋正常形狀。
+ *   「三關跑的時候有沒有把共用設定寫壞」改由 configFingerprint 前後比對直接量（見 runChecks）。
  */
 function treeState(run, cwd) {
   const git = (...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv() });
@@ -52,18 +48,6 @@ function treeState(run, cwd) {
   try { here = fs.realpathSync(cwd); } catch { return 'not-a-repo'; }
   try { root = fs.realpathSync(top.stdout.trim()); } catch { return 'wrong-tree'; }
   if (root !== here) return 'wrong-tree';
-  // 共用設定檔指名直讀（不吃生效值）；只在開著 extensions.worktreeConfig 時才要求它是 false
-  const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
-  if (common.status !== 0) return 'not-a-repo';
-  const sharedFile = path.join(common.stdout.trim(), 'config');
-  // --includes：共用檔用 include 引進來的值也要算（指名讀檔時 git 預設不展開 include）
-  const readShared = (key) => spawnSync('git', ['config', '--file', sharedFile, '--includes', '--type=bool', '--get-all', key], { encoding: 'utf8', env: gitEnv() });
-  const wtc = readShared('extensions.worktreeConfig');
-  if (wtc.status === 0 && wtc.stdout.split('\n').some((v) => v.trim() === 'true')) {
-    const shared = readShared('core.bare');
-    if (shared.status === 0 && shared.stdout.split('\n').some((v) => v.trim() === 'true')) return 'shared-bare';
-    if (shared.status !== 0 && shared.status !== 1) return 'shared-bare';   // 1＝沒有這個鍵；其他非零＝值不是合法布林
-  }
   // 有提交才要求這棵樹自己的索引檔存在、而且 git 讀得了（剛 init、還沒提交的倉庫本來就沒有索引；空索引是合法的）
   if (git('rev-parse', '--verify', '-q', 'HEAD').status === 0) {
     const indexPath = git('rev-parse', '--path-format=absolute', '--git-path', 'index');
@@ -72,7 +56,24 @@ function treeState(run, cwd) {
   return 'ok';
 }
 
-function runChecks({ settings = readSettings(), run = runCommand, cwd = process.cwd(), tree = treeState } = {}) {
+/**
+ * 倉庫設定的指紋：**共用設定檔**與**這棵樹自己的 config.worktree** 的原始位元組（不存在記成 null）。
+ * 三關前後各取一次、不一樣＝三關跑的過程中有東西改了倉庫設定（原專案 08-09 事故：考題帶著推送前鉤子的 GIT_DIR
+ * 跑 git init，把 bare = true 寫進共用設定——那一刻從這棵樹看生效值可能照樣健康，別的樹卻全部打不開）。
+ * 直接量「有沒有被寫」，不判讀寫進去的內容合不合 Git 的規則（那是 Git 的事，重做它追不上；搬家前準備 r3）。
+ * ⚠️ 守不到的：三關開始之前就已經壞掉的共用設定（這棵樹生效值健康時看不出來）；include 引進的其他檔被改；
+ *   同一段時間有別的工作階段改了倉庫設定（會紅，訊息照實說去查是誰改的）。
+ */
+function configFingerprint(cwd) {
+  const git = (...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv() });
+  const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
+  const perTree = git('rev-parse', '--path-format=absolute', '--git-path', 'config.worktree');
+  if (common.status !== 0 || perTree.status !== 0) return null;
+  const read = (file) => { try { return fs.readFileSync(file).toString('base64'); } catch { return null; } };
+  return JSON.stringify({ shared: read(path.join(common.stdout.trim(), 'config')), worktree: read(perTree.stdout.trim()) });
+}
+
+function runChecks({ settings = readSettings(), run = runCommand, cwd = process.cwd(), tree = treeState, fingerprint = configFingerprint } = {}) {
   const lines = [];
   const raw = settings.checks && settings.checks.commands;
   if (!Array.isArray(raw) || !raw.length) return { code: 2, lines: ['專案設定裡沒有登記三關指令：什麼都沒跑就放行，比不跑更危險。'] };
@@ -85,10 +86,10 @@ function runChecks({ settings = readSettings(), run = runCommand, cwd = process.
   const BEFORE = {
     bare: '這棵樹在跑三關之前就已經是裸倉庫了：先還原再推。',
     'wrong-tree': '版本控制認的工作樹根目錄不是這裡（樹被指到別處，或不是在專案根目錄跑）：三關量到的會是別棵樹，不放行。',
-    'shared-bare': '開著 extensions.worktreeConfig 的倉庫，共用設定裡 core.bare 不是 false——這棵樹自己的設定蓋住了它，但其他沒有覆寫的樹（含主目錄）都打不開：先還原共用設定再推。',
     'index-unusable': '倉庫有提交，這棵樹的索引檔卻不見了或 git 讀不了：靠它掃全樹的考題會掃到零個檔然後回報零違規，不放行。索引檔不見時用 git read-tree HEAD 重建（索引在但壞了，先備份再處理）。',
   };
   if (before !== 'ok') return { code: 2, lines: [BEFORE[before] || '這裡不是版本控制的工作樹。'] };
+  const printBefore = fingerprint(cwd);
   for (const [i, cmd] of cmds.entries()) {
     lines.push(`第 ${i + 1} 關：${cmd.join(' ')}`);
     const r = run(cmd, cwd);
@@ -98,10 +99,12 @@ function runChecks({ settings = readSettings(), run = runCommand, cwd = process.
   const after = tree(run, cwd);
   const AFTER = {
     'wrong-tree': '三關跑完之後這棵樹被指到別處了（跑之前是好的）：有一題改了倉庫設定，先還原、再查是哪一題。',
-    'shared-bare': '三關跑完之後共用的倉庫設定被寫成裸倉庫了（跑之前是好的）：其他樹都會打不開，先還原共用設定、再查是哪一題。',
     'index-unusable': '三關跑完之後這棵樹的索引檔不見了或讀不了（跑之前是好的）：有一題弄壞了索引，先重建、再查是哪一題。',
   };
   if (after !== 'ok') return { code: 1, lines: [...lines, AFTER[after] || '三關跑完之後這棵樹不是工作樹了（跑之前是好的）：有一題把倉庫弄壞了，先還原、再查是哪一題。'] };
+  if (fingerprint(cwd) !== printBefore) {
+    return { code: 1, lines: [...lines, '三關跑的過程中，倉庫的共用設定或這棵樹自己的設定被改了：從這棵樹看也許還健康，別的樹（含主目錄）可能已經打不開。先看設定檔改了什麼、還原，再查是哪一題（或是不是同一段時間有別的工作階段在改）。'] };
+  }
   return { code: 0, lines: [...lines, `三關全綠（${cmds.length} 關）。`] };
 }
 
@@ -112,4 +115,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { runChecks, runCommand, treeState };
+module.exports = { runChecks, runCommand, treeState, configFingerprint };
