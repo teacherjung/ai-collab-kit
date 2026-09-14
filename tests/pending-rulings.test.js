@@ -22,7 +22,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { run, evaluate, deciderOf, cites, realDate, readPart } = require('../tools/pending-rulings.js');
+const { run, evaluate, deciderOf, cites, realDate, readPart, cliArgsProblem } = require('../tools/pending-rulings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -254,4 +254,12 @@ test('⑬只讀開頭那一段（r5 之後）：原話與網址寫在特殊行�
   const m = evaluate([q, mention], D);
   assert.equal(m.open.length, 0, '行內程式碼裡提到記號不是特殊行、原話照常算');
   assert.equal(m.near.length, 0);
+});
+
+test('指令列不收參數：舊習慣的 --all／--pr 不可以被靜靜忽略（搬家前準備）', () => {
+  assert.equal(cliArgsProblem([]), null, '對照組：不給參數正常跑');
+  for (const argv of [['--all'], ['--pr', '5']]) assert.match(cliArgsProblem(argv), /不收任何參數/u, argv.join(' '));
+  const r = runInCopy('tools/pending-rulings.js', ['--pr', '5']);
+  assert.equal(r.status, 2);
+  assert.match(r.stdout, /不收任何參數/u, '真的跑一遍：在問平台之前就停');
 });

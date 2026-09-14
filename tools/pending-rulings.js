@@ -168,11 +168,20 @@ function run({ settings = readSettings(), platform = { ask } } = {}) {
   return { code: 0, lines };
 }
 
+/**
+ * 指令列不收任何參數（搬家前準備）：原專案的同名工具有 --all／--pr，搬過來的人照舊習慣打 --pr 5，
+ * 原本會被靜靜忽略、印出整個專案的清單，讓人以為那是只看那一支的結果。不認得就退 2 並說清楚。
+ */
+function cliArgsProblem(argv) {
+  return argv.length ? `待裁清單不收任何參數（收到：${argv.join(' ')}）：它一律掃整個專案的留言。用法：node tools/pending-rulings.js` : null;
+}
+
 if (require.main === module) {
   let result;
-  try { result = run(); } catch (e) { result = { code: 2, lines: [`待裁清單：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] }; }
+  const argProblem = cliArgsProblem(process.argv.slice(2));
+  try { result = argProblem ? { code: 2, lines: [argProblem] } : run(); } catch (e) { result = { code: 2, lines: [`待裁清單：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] }; }
   process.stdout.write(`${result.lines.join('\n')}\n`);
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, render, deciderOf, cites, realDate, readPart };
+module.exports = { run, evaluate, render, deciderOf, cites, realDate, readPart, cliArgsProblem };
