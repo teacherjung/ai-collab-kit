@@ -215,7 +215,7 @@ test('預設執行器：起不來回 status null，不是 0', () => {
 test('動作清單只有一份正本：設定產生器照它排版，登記了清單外的動作就紅', () => {
   const data = readSettings();
   const printed = buildSettings(data);
-  for (const [name, op] of Object.entries(OPERATIONS)) {
+  for (const name of Object.keys(OPERATIONS)) {
     assert.ok(printed.includes(name), `設定說明裡找不到動作 ${name}`);
   }
   const withUnknown = JSON.parse(JSON.stringify(data));

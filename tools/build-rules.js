@@ -43,7 +43,7 @@ const ESCAPED_ASCII_PUNCT = /\\([!-/:-@[-`{-~])/gu;
 const EDGE_SPACE = /^\s|\s$|\t/u;
 // 空字元不是標點、跳脫不了，而 Markdown 規格明定呈現時會把它換成別的字元——
 // 也就是說本地解回來雖然一樣，讀者看到的卻不是原文。直接擋掉。
-const NUL = /\u0000/u;
+const hasNul = (s) => String(s).includes('\u0000');
 // 規矩至少要有幾條，才算「這份資料還是一份規矩清單」（不是實際條數，寫死會漂）。
 const MIN_RULES = 20;
 
@@ -64,7 +64,7 @@ function checkPlain(value, what, problems) {
     problems.push(`${what} 的前後有空白、或裡面有定位字元：縮排會讓它變成程式碼區塊`);
     return false;
   }
-  if (NUL.test(value)) {
+  if (hasNul(value)) {
     problems.push(`${what} 裡有空字元：呈現時會被換成別的字元，讀者看到的就不是原文`);
     return false;
   }

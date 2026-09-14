@@ -45,8 +45,6 @@ const c = (body, id = `c${++seq}`) => ({ id, body, createdAt: new Date(Date.UTC(
 const verdict = ({ role = 'Beta', source = 'CLI', sha = HEAD, round = 1, verdict: v = '通過', extra = '' } = {}, id) =>
   c(`🤖 ${role}｜來源：${source}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}${extra}`, id);
 
-const codes = (r) => r.problems.length ? 1 : 0;
-
 test('基準：指定的那一位對目前版本說通過、沒人阻擋＝通過（對照組）', () => {
   const r = evaluate([verdict()], HEAD, 'Beta', ROLES);
   assert.deepEqual(r.problems, [], r.problems.join('\n'));

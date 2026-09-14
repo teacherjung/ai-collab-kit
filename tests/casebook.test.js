@@ -37,7 +37,6 @@ const { build: buildIndex, outFile: indexOutFile } = require('../tools/build-cas
 
 const root = path.join(__dirname, '..');
 const casesDir = path.join(root, 'cases');
-const indexFile = path.join(casesDir, 'README.md');
 // 六欄，順序就是案例的固定格式。
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
 // 一份已知的字表；辨認這份以外的名字不是這題的事。

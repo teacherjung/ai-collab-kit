@@ -21,6 +21,17 @@
 - `settings.json` → `PROJECT-SETTINGS.md`：**專案設定**。值只有一份（`settings.json`），人讀的那份是產物；每個專案搬進去後逐欄填。
 - `tools/`、`templates/`、`tests/`：**機器**。守得住的規矩寫成腳本、考題、範本。本文只寫「這條有機器守」，不重述機器做什麼。
 
+## 搬進一個專案
+
+照順序做；每一步後面寫的是「漏了會怎樣」。還沒對真專案組裝到三關全綠過，其餘步驟修到哪補到哪。
+
+1. `tools/`、`tests/`、`templates/` 放在專案根目錄，**連 `tools/package.json`、`tests/package.json` 一起搬**。這兩份宣告「底下是 CommonJS」。專案根目錄若宣告 `"type":"module"`，少了它們每支工具第一行就崩——禁區攔截器崩掉＝兩家 AI 照常呼叫工具，錢的邊界靜靜失守（`tests/placement.test.js`）。
+2. 專案若有 ESLint、而且把 `.js` 當 ES 模組：在它的設定補一組（package.json 的宣告管不到 lint）。漏了＝lint 對套件檔報幾百個錯，推送前那道門推不上去。
+
+   ```js
+   { files: ['tools/**/*.js', 'tests/**/*.js'], languageOptions: { sourceType: 'commonjs', globals: globals.node } }
+   ```
+
 ## 進門規則
 
 一條規矩要進本文，三件都要有，缺一不進：

@@ -29,7 +29,7 @@ const outFile = path.join(casesDir, 'README.md');
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const EDGE_SPACE = /^\s|\s$|\t/u;
-const NUL = /\u0000/u;
+const hasNul = (s) => String(s).includes('\u0000');
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const SLUG = /^[a-z0-9-]+$/u;
 const RULE_IDS = /^[A-Z]\d+(?:、[A-Z]\d+)*$/u;
@@ -39,7 +39,7 @@ function checkPlain(value, what) {
   if (value.trim() === '') throw new Error(`${what} 是空的`);
   if (LINE_BREAK.test(value)) throw new Error(`${what} 裡有換行：它會跑出自己該待的位置`);
   if (EDGE_SPACE.test(value)) throw new Error(`${what} 的前後有空白、或裡面有定位字元`);
-  if (NUL.test(value)) throw new Error(`${what} 裡有空字元`);
+  if (hasNul(value)) throw new Error(`${what} 裡有空字元`);
   return value;
 }
 

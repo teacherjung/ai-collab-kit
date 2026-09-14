@@ -15,6 +15,7 @@
   "markdown-effective.test.js",
   "merge.test.js",
   "pending-rulings.test.js",
+  "placement.test.js",
   "platform.test.js",
   "rules-length.test.js",
   "run-checks.test.js",

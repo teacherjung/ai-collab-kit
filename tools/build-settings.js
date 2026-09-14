@@ -20,7 +20,7 @@ const root = path.join(__dirname, '..');
 const outFile = path.join(root, 'PROJECT-SETTINGS.md');
 
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
-const NUL = /\u0000/u;
+const hasNul = (s) => String(s).includes('\u0000');
 const STATES = ['未移植', '已安裝未啟用', '已啟用'];
 const PROVIDERS = ['未設定', '無', '工具自帶', '專案自建'];
 
@@ -28,7 +28,7 @@ function plain(value, what, { allowEmpty = false } = {}) {
   if (typeof value !== 'string') throw new Error(`${what} 不是字串`);
   if (!allowEmpty && value.trim() === '') throw new Error(`${what} 是空的`);
   if (LINE_BREAK.test(value)) throw new Error(`${what} 裡有換行：它會跑出自己該待的位置`);
-  if (NUL.test(value)) throw new Error(`${what} 裡有空字元`);
+  if (hasNul(value)) throw new Error(`${what} 裡有空字元`);
   return literal(value);
 }
 
