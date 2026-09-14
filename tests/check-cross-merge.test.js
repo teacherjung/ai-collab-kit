@@ -97,6 +97,9 @@ function tempRepo() {
   const git = (...args) => { const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { ...gitEnv(), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }); if (r.status !== 0) throw new Error(`git ${args.join(' ')}：${r.stderr}`); return r.stdout.trim(); };
   const write = (f, s) => fs.writeFileSync(path.join(root, f), s);
   git('init', '-q', '-b', 'main');
+  // 身分寫進倉庫自己的設定（搬家前準備）：閘在臨時工作樹裡 git merge 用的是清過 GIT_ 的環境，
+  // 上面那幾個 GIT_AUTHOR／COMMITTER 變數到不了它；雲端 Linux 機器沒有全域身分時合併會失敗。臨時工作樹共用這份設定。
+  git('config', 'user.name', 't'); git('config', 'user.email', 't@x');
   // 三關＝這支腳本：規則檔說不准的字不可以出現在內容檔裡
   write('check.js', "const fs=require('fs');const rule=fs.readFileSync('rule.txt','utf8').trim();const body=fs.readFileSync('body.txt','utf8');if(rule&&body.includes(rule)){console.error('rule '+rule+' forbids body');process.exit(1)}console.log('ok')");
   write('rule.txt', '\n'); write('body.txt', 'hello\n'); write('other.txt', 'x\n');

@@ -7,7 +7,8 @@
     "會分頁的動作（openChanges、comments、allComments、changedFiles、checks）用 --paginate，每頁各印一個陣列；這套架構收這種寫法。但『頁數有沒有收齊』是這條指令自己的責任，架構驗不到。openChanges 用會分頁的端點而不是 pr list --limit：--limit 是筆數上限，超過就靜靜截斷（r1 Medium⑥）。",
     "markReady 與 merge 會真的動到平台，填之前先確認那是你要的行為（例如合併方式、要不要刪分支）。",
     "2026-09-13 對真倉庫實跑過七個唯讀動作（r3 之後含 change 那一條的修正）。",
-    "合併指令另外抄進 settings.json 的 mergeCommand（tools/merge.js 全綠之後按的是這一條，不是 operations.merge）。它多認兩個記號：{reviewer}＝變更說明「獨立審查者」欄那一位、{merger}＝跑 node tools/merge.js <編號> --merger <識別值> 時自報的那一位；帶 --body 才留得下誰審誰合（規矩 H5；平台上的合併者永遠是共用的那個帳號，這兩行是事後唯一查得到的痕跡）。{sha}＝按鍵前核過的版本，帶 --match-head-commit 平台才會替你擋最後一刻被推上來的新版本。"
+    "合併指令另外抄進 settings.json 的 mergeCommand（tools/merge.js 全綠之後按的是這一條，不是 operations.merge）。它多認兩個記號：{reviewer}＝變更說明「獨立審查者」欄那一位、{merger}＝跑 node tools/merge.js <編號> --merger <識別值> 時自報的那一位；帶 --body 才留得下誰審誰合（規矩 H5；平台上的合併者永遠是共用的那個帳號，這兩行是事後唯一查得到的痕跡）。{sha}＝按鍵前核過的版本，帶 --match-head-commit 平台才會替你擋最後一刻被推上來的新版本。",
+    "requiredChecks 的 app_id：平台用 -1（或不給）表示「任何來源都算」，翻譯成 null；寫成 `if .app_id then` 的話 -1 會被當成一個叫「-1」的產生者，真考卷閘每一支都查不到場次、退 2（搬家前準備；原專案的翻譯就是這樣處理的）。"
   ],
   "operations": {
     "change": [
@@ -67,7 +68,7 @@
       "api",
       "repos/{project}/branches/{branch}/protection/required_status_checks",
       "--jq",
-      "[.checks[]|{name:.context,producer:(if .app_id then (.app_id|tostring) else null end)}]"
+      "[.checks[]|{name:.context,producer:(if (.app_id // -1) < 0 then null else (.app_id|tostring) end)}]"
     ],
     "branchSha": [
       "gh",

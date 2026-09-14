@@ -196,6 +196,10 @@ test('GitHub 範本：每一條讀寫指令都用 {project} 釘倉庫、不用 {
   }
   assert.deepEqual([...doc.clearEnv].sort(), ['GH_HOST', 'GH_REPO']);
   assert.deepEqual(Object.keys(doc.operations).sort(), Object.keys(OPERATIONS).sort(), '範本要涵蓋每一個動作（新增動作時範本沒跟上，抄的人就少一條）');
+  // requiredChecks：平台用負數（-1）或不給 app_id 表示「任何來源都算」，要翻成 null（搬家前準備）。
+  // ⚠️ 這裡只是絆線（看翻譯字面有沒有處理負數），不是跑 jq 驗行為——套件考題不綁 jq 這個外部工具
+  const rc = doc.operations.requiredChecks.join(' ');
+  assert.match(rc, /\(\.app_id \/\/ -1\) < 0/u, 'requiredChecks 要把負數或缺的 app_id 翻成 null（寫成 if .app_id then 的話 -1 會變成一個叫「-1」的產生者）');
   // 可執行性（r3 Medium④：change 多貼了一個 {change}，填完設定仍跑不起來）：每個記號每條指令最多出現一次，
   // 該動作的參數記號要剛好一次；展開後的 argv 沒有殘留記號
   for (const [name, argv] of Object.entries(doc.operations)) {

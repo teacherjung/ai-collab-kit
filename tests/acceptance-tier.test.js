@@ -2,7 +2,8 @@
 //
 // 守得到的：①動作累積、級別寫最重的；②沒列到的路徑當指定那一級並列出來；③改名前的舊路徑也算；
 //   ⑤改名或複製卻沒帶舊路徑＝退 2（r1 Medium⑦）；平台有自報總數就對帳，對不上＝退 2（清單可能被平台的筆數上限截掉）；
-//   ④分級表沒填好（少欄、unknownTier 不在 tiers 裡、家族指到不存在的級）＝退 2；平台問不到＝退 2；沒有路徑＝退 2。
+//   ④分級表沒填好（少欄、unknownTier 不在 tiers 裡、家族指到不存在的級）＝退 2；平台問不到＝退 2；沒有路徑＝退 2；
+//   ⑥**有一筆壞就整張不算**（不濾掉）：家族缺欄、樣式沒以 ^ 開頭、樣式不是合法正規式、級別缺動作＝退 2（搬家前準備）。
 // ⚠️ 守不到的：表本身對不對（新家族出現時它會落到指定那一級並被列出，由改表的人補）；有沒有照印出來的做。
 'use strict';
 const test = require('node:test');
@@ -59,4 +60,22 @@ test('③改名前的舊路徑也算；④設定沒填好、平台問不到、�
   assert.equal(run(undefined, { settings, platform }).code, 2);
   assert.throws(() => run('7', { settings, platform: { ask() { throw new TypeError('程式寫錯'); } } }), TypeError);
   assert.equal(runInCopy('tools/acceptance-tier.js', ['7']).status, 2, '空白設定的複本：設定未填');
+});
+
+test('⑥有一筆壞就整張不算：不可以濾掉那一筆、讓那一族的路徑靜靜落到別的級（搬家前準備）', () => {
+  assert.ok(tableOf({ acceptance: ACC }), '對照組：好的表讀得出來');
+  const broken = (patch) => ({ acceptance: { ...ACC, ...patch } });
+  const cases = [
+    ['家族少了樣式', broken({ families: [...ACC.families, { tier: '重新整理' }] })],
+    ['家族樣式沒以 ^ 開頭（會命中路徑中段）', broken({ families: [...ACC.families, { pattern: 'lib/', tier: '重啟走流程' }] })],
+    ['家族樣式不是合法正規式', broken({ families: [...ACC.families, { pattern: '^(', tier: '重啟走流程' }] })],
+    ['家族樣式是未設定', broken({ families: [...ACC.families, { pattern: '未設定', tier: '重新整理' }] })],
+    ['級別缺動作', broken({ tiers: [...ACC.tiers, { id: '多出來的' }] })],
+    ['級別是空字串', broken({ tiers: [...ACC.tiers, { id: ' ', action: 'x' }] })],
+  ];
+  for (const [why, s] of cases) {
+    assert.equal(tableOf(s), null, why);
+    const r = run('7', { settings: s, platform: fake([{ path: 'lib/a.js', status: 'modified', previousPath: null }]) });
+    assert.equal(r.code, 2, `${why}：退 2`);
+  }
 });

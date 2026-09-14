@@ -15,14 +15,27 @@ const { read: readSettings } = require('./settings-data.js');
 
 const UNSET = '未設定';
 
-/** 讀設定裡的分級表；形狀不對＝null。tiers 從最重排到最輕。 */
+/**
+ * 讀設定裡的分級表；形狀不對＝null。tiers 從最重排到最輕。
+ * ⚠️ **有一筆壞就整張不算**，不濾掉（搬家前準備，驗屋 AT-8）：濾掉一筆家族＝那一族的路徑靜靜落到「沒列到」那一級，
+ *    表看起來還能用、級別卻可能變輕。家族樣式必須以 ^ 開頭：沒錨定的樣式會命中路徑中段（lib/ 也命中 public/lib/x）。
+ *    樣式不是合法正規式也算壞（原本會在這裡丟例外）。
+ */
 function tableOf(settings) {
   const a = settings.acceptance || {};
-  const tiers = Array.isArray(a.tiers) ? a.tiers.filter((t) => t && typeof t.id === 'string' && t.id !== UNSET && typeof t.action === 'string' && t.action !== UNSET) : [];
-  const families = Array.isArray(a.families) ? a.families.filter((f) => f && typeof f.pattern === 'string' && f.pattern !== UNSET && typeof f.tier === 'string') : [];
-  if (!tiers.length || !families.length || typeof a.unknownTier !== 'string' || !tiers.some((t) => t.id === a.unknownTier)) return null;
-  if (families.some((f) => !tiers.some((t) => t.id === f.tier))) return null;
-  return { tiers, families: families.map((f) => ({ re: new RegExp(f.pattern, 'u'), tier: f.tier })), unknownTier: a.unknownTier };
+  if (!Array.isArray(a.tiers) || !Array.isArray(a.families) || !a.tiers.length || !a.families.length) return null;
+  const goodTier = (t) => t && typeof t.id === 'string' && t.id.trim() && t.id !== UNSET && typeof t.action === 'string' && t.action.trim() && t.action !== UNSET;
+  if (!a.tiers.every(goodTier)) return null;
+  const tiers = a.tiers;
+  const families = [];
+  for (const f of a.families) {
+    if (!f || typeof f.pattern !== 'string' || !f.pattern.startsWith('^') || typeof f.tier !== 'string' || !tiers.some((t) => t.id === f.tier)) return null;
+    let re;
+    try { re = new RegExp(f.pattern, 'u'); } catch { return null; }
+    families.push({ re, tier: f.tier });
+  }
+  if (typeof a.unknownTier !== 'string' || !tiers.some((t) => t.id === a.unknownTier)) return null;
+  return { tiers, families, unknownTier: a.unknownTier };
 }
 
 /** 純判斷層。 */

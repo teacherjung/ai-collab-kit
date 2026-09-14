@@ -15,7 +15,8 @@
 //     彼此不比對，跑閘途中推上來的新版本照樣被合併）；問不到版本＝不放行；
 //   ⑨**合併指令的記號**：{change}、{sha}、{project}、{reviewer}（說明的「獨立審查者」欄）、{merger}（--merger 自報、
 //     要是登記過的參與者）；認不得的記號、該填填不出來＝不放行；跑閘前驗得了的先驗；沒帶誰審誰合／版本要提醒；
-//   ⑩閘退 1＝擋下（退 1）；退 2 或其他非零（含起不來）＝查不清楚（退 2），不叫人去找「紅的是哪一題」。
+//   ⑩閘退 1＝擋下（退 1）；退 2 或其他非零（含起不來）＝查不清楚（退 2），不叫人去找「紅的是哪一題」；
+//   ⑪按合併鍵那一步也清掉 platform.clearEnv 登記的變數；合併指令裡沒有 {change}＝不放行（搬家前準備）。
 //
 // ⚠️ 守不到的，照實說：它擋不住「不用這支指令、直接按平台的合併鍵」——要擋那個只有平台級的
 //    分支保護。也不驗那幾道閘自己對不對（那是各道閘自己的考題）。{merger} 是自報的：驗得到「是登記過的參與者」，
@@ -268,4 +269,30 @@ test('⑨GitHub 範本的合併指令真的填得完：誰審、誰合兩行＋�
   assert.doesNotMatch(calls[1], /\{[a-z]+\}/u, `展開後還有記號：${calls[1]}`);
   assert.match(calls[1], new RegExp(`--match-head-commit ${HEAD}`, 'u'));
   assert.match(calls[1], /--body Reviewed-By: Beta\nMerged-By: Alpha$/u);
+});
+
+test('⑪合併指令沒有 {change}＝不放行，閘都不跑（搬家前準備）', () => {
+  const { run, calls } = fakeRunner([0]);
+  const r = mergeRun('7', { settings: settingsWith([gate('甲')], { mergeCommand: { command: 'platform', args: ['merge', '--squash'] } }), run });
+  assert.equal(r.code, 2);
+  assert.deepEqual(calls, [], '跑閘之前就該停');
+  assert.match(r.lines.join('\n'), /沒有 \{change\}/u);
+});
+
+test('⑪真的預設執行器：按合併鍵時清掉 platform.clearEnv 登記的變數，其他照留（搬家前準備）', () => {
+  const prev = { A: process.env.KIT_PICK_SITE_TEST, B: process.env.KIT_KEEP_TEST };
+  process.env.KIT_PICK_SITE_TEST = 'other.example';
+  process.env.KIT_KEEP_TEST = 'keep';
+  try {
+    const probe = 'process.stdout.write(JSON.stringify({ pick: "KIT_PICK_SITE_TEST" in process.env, keep: process.env.KIT_KEEP_TEST || null }))';
+    const r = runCommand(process.execPath, ['-e', probe], { clearEnv: ['KIT_PICK_SITE_TEST'] });
+    assert.deepEqual(JSON.parse(r.output), { pick: false, keep: 'keep' });
+    // mergeRun 真的把 clearEnv 傳到按鍵那一步（假執行器記下收到的選項）
+    let seen = null;
+    const settings = settingsWith([gate('甲')], { platform: { clearEnv: ['KIT_PICK_SITE_TEST'] } });
+    realMergeRun('7', { settings, platform: fakePlatform(), run: (cmd, args, opts) => { if (cmd === 'platform') seen = opts; return { code: 0, output: '' }; } });
+    assert.deepEqual(seen, { clearEnv: ['KIT_PICK_SITE_TEST'] }, '按鍵那一步要帶著專案登記的清單');
+  } finally {
+    for (const [k, v] of [['KIT_PICK_SITE_TEST', prev.A], ['KIT_KEEP_TEST', prev.B]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });

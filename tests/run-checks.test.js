@@ -96,6 +96,9 @@ test('⑥子行程看不到 GIT_ 那一族', () => {
 
 test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 GIT_；欄位閘範本訂閱 edited 且不接 || true', () => {
   const hook = fs.readFileSync(path.join(ROOT, 'templates', 'pre-push'), 'utf8');
+  // 鉤子沒有執行權＝git 靜靜略過它（搬家前準備）：版本控制裡要記成可執行，搬進專案時才帶得過去
+  const mode = spawnSync('git', ['ls-files', '-s', 'templates/pre-push'], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }).stdout.split(/\s+/u)[0];
+  assert.equal(mode, '100755', `推送前鉤子範本在版本控制裡的模式是 ${mode}，要是 100755`);
   assert.match(hook, /node tools\/run-checks\.js/u);
   assert.match(hook, /unset "\$_gitvar"/u, '鉤子第一件事是清 GIT_');
   assert.doesNotMatch(hook, /npm (run|test)/u, '鉤子不抄三關');

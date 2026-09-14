@@ -25,18 +25,20 @@
 
 照順序做；每一步後面寫的是「漏了會怎樣」。還沒對真專案組裝到三關全綠過，其餘步驟修到哪補到哪。
 
-1. `tools/`、`tests/`、`templates/` 放在專案根目錄，**連 `tools/package.json`、`tests/package.json` 一起搬**。這兩份宣告「底下是 CommonJS」。專案根目錄若宣告 `"type":"module"`，少了它們每支工具第一行就崩——禁區攔截器崩掉＝兩家 AI 照常呼叫工具，錢的邊界靜靜失守（`tests/placement.test.js`）。
+1. 從套件的一個**固定版本**取檔（`git archive <版本> <路徑…>`，不要整個資料夾照抄）：`tools/`、`tests/`、`templates/`，加上根目錄的 `settings.json`、`rules.json`、`RULES.md`、`MACHINES.md`、`PROJECT-SETTINGS.md`（工具與考題從根目錄讀它們）；`cases/` 看專案要不要帶（它可能含私人紀錄，公開倉庫先想清楚）。**不要帶** `README.md`、`package.json`、`.gitignore`——那三份是專案自己的，覆蓋掉會弄壞專案。記下取的是哪一個版本，以後同步照同一份清單重取。**連 `tools/package.json`、`tests/package.json` 一起搬**。這兩份宣告「底下是 CommonJS」。專案根目錄若宣告 `"type":"module"`，少了它們每支工具第一行就崩——禁區攔截器崩掉＝兩家 AI 照常呼叫工具，錢的邊界靜靜失守（`tests/placement.test.js`）。
 2. 專案若有 ESLint、而且把 `.js` 當 ES 模組：在它的設定補一組（package.json 的宣告管不到 lint）。漏了＝lint 對套件檔報幾百個錯，推送前那道門推不上去。
 
    ```js
    { files: ['tools/**/*.js', 'tests/**/*.js'], languageOptions: { sourceType: 'commonjs', globals: globals.node } }
    ```
 
-3. 接禁區攔截器（B1），兩家 AI 各接一次。Claude 側：`templates/hook-claude.json` 的內容放進專案的 `.claude/settings.json`。Codex 側二擇一：專案層＝`templates/hook-codex.json` 放進專案的 `.codex/hooks.json`；全域層＝`templates/hook-codex-global.json` 放進家目錄的 `.codex/hooks.json`，並把 `{kitRoot}` 換成一份**固定、不切分支**的套件複本的絕對路徑（全域的禁區清單就是那份複本的清單）。放好之後在 Codex 按「信任」，之後每改一次鉤子檔都要重按。漏了＝那一方沒有攔截；三份範本的指令都不靠當下目錄、起不來一律擋（`tests/forbidden-tools.test.js` ⑫）。
+3. 接禁區攔截器（B1），兩家 AI 各接一次。Claude 側：把 `templates/hook-claude.json` 那一組 PreToolUse **加到**專案 `.claude/settings.json` 既有清單的**尾端**，不是整份覆蓋；範本的說明鍵不要抄；`permissions.deny` 不要照範本清空，專案原有的逐字拒絕要留著。專案原本已經有一層攔截時，先讓兩層並存、確認新的那層真的在擋，再拆舊的——任何時刻都要至少一層在擋。Codex 側二擇一：專案層＝`templates/hook-codex.json` 放進專案的 `.codex/hooks.json`；全域層＝`templates/hook-codex-global.json` 放進家目錄的 `.codex/hooks.json`，並把 `{kitRoot}` 換成一份**固定、不切分支**的套件複本的絕對路徑（全域的禁區清單就是那份複本的清單）。Codex 的鉤子檔一樣是往尾端加一組、不插前面；**改檔之前先關掉所有 Codex 視窗**，改完到按下信任之前不可以有 Codex 在跑（Codex 沒有第二道權限層，那段時間沒有攔截）。放好之後在 Codex 按「信任」，之後每改一次鉤子檔都要重按。漏了＝那一方沒有攔截；三份範本的指令都不靠當下目錄、起不來一律擋（`tests/forbidden-tools.test.js` ⑫）。
 
 4. 合併指令（`settings.json` 的 mergeCommand）從 `templates/platform-github.json` 的 mergeCommand 起抄，保留 `{reviewer}`、`{merger}`、`{sha}`；合併時跑 `node tools/merge.js <編號> --merger <按鍵那一方的識別值>`。漏了 `{reviewer}`／`{merger}`＝合併紀錄留不下誰審、誰合；漏了 `{sha}`＝最後一刻被推上來的新版本平台不替你擋（兩種都會印提醒，不擋）。
 
-5. 換雲端設定之前，先把專案原本雲端的 job 名逐一列出來；換成 `templates/ci-github.yml` 之後逐一對，範本沒有的（例如相依套件的安全通報、另一個版本的執行環境）照原樣搬進範本最後那一段。漏了不會有任何東西變紅＝那一道靜靜消失。
+5. 換雲端設定之前，先把專案原本雲端的 job 名逐一列出來。把 `templates/ci-github.yml` 抄成專案的 `.github/workflows/ci.yml`，範本沒有的（例如相依套件的安全通報、另一個版本的執行環境）照原樣搬進**抄出來那一份**的最後那一段——`templates/` 裡的範本本身不要改（套件考題釘著範本不抄三關）。job 名若被分支保護設成必過檢查，沿用原名或同步改分支保護。漏了不會有任何東西變紅＝那一道靜靜消失。
+
+6. 推送前鉤子：`templates/pre-push` 在版本控制裡是可執行的（沒有執行權 git 會靜靜略過它）；放到專案實際的鉤子位置時保留執行權。
 
 ## 進門規則
 

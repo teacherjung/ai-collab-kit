@@ -35,7 +35,7 @@ const TOKENS = ['change', 'sha', 'project', 'reviewer', 'merger'];
  *    「跑不起來」不等於「檢查過了」。這兩條路 2026-09-13 稽核前零覆蓋：改成回 0，
  *    一道根本不存在的閘會被當成綠燈，一路按下合併鍵（端到端重現過）。
  */
-function runCommand(command, args) {
+function runCommand(command, args, { clearEnv = [] } = {}) {
   // node 本身在、閘的檔案不在：node 會退 1，跟「閘判定擋下」同一個碼（搬家修正 r1 B3）。跑之前先看檔在不在。
   // ⚠️ 只擋得住「檔案不在或讀不到」；檔在、但載入就崩（語法錯、相依缺）node 一樣退 1，這裡分不出來。
   if (path.basename(command) === 'node' && typeof args[0] === 'string' && /\.c?js$/u.test(args[0])) {
@@ -43,7 +43,11 @@ function runCommand(command, args) {
     catch { return { code: 2, output: `閘的檔案不在或讀不到：${args[0]}（在 ${process.cwd()} 底下找的；合併指令要在專案根目錄跑）` }; }
   }
   // 環境先清 GIT_ 那一族（規矩 E4；r1 High①）：閘會叫 git，繼承來的 GIT_DIR 會讓它們查到別棵倉庫
-  const result = spawnSync(command, args, { encoding: 'utf8', env: gitEnv() });
+  // 按合併鍵那一步另外清掉專案登記的選倉環境變數（platform.clearEnv；搬家前準備）：
+  // 平台動作問資料時本來就清，合併指令原本沒清——環境裡一個選站台的變數就能把合併導到別的站
+  const env = gitEnv();
+  for (const key of clearEnv) delete env[key];
+  const result = spawnSync(command, args, { encoding: 'utf8', env });
   if (result.error) return { code: 2, output: String(result.error.message) };
   return { code: result.status === null ? 2 : result.status, output: `${result.stdout || ''}${result.stderr || ''}` };
 }
@@ -88,6 +92,10 @@ function mergeRun(changeId, { settings = readSettings(), run = runCommand, platf
   const merge = settings.mergeCommand;
   const mergeArgs = merge && Array.isArray(merge.args) ? merge.args.map(String) : [];
   const used = new Set(mergeArgs.flatMap((a) => [...a.matchAll(/\{([a-z]+)\}/gu)].map((m) => m[1])));
+  if (merge && merge.command && merge.command !== UNSET && !used.has('change')) {
+    say('合併指令裡沒有 {change}：它不知道要合哪一支（有些平台工具不給編號時會去合「目前分支」那一支），不放行。');
+    return { code: 2, lines };
+  }
   const unknown = [...used].filter((t) => !TOKENS.includes(t));
   if (unknown.length) {
     say(`合併指令裡有認不得的記號：${unknown.map((t) => `{${t}}`).join('、')}（認得的只有 ${TOKENS.map((t) => `{${t}}`).join('、')}）——原樣送出去就是字面文字，不放行。`);
@@ -166,7 +174,8 @@ function mergeRun(changeId, { settings = readSettings(), run = runCommand, platf
     }
   }
   const argv = mergeArgs.map((arg) => arg.replace(/\{([a-z]+)\}/gu, (_, t) => values[t]));
-  const { code, output } = run(merge.command, argv);
+  const clearEnv = Array.isArray((settings.platform || {}).clearEnv) ? settings.platform.clearEnv.filter((k) => typeof k === 'string' && k) : [];
+  const { code, output } = run(merge.command, argv, { clearEnv });
   const tail = output.trim().split('\n').slice(-5).join('\n');
   if (tail) say(tail);
   if (code !== 0) {
