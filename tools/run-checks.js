@@ -27,11 +27,17 @@ function runCommand(argv, cwd) {
  * 這棵樹還是工作樹嗎？回 'ok'／'bare'／'not-a-repo'／'wrong-tree'／'shared-bare'／'index-unusable'。
  * wrong-tree＝版本控制認的工作樹根目錄不是這裡：樹被指到別處（例如設定裡的 core.worktree），或不在專案根目錄跑。
  * 搬家驗屋 09-13：原本只查裸倉庫；樹被指到別處時照樣回報三關全綠，而依賴版本控制的考題量的是另一棵樹。
- * shared-bare＝**共用設定檔**裡 core.bare 是 true（或不是合法布林），即使這棵樹自己的 config.worktree 把它蓋成 false。
- *   只看生效值會被蓋住：這棵樹看起來健康，其他沒有覆寫的樹（含主目錄）卻全部打不開（原專案 08-09 事故的形狀之一）。
- * index-unusable＝倉庫有提交、索引卻一個檔都列不出來：索引不見或壞了時 git ls-files 不報錯、只回空清單，
- *   靠它掃全樹的考題會掃到零個檔然後回報零違規。（搬家前準備：補到跟原專案的工作樹體檢同級的這兩項。）
- * ⚠️ 守不到的：索引只壞一部分（列得出一些檔）；別棵樹自己的 config.worktree 被寫壞（只有在那棵樹裡跑才看得到）。
+ * shared-bare＝開著 extensions.worktreeConfig 時，**共用設定檔**裡 core.bare 不是 false（true 或不是合法布林），
+ *   即使這棵樹自己的 config.worktree 把它蓋成 false。開著這個擴充時共用檔的 core.bare 會套到每一棵沒覆寫的樹
+ *   （Git 官方文件因此要求把它搬進主工作樹的 config.worktree）；只看生效值會被蓋住：這棵樹看起來健康，
+ *   其他沒覆寫的樹（含主目錄）卻全部打不開（原專案 08-09 事故就是這個擴充開著的倉庫）。
+ *   **沒開**這個擴充時共用檔的 core.bare 只作用在主工作樹——「裸儲存庫＋連結工作樹」是 Git 支援的正常形狀，不判壞
+ *   （搬家前準備 r2 B1）；那時主工作樹自己被弄成裸倉庫，在主工作樹跑就會被上面的 bare 抓到。
+ * index-unusable＝倉庫有提交，這棵樹自己的**索引檔卻不存在**，或 git 讀不了索引：索引不見時 git ls-files 不報錯、
+ *   只回空清單，靠它掃全樹的考題會掃到零個檔然後回報零違規。**索引存在但是空的**（例如暫存刪除了全部檔案）是合法狀態，
+ *   不判壞（搬家前準備 r2 B2）。
+ * ⚠️ 守不到的：索引檔在、但只壞一部分；別棵樹自己的 config.worktree 被寫壞（只有在那棵樹裡跑才看得到）；
+ *   沒開擴充時主工作樹被弄成裸倉庫、而檢查是在連結工作樹裡跑（這棵樹沒事，主工作樹要在主工作樹跑才看得到）。
  */
 function treeState(run, cwd) {
   const git = (...args) => spawnSync('git', args, { cwd, encoding: 'utf8', env: gitEnv() });
@@ -46,17 +52,21 @@ function treeState(run, cwd) {
   try { here = fs.realpathSync(cwd); } catch { return 'not-a-repo'; }
   try { root = fs.realpathSync(top.stdout.trim()); } catch { return 'wrong-tree'; }
   if (root !== here) return 'wrong-tree';
-  // 共用設定檔指名直讀（不吃生效值）；每一筆都要是合法布林而且是 false
+  // 共用設定檔指名直讀（不吃生效值）；只在開著 extensions.worktreeConfig 時才要求它是 false
   const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
   if (common.status !== 0) return 'not-a-repo';
-  const shared = spawnSync('git', ['config', '--file', path.join(common.stdout.trim(), 'config'), '--type=bool', '--get-all', 'core.bare'], { encoding: 'utf8', env: gitEnv() });
-  if (shared.status === 0 && shared.stdout.split('\n').some((v) => v.trim() === 'true')) return 'shared-bare';
-  if (shared.status !== 0 && shared.status !== 1) return 'shared-bare';   // 1＝沒有這個鍵；其他非零＝值不是合法布林
-  // 有提交才要求索引列得出檔（剛 init、還沒提交的倉庫本來就沒有索引）
+  const sharedFile = path.join(common.stdout.trim(), 'config');
+  const readShared = (key) => spawnSync('git', ['config', '--file', sharedFile, '--type=bool', '--get-all', key], { encoding: 'utf8', env: gitEnv() });
+  const wtc = readShared('extensions.worktreeConfig');
+  if (wtc.status === 0 && wtc.stdout.split('\n').some((v) => v.trim() === 'true')) {
+    const shared = readShared('core.bare');
+    if (shared.status === 0 && shared.stdout.split('\n').some((v) => v.trim() === 'true')) return 'shared-bare';
+    if (shared.status !== 0 && shared.status !== 1) return 'shared-bare';   // 1＝沒有這個鍵；其他非零＝值不是合法布林
+  }
+  // 有提交才要求這棵樹自己的索引檔存在、而且 git 讀得了（剛 init、還沒提交的倉庫本來就沒有索引；空索引是合法的）
   if (git('rev-parse', '--verify', '-q', 'HEAD').status === 0) {
-    const inTree = git('ls-tree', '-r', '--name-only', 'HEAD');
-    const inIndex = git('ls-files');
-    if (inTree.status === 0 && inTree.stdout.trim() && (inIndex.status !== 0 || !inIndex.stdout.trim())) return 'index-unusable';
+    const indexPath = git('rev-parse', '--path-format=absolute', '--git-path', 'index');
+    if (indexPath.status !== 0 || !fs.existsSync(indexPath.stdout.trim()) || git('ls-files').status !== 0) return 'index-unusable';
   }
   return 'ok';
 }
@@ -74,8 +84,8 @@ function runChecks({ settings = readSettings(), run = runCommand, cwd = process.
   const BEFORE = {
     bare: '這棵樹在跑三關之前就已經是裸倉庫了：先還原再推。',
     'wrong-tree': '版本控制認的工作樹根目錄不是這裡（樹被指到別處，或不是在專案根目錄跑）：三關量到的會是別棵樹，不放行。',
-    'shared-bare': '共用的倉庫設定裡 core.bare 是 true（或不是合法布林）——這棵樹自己的設定蓋住了它，但其他沒有覆寫的樹（含主目錄）都打不開：先還原共用設定再推。',
-    'index-unusable': '倉庫有提交，索引卻一個檔都列不出來（索引不見或壞了）：靠它掃全樹的考題會掃到零個檔然後回報零違規，不放行。先重建索引（git read-tree HEAD）。',
+    'shared-bare': '開著 extensions.worktreeConfig 的倉庫，共用設定裡 core.bare 不是 false——這棵樹自己的設定蓋住了它，但其他沒有覆寫的樹（含主目錄）都打不開：先還原共用設定再推。',
+    'index-unusable': '倉庫有提交，這棵樹的索引檔卻不見了或 git 讀不了：靠它掃全樹的考題會掃到零個檔然後回報零違規，不放行。索引檔不見時用 git read-tree HEAD 重建（索引在但壞了，先備份再處理）。',
   };
   if (before !== 'ok') return { code: 2, lines: [BEFORE[before] || '這裡不是版本控制的工作樹。'] };
   for (const [i, cmd] of cmds.entries()) {
@@ -88,7 +98,7 @@ function runChecks({ settings = readSettings(), run = runCommand, cwd = process.
   const AFTER = {
     'wrong-tree': '三關跑完之後這棵樹被指到別處了（跑之前是好的）：有一題改了倉庫設定，先還原、再查是哪一題。',
     'shared-bare': '三關跑完之後共用的倉庫設定被寫成裸倉庫了（跑之前是好的）：其他樹都會打不開，先還原共用設定、再查是哪一題。',
-    'index-unusable': '三關跑完之後索引列不出任何檔了（跑之前是好的）：有一題弄壞了索引，先 git read-tree HEAD、再查是哪一題。',
+    'index-unusable': '三關跑完之後這棵樹的索引檔不見了或讀不了（跑之前是好的）：有一題弄壞了索引，先重建、再查是哪一題。',
   };
   if (after !== 'ok') return { code: 1, lines: [...lines, AFTER[after] || '三關跑完之後這棵樹不是工作樹了（跑之前是好的）：有一題把倉庫弄壞了，先還原、再查是哪一題。'] };
   return { code: 0, lines: [...lines, `三關全綠（${cmds.length} 關）。`] };

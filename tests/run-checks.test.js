@@ -5,7 +5,8 @@
 //   ⑤跑之前是裸倉庫＝退 2、跑完變裸倉庫＝退 1（真的用臨時倉庫驗）；⑥子行程看不到 GIT_ 那一族；
 //   ⑦推送前鉤子與雲端範本都呼叫這一支、不抄三關；
 //   ⑧版本控制認的工作樹根目錄不是這裡（樹被指到別處、或在子目錄跑）：跑之前＝退 2、跑完才歪＝退 1（搬家驗屋 09-13）；
-//   ⑨共用設定檔的 core.bare 被寫成 true、而這棵樹自己的 config.worktree 把它蓋住；索引列不出任何檔：跑之前＝2、跑完才壞＝1（搬家前準備）。
+//   ⑨開著 worktreeConfig 時共用設定檔的 core.bare 被寫成 true、而這棵樹自己的 config.worktree 把它蓋住；有提交卻索引檔不見：
+//     跑之前＝2、跑完才壞＝1（搬家前準備）。正面控制（r2）：沒開擴充的裸儲存庫形狀、git init --bare＋連結工作樹、暫存刪除全部檔案的空索引，都＝0。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查。
 'use strict';
 const test = require('node:test');
@@ -135,7 +136,7 @@ test('⑨共用設定被寫成裸倉庫、卻被這棵樹自己的設定蓋住�
     assert.equal(g(linked, 'rev-parse', '--is-bare-repository'), 'false', '前提：從這棵樹看生效值，被蓋住了（只看生效值會判健康）');
     const masked = runChecks({ settings, cwd: linked });
     assert.equal(masked.code, 2);
-    assert.match(masked.lines.join('\n'), /共用的倉庫設定裡 core\.bare 是 true/u);
+    assert.match(masked.lines.join('\n'), /共用設定裡 core\.bare 不是 false/u);
     g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'false');
     assert.equal(runChecks({ settings, cwd: linked }).code, 0, '還原後照常');
 
@@ -152,9 +153,31 @@ test('⑨共用設定被寫成裸倉庫、卻被這棵樹自己的設定蓋住�
     assert.equal(spawnSync('git', ['ls-files'], { cwd: main, encoding: 'utf8', env }).stdout, '', '前提：索引不見時 ls-files 靜靜回空');
     const noIndex = runChecks({ settings, cwd: main });
     assert.equal(noIndex.code, 2);
-    assert.match(noIndex.lines.join('\n'), /索引卻一個檔都列不出來/u);
+    assert.match(noIndex.lines.join('\n'), /索引檔卻不見了或 git 讀不了/u);
     g(main, 'read-tree', 'HEAD');
     assert.equal(runChecks({ settings, cwd: main }).code, 0, '重建索引後照常');
+
+    // 正面控制（搬家前準備 r2 B2）：暫存刪除全部檔案＝索引合法地是空的，不可以判壞
+    g(main, 'rm', '-r', '-q', '.');
+    assert.equal(spawnSync('git', ['ls-files'], { cwd: main, encoding: 'utf8', env }).stdout, '', '前提：暫存刪除全部之後 ls-files 是空的');
+    assert.ok(fs.existsSync(indexFile), '前提：索引檔還在');
+    assert.equal(runChecks({ settings, cwd: main }).code, 0, '空索引是合法狀態（暫存刪除全部），不是索引壞了');
+    g(main, 'reset', '-q', '--hard', 'HEAD');
+
+    // 正面控制（搬家前準備 r2 B1）：沒開 worktreeConfig 時，共用檔的 core.bare 只作用在主工作樹——
+    // 「共用 core.bare=true＋連結工作樹」是 Git 支援的形狀，連結工作樹不可以判壞
+    g(main, 'config', 'extensions.worktreeConfig', 'false');
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'true');
+    assert.equal(g(linked, 'rev-parse', '--is-bare-repository'), 'false', '前提：沒開擴充時連結工作樹的生效值不受共用檔影響');
+    assert.equal(runChecks({ settings, cwd: linked }).code, 0, '沒開 worktreeConfig 的裸儲存庫形狀＋連結工作樹＝正常');
+    g(main, 'config', '--file', path.join(main, '.git', 'config'), 'core.bare', 'false');
+
+    // 正面控制：真正的裸儲存庫（git init --bare）＋連結工作樹
+    const bareRepo = path.join(scratch, 'store.git');
+    const bareLinked = path.join(scratch, 'bare-linked');
+    g(scratch, 'clone', '-q', '--bare', main, bareRepo);
+    g(bareRepo, 'worktree', 'add', '-q', '--detach', bareLinked);
+    assert.equal(runChecks({ settings, cwd: bareLinked }).code, 0, '裸儲存庫＋連結工作樹＝正常');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
