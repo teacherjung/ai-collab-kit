@@ -8,6 +8,7 @@
   "check-stacked.test.js",
   "data-contract.test.js",
   "file-names.test.js",
+  "filled-settings.test.js",
   "forbidden-tools.test.js",
   "git-env.test.js",
   "ignore-lists.test.js",

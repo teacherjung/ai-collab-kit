@@ -7,7 +7,8 @@
 //
 // 空白設定＝同目錄的 unfilled-settings.json：套件發布時 settings.json 的逐字副本。
 // 它的形狀（欄位名、型別）由 settings.test.js 盯著跟真設定一致——設定多一欄、少一欄，那題就紅。
-// ⚠️ 守不到的：新寫的考題不經過這裡、又直接跑本倉庫的工具（或呼叫純函式時不給設定、吃到預設讀真設定）——靠審查。
+// ⚠️ 守不到的：新寫的考題不經過這裡、又直接跑本倉庫的工具（或呼叫純函式時不給設定、吃到預設讀真設定）——
+//   這一條由 tests/filled-settings.test.js 在「每一欄都填了假值」的複本裡整卷重跑來抓（照設定叫外面＝錄音機記到＝紅）；考題沒走到的分支仍靠審查。
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');

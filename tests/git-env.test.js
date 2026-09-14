@@ -46,7 +46,7 @@ function snapshot(dir) {
   return out;
 }
 
-test('整份考卷帶著指向誘餌倉庫的 GIT_DIR 跑：全綠，而且誘餌一個位元組都沒變', () => {
+test('整份考卷帶著指向誘餌倉庫的 GIT_DIR 跑：全綠，而且誘餌一個位元組都沒變', { skip: process.env.KIT_NESTED_SUITE === '1' ? '巢狀整卷裡不再巢狀' : false }, () => {
   // 原專案事故的機制：推送前鉤子從連結工作樹跑考題，git 把 GIT_DIR 放進環境；考題裡的 git init／git config
   // 沒清環境，就寫進真倉庫（案例簿 bare-repo-from-hook-env）。這裡把真倉庫換成誘餌。
   const files = fs.readdirSync(__dirname).filter((f) => f.endsWith('.test.js') && f !== path.basename(__filename)).sort();
@@ -63,7 +63,7 @@ test('整份考卷帶著指向誘餌倉庫的 GIT_DIR 跑：全綠，而且誘�
     const linkedGitDir = path.join(decoy, '.git', 'worktrees', 'linked');
     assert.ok(fs.existsSync(linkedGitDir), '前提：連結工作樹的 gitdir 在');
     const before = snapshot(path.join(decoy, '.git'));
-    const env = { ...gitEnv(), GIT_DIR: linkedGitDir };
+    const env = { ...gitEnv(), GIT_DIR: linkedGitDir, KIT_NESTED_SUITE: '1' };   // 巢狀整卷裡另一題整卷重跑的那題標成跳過
     delete env.NODE_TEST_CONTEXT;   // 不拿掉的話子行程的 node --test 不管紅不紅都退 0
     const r = spawnSync(process.execPath, ['--test', ...files.map((f) => path.join(__dirname, f))], { cwd: path.join(__dirname, '..'), env, encoding: 'utf8' });
     assert.equal(r.status, 0, `帶著別的倉庫的 GIT_DIR，考卷不是全綠：\n${r.stdout.split('\n').filter((l) => /^\s*not ok|^✖/u.test(l)).slice(0, 10).join('\n')}`);
