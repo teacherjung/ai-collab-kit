@@ -267,6 +267,9 @@ function sweepCanaries({ outFile } = {}) {
   catch (e) { return { code: 2, lines: [`收不掉：清單檔讀不到（${e.code || '讀取失敗'}）——埋在哪不知道，請自己去禁區找 .scan-canary-* 目錄。`] }; }
   let failed = 0;
   for (const dir of dirs) {
+    // 只刪看起來就是這支自己埋的：絕對路徑、目錄名以 .scan-canary- 開頭。清單檔被改過或寫錯時，別的東西一律不碰、算收不掉
+    // （這個動作在機器未啟用時也跑，安全只能靠這一道；接鉤子前批預審）
+    if (!path.isAbsolute(dir) || !path.basename(dir).startsWith('.scan-canary-')) { failed += 1; continue; }
     try { fs.rmSync(dir, { recursive: true, force: true }); }
     catch { failed += 1; }
   }
@@ -284,7 +287,7 @@ function cli(opts = {}, argv = []) {
   const arg = (flag) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
   try {
     const sweep = arg('--sweep');
-    if (sweep) return sweepCanaries({ ...opts, outFile: sweep });   // 收不擋：只刪清單檔上記的
+    if (sweep) return sweepCanaries({ ...opts, outFile: sweep });   // 收不擋：只刪清單檔上記的、而且名字是 .scan-canary- 開頭的目錄
     const settings = opts.settings || readSettings();
     const off = notEnabled(settings);
     if (off) return { code: 2, lines: [`${off}。要用它，先在 settings.json 把那一列改成已啟用、重產設定說明，再跑。`] };

@@ -204,7 +204,8 @@ test('指令入口：回覆與日誌都真的進了比對（任一邊漏掉就�
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('真的跑一遍指令：日誌區有一個「檔名就是機密、而且讀不到」的檔，退 2 且兩個輸出流都不帶機密', () => {
+// ⚠️ 以 root 跑時那個檔讀得到，「讀不到」這一半沒考到；「檔名本身就是機密＝命中＝退 1」那一半照樣有考
+test('真的跑一遍指令：日誌區有一個「檔名就是機密、而且讀不到」的檔，退 1（事故）且兩個輸出流都不帶機密', () => {
   const dir = tempDir();
   try {
     const secrets = path.join(dir, 'secrets.txt');
