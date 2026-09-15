@@ -11,7 +11,7 @@
 // 判斷只有一份＝tools/forbidden-tools.js。這支**不碰**家目錄的 .codex 或 .claude（不讀、不寫；複本也不准放在那兩個目錄底下）：
 // 貼上與按信任是人的事。
 //
-// 用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄>
+// 用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄> [--deny-probe <照清單該擋的假工具名>]
 //   標準輸出＝要貼的那一組接線（JSON）；標準錯誤＝人讀的摘要。
 //   退 0＝寫好而且自我試跑過；退 2＝拒絕（什麼都沒寫）；
 //   退 1＝寫了東西但沒成功（自我試跑沒過、或寫到一半出錯）：標準輸出是空的、沒有東西可以貼，目的地可能留有複本或半份，
@@ -72,6 +72,13 @@ function realish(p) {
 }
 
 const inside = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+/**
+ * 不分大小寫比：不分大小寫的磁碟上 ~/.CODEX 就是 ~/.codex，而還不存在的那一截 native 版還原不了大小寫
+ * （裁示批 r1 B3：第一次建立 .CODEX 就擋不住）。分大小寫的磁碟上多擋了 ~/.CODEX 這種名字，無害。
+ */
+const insideAnyCase = (child, parent) => inside(child.toLowerCase(), parent.toLowerCase());
+/** 工具名的合法字元（跟攔截器同一套）：不合法的名字攔截器本來就一律擋，拿來當試跑的「該擋的名字」證明不了清單。 */
+const PROBE_NAME = /^mcp__[A-Za-z0-9_.-]{1,195}$/u;
 
 /** 目的地的檢查；回真實路徑。任何一條不過就拒絕（此時什麼都還沒寫）。 */
 function checkTarget(to, { home = os.homedir(), allowTemp = false } = {}) {
@@ -79,11 +86,11 @@ function checkTarget(to, { home = os.homedir(), allowTemp = false } = {}) {
   const real = realish(path.normalize(to));
   if (unquotable(real)) throw new Refusal('複本路徑含單引號或控制字元，放不進鉤子指令');
   for (const d of ['.codex', '.claude']) {
-    if (inside(real, realish(path.join(home, d)))) throw new Refusal(`複本不可以放在家目錄的 ${d} 底下：那是 AI 平台自己的設定目錄，這支工具不碰`);
+    if (insideAnyCase(real, realish(path.join(home, d)))) throw new Refusal(`複本不可以放在家目錄的 ${d} 底下：那是 AI 平台自己的設定目錄，這支工具不碰`);
   }
   if (!allowTemp) {
     for (const t of [os.tmpdir(), ...TEMP_ROOTS]) {
-      if (fs.existsSync(t) && inside(real, realish(t))) {
+      if (fs.existsSync(t) && insideAnyCase(real, realish(t))) {
         throw new Refusal(`複本不可以放在暫存區（${t}）：作業系統會清，清掉那天所有 mcp__ 工具會突然全擋。建議放在家目錄底下一個固定的地方，例如 ~/.local/share/ai-collab-kit/guard/<版本碼前幾碼>`);
       }
     }
@@ -142,6 +149,10 @@ function hookGroup({ copyDir, fp }, templateText) {
   const group = doc && doc.hooks && doc.hooks.PreToolUse && doc.hooks.PreToolUse[0];
   const command = group && group.hooks && group.hooks[0] && group.hooks[0].command;
   if (typeof command !== 'string') throw new Refusal('接線範本裡找不到那一條指令');
+  // 整組的形狀也要對：matcher 不是 ^mcp__、不是指令型、多出別的組或別的鉤子＝印出來的那一組不會照預期攔（裁示批 r1 T2）
+  if (doc.hooks.PreToolUse.length !== 1 || group.matcher !== '^mcp__' || group.hooks.length !== 1 || group.hooks[0].type !== 'command') {
+    throw new Refusal('接線範本那一組的形狀不對（要剛好一組、matcher 是 ^mcp__、剛好一條指令型鉤子）');
+  }
   for (const ph of PLACEHOLDERS) {
     if (command.split(ph).length !== 2) throw new Refusal(`範本的指令裡「${ph}」不是剛好一個`);
   }
@@ -158,7 +169,7 @@ const runHook = (command, tool) => spawnSync('/bin/sh', ['-lc', command], { cwd:
  *   ③指紋檢查要真的在：同一行指令指向一份改過一個位元組的副本，要退 2 而且是指紋那一句。
  * 全程只跑指令、不把複本裡的程式載進這支（驗的就是鉤子實際會走的那一條路）。
  */
-function selfTest({ copyDir, fp, template, forbidden }) {
+function selfTest({ copyDir, fp, template, forbidden, denyProbe = null }) {
   const command = hookGroup({ copyDir, fp }, template).hooks[0].command;
   const show = (r) => `退 ${r.status}；標準輸出「${r.stdout.slice(0, 120)}」；錯誤輸出「${r.stderr.slice(0, 200)}」`;
 
@@ -170,12 +181,8 @@ function selfTest({ copyDir, fp, template, forbidden }) {
   }
   if (!allowName) return `無害的假名一個都沒有被乾淨地放行（最後一次：${show(lastAllow)}）——清單壞到什麼都擋、或登入設定往標準輸出印字（要先讓它安靜）`;
 
-  const f = forbidden;
-  const denyCandidates = [
-    ...(Array.isArray(f.servers) ? f.servers.map((srv) => `mcp__${srv}__guard_copy_selftest_probe`) : []),
-    ...(Array.isArray(f.verbs) && Array.isArray(f.nouns) && f.verbs[0] && f.nouns[0] ? [`mcp__guard_copy_selftest__${f.verbs[0]}_${f.nouns[0]}`] : []),
-    ...(Array.isArray(f.deny) ? f.deny : []),
-  ].filter((n) => typeof n === 'string');
+  // 有給 --deny-probe 就只試那一個（給了卻不擋＝失敗，不改試別的）；沒給就從清單自動產生
+  const denyCandidates = denyProbe ? [denyProbe] : autoDenyProbes(forbidden);
   let denied = false;
   let lastDeny = null;
   for (const name of denyCandidates) {
@@ -202,9 +209,29 @@ function selfTest({ copyDir, fp, template, forbidden }) {
   return null;
 }
 
-function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = true }) {
+/** 從清單自動產生「照清單該擋」的試跑名字：連接器、第一組動詞＋名詞、逐字拒絕清單。只有樣式規則的清單產不出來（要 --deny-probe）。 */
+function autoDenyProbes(forbidden) {
+  const f = forbidden;
+  return [
+    ...(Array.isArray(f.servers) ? f.servers.map((srv) => `mcp__${srv}__guard_copy_selftest_probe`) : []),
+    ...(Array.isArray(f.verbs) && Array.isArray(f.nouns) && f.verbs[0] && f.nouns[0] ? [`mcp__guard_copy_selftest__${f.verbs[0]}_${f.nouns[0]}`] : []),
+    ...(Array.isArray(f.deny) ? f.deny : []),
+  ].filter((n) => typeof n === 'string' && PROBE_NAME.test(n));
+}
+
+function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = true, denyProbe = null }) {
+  if (denyProbe !== null && (typeof denyProbe !== 'string' || !PROBE_NAME.test(denyProbe))) {
+    throw new Refusal('--deny-probe 要是合法的假工具名（mcp__ 開頭、只用英數與 _ . -）：不合法的名字攔截器本來就擋，證明不了清單');
+  }
   const copyDir = checkTarget(to, { home, allowTemp });
   const { commit, files, template, tracking } = extract(from, root);
+  const forbiddenBlock = JSON.parse(files.get('settings.json').toString('utf8')).forbidden;
+  // 只看「清單有沒有這幾種欄位」，不看合不合文法：壞掉的清單要走到試跑，由「無害名字也被擋、設定壞掉」那一句露出來
+  const f = forbiddenBlock;
+  const hasAutoSource = (Array.isArray(f.servers) && f.servers.length) || (Array.isArray(f.verbs) && f.verbs[0] && Array.isArray(f.nouns) && f.nouns[0]) || (Array.isArray(f.deny) && f.deny.length);
+  if (runSelfTest && !denyProbe && !hasAutoSource) {
+    throw new Refusal('這份清單只靠樣式規則（沒有連接器、動詞＋名詞、逐字拒絕清單），工具自己想不出該擋的試跑名字：用 --deny-probe 給一個照清單該擋的假工具名（只當字串餵給攔截器）');
+  }
   hookGroup({ copyDir, fp: '0'.repeat(64) }, template);   // 先驗範本，範本壞了就什麼都不寫
   fs.mkdirSync(copyDir, { recursive: true });
   for (const rel of COPY_FILES) {
@@ -213,8 +240,7 @@ function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = t
   }
   const fp = fingerprintDir(copyDir);   // 從磁碟讀回來算：算的就是鉤子會看到的位元組
   const group = hookGroup({ copyDir, fp }, template);
-  const forbidden = JSON.parse(files.get('settings.json').toString('utf8')).forbidden;
-  const failure = runSelfTest ? selfTest({ copyDir, fp, template, forbidden }) : null;
+  const failure = runSelfTest ? selfTest({ copyDir, fp, template, forbidden: forbiddenBlock, denyProbe }) : null;
   return { commit, tracking, copyDir, fp, group, failure };
 }
 
@@ -222,8 +248,9 @@ function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 2) {
     const [k, v] = [argv[i], argv[i + 1]];
-    if (!['--from', '--to'].includes(k) || v === undefined || out[k.slice(2)] !== undefined) return null;
-    out[k.slice(2)] = v;
+    const key = { '--from': 'from', '--to': 'to', '--deny-probe': 'denyProbe' }[k];
+    if (!key || v === undefined || out[key] !== undefined) return null;
+    out[key] = v;
   }
   return out.from && out.to ? out : null;
 }
@@ -231,7 +258,7 @@ function parseArgs(argv) {
 function main(argv = process.argv.slice(2), env = process.env) {
   const args = parseArgs(argv);
   if (!args) {
-    process.stderr.write('用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄>\n');
+    process.stderr.write('用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄> [--deny-probe <照清單該擋的假工具名>]\n');
     return 2;
   }
   let r;
@@ -249,10 +276,10 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
   process.stdout.write(`${JSON.stringify(r.group, null, 2)}\n`);
   process.stderr.write([...summary, '自我試跑：過（/bin/sh -lc：無害假名放行、該擋的假名退 2、改過一個位元組的副本退 2）。',
-    '接下來（人做，這支不碰家目錄的 .codex）：關掉所有 Codex 視窗 → 把上面那一組加到家目錄 .codex/hooks.json 的 hooks.PreToolUse 最後面（換掉舊的複本那一組）→ 開 Codex 按信任 → 叫一個無害的工具確認照常能用 → 才刪舊的複本目錄。', ''].join('\n'));
+    '接下來（人做，這支不碰家目錄的 .codex；步驟與理由＝README「搬進一個專案」第 3 步）：關掉所有 Codex 視窗 → 第一次裝＝把上面那一組加到家目錄 .codex/hooks.json 的 hooks.PreToolUse 最後面；換新複本＝在原位置換掉舊複本那一組 → 開 Codex 按信任 → 叫清單上刻意放的無害測試工具，看到攔截器的拒絕訊息（證明新鉤子真的在跑；無害工具照常能用證明不了）→ 換新複本時才刪舊的複本目錄。', ''].join('\n'));
   return 0;
 }
 
 if (require.main === module) process.exit(main());
 
-module.exports = { COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal };
+module.exports = { COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal };

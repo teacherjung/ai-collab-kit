@@ -101,7 +101,8 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     for (const step of [['git', 'init', '-q'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
 
     for (const d of watched) fs.utimesSync(d, PAST, PAST);
-    const r = sh([process.execPath, '--test']);
+    // 報告格式固定成 spec：下面數跳過原因靠的是報告文字（裁示批 r1 T1：換成別的格式會假紅）
+    const r = sh([process.execPath, '--test', '--test-reporter=spec']);
     const failing = r.stdout.split('\n').filter((l) => /^✖|^not ok/u.test(l)).slice(0, 12).join('\n');
     assert.equal(r.status, 0, `填了假設定的整份考卷不是全綠：\n${failing}`);
     const skippedCasebook = r.stdout.split(NOT_CARRIED_REASON).length - 1;

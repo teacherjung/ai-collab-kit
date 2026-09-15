@@ -7,14 +7,16 @@
 //   ①抽出來的複本剛好是那四個檔、唯讀、內容是那個版本提交的（工作樹沒提交的改動進不去），同一個版本抽兩次指紋一樣；
 //     指紋跟 /usr/bin/shasum 自己算的一模一樣（兩套實作互證）；
 //   ②印出來的指令真的跑一遍（sh -c 與 sh -lc、從別的目錄起）：該擋的擋、該放的放；
-//   ③四個檔各改一個位元組、少一個檔、整個複本不在、三個佔位任一個沒換＝退 2、不印拒絕以外的東西；每一種都有「改回來就恢復」的對照組；
+//   ③四個檔各改一個位元組、少一個檔、整個複本不在、三個佔位任一個沒換、複本裡任何一處換成連結（內容一模一樣也算）＝退 2、不印拒絕以外的東西；
+//     每一種都有「改回來就恢復」的對照組（連結那幾種另有對照：不擋的話，內容相同的連結真的會讓攔截器讀到別份清單而放行）；
 //   ④找不到 node、攔截器載入就崩（指紋是對的）＝退 2；
 //   ⑤**攔截器讀到的檔＝指紋蓋到的檔**：程式層追蹤（每一支載入的模組、每一次讀檔）加上 Node 自己讀的 tools/package.json
 //     （行為證明：拿掉就崩），剛好等於指紋清單；複本旁邊、上一層放會改變載入方式的檔，判斷不變；原始碼裡每一個 require 都是
 //     內建模組或清單上的檔；攔截器只讀設定的 forbidden 那一塊（所以複本只放那一塊）；
 //   ⑥環境變數夾帶的程式（NODE_OPTIONS）進不來（對照組：拿掉清空環境那一截，夾帶的程式真的會把該擋的放行）；
 //   ⑦拒絕的情況什麼都不寫：相對路徑、路徑含單引號、目的地不空、在版本控制目錄裡、在家目錄的 .codex／.claude 底下
-//     （大小寫不同也算，不分大小寫的磁碟上是同一個目錄）、在暫存區、版本不存在、那個版本的禁區清單沒填；
+//     （大小寫不同也算，目錄還不存在也算）、在暫存區、版本不存在、那個版本的禁區清單沒填、範本那一組形狀不對、
+//     清單只有樣式規則卻沒給 --deny-probe、--deny-probe 不是合法的假工具名；
 //     自我試跑沒過、寫到一半出錯＝退 1、不印接線；
 //   ⑧只抽**已經在 origin/<主幹> 裡**的版本（本機沒推的提交、沒 fetch、設定沒填主幹＝拒絕）；接線範本也從那個版本讀（工作樹改了範本不算數）；
 //   ⑨自我試跑真的抓得到：攔截器被改成什麼都放、清單壞到什麼都擋、指紋檢查被拿掉、放行時往輸出印字——都退 1、不印接線；
@@ -166,6 +168,37 @@ test('②③④印出來的指令真的跑一遍：擋、放、改一個位元�
   blocks(hook(cmd), MISMATCH, '整個複本不在');
   fs.renameSync(`${copyDir}.away`, copyDir);
   allows(hook(cmd), '對照組：放回來就恢復');
+
+  // 連結（裁示批 r1 B1）：另一份內容相同、只有清單放寬的複本；把這一份的某一處換成指向它的連結，
+  // shasum 跟著連結算出一樣的指紋，node 卻從連結真正的位置找旁邊的檔＝讀到放寬的清單。一律擋。
+  const loose = path.join(scratch, 'loose-copy');
+  fs.cpSync(copyDir, loose, { recursive: true });
+  for (const p of walk(loose)) fs.chmodSync(p, 0o755);
+  fs.writeFileSync(path.join(loose, 'settings.json'), `${JSON.stringify({ forbidden: { ...FAKE, servers: ['nothing_here'], verbs: ['nothing_here'] } }, null, 2)}\n`);
+  const swapToLink = (rel, target) => {
+    const at = path.join(copyDir, rel);
+    const saved = `${at}.saved`;
+    fs.chmodSync(path.dirname(at), 0o755);
+    fs.renameSync(at, saved);
+    fs.symlinkSync(target, at);
+    return () => { fs.unlinkSync(at); fs.renameSync(saved, at); };
+  };
+  // 對照組：不看連結的舊寫法，同一個連結真的會放行（證明這個反例在這台機器上成立）
+  const noLinkCheck = cmd.replace(' && [ -z "$(/usr/bin/find . -type l 2>/dev/null)" ]', '');
+  assert.notEqual(noLinkCheck, cmd, '前提：指令裡有檢查連結那一截');
+  let restore = swapToLink(path.join('tools', 'forbidden-tools.js'), path.join(loose, 'tools', 'forbidden-tools.js'));
+  assert.equal(fingerprintDir(copyDir), fp, '前提：換成內容相同的連結，指紋一樣');
+  allows(hook(noLinkCheck, { tool: DENIED }), '對照組：不檢查連結時，入口換成連結真的讀到放寬的清單而放行');
+  blocks(hook(cmd, { tool: DENIED }), MISMATCH, '入口換成連結');
+  restore();
+  restore = swapToLink('tools', path.join(loose, 'tools'));
+  blocks(hook(cmd, { tool: DENIED }), MISMATCH, 'tools 目錄換成連結');
+  restore();
+  restore = swapToLink('settings.json', path.join(scratch, 'moved-settings-link-target'));
+  fs.copyFileSync(`${path.join(copyDir, 'settings.json')}.saved`, path.join(scratch, 'moved-settings-link-target'));
+  blocks(hook(cmd), MISMATCH, '設定檔換成內容相同的連結');
+  restore();
+  denies(hook(cmd, { tool: DENIED }), '對照組：連結都拿掉就恢復');
 
   const values = { '{copyDir}': copyDir, '{files}': COPY_FILES.join(' '), '{fingerprint}': fp };
   const fill = (skip) => PLACEHOLDERS.reduce((c, ph) => (ph === skip ? c : c.replace(ph, () => values[ph])), templateCommand());
@@ -332,9 +365,25 @@ test('⑦拒絕的情況什麼都不寫；自我試跑沒過＝退 1、不印接
   assert.equal(noFlag.status, 2, noFlag.stderr);
   assert.match(noFlag.stderr, /暫存區/u);
 
-  // 不分大小寫的磁碟上 .CODEX 就是 .codex：大小寫不同也要擋（分大小寫的磁碟上它們是兩個目錄，這一段不適用）
-  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
-  if (fs.existsSync(path.join(home, '.CODEX'))) refuses({ to: path.join(home, '.CODEX', 'guard') }, /\.codex/u, '家目錄的 .codex（大小寫不同）');
+  // 大小寫不同也要擋：不分大小寫的磁碟上 .CODEX 就是 .codex；目錄還不存在時也一樣（裁示批 r1 B3：第一次建立就擋不住）
+  const freshHome = fs.mkdtempSync(path.join(scratch, 'fresh-home-'));
+  const refusesIn = (to, re, why) => {
+    assert.throws(() => build({ root: src, home: freshHome, from: 'HEAD', allowTemp: true, to }), (e) => e instanceof Refusal && re.test(e.message), why);
+    assert.ok(!fs.existsSync(to), `${why}：不可以留下目的地`);
+  };
+  refusesIn(path.join(freshHome, '.CODEX', 'guard'), /\.codex/u, '.CODEX 還不存在');
+  refusesIn(path.join(freshHome, '.Claude', 'guard'), /\.claude/u, '.Claude 還不存在');
+  assert.ok(!fs.existsSync(path.join(freshHome, '.codex')) && !fs.existsSync(path.join(freshHome, '.claude')), '前提：兩個目錄都真的還不存在');
+  fs.mkdirSync(path.join(freshHome, '.codex'));
+  refusesIn(path.join(freshHome, '.CODEX', 'guard2'), /\.codex/u, '.codex 已存在、寫成大寫');
+
+  // 範本那一組的形狀不對（matcher 被改掉，提交進版本）：拒絕、不印（裁示批 r1 T2）
+  const badShape = sourceRepo(scratch, { edit: (dir) => {
+    const f = path.join(dir, 'templates', 'hook-codex-global.json');
+    fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('"matcher": "^mcp__"', '"matcher": "^mcp__unrelated__"'));
+  } });
+  assert.throws(() => build({ root: badShape, home, from: 'HEAD', allowTemp: true, to: path.join(scratch, 'c-shape') }), (e) => e instanceof Refusal && /形狀不對/u.test(e.message), '範本 matcher 被改掉');
+  assert.ok(!fs.existsSync(path.join(scratch, 'c-shape')));
 
   // 寫到一半出錯（目的地的上層不給寫）：退 1、不印接線、訊息說可能留有半份
   if (process.getuid && process.getuid() !== 0) {
@@ -413,4 +462,23 @@ test('⑨自我試跑真的抓得到：什麼都放、什麼都擋、指紋檢�
   const src = sourceRepo(scratch, { forbidden: { ...FAKE, deny: [ALLOW_PROBES[0], ...FAKE.deny] } });
   const r = build({ root: src, home, allowTemp: true, from: 'HEAD', to: path.join(scratch, 'st-collide') });
   assert.equal(r.failure, null, `試跑名字被清單擋到時要換一個（${r.failure}）`);
+}));
+
+test('⑩只靠樣式規則的清單：沒給 --deny-probe 就拒絕（什麼都不寫）；給了照清單該擋的假名就能裝，給的名字不擋或不合法就不過', () => withScratch((scratch) => {
+  const home = fs.mkdtempSync(path.join(scratch, 'home-'));
+  const patternsOnly = { name: '測試禁區', patterns: ['^create_widget$'] };
+  const src = sourceRepo(scratch, { forbidden: patternsOnly });
+  const to = path.join(scratch, 'p-none');
+  assert.throws(() => build({ root: src, home, from: 'HEAD', allowTemp: true, to }), (e) => e instanceof Refusal && /--deny-probe/u.test(e.message), '沒給 --deny-probe');
+  assert.ok(!fs.existsSync(to), '沒給 --deny-probe：不可以留下目的地');
+  const ok = build({ root: src, home, from: 'HEAD', allowTemp: true, to: path.join(scratch, 'p-ok'), denyProbe: 'mcp__guard_copy_selftest__create_widget' });
+  assert.equal(ok.failure, null, `給了照清單該擋的假名就能裝（${ok.failure}）`);
+  denies(hook(ok.group.hooks[0].command, { tool: 'mcp__other__create_widget' }), '裝好的指令照樣式擋');
+  allows(hook(ok.group.hooks[0].command, { tool: 'mcp__other__get_widget' }), '裝好的指令照常放行');
+  const wrong = build({ root: src, home, from: 'HEAD', allowTemp: true, to: path.join(scratch, 'p-wrong'), denyProbe: 'mcp__guard_copy_selftest__get_widget' });
+  assert.match(wrong.failure || '', /沒有一個被擋成退 2/u, '給的名字照清單不擋：不過（不改試別的）');
+  assert.throws(() => build({ root: src, home, from: 'HEAD', allowTemp: true, to: path.join(scratch, 'p-illegal'), denyProbe: 'mcp__has space__x' }), (e) => e instanceof Refusal && /合法的假工具名/u.test(e.message), '--deny-probe 不合法');
+  // 指令入口也收這個參數
+  const cli = spawnSync(process.execPath, [path.join(src, 'tools', 'guard-copy.js'), '--from', 'HEAD', '--to', path.join(scratch, 'p-cli'), '--deny-probe', 'mcp__guard_copy_selftest__create_widget'], { cwd: scratch, encoding: 'utf8', env: { ...base, KIT_GUARD_COPY_ALLOW_TEMP: '1' } });
+  assert.equal(cli.status, 0, cli.stderr);
 }));
