@@ -7,7 +7,8 @@
 //   ①抽出來的複本剛好是那四個檔、唯讀、內容是那個版本提交的（工作樹沒提交的改動進不去），同一個版本抽兩次指紋一樣；
 //     指紋跟 /usr/bin/shasum 自己算的一模一樣（兩套實作互證）；
 //   ②印出來的指令真的跑一遍（sh -c 與 sh -lc、從別的目錄起）：該擋的擋、該放的放；
-//   ③四個檔各改一個位元組、少一個檔、整個複本不在、三個佔位任一個沒換、複本裡任何一處換成連結（內容一模一樣也算）＝退 2、不印拒絕以外的東西；
+//   ③四個檔各改一個位元組、少一個檔、整個複本不在、三個佔位任一個沒換、複本裡任何一處換成連結（內容一模一樣也算）、查不了有沒有連結、找不到 find＝退 2、不印拒絕以外的東西；
+//     連結那兩道（查連結、node 不順著連結找檔）各自單獨也擋得住；
 //     每一種都有「改回來就恢復」的對照組（連結那幾種另有對照：不擋的話，內容相同的連結真的會讓攔截器讀到別份清單而放行）；
 //   ④找不到 node、攔截器載入就崩（指紋是對的）＝退 2；
 //   ⑤**攔截器讀到的檔＝指紋蓋到的檔**：程式層追蹤（每一支載入的模組、每一次讀檔）加上 Node 自己讀的 tools/package.json
@@ -183,14 +184,34 @@ test('②③④印出來的指令真的跑一遍：擋、放、改一個位元�
     fs.symlinkSync(target, at);
     return () => { fs.unlinkSync(at); fs.renameSync(saved, at); };
   };
-  // 對照組：不看連結的舊寫法，同一個連結真的會放行（證明這個反例在這台機器上成立）
-  const noLinkCheck = cmd.replace(' && [ -z "$(/usr/bin/find . -type l 2>/dev/null)" ]', '');
-  assert.notEqual(noLinkCheck, cmd, '前提：指令裡有檢查連結那一截');
+  // 兩道各自擋得住（裁示批 r2 B1）：①查連結而且查不了也擋；②node 不順著連結找旁邊的檔。
+  // 對照組＝兩道都拿掉，同一個連結真的讀到放寬的清單而放行（證明這個反例在這台機器上成立）
+  const LINK_CHECK = ' && guard_links="$(/usr/bin/find . -type l 2>/dev/null)" && [ -z "$guard_links" ]';
+  const PRESERVE = ' --preserve-symlinks --preserve-symlinks-main';
+  assert.ok(cmd.includes(LINK_CHECK) && cmd.includes(PRESERVE), '前提：指令裡有兩道');
+  const onlyPreserve = cmd.replace(LINK_CHECK, '');
+  const neither = onlyPreserve.replace(PRESERVE, '');
   let restore = swapToLink(path.join('tools', 'forbidden-tools.js'), path.join(loose, 'tools', 'forbidden-tools.js'));
   assert.equal(fingerprintDir(copyDir), fp, '前提：換成內容相同的連結，指紋一樣');
-  allows(hook(noLinkCheck, { tool: DENIED }), '對照組：不檢查連結時，入口換成連結真的讀到放寬的清單而放行');
+  allows(hook(neither, { tool: DENIED }), '對照組：兩道都拿掉時，入口換成連結真的讀到放寬的清單而放行');
   blocks(hook(cmd, { tool: DENIED }), MISMATCH, '入口換成連結');
+  denies(hook(onlyPreserve, { tool: DENIED }), '只剩第②道：照複本自己的清單擋');
+  // 查不了有沒有連結（tools 設成進得去、列不出）：find 失敗也要擋，不可以把「沒印東西」當成「沒有連結」
+  if (process.getuid && process.getuid() !== 0) {
+    fs.chmodSync(path.join(copyDir, 'tools'), 0o111);
+    const find = spawnSync('/usr/bin/find', ['.', '-type', 'l'], { cwd: copyDir, encoding: 'utf8' });
+    try {
+      assert.notEqual(find.status, 0, '前提：這樣設定之後 find 真的失敗');
+      assert.equal(fingerprintDir(copyDir), fp, '前提：四個檔照樣讀得到、指紋一樣');
+      blocks(hook(cmd, { tool: DENIED }), MISMATCH, '查不了有沒有連結');
+      const swallowed = cmd.replace(LINK_CHECK, ' && [ -z "$(/usr/bin/find . -type l 2>/dev/null)" ]').replace(PRESERVE, '');
+      allows(hook(swallowed, { tool: DENIED }), '對照組：只看輸出空不空、又不帶旗標的寫法，這個情況真的放行');
+    } finally {
+      fs.chmodSync(path.join(copyDir, 'tools'), 0o755);
+    }
+  }
   restore();
+  blocks(hook(cmd.replace('/usr/bin/find', '/nonexistent/find')), MISMATCH, '找不到 find 也擋');
   restore = swapToLink('tools', path.join(loose, 'tools'));
   blocks(hook(cmd, { tool: DENIED }), MISMATCH, 'tools 目錄換成連結');
   restore();
