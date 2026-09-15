@@ -22,7 +22,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { cli, probeRun, plantCanaries, sweepCanaries, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE } = require('../tools/scan-probe.js');
+const { MACHINE, cli, probeRun, plantCanaries, sweepCanaries, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE } = require('../tools/scan-probe.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
 
@@ -288,7 +288,7 @@ test('預設執行器：指令起不來＝status null（呼叫端當測不出）
 });
 
 test('指令入口：例外收成退 2，訊息不帶路徑；真的跑一遍指令不會放行', () => {
-  const boom = cli({ settings: { get scanner() { throw Object.assign(new Error('/Users/someone/secret'), { code: 'EBOOM' }); } } });
+  const boom = cli({ settings: { machines: [{ name: MACHINE, state: '已啟用' }], get scanner() { throw Object.assign(new Error('/Users/someone/secret'), { code: 'EBOOM' }); } } });
   assert.equal(boom.code, 2);
   assert.match(boom.lines.join('\n'), /EBOOM/u);
   assert.ok(!boom.lines.join('\n').includes('/Users/someone'), '例外訊息不可以帶路徑');
@@ -406,5 +406,43 @@ test('前綴裡的 {projectRoot} 換成專案根目錄：隔離設定檔住在�
     fs.rmSync(zone, { recursive: true, force: true });
     fs.rmSync(boxRoot, { recursive: true, force: true });
     fs.rmSync(noRoot, { recursive: true, force: true });
+  }
+});
+
+test('指令入口：專案沒把這台機器登記已啟用就不跑——試探與埋都什麼都不做；收照樣能收（搬家第 2 步 Grok 複審後掃）', () => {
+  const zone = tempZone();
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-canary-out-'));
+  try {
+    const iso = { provider: '專案自建', wrap: [process.execPath, FAKE, '{box}'], boxRoot: UNSET, forbidden: [zone] };
+    const withState = (machines) => ({ machines, scanner: { isolation: iso } });
+    const cases = [
+      ['登記已安裝未啟用', [{ name: MACHINE, state: '已安裝未啟用' }]],
+      ['登記未移植', [{ name: MACHINE, state: '未移植' }]],
+      ['沒有這一列', [{ name: '掃描前試探', state: '已啟用' }]],
+      ['這一列重複', [{ name: MACHINE, state: '已啟用' }, { name: MACHINE, state: '已啟用' }]],
+      ['沒有機器表', undefined],
+    ];
+    for (const [why, machines] of cases) {
+      const out = path.join(work, 'x.txt');
+      for (const argv of [[], ['--plant', out]]) {
+        const r = cli({ settings: withState(machines) }, argv);
+        assert.equal(r.code, 2, `${why}（${argv.join(' ') || '試探'}）：要拒絕`);
+        assert.match(r.lines.join('\n'), /掃描前試探/u, `${why}：訊息要講是哪一台`);
+        assert.deepEqual(fs.readdirSync(zone), [], `${why}（${argv.join(' ') || '試探'}）：禁區裡什麼都不可以有`);
+        assert.ok(!fs.existsSync(out), `${why}：不可以留下清單檔`);
+      }
+    }
+    // 對照組：同一份設定登記已啟用，埋真的會動手（證明上面的「什麼都沒做」是這一道擋的）
+    const planted = cli({ settings: withState([{ name: MACHINE, state: '已啟用' }]) }, ['--plant', path.join(work, 'ok.txt')]);
+    assert.equal(planted.code, 0, planted.lines.join('\n'));
+    assert.equal(fs.readdirSync(zone).filter((n) => n.startsWith('.scan-canary-')).length, 1, '對照組：已啟用就真的埋了');
+    // 收不擋：機器改成未啟用之後，已經埋的照樣收得回來
+    const swept = cli({ settings: withState([{ name: MACHINE, state: '已安裝未啟用' }]) }, ['--sweep', path.join(work, 'ok.txt')]);
+    assert.equal(swept.code, 0, swept.lines.join('\n'));
+    assert.deepEqual(fs.readdirSync(zone), [], '收完禁區是空的');
+    // 名字要跟設定的機器表那一列一字不差（改名時兩邊一起改）
+    assert.equal(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'settings.json'), 'utf8')).machines.filter((m) => m.name === MACHINE).length, 1, '本倉庫設定的機器表要剛好有這一列');
+  } finally {
+    for (const d of [zone, work]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
