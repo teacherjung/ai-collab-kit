@@ -437,7 +437,7 @@ test('指令入口：專案沒把這台機器登記已啟用就不跑——試�
         assert.ok(!fs.existsSync(out), `${why}：不可以留下清單檔`);
       }
     }
-    // 對照組：同一份設定登記已啟用，試探真的會跑盒內指令、埋真的會動手（證明上面的「什麼都沒做」是這一道擋的）
+    // 對照組：同一份設定登記已啟用，跨過閘、開始執行探針；埋真的會動手（證明上面的「什麼都沒做」是這一道擋的）
     const live = fakeRunner(() => ({ status: 1, stdout: '', stderr: 'Operation not permitted' }));
     cli({ settings: withState([{ name: MACHINE, state: '已啟用' }]), run: live.run }, []);
     assert.ok(live.calls.length > 0, '對照組：已啟用時跨過閘、開始執行探針（至少叫了一次指令；這個假執行器讓盒外對照不活，所以沒走到盒內那一步）');
