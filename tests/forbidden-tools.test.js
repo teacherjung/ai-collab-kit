@@ -7,7 +7,8 @@
 //   ⑥三份接線範本（Claude、Codex 專案層、Codex 全域層）都只呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
 //   ⑩連接器在名字的任何一段都認得（多一層前綴照樣白名單制；邊界要真的是邊界）；
 //   ⑪雙保險：唯讀名單誤放了動禁區的工具，家族網照樣擋；
-//   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、專案根沒給＝退 2 帶錯誤輸出。
+//   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、專案根沒給＝退 2 帶錯誤輸出
+//     （Codex 全域層這裡只守「範本原樣＝退 2」；複本、指紋、真的跑一遍在 tests/guard-copy.test.js）。
 //   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
 //   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字；
 //   ⑨規則要合各欄位的文法：含空白、非法字元的規則不可能匹配合法工具名，留著只會把「有規則」判成真（r2 High②）＝拒絕。
@@ -155,7 +156,9 @@ test('⑥三份接線範本都只呼叫同一支判斷，範本裡不抄判斷�
     const cmds = doc.hooks.PreToolUse.flatMap((h) => h.hooks.map((x) => x.command));
     assert.equal(cmds.length, 1, `${f} 要剛好一條指令`);
     assert.equal(cmds[0].split('tools/forbidden-tools.js').length, 2, `${f} 要呼叫同一支、而且只呼叫一次`);
-    assert.ok(cmds[0].endsWith(FAIL_CLOSED_TAIL), `${f} 的尾巴要把起不來轉成退 2`);
+    // 全域層在尾巴之後還有一截「拒絕改退 2」（tests/guard-copy.test.js 真的跑過），所以這裡看「剛好一個」，不看「結尾是」
+    assert.equal(cmds[0].split(FAIL_CLOSED_TAIL).length, 2, `${f} 要剛好一個把起不來轉成退 2 的尾巴`);
+    if (f !== 'hook-codex-global.json') assert.ok(cmds[0].endsWith(FAIL_CLOSED_TAIL), `${f} 的尾巴要把起不來轉成退 2`);
     assert.ok(!JSON.stringify(doc).includes('python3'), `${f} 不可以自己抄一份判斷`);
   }
 });
@@ -220,10 +223,12 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
     blocks(sh(codex, { cwd: elsewhere }), 'Codex 專案層：不在版本控制目錄裡');
     blocks(sh(codex, { cwd: subdir, env: { PATH: elsewhere } }), 'Codex 專案層：找不到 node 與 git');
 
+    // 全域層讀固定複本、指令裡寫死指紋（裁示 6a＋7b）：真的跑一遍的題在 tests/guard-copy.test.js；這裡只守範本原樣＝擋
     const global = cmd('hook-codex-global.json');
-    assert.equal(global.split('{kitRoot}').length, 2, '全域層要留一個 {kitRoot} 讓安裝的人換成絕對路徑');
-    denies(sh(global.replace('{kitRoot}', proj), { cwd: elsewhere }), 'Codex 全域層：從別的專案起');
-    blocks(sh(global, { cwd: elsewhere }), 'Codex 全域層：{kitRoot} 忘了換');
+    for (const ph of ['{copyDir}', '{files}', '{fingerprint}']) assert.equal(global.split(ph).length, 2, `全域層要剛好留一個 ${ph} 給 tools/guard-copy.js 填`);
+    const raw = sh(global, { cwd: elsewhere });
+    assert.deepEqual([raw.status, raw.stdout], [2, ''], `Codex 全域層：佔位沒換＝退 2（${raw.stderr}）`);
+    assert.match(raw.stderr, /指紋對不上/u, 'Codex 全域層：退 2 要帶錯誤輸出');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }

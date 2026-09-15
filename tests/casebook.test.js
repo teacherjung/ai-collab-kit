@@ -22,7 +22,15 @@
 //     整行照掃不給任何豁免**（上一版對網址整段放行，結果網址後面緊接著的名字也被吞掉；
 //     來源網址裡本來就不該出現字表上的名字，所以根本不需要那個例外）。
 //
+//   ④**帶不帶案例簿只看設定的登記**（裁示 2a：公開的專案可以不帶）：機器表「案例簿考題＋索引產生器」那一列已啟用＝帶、未移植＝不帶。
+//     登記跟 cases/ 在不在對不上一律紅（而且照跑上面四題）；唯一跳過的情況是「登記不帶，而且 cases/ 確實不在」，跳過會寫出原因。
+//     上面四題各自記一筆「我跑了」，最後一題核對跑了幾題＝登記說該跑幾題（接線接錯、跳過值寫死，這裡紅）。
+//     ⚠️ 所以只挑幾題跑（--test-name-pattern）時最後一題會紅，那是這個核對的代價。
+//
 // ⚠️ 守不到的，照實說：
+//    ・同一個變更裡同時把登記改成未移植、又刪掉 cases/：兩樣都改就全綠（四題跳過）——看得見的改動，靠審查；
+//    ・不帶案例簿的專案裡，「本文每一條都有案例指著」與名字字表都不檢查：規矩本文要在套件那邊改；
+//    ・「在不在」看的是磁碟、不是版本控制：沒追蹤的 cases/ 也算在（本機紅、乾淨的雲端副本可能綠）。
 //    ・欄位「非空」指的是**原始欄值非空**，不是「呈現出來看得到字」——這一題不解讀 Markdown，
 //      只靠 ⓪ 擋掉已知會產生隱藏內容的那兩樣；別種寫法仍可能讓呈現與原文不一致。
 //    ・事實對不對、一事一檔、來源連結活不活著、條號撐不撐得住那條規矩（字面引用 ≠ 事件支撐）、
@@ -33,10 +41,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { read } = require('../tools/build-rules.js');
-const { build: buildIndex, outFile: indexOutFile } = require('../tools/build-casebook-index.js');
+const { build: buildIndex, outFile: indexOutFile, MACHINE, NOT_CARRIED_REASON, declaration } = require('../tools/build-casebook-index.js');
+const { read: readSettings } = require('../tools/settings-data.js');
 
 const root = path.join(__dirname, '..');
 const casesDir = path.join(root, 'cases');
+// 帶不帶只看登記；cases/ 在不在只拿來對帳（declaration 的註解）
+const DECLARED = declaration(readSettings().machines, fs.existsSync(casesDir));
+const SKIP = DECLARED.run ? false : NOT_CARRIED_REASON;
+const CHECKS = 4;
+let ran = 0;
 // 六欄，順序就是案例的固定格式。
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
 // 一份已知的字表；辨認這份以外的名字不是這題的事。
@@ -88,7 +102,8 @@ function ruleIds() {
   return ids;
 }
 
-test('案例與索引都不含會製造隱藏內容的字元', () => {
+test('案例與索引都不含會製造隱藏內容的字元', { skip: SKIP }, () => {
+  ran += 1;
   for (const file of [...caseFiles(), 'README.md']) {
     const text = fs.readFileSync(path.join(casesDir, file), 'utf8');
     const hit = HIDDEN.exec(text);
@@ -100,7 +115,8 @@ test('案例與索引都不含會製造隱藏內容的字元', () => {
   }
 });
 
-test('索引與重新產生的結果逐字元相同（索引是產物、不要手改）', () => {
+test('索引與重新產生的結果逐字元相同（索引是產物、不要手改）', { skip: SKIP }, () => {
+  ran += 1;
   const files = caseFiles();
   assert.ok(files.length >= 20, `只找到 ${files.length} 則案例：目錄空掉的話下面幾題會變成空包彈`);
   assert.equal(
@@ -110,7 +126,8 @@ test('索引與重新產生的結果逐字元相同（索引是產物、不要�
   );
 });
 
-test('每則六欄各一個且非空、條號都存在，而且本文每一條都有案例指著', () => {
+test('每則六欄各一個且非空、條號都存在，而且本文每一條都有案例指著', { skip: SKIP }, () => {
+  ran += 1;
   const ids = ruleIds();
   const covered = new Set();
   for (const file of caseFiles()) {
@@ -123,7 +140,8 @@ test('每則六欄各一個且非空、條號都存在，而且本文每一條�
   assert.deepEqual(orphans, [], `這幾條規矩沒有任何案例指著它（案例簿的進門規則：一條規矩要進本文，就要說得出它為什麼存在）：${orphans.join('、')}`);
 });
 
-test('案例與索引都不出現裁示者名字與 AI 產品名（只認一份已知字表、不分大小寫）', () => {
+test('案例與索引都不出現裁示者名字與 AI 產品名（只認一份已知字表、不分大小寫）', { skip: SKIP }, () => {
+  ran += 1;
   for (const file of [...caseFiles(), 'README.md']) {
     fs.readFileSync(path.join(casesDir, file), 'utf8')
       .split('\n')
@@ -138,4 +156,26 @@ test('案例與索引都不出現裁示者名字與 AI 產品名（只認一份�
         }
       });
   }
+});
+
+// ⚠️ 這一題要留在檔案最後：它核對上面四題跑了幾題
+test('帶不帶案例簿只看設定的登記，而且登記要跟 cases/ 在不在一致；該跑的真的跑了', () => {
+  assert.equal(DECLARED.problem, null, DECLARED.problem || '');
+  assert.equal(ran, DECLARED.run ? CHECKS : 0, `登記說${DECLARED.run ? '要跑' : '不跑'}案例簿的 ${CHECKS} 題，實際跑了 ${ran} 題：跳過的接線接錯了`);
+  const row = (state) => [{ name: MACHINE, state }];
+  assert.deepEqual(declaration(row('已啟用'), true), { run: true, problem: null }, '登記帶、cases/ 在：照跑');
+  assert.deepEqual(declaration(row('未移植'), false), { run: false, problem: null }, '登記不帶、cases/ 不在：唯一跳過的情況');
+  const reds = [
+    ['登記帶、cases/ 不在（套件裡誤刪，或專案同步時設定被蓋回）', row('已啟用'), false],
+    ['登記不帶、cases/ 卻在', row('未移植'), true],
+    ['登記成其他狀態', row('已安裝未啟用'), false],
+    ['這一列不見了', [{ name: '案例簿考題', state: '未移植' }], false],
+    ['這一列重複', [...row('未移植'), ...row('未移植')], false],
+  ];
+  for (const [why, machines, present] of reds) {
+    const d = declaration(machines, present);
+    assert.ok(d.run && d.problem, `${why}：要紅而且照跑`);
+  }
+  // 訊息不可以只叫人還原：在不帶案例簿的專案裡照做＝把私人紀錄複製進公開倉庫（挑錯那一輪實際走出來過）
+  assert.match(declaration(row('已啟用'), false).problem, /不要把 cases\/ 複製進來/u, '登記帶、cases/ 不在：訊息要講不帶案例簿的專案該怎麼做');
 });

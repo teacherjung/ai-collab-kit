@@ -27,6 +27,35 @@ const notesFile = path.join(casesDir, 'index.json');
 const outFile = path.join(casesDir, 'README.md');
 
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
+
+/**
+ * 帶不帶案例簿的**登記**（裁示 2a：公開的專案可以不帶 cases/）。登記住在設定的機器表這一列：已啟用＝帶、未移植＝不帶。
+ * ⚠️ 帶不帶只看登記、**不看 cases/ 在不在**——「找不到就跳過」會讓套件自己的倉庫誤刪案例簿時照樣全綠（靜靜通過）。
+ * cases/ 在不在只拿來跟登記對帳：對不上一律紅、而且照跑檢查；唯一跳過的情況是「登記不帶，而且 cases/ 確實不在」。
+ * 考題看得到的只有磁碟上的 cases/，分不出自己在套件還是在專案裡，所以訊息兩種情況都要講清楚。
+ */
+const MACHINE = '案例簿考題＋索引產生器';
+const NOT_CARRIED_REASON = `settings.json 把「${MACHINE}」登記成未移植（本專案不帶案例簿），cases/ 也確實不在`;
+
+/**
+ * @param {unknown} machines 設定的機器表
+ * @param {boolean} casesPresent 磁碟上有沒有 cases/
+ * @returns {{ run: boolean, problem: string|null }}
+ */
+function declaration(machines, casesPresent) {
+  const rows = Array.isArray(machines) ? machines.filter((m) => m && m.name === MACHINE) : [];
+  if (rows.length !== 1) return { run: true, problem: `機器表裡「${MACHINE}」要剛好一列（現在 ${rows.length} 列）` };
+  const { state } = rows[0];
+  if (state === '已啟用') {
+    return casesPresent ? { run: true, problem: null }
+      : { run: true, problem: `「${MACHINE}」登記已啟用（帶案例簿），cases/ 卻不在。在套件自己的倉庫＝案例簿被誤刪，還原它；在不帶案例簿的專案（多半是同步時設定被蓋回已啟用）＝把這一列改回未移植，不要把 cases/ 複製進來` };
+  }
+  if (state === '未移植') {
+    return casesPresent ? { run: true, problem: `「${MACHINE}」登記未移植（不帶案例簿），cases/ 卻在：不帶就刪掉 cases/；要帶就改登記已啟用` }
+      : { run: false, problem: null };
+  }
+  return { run: true, problem: `「${MACHINE}」只能登記已啟用（帶案例簿）或未移植（不帶），現在是「${state}」：這一列是開關，不只是紀錄` };
+}
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const EDGE_SPACE = /^\s|\s$|\t/u;
 const hasNul = (s) => String(s).includes('\u0000');
@@ -109,4 +138,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 cases/README.md：${caseFiles().length} 則\n`);
 }
 
-module.exports = { build, outFile, notesFile, caseFiles, readCase, parseCase, checkPlain, FIELDS };
+module.exports = { build, outFile, notesFile, caseFiles, readCase, parseCase, checkPlain, FIELDS, MACHINE, NOT_CARRIED_REASON, declaration };

@@ -18,7 +18,10 @@
 //
 // ⚠️ 巢狀：複本裡的這一題與「誘餌倉庫」那題（也會整份考卷重跑）看到 KIT_NESTED_SUITE=1 就標成跳過，
 //    免得無限巢狀；跳過在報告裡是 skipped，不是靜靜通過。
-// ⚠️ 守不到的：考題沒走到的分支；考題自己寫死、既不讀設定也不叫 gh 的外部呼叫；cases/ 不在複本裡時案例簿那幾題的結果；
+// 案例簿：複本**一律不帶** cases/、把那一列登記成未移植（不帶案例簿的專案的樣子）；案例簿考題只讀設定的機器表那一列、不叫外面，
+//   所以巢狀那一輪固定走「不帶」那條路，而且這一題核對它真的走了（四題跳過、原因寫出來）。帶案例簿時的完整檢查由外層那一輪做
+//   （套件自己的倉庫）；在不帶案例簿的專案裡，外層同樣是跳過。
+// ⚠️ 守不到的：考題沒走到的分支；考題自己寫死、既不讀設定也不叫 gh 的外部呼叫；
 //   假 gh 只攔「保留測試環境 PATH 的 gh 呼叫」——用絕對路徑叫 gh、或經過會重建 PATH 的 shell（例如 sh -lc）就攔不到，
 //   這不是程序層級的禁止連網（r1 T2）；禁區與家目錄以外的地方被寫，這一題看不到。
 'use strict';
@@ -31,12 +34,13 @@ const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
 const { OPERATIONS } = require('../tools/platform.js');
 const { unfilled } = require('./helpers/kit-copy.js');
+const { MACHINE: CASEBOOK, NOT_CARRIED_REASON } = require('../tools/build-casebook-index.js');
 
 const ROOT = path.join(__dirname, '..');
 const NESTED = process.env.KIT_NESTED_SUITE === '1';
 /** 工具與考題從根目錄讀的那幾份（README「搬進一個專案」第 1 步同一份清單）。 */
 const ROOT_FILES = ['settings.json', 'rules.json', 'RULES.md', 'MACHINES.md', 'PROJECT-SETTINGS.md'];
-const ROOT_DIRS = ['tools', 'tests', 'templates', 'cases'];
+const ROOT_DIRS = ['tools', 'tests', 'templates'];   // cases/ 刻意不帶（上面「案例簿」那段）
 
 /** 只記錄、退 97 的錄音機（一條 argv）。 */
 const recorder = (log, tag) => [process.execPath, '-e', `require('fs').appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(tag)} + ' ' + process.argv.slice(1).join(' ') + '\\n'); process.exit(97)`];
@@ -59,7 +63,10 @@ function fakeFilled({ log, box, zones }) {
   s.checks = { prepareWorktree: recorder(log, 'prepare'), commands: [recorder(log, 'check')] };   // 準備指令也填成有動作的（r1 T1：填「無」＝這一格沒考到）
   s.gates = s.gates.map((g) => ({ ...g, state: '已啟用' }));
   s.mergeCommand = { command: process.execPath, args: [...recorder(log, 'merge').slice(1), '{change}', '--match-head-commit', '{sha}', '--body', 'Reviewed-By: {reviewer}\nMerged-By: {merger}'] };
-  s.machines = s.machines.map((m) => (m.state === '未移植' ? m : { ...m, state: '已啟用', verified: '2026-09-15' }));
+  s.machines = s.machines.map((m) => {
+    if (m.name === CASEBOOK) return { ...m, state: '未移植', verified: '' };   // 複本不帶案例簿
+    return m.state === '未移植' ? m : { ...m, state: '已啟用', verified: '2026-09-15' };
+  });
   return s;
 }
 
@@ -77,7 +84,7 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     const PAST = new Date('2001-02-03T04:05:06Z');
     const watched = [...zones, home];
     const stamp = (d) => fs.statSync(d).mtimeMs;
-    for (const d of ROOT_DIRS) if (fs.existsSync(path.join(ROOT, d))) fs.cpSync(path.join(ROOT, d), path.join(copy, d), { recursive: true });
+    for (const d of ROOT_DIRS) fs.cpSync(path.join(ROOT, d), path.join(copy, d), { recursive: true });
     for (const f of ROOT_FILES) fs.copyFileSync(path.join(ROOT, f), path.join(copy, f));
     const settings = fakeFilled({ log, box, zones });
     fs.writeFileSync(path.join(copy, 'settings.json'), `${JSON.stringify(settings, null, 1)}\n`);
@@ -87,6 +94,8 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     const env = { ...gitEnv(), HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KIT_NESTED_SUITE: '1' };
     delete env.NODE_TEST_CONTEXT;   // 不拿掉的話子行程的 node --test 不管紅不紅都退 0
     const sh = (args) => spawnSync(args[0], args.slice(1), { cwd: copy, env, encoding: 'utf8' });
+    assert.ok(!fs.existsSync(path.join(copy, 'cases')), '前提：複本不帶案例簿');
+    assert.deepEqual(settings.machines.filter((m) => m.name === CASEBOOK).map((m) => m.state), ['未移植'], '前提：複本把案例簿登記成不帶');
     const build = sh([process.execPath, 'tools/build-settings.js']);
     assert.equal(build.status, 0, `前提：假設定產得出設定說明（${build.stderr}）`);
     for (const step of [['git', 'init', '-q'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
@@ -95,6 +104,8 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     const r = sh([process.execPath, '--test']);
     const failing = r.stdout.split('\n').filter((l) => /^✖|^not ok/u.test(l)).slice(0, 12).join('\n');
     assert.equal(r.status, 0, `填了假設定的整份考卷不是全綠：\n${failing}`);
+    const skippedCasebook = r.stdout.split(NOT_CARRIED_REASON).length - 1;
+    assert.equal(skippedCasebook, 4, `巢狀那一輪要走「不帶案例簿」那條路：四題跳過、各寫一次原因（實際 ${skippedCasebook} 次）`);
     const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim() : '';
     assert.equal(calls, '', `有考題照設定去叫了外面（平台、合併、三關、隔離或 gh）：\n${calls.split('\n').slice(0, 8).join('\n')}`);
     for (const d of watched) {

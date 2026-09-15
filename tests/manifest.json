@@ -11,6 +11,7 @@
   "filled-settings.test.js",
   "forbidden-tools.test.js",
   "git-env.test.js",
+  "guard-copy.test.js",
   "ignore-lists.test.js",
   "manifest.test.js",
   "markdown-effective.test.js",
