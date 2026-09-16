@@ -10,7 +10,8 @@
 //     對每一題的每一則都檢查。
 //   ②協定版本：對過的三個版本各釘一次照著回、不在表上的回自己的預設（未知的未來版本也回預設）。
 //   ③**安裝說明裡可照抄的位置**（程式碼圍欄、行內程式碼）寫的名字與登記鍵，逐字等於它真的跑起來報的：
-//     人照著抄的就是這幾處，這幾處多一個字元就紅。
+//     圍欄照種類整段比；行內程式碼**整個序列釘住**（固定位置再驗值，不先用名字挑位置——挑的話拼錯那段就
+//     從集合消失，Codex r4）。人照著抄的就是這幾處，這幾處多一個字元、少一段、多一段都紅。
 //   ④在一份代表性的禁區清單裡，這個名字**只有逐字拒絕清單擋得住**：不在清單上就放行（對照組），
 //     加進清單才拒絕、理由含「在拒絕清單上」。這是⓪要求「挑一個只有這份清單擋的名字」的機器證明。
 //   ⑤本體的位元組跟釘的一樣（改一個字元都要重算雜湊）＋原始碼裡沒有出現那幾個取得能力的字串
@@ -141,6 +142,16 @@ test('②的另一半：回覆的 id 原樣回（0 與字串都是；通知沒�
   assert.deepEqual(r.lines, [INIT_REPLY(0, '2025-06-18'), LIST_REPLY('abc')]);
 });
 
+/**
+ * 安裝說明裡行內程式碼的**完整序列**（照出現順序），名字那幾格由本體真的報的填進來。
+ * 這是封閉的集合：任何一段被改掉、刪掉或新增都對不上，不依賴那一段有沒有拼對。
+ */
+const INLINE_CODE_SPANS = (server, live) => [
+  'tools/canary-server.js', '.mcp.json', server, 'mcpServers', '"args": ["tools/canary-server.js"]', '.mcp.json', 'GIT_',
+  '~/.codex/config.toml', 'tools/canary-server.js', '~/.local/share/ai-collab-kit/canary/', 'settings.json', 'forbidden.deny',
+  live, 'permissions.deny', 'tools/guard-copy.js', 'tests/canary-server.test.js',
+];
+
 /** 安裝說明裡人會照抄的兩種位置：程式碼圍欄（整段）與行內程式碼（整段）。 */
 function copyableParts(markdown) {
   const fences = [...markdown.matchAll(/```(\w*)\n([\s\S]*?)\n```/gu)].map((m) => ({ lang: m[1], body: m[2] }));
@@ -166,11 +177,10 @@ test('③安裝說明裡可照抄的位置，逐字等於它真的跑起來報�
   assert.equal(toml.length, 1);
   assert.ok(toml[0].body.split('\n').includes(`[mcp_servers.${server}]`), 'config.toml 那一段的段名不是它自己報的伺服器名');
   assert.ok(toml[0].body.includes('/tools/canary-server.js"]'), 'config.toml 那一段指的不是這支伺服器');
-  // 行內程式碼：整段比。提到工具名的每一段都要剛好是那個名字；提到伺服器名的每一段都要剛好是伺服器名
-  const named = spans.filter((s) => s.includes('mcp__'));
-  assert.ok(named.length >= 1, '安裝說明的行內程式碼裡找不到工具名');
-  for (const s of named) assert.equal(s, live, `行內程式碼「${s}」不是逐字的工具名`);
-  for (const s of spans.filter((x) => x.includes(server) && !x.includes('mcp__'))) assert.equal(s, server, `行內程式碼「${s}」不是逐字的伺服器名`);
+  // 行內程式碼：**整個序列釘住**（固定位置、再驗值）。先用「含有正確名字」挑出要驗的那幾段，
+  // 拼錯的那一段就會從集合裡消失而不被驗（Codex r4 B2 實測：guard_canry 全綠）；所以不挑，整份序列比，
+  // 名字那幾格由本體報的填進來。改說明裡的行內程式碼＝要有意識地改這張表。
+  assert.deepEqual(spans, INLINE_CODE_SPANS(server, live), '安裝說明的行內程式碼序列跟釘的不一樣（有一段被改掉、刪掉或新增）');
 });
 
 test('③的絆線：四份說明的散文提到這個名字的次數跟釘的一樣', () => {
