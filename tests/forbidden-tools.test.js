@@ -7,7 +7,7 @@
 //   ⑥三份接線範本（Claude、Codex 專案層、Codex 全域層）都只呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
 //   ⑩連接器在名字的任何一段都認得（多一層前綴照樣白名單制；邊界要真的是邊界）；
 //   ⑪雙保險：唯讀名單誤放了動禁區的工具，家族網照樣擋；
-//   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、專案根沒給＝退 2 帶錯誤輸出
+//   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、Git 找不到工作樹根、清環境用的 env／sed 不在＝退 2 帶錯誤輸出
 //     （Codex 全域層這裡只守「範本原樣＝退 2」；複本、指紋、真的跑一遍在 tests/guard-copy.test.js）。
 //   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
 //   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字；
@@ -209,6 +209,17 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
     assert.equal(spawnSync('git', ['init', '-q'], { cwd: loose, env: gitEnv(), encoding: 'utf8' }).status, 0);
     const looseEnv = { GIT_DIR: path.join(loose, '.git'), GIT_WORK_TREE: loose };
     const withoutClearing = (command) => command.replace(/^root="\$\(.*?git rev-parse/u, 'root="$(git rev-parse');
+    /** 只放 node、git、env、sed 四支（少一支就不放）的 PATH：其他一概找不到。 */
+    const binWithout = (missing) => {
+      const bin = fs.mkdtempSync(path.join(scratch, 'bin-'));
+      for (const tool of ['node', 'git', 'env', 'sed']) {
+        if (tool === missing) continue;
+        const real = tool === 'node' ? process.execPath : spawnSync('/bin/sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+        assert.ok(real, `前提：找得到 ${tool}`);
+        fs.symlinkSync(real, path.join(bin, tool));
+      }
+      return bin;
+    };
 
     // Claude 側與 Codex 專案層現在是同一招（問版本控制根目錄）：平台給的專案目錄變數跟著「從哪個目錄開 Claude」走
     //（2026-09-16 實測從子目錄開＝指到子目錄），所以這裡刻意**不給**那個變數、也給一個指到別處的，結果都要一樣
@@ -223,6 +234,10 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
       denies(sh(command, { cwd: subdir, env: looseEnv }), `${who}：環境指向別的倉庫也照自己的清單判`);
       blocks(sh(command, { cwd: elsewhere }), `${who}：不在版本控制目錄裡`);
       blocks(sh(command, { cwd: subdir, env: { PATH: elsewhere } }), `${who}：找不到 node 與 git`);
+      // 清環境用的 env／sed 不在、但 node 與 git 都在：清不掉就不可以往下問根目錄（不然環境指向別的倉庫時會讀到它的清單而放行）
+      blocks(sh(command, { cwd: subdir, env: { PATH: binWithout('env'), ...looseEnv } }), `${who}：沒有 env`);
+      blocks(sh(command, { cwd: subdir, env: { PATH: binWithout('sed'), ...looseEnv } }), `${who}：沒有 sed`);
+      denies(sh(command, { cwd: subdir, env: { PATH: binWithout(null), ...looseEnv } }), `${who} 對照組：四支工具都在、環境指向別的倉庫也照自己的清單判`);
       blocks(sh(command, { cwd: broken }), `${who}：攔截器載入就崩`);
     }
 
