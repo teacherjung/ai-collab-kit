@@ -61,14 +61,24 @@ const HELLO = hello('2025-06-18');
 const LIST = { jsonrpc: '2.0', id: 2, method: 'tools/list' };
 const feed = (messages) => `${messages.map((m) => (typeof m === 'string' ? m : JSON.stringify(m))).join('\n')}\n`;
 
-/** 每一則回覆的信封：不是 JSON-RPC 2.0、或沒有 id，客戶端就不收（對每一題的每一則都檢查）。 */
+/** 每一則回覆的信封：不是 JSON-RPC 2.0、結果與錯誤同時有或都沒有，客戶端就不收。 */
 function parseLines(stdout) {
   const lines = stdout.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
   for (const line of lines) {
     assert.equal(line.jsonrpc, '2.0', '每一則回覆都要自報 JSON-RPC 2.0');
-    assert.ok(line.id !== undefined, '每一則回覆都要帶回問題的 id');
+    assert.ok(('result' in line) !== ('error' in line), '一則回覆只能有結果或錯誤其中一個');
   }
   return lines;
+}
+
+/**
+ * 回覆的 id 要跟問題**一一對上**（順序、型別、值都是）：只檢查「有這一格」不夠——
+ * 回錯 id 的伺服器，真的客戶端會把回覆丟掉、交握逾時、工具掛不上（Codex r2 B3 實測）。
+ * 沒有 id 的是通知，本來就不該有回覆，所以不列入。
+ */
+function matchIds(messages, lines) {
+  const asked = messages.filter((m) => m && typeof m === 'object' && m.id !== undefined).map((m) => m.id);
+  assert.deepEqual(lines.map((l) => l.id), asked, '回覆的 id 沒有跟問題一一對上（順序、型別、值）');
 }
 
 /**
@@ -82,7 +92,9 @@ function talk(messages) {
   const left = fs.readdirSync(dir);
   fs.rmSync(dir, { recursive: true, force: true });
   assert.equal(r.signal, null, '標準輸入關掉之後沒有自己結束（被時限殺掉）');
-  return { code: r.status, stderr: r.stderr, left, lines: parseLines(r.stdout) };
+  const lines = parseLines(r.stdout);
+  matchIds(messages, lines);
+  return { code: r.status, stderr: r.stderr, left, lines };
 }
 
 test('①掛得起來、只有一個工具、叫了回 pong；交握回覆逐字相符；跑完什麼都沒留下', () => {
@@ -111,11 +123,23 @@ test('①掛得起來、只有一個工具、叫了回 pong；交握回覆逐字
 
 test('②協定版本：對過的照著回、沒對過的回預設；ping 回空結果', () => {
   // 刻意不用預設值當輸入：輸入跟期望值同一個數字的話，「照著回」與「不管你說什麼都回預設」分不出來
-  assert.equal(talk([hello('2024-11-05')]).lines[0].result.protocolVersion, '2024-11-05', '對過的版本要照著回');
+  for (const v of ['2025-06-18', '2025-03-26', '2024-11-05']) {
+    assert.equal(talk([hello(v)]).lines[0].result.protocolVersion, v, `對過的版本 ${v} 要照著回（表上少一個就紅）`);
+  }
   assert.equal(talk([hello('2099-01-01')]).lines[0].result.protocolVersion, '2025-06-18', '沒對過的版本要回自己的預設，不可以照單全收');
   assert.equal(talk([hello('latest')]).lines[0].result.protocolVersion, '2025-06-18', '不是版本形狀也要回自己的預設');
   const pong = talk([HELLO, { jsonrpc: '2.0', id: 7, method: 'ping' }]).lines[1];
   assert.deepEqual(pong.result, {}, 'ping 要回空結果（客戶端拿它確認連線還活著）');
+});
+
+test('②的另一半：回覆的 id 原樣回（0 與字串都是；通知沒有 id 就不回）', () => {
+  // 官方客戶端的第一則 initialize 常常就是 id=0：把 0 當成「沒填」的寫法會讓交握整個逾時
+  const r = talk([{ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 'abc', method: 'tools/list' }]);
+  assert.deepEqual(r.lines.map((l) => l.id), [0, 'abc']);
+  assert.equal(r.lines[0].result.serverInfo.name, 'guard_canary');
+  assert.equal(r.lines[1].result.tools.length, 1);
 });
 
 test('③裝機說明裡正確全名出現的次數跟釘的一樣；兩處登記鍵也是它自己報的名字', () => {
@@ -125,8 +149,11 @@ test('③裝機說明裡正確全名出現的次數跟釘的一樣；兩處登�
   assert.equal(live, FULL_NAME);
   for (const [rel, expected] of DOCS) {
     const text = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-    const hits = text.split(live).length - 1;
-    assert.equal(hits, expected, `${rel} 裡正確的全名出現 ${hits} 次，釘的是 ${expected} 次（有一處被改掉、刪掉，或新增了一處沒登記）`);
+    // 數的是**完整的工具名**（前後都要是名字以外的字元）：數子字串的話，尾端多一個字母
+    //（…__pingg）或前面多一個字母都還是數得到正確的那一段＝拼錯了仍然全綠（Codex r2 B2 實測）
+    const tokens = [...text.matchAll(/(?<![A-Za-z0-9_.-])mcp__[A-Za-z0-9_.-]+/gu)].map((m) => m[0]);
+    const hits = tokens.filter((t) => t === live).length;
+    assert.equal(hits, expected, `${rel} 裡完整正確的全名出現 ${hits} 次，釘的是 ${expected} 次（有一處被改掉、刪掉，或新增了一處沒登記）`);
   }
   // 決定工具名的其實是兩處登記鍵（Claude 的 .mcp.json 鍵、Codex 的 config.toml 段名），也要對
   const install = fs.readFileSync(INSTALL_DOC, 'utf8');
@@ -227,15 +254,14 @@ test('⑥半行還沒收完不會先回話，切成兩段送也組得回來', as
 const launchEnv = (() => { const e = gitEnv(); delete e.NODE_TEST_CONTEXT; return e; })();
 
 /** 暫存的專案：版本控制的根目錄底下有 tools/canary-server.js，另有一層子目錄。 */
-function projectRepo() {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-canary-proj-')));
+function setUpRepo(dir) {
   fs.mkdirSync(path.join(dir, 'tools'));
   fs.copyFileSync(SERVER, path.join(dir, 'tools', 'canary-server.js'));
   fs.copyFileSync(path.join(ROOT, 'tools', 'package.json'), path.join(dir, 'tools', 'package.json'));
   fs.mkdirSync(path.join(dir, 'sub', 'deeper'), { recursive: true });
-  const init = spawnSync('git', ['init', '-q'], { cwd: dir, env: launchEnv, encoding: 'utf8' });
-  assert.equal(init.status, 0, init.stderr);
-  return dir;
+  // 有時限：git 起不來或卡住時要轉紅，不可以讓整份考卷等它（Codex r2 T4）
+  const init = spawnSync('git', ['init', '-q'], { cwd: dir, env: launchEnv, encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' });
+  assert.equal(init.status, 0, `暫存專案的版本控制起不來：${init.stderr || init.error}`);
 }
 
 const shake = (command, args, cwd) => spawnSync(command, args, { cwd, input: feed([HELLO]), encoding: 'utf8', env: launchEnv, timeout: 10_000, killSignal: 'SIGKILL' });
@@ -244,8 +270,10 @@ test('⑦照安裝說明那一段登記真的起一次：根目錄與子目錄�
   const block = fs.readFileSync(INSTALL_DOC, 'utf8').match(/```json\n([\s\S]*?)\n```/u);
   assert.ok(block, '安裝說明裡找不到那一段 JSON 登記');
   const entry = JSON.parse(block[1]).mcpServers.guard_canary;
-  const dir = projectRepo();
+  // 目錄先建好再進 finally：布置到一半失敗時也要收乾淨（Codex r2 T4）
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-canary-proj-')));
   try {
+    setUpRepo(dir);
     for (const cwd of [dir, path.join(dir, 'sub', 'deeper')]) {
       const r = shake(entry.command, entry.args, cwd);
       assert.equal(r.signal, null, `從 ${cwd} 起：沒有自己結束`);
