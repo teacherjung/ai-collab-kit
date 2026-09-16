@@ -16,14 +16,19 @@ mcp__guard_canary__ping
 {
   "mcpServers": {
     "guard_canary": {
-      "command": "node",
-      "args": ["tools/canary-server.js"]
+      "command": "sh",
+      "args": [
+        "-c",
+        "root=\"$(for v in $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p'); do unset \"$v\"; done; git rev-parse --show-toplevel)\" && exec node \"$root/tools/canary-server.js\""
+      ]
     }
   }
 }
 ```
 
-路徑是相對的：伺服器從專案根目錄啟動。第一次啟動時介面會問要不要信任這個專案的伺服器，要按同意，工具才會出現。
+⚠️ **不可以寫成相對路徑**（`"args": ["tools/canary-server.js"]`）：伺服器的工作目錄跟著「你從哪個目錄開 Claude」走，不是專案根目錄；平台給的專案目錄變數也一樣跟著走（2026-09-16 實測：從專案的子目錄開，兩者都指到那個子目錄，`.mcp.json` 卻仍被找到）。從子目錄開的那幾次，伺服器就起不來、工具從清單上消失——而這正是驗收時最會被誤判成「被擋住」的樣子。所以這裡跟 Codex 專案層鉤子用同一招：先清掉 `GIT_` 開頭的環境變數（規矩 E4），再問版本控制的根目錄。專案不在版本控制裡的話，改填伺服器的絕對路徑。
+
+第一次啟動時介面會問要不要信任這個專案的伺服器，要按同意，工具才會出現。
 
 ## ② Codex 側登記
 

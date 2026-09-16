@@ -19,7 +19,8 @@
 // 誠實劃界：「無害」有兩層，兩層都不證明 node 自己做了什麼——①考題把這個檔的**位元組釘住**（改一個字元
 // 都要重算雜湊，重算的人要負責看過改了什麼）；②考題掃原始碼裡有沒有出現取得能力的那幾個字串，
 // 但**那道掃描是絆線**：不寫出那幾個字串一樣做得到（換個寫法就繞開了）。另外考題會看「跑一輪之後工作
-// 目錄有沒有多出檔案」——那只看得到工作目錄。壞掉的一行 JSON 只丟掉那一行、不讓整支崩（崩了工具
+// 目錄有沒有多出檔案」——那只看得到工作目錄。對方掛著不把輸出讀走時，回覆會排在記憶體裡（沒有背壓處理；
+// 正常的客戶端會讀，這要刻意不讀才碰得到）。壞掉的一行 JSON 只丟掉那一行、不讓整支崩（崩了工具
 // 就從清單上消失，驗收時會把「叫不到」誤當成「被擋」）；單一行超過上限時整段緩衝丟掉，那之後的訊息可能
 // 對不齊——這一支的用途是被叫一次看有沒有被擋，不是可靠的資料通道。標準輸入關掉就自己結束（不呼叫
 // process.exit：那會把還沒寫出去的回覆截斷）。
@@ -29,9 +30,13 @@
 const SERVER = 'guard_canary';
 const TOOL = 'ping';
 const REPLY = 'pong';
-/** 對方沒說版本、或說的不是日期形狀時用這個；說了就照著回（兩家 AI 的版本不同）。 */
+/** 對方沒說版本、或說的不在下面這張表裡時用這個。 */
 const PROTOCOL = '2025-06-18';
-const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/u;
+/**
+ * 對過的協定版本：對方說的在這張表裡就照著回，否則回 PROTOCOL。
+ * （MCP 的版本協商要求回一個**自己支援的**版本，不是把對方說的原樣回聲——回聲等於宣稱支援任何版本。）
+ */
+const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
 /** 一行的上限：壞掉的輸入不該把記憶體吃光。 */
 const MAX_LINE = 1024 * 1024;
 
@@ -51,7 +56,7 @@ function handle(msg) {
     return;
   }
   if (method === 'initialize') {
-    const version = typeof params.protocolVersion === 'string' && DATE_SHAPE.test(params.protocolVersion) ? params.protocolVersion : PROTOCOL;
+    const version = SUPPORTED.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL;
     if (asked) result(id, { protocolVersion: version, capabilities: { tools: {} }, serverInfo: { name: SERVER, version: '1.0.0' } });
     return;
   }
