@@ -75,12 +75,29 @@ const hook = (command, { home, tool = ALLOWED, flag = '-c', cwd = os.tmpdir(), e
 const tool = (root, args, { home, env = {} } = {}) =>
   spawnSync(process.execPath, [path.join(root, 'tools', 'guard-copy.js'), ...args], { cwd: os.tmpdir(), encoding: 'utf8', env: { ...base, KIT_GUARD_COPY_ALLOW_TEMP: '1', ...homeEnv(home), ...env } });
 
-/** Claude 側那一行的拒絕：退 0、標準輸出**整段**是拒絕形狀。 */
+/**
+ * Claude 側那一行的拒絕形狀哪裡不完整（Codex r1 第 1 條：原本只看 permissionDecision）；完整＝null。
+ * 刻意不拿 tools/guard-copy.js 的同一支來用：受審的程式改鬆了，考題的尺不可以跟著鬆。
+ * 完整＝標準輸出整段是一個 JSON 物件、最上層只有 hookSpecificOutput、其中 hookEventName＝PreToolUse、
+ * permissionDecision＝deny、permissionDecisionReason 是非空字串。
+ */
+const denyShapeProblem = (stdout) => {
+  let doc;
+  try { doc = JSON.parse(stdout); } catch { return '整段不是一個 JSON'; }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return '不是 JSON 物件';
+  if (JSON.stringify(Object.keys(doc)) !== '["hookSpecificOutput"]') return `最上層不是只有 hookSpecificOutput（${Object.keys(doc).join('、')}）`;
+  const h = doc.hookSpecificOutput;
+  if (!h || typeof h !== 'object') return 'hookSpecificOutput 不是物件';
+  if (h.hookEventName !== 'PreToolUse') return `hookEventName 不是 PreToolUse（${h.hookEventName}）`;
+  if (h.permissionDecision !== 'deny') return `permissionDecision 不是 deny（${h.permissionDecision}）`;
+  if (typeof h.permissionDecisionReason !== 'string' || !h.permissionDecisionReason) return `permissionDecisionReason 不是非空字串（${h.permissionDecisionReason}）`;
+  return null;
+};
+/** Claude 側那一行的拒絕：退 0、標準輸出**整段**是完整的拒絕形狀（denyShapeProblem）。 */
 const denies = (r, why) => {
   assert.equal(r.status, 0, `${why}：退出碼 ${r.status}（${r.stderr}）`);
-  let decision = null;
-  try { decision = JSON.parse(r.stdout).hookSpecificOutput.permissionDecision; } catch { /* 不是拒絕形狀：下面那一句會講 */ }
-  assert.equal(decision, 'deny', `${why}：標準輸出不是拒絕形狀（「${r.stdout.slice(0, 120)}」）`);
+  const problem = denyShapeProblem(r.stdout);
+  assert.equal(problem, null, `${why}：標準輸出不是完整的拒絕形狀——${problem}（「${r.stdout.slice(0, 120)}」）`);
 };
 const allows = (r, why) => assert.deepEqual([r.status, r.stdout, r.stderr], [0, '', ''], why);
 const blocks = (r, re, why) => {
@@ -112,4 +129,4 @@ function withScratch(fn) {
 /** 一棵目錄現在的樣子（每一筆的路徑、大小、修改時間）：前後各拍一次，用來證明「什麼都沒寫」。 */
 const snapshot = (dir) => walk(dir).map((p) => { const st = fs.lstatSync(p); return `${path.relative(dir, p)}|${st.isDirectory() ? 'd' : st.size}|${st.mtimeMs}`; }).sort();
 
-module.exports = { KIT, FAKE, LOOSE, DENIED, ALLOWED, MISMATCH, STARTUP, base, git, sourceRepo, editFile, fakeHome, hook, tool, denies, allows, blocks, walk, withScratch, snapshot };
+module.exports = { KIT, FAKE, LOOSE, DENIED, ALLOWED, MISMATCH, STARTUP, base, git, sourceRepo, editFile, fakeHome, hook, tool, denyShapeProblem, denies, allows, blocks, walk, withScratch, snapshot };

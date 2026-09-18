@@ -47,6 +47,8 @@
 //   ⑭四個檔之一換成具名管道、或換成極大的檔（稀疏檔）：限時 5 秒內退 2（逾時算失敗：官方鉤子文件寫 PreToolUse 的指令鉤子逾時不擋）；
 //     對照組＝修正前的寫法（find 有輸出照樣算指紋、沒有大小上限）2 秒內結束不了；超過上限、指紋是對的那一份：照樣退 2、copyProblem 也不收
 //     （對照組＝拿掉大小上限的寫法照用）。
+//   ⑮（Codex r1 第 1 條）Claude 側的拒絕形狀要完整：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、
+//     理由缺或空、最上層多一個鍵——從改過的來源重抽，試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收（先驗只差那一處）。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明（⑪的 /bin/bash 那一發只看有沒有 /bin/bash）；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明；「撤不掉」那一段以 root 跑時不跑（改權限擋不住 root）。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
@@ -871,4 +873,48 @@ test('⑭四個檔之一換成具名管道、或換成超過上限的檔：find 
   blocks(hook(big.cmd, { home: big.home }), MISMATCH, '超過上限、指紋是對的：照樣退 2');
   allows(hook(big.cmd.split(LIMIT).join(''), { home: big.home }), '對照組：拿掉大小上限的寫法，這一份照用');
   assert.match(copyProblem(big.copyDir, big.fp) || '', /不小於 1048576 位元組/u, 'copyProblem 也不收');
+}));
+
+test('⑮Claude 側的拒絕形狀要完整（Codex r1 第 1 條）：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、理由缺或空、最上層多一個鍵——重抽的複本試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收', () => withScratch((scratch) => {
+  const good = landed(scratch);
+  const goodOut = hook(good.cmd, { home: good.home, tool: DENIED });
+  denies(goodOut, '前提：原本的攔截器印的是完整的拒絕形狀');
+  const goodDoc = JSON.parse(goodOut.stdout);
+  // 每一發只改 tools/forbidden-tools.js 裡 hookOutput 的一處（Codex r1 M11 的做法：改來源、重抽複本、新指紋，不是拿舊指紋去擋）；
+  // shape＝照原本的輸出算出「只差這一個變因」該長什麼樣，先驗真的只差這一處
+  const VARIANTS = [
+    { why: '缺 hookEventName', from: "      hookEventName: 'PreToolUse',\n", to: '', shape: (d) => { delete d.hookSpecificOutput.hookEventName; }, re: /hookEventName 不是 PreToolUse/u },
+    { why: 'hookEventName 不對', from: "hookEventName: 'PreToolUse',", to: "hookEventName: 'PostToolUse',", shape: (d) => { d.hookSpecificOutput.hookEventName = 'PostToolUse'; }, re: /hookEventName 不是 PreToolUse/u },
+    { why: 'permissionDecision 不是 deny', from: "permissionDecision: 'deny',", to: "permissionDecision: 'ask',", shape: (d) => { d.hookSpecificOutput.permissionDecision = 'ask'; }, re: /permissionDecision 不是 deny/u },
+    { why: '理由缺', from: 'permissionDecisionReason: `', to: 'permissionDecisionReason: undefined && `', shape: (d) => { delete d.hookSpecificOutput.permissionDecisionReason; }, re: /permissionDecisionReason 不是非空字串/u },
+    { why: '理由是空字串', from: 'permissionDecisionReason: `', to: "permissionDecisionReason: '' && `", shape: (d) => { d.hookSpecificOutput.permissionDecisionReason = ''; }, re: /permissionDecisionReason 不是非空字串/u },
+    { why: '最上層多一個鍵', from: 'return JSON.stringify({\n', to: 'return JSON.stringify({\n    continue: true,\n', shape: (d) => { d.continue = true; }, re: /最上層/u },
+  ];
+  for (const v of VARIANTS) {
+    const src = sourceRepo(scratch, editFile('tools/forbidden-tools.js', (c) => {
+      assert.equal(c.split(v.from).length, 2, `${v.why}：前提：攔截器裡剛好有一處「${v.from.trim()}」`);
+      return c.replace(v.from, () => v.to);
+    }));
+    // (a) 試跑：沒過、不落地、沒有殘留，而且說出不符的是哪一處
+    const home = fakeHome(scratch);
+    const r = buildClaude({ from: 'HEAD', root: src, home, allowTemp: true });
+    assert.match(r.failure || '', /照清單該擋的假名沒有一個被擋下（退 0、標準輸出整段是完整的拒絕形狀）/u, `${v.why}：試跑要沒過（${r.failure}）`);
+    assert.match(r.failure, v.re, `${v.why}：試跑要說出不符的是哪一處（${r.failure}）`);
+    assert.ok(!fs.existsSync(r.copyDir), `${v.why}：試跑沒過不可以落地`);
+    assert.deepEqual(fs.readdirSync(baseOf(home)), [], `${v.why}：暫存骨架要清掉`);
+    // (b) 硬落地同一份（不試跑）、照那一行跑：輸出真的只差這一處，denies() 不收
+    const forced = landed(scratch, editFile('tools/forbidden-tools.js', (c) => c.replace(v.from, () => v.to)), { runSelfTest: false });
+    assert.equal(forced.fp, r.fp, `${v.why}：前提：硬落地的是同一份`);
+    const out = hook(forced.cmd, { home: forced.home, tool: DENIED });
+    const expected = structuredClone(goodDoc);
+    v.shape(expected);
+    assert.deepEqual([out.status, JSON.parse(out.stdout)], [0, expected], `${v.why}：前提：退 0、輸出跟原本的只差這一處`);
+    assert.throws(() => denies(out, v.why), (e) => v.re.test(e.message), `${v.why}：denies() 不可以收，而且要說出不符的是哪一處`);
+  }
+  // 指令入口（Codex r1 M11 那一發：缺 hookEventName）：退 1、標準輸出空的、不說「過」
+  const m11 = sourceRepo(scratch, editFile('tools/forbidden-tools.js', (c) => c.replace(VARIANTS[0].from, () => '')));
+  const cli = tool(m11, ['--claude'], { home: fakeHome(scratch) });
+  assert.deepEqual([cli.status, cli.stdout], [1, ''], `缺 hookEventName：指令入口退 1（${cli.stderr}）`);
+  assert.match(cli.stderr, /自我試跑沒過[\s\S]*hookEventName 不是 PreToolUse[\s\S]*沒有落地/u);
+  assert.doesNotMatch(cli.stderr, /自我試跑：過/u);
 }));

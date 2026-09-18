@@ -368,9 +368,34 @@ function claudeGroups(fp, templateText) {
 const runHook = (command, tool, { flag = '-lc', env } = {}) =>
   spawnSync('/bin/sh', [flag, command], { cwd: os.tmpdir(), env, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
 
+/** Codex 全域層試跑認的拒絕形狀（錯誤輸出那一段）。Codex r1 第 1 條只改 Claude 側：這一支一個字不動（那一層的判準與輸出不變）。 */
 const isDenyShape = (text) => {
   try { return JSON.parse(text.trim()).hookSpecificOutput.permissionDecision === 'deny'; } catch { return false; }
 };
+
+/**
+ * Claude 側試跑認的拒絕形狀（Codex r1 第 1 條：原本跟 Codex 共用上面那一支、只看 permissionDecision）。回不符的地方；符合＝null。
+ *   ・標準輸出**整段**解析得出一個 JSON 物件（被別的輸出弄髒＝平台讀不出來＝放行）；
+ *   ・最上層**只有** hookSpecificOutput 這一個鍵：tools/forbidden-tools.js 的 hookOutput 只印這一個；官方文件另外列了別的最上層欄位，
+ *     多一個就不認、不逐一判斷它是不是無害的（跟 CLAUDE_GROUP_KEYS 同一個做法）；
+ *   ・hookEventName＝'PreToolUse'：官方鉤子文件 JSON output 段（https://code.claude.com/docs/en/hooks#json-output，2026-09-19 讀；
+ *     是文件、不是量測）寫 hookSpecificOutput 裡要有 hookEventName，也寫 exit 0 的輸出解析得出來、結構驗證沒過＝不擋、動作照做；
+ *   ・permissionDecision＝'deny'；permissionDecisionReason 是非空字串（驗收看的就是這一句：要含「在拒絕清單上」）。
+ * 平台拿到缺欄位的形狀實際怎麼做沒有量（沒有叫任何 mcp__ 工具去試），這裡照文件的格式往嚴的一邊認。
+ */
+function claudeDenyProblem(text) {
+  let doc;
+  try { doc = JSON.parse(text); } catch { return '標準輸出整段不是一個 JSON'; }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return '標準輸出不是一個 JSON 物件';
+  const top = Object.keys(doc);
+  if (top.length !== 1 || top[0] !== 'hookSpecificOutput') return `最上層要剛好只有 hookSpecificOutput（有的是：${top.join('、') || '沒有任何鍵'}）`;
+  const h = doc.hookSpecificOutput;
+  if (!h || typeof h !== 'object' || Array.isArray(h)) return 'hookSpecificOutput 不是物件';
+  if (h.hookEventName !== 'PreToolUse') return `hookEventName 不是 PreToolUse（是 ${JSON.stringify(h.hookEventName) || '缺'}）`;
+  if (h.permissionDecision !== 'deny') return `permissionDecision 不是 deny（是 ${JSON.stringify(h.permissionDecision) || '缺'}）`;
+  if (typeof h.permissionDecisionReason !== 'string' || h.permissionDecisionReason === '') return `permissionDecisionReason 不是非空字串（是 ${JSON.stringify(h.permissionDecisionReason) || '缺'}）`;
+  return null;
+}
 
 /**
  * 試跑的擺法：同一套三項檢查，兩種接線各自「怎麼把那一行指令對到某一份複本」與「拒絕長什麼樣」。
@@ -390,17 +415,19 @@ const claudeRig = ({ fp, template }) => {
     flags: ['-c', '-lc'],
     copyDirIn: (root) => path.join(root, ...CLAUDE_BASE, fp),
     aim: (root) => ({ command, env: { ...process.env, HOME: root } }),
-    // Claude 側量過的那條路：退 0、標準輸出**整段**就是拒絕形狀（被別的輸出弄髒＝平台讀不出來＝放行，所以這裡要求整段解析得過）
-    denied: (r) => r.status === 0 && isDenyShape(r.stdout),
-    deniedAs: '擋下（退 0、標準輸出是拒絕形狀）',
+    // Claude 側量過的那條路：退 0、標準輸出**整段**就是完整的拒絕形狀（claudeDenyProblem；被別的輸出弄髒＝平台讀不出來＝放行）
+    denied: (r) => r.status === 0 && claudeDenyProblem(r.stdout) === null,
+    deniedAs: '擋下（退 0、標準輸出整段是完整的拒絕形狀）',
+    whyNot: (r) => (r.status === 0 ? claudeDenyProblem(r.stdout) : `退 ${r.status}`),
+    deniedHint: '攔截器被改成什麼都放、印的拒絕形狀不完整、或清單沒有有效規則',
   };
 };
 
 /**
  * 照鉤子的起法真的跑那一行指令（Codex＝/bin/sh -lc；Claude＝-c 與 -lc 各跑一遍），任一項不符就回失敗原因：
  *   ①無害假名要**放行**：退 0、兩個輸出都空的（依序試幾個，有一個過就算；清單壞到什麼都擋、登入設定往輸出印字，都在這裡露出來）；
- *   ②照清單該擋的假名要**擋**：Codex＝退 2、錯誤輸出是拒絕的形狀；Claude＝退 0、標準輸出是拒絕的形狀
- *    （依序試幾個；攔截器被改成什麼都放，這裡露出來）；
+ *   ②照清單該擋的假名要**擋**：Codex＝退 2、錯誤輸出是拒絕的形狀；Claude＝退 0、標準輸出整段是完整的拒絕形狀（claudeDenyProblem）
+ *    （依序試幾個；攔截器被改成什麼都放、Claude 側印的拒絕形狀缺欄位，這裡露出來）；
  *   ③指紋檢查要真的在：同一行指令對到一份改過一個位元組的副本，要退 2 而且是指紋那一句。
  * 全程只跑指令、不把複本裡的程式載進這支（驗的就是鉤子實際會走的那一條路）。
  */
@@ -427,7 +454,9 @@ function selfTest({ copyDir, fp, template, forbidden, denyProbe = null, rig = co
       lastDeny = runHook(command, name, { flag, env });
       if (rig.denied(lastDeny)) { denied = true; break; }
     }
-    if (!denied) return `${tag}照清單該擋的假名沒有一個被${rig.deniedAs}（試了 ${denyCandidates.length} 個${lastDeny ? `；最後一次：${show(lastDeny)}` : ''}）——攔截器被改成什麼都放、或清單沒有有效規則`;
+    // whyNot、deniedHint 只有 Claude 側有（Codex 全域層這一句的字不變）
+    const whyNot = rig.whyNot && lastDeny ? `；不符的地方：${rig.whyNot(lastDeny)}` : '';
+    if (!denied) return `${tag}照清單該擋的假名沒有一個被${rig.deniedAs}（試了 ${denyCandidates.length} 個${lastDeny ? `；最後一次：${show(lastDeny)}` : ''}${whyNot}）——${rig.deniedHint || '攔截器被改成什麼都放、或清單沒有有效規則'}`;
 
     const dupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-copy-selftest-'));
     try {
