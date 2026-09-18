@@ -399,6 +399,9 @@ const isDenyShape = (text) => {
  *   ・permissionDecision＝'deny'；permissionDecisionReason 是非空字串（驗收看的就是這一句：要含「在拒絕清單上」）。
  * 平台拿到缺欄位的形狀實際怎麼做沒有量（沒有叫任何 mcp__ 工具去試），這裡照文件的格式往嚴的一邊認。
  */
+/** hookSpecificOutput 裡只准這三個鍵（Codex r2 第 1 條）：官方文件在 PreToolUse 另列了 additionalContext 等欄位、各有型別，
+ *  型別不對＝結構驗證沒過＝不擋；這裡跟最上層同一個做法——多一個就不認，不逐一驗它的型別（攔截器本來就只印這三個）。 */
+const CLAUDE_DENY_INNER_KEYS = ['hookEventName', 'permissionDecision', 'permissionDecisionReason'];
 function claudeDenyProblem(text) {
   let doc;
   try { doc = JSON.parse(text); } catch { return '標準輸出整段不是一個 JSON'; }
@@ -410,6 +413,8 @@ function claudeDenyProblem(text) {
   if (h.hookEventName !== 'PreToolUse') return `hookEventName 不是 PreToolUse（是 ${JSON.stringify(h.hookEventName) || '缺'}）`;
   if (h.permissionDecision !== 'deny') return `permissionDecision 不是 deny（是 ${JSON.stringify(h.permissionDecision) || '缺'}）`;
   if (typeof h.permissionDecisionReason !== 'string' || h.permissionDecisionReason === '') return `permissionDecisionReason 不是非空字串（是 ${JSON.stringify(h.permissionDecisionReason) || '缺'}）`;
+  const inner = Object.keys(h).filter((k) => !CLAUDE_DENY_INNER_KEYS.includes(k));
+  if (inner.length) return `hookSpecificOutput 裡要剛好只有 ${CLAUDE_DENY_INNER_KEYS.join('、')}（多了：${inner.join('、')}）`;
   return null;
 }
 

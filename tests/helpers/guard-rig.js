@@ -79,7 +79,7 @@ const tool = (root, args, { home, env = {} } = {}) =>
  * Claude 側那一行的拒絕形狀哪裡不完整（Codex r1 第 1 條：原本只看 permissionDecision）；完整＝null。
  * 刻意不拿 tools/guard-copy.js 的同一支來用：受審的程式改鬆了，考題的尺不可以跟著鬆。
  * 完整＝標準輸出整段是一個 JSON 物件、最上層只有 hookSpecificOutput、其中 hookEventName＝PreToolUse、
- * permissionDecision＝deny、permissionDecisionReason 是非空字串。
+ * permissionDecision＝deny、permissionDecisionReason 是非空字串，而且 hookSpecificOutput 裡**只有**這三個鍵（Codex r2 第 1 條）。
  */
 const denyShapeProblem = (stdout) => {
   let doc;
@@ -91,6 +91,8 @@ const denyShapeProblem = (stdout) => {
   if (h.hookEventName !== 'PreToolUse') return `hookEventName 不是 PreToolUse（${h.hookEventName}）`;
   if (h.permissionDecision !== 'deny') return `permissionDecision 不是 deny（${h.permissionDecision}）`;
   if (typeof h.permissionDecisionReason !== 'string' || !h.permissionDecisionReason) return `permissionDecisionReason 不是非空字串（${h.permissionDecisionReason}）`;
+  const extra = Object.keys(h).filter((k) => !['hookEventName', 'permissionDecision', 'permissionDecisionReason'].includes(k));
+  if (extra.length) return `hookSpecificOutput 裡要剛好只有那三個鍵（多了：${extra.join('、')}）`;
   return null;
 };
 /** Claude 側那一行的拒絕：退 0、標準輸出**整段**是完整的拒絕形狀（denyShapeProblem）。 */

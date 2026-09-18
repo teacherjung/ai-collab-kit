@@ -48,7 +48,8 @@
 //     對照組＝修正前的寫法（find 有輸出照樣算指紋、沒有大小上限）2 秒內結束不了；超過上限、指紋是對的那一份：照樣退 2、copyProblem 也不收
 //     （對照組＝拿掉大小上限的寫法照用）。
 //   ⑮（Codex r1 第 1 條）Claude 側的拒絕形狀要完整：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、
-//     理由缺或空、最上層多一個鍵——從改過的來源重抽，試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收（先驗只差那一處）。
+//     理由缺或空、最上層多一個鍵、hookSpecificOutput 裡多一個鍵（Codex r2 第 1 條：數值或字串的 additionalContext 都不收）——從改過的來源重抽，
+//     試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收（先驗只差那一處）。
 //   ⑯（第 4 條，照實的對照）<指紋> 那一層本身換成指向內容相同目錄的連結＝那一行照用（它只查 cd 進去之後的裡面）；
 //     --claude、--retire 不收（copyProblem 說是連結）；連結改指到清單改弱的目錄＝指紋對不上、退 2。
 //   ⑰（第 2、3 條）--retire：基底本身或它的上層是連結、解開之後在假家的 .claude／.codex 底下＝退 2、什麼都不動（--claude 同一個情境也拒絕；
@@ -883,7 +884,7 @@ test('⑭四個檔之一換成具名管道、或換成超過上限的檔：find 
   assert.match(copyProblem(big.copyDir, big.fp) || '', /不小於 1048576 位元組/u, 'copyProblem 也不收');
 }));
 
-test('⑮Claude 側的拒絕形狀要完整（Codex r1 第 1 條）：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、理由缺或空、最上層多一個鍵——重抽的複本試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收', () => withScratch((scratch) => {
+test('⑮Claude 側的拒絕形狀要完整（Codex r1 第 1 條）：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、理由缺或空、最上層多一個鍵、內層多一個鍵（Codex r2 第 1 條）——重抽的複本試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收', () => withScratch((scratch) => {
   const good = landed(scratch);
   const goodOut = hook(good.cmd, { home: good.home, tool: DENIED });
   denies(goodOut, '前提：原本的攔截器印的是完整的拒絕形狀');
@@ -897,6 +898,10 @@ test('⑮Claude 側的拒絕形狀要完整（Codex r1 第 1 條）：攔截器�
     { why: '理由缺', from: 'permissionDecisionReason: `', to: 'permissionDecisionReason: undefined && `', shape: (d) => { delete d.hookSpecificOutput.permissionDecisionReason; }, re: /permissionDecisionReason 不是非空字串/u },
     { why: '理由是空字串', from: 'permissionDecisionReason: `', to: "permissionDecisionReason: '' && `", shape: (d) => { d.hookSpecificOutput.permissionDecisionReason = ''; }, re: /permissionDecisionReason 不是非空字串/u },
     { why: '最上層多一個鍵', from: 'return JSON.stringify({\n', to: 'return JSON.stringify({\n    continue: true,\n', shape: (d) => { d.continue = true; }, re: /最上層/u },
+    // Codex r2 第 1 條 M12：內層多一個型別不對的已知欄位（官方文件的 additionalContext 是字串）——三個必要欄位都還在、理由也還在
+    { why: '內層多一個數值的 additionalContext', from: "permissionDecision: 'deny',", to: "permissionDecision: 'deny',\n      additionalContext: 123,", shape: (d) => { d.hookSpecificOutput.additionalContext = 123; }, re: /hookSpecificOutput 裡要剛好只有/u },
+    // 型別對的也不收：這一支選的是「多一個就不認」，不逐一驗型別（寫明是刻意的較嚴契約）
+    { why: '內層多一個字串的 additionalContext', from: "permissionDecision: 'deny',", to: "permissionDecision: 'deny',\n      additionalContext: 'x',", shape: (d) => { d.hookSpecificOutput.additionalContext = 'x'; }, re: /hookSpecificOutput 裡要剛好只有/u },
   ];
   for (const v of VARIANTS) {
     const src = sourceRepo(scratch, editFile('tools/forbidden-tools.js', (c) => {
