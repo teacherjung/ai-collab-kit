@@ -64,10 +64,11 @@ const fakeHome = (scratch) => fs.mkdtempSync(path.join(scratch, 'home-'));
 /**
  * 照鉤子的起法跑一次。回 spawnSync 結果。
  * HOME 沒設（home: null）只准配 -c：登入 shell 在 HOME 沒設時會照密碼檔找到真的家、去讀那裡的登入設定。
+ * timeout（毫秒）：到時間就殺掉 sh，結果的 status 是 null、error.code 是 ETIMEDOUT（blocks／denies／allows 看退出碼，逾時一律算失敗）。
  */
-const hook = (command, { home, tool = ALLOWED, flag = '-c', cwd = os.tmpdir(), env = {} } = {}) => {
+const hook = (command, { home, tool = ALLOWED, flag = '-c', cwd = os.tmpdir(), env = {}, timeout } = {}) => {
   if (home === null && flag !== '-c') throw new Error('考題的 HOME 紀律：HOME 沒設只准配 -c（登入 shell 會去讀真的家的登入設定）');
-  return spawnSync('/bin/sh', [flag, command], { cwd, env: { ...base, ...homeEnv(home), ...env }, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+  return spawnSync('/bin/sh', [flag, command], { cwd, env: { ...base, ...homeEnv(home), ...env }, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8', timeout });
 };
 
 /** 跑某一份來源專案自己的 tools/guard-copy.js 指令入口（暫存區放行只給考題用）。 */

@@ -18,7 +18,9 @@
 //     範本從已合併的版本讀；
 //   ④那個名字已經在、但不自洽（改過一個位元組、多一個檔、名字是連結）＝拒絕、不覆寫、不刪；別的工作階段搶先落地＝自洽就算成功；
 //   ⑤那一行真的跑一遍（-c 與 -lc、從別的目錄起）：擋、放、四個檔各改一個位元組、少檔、複本改名（總煞車）、HOME 沒設（只跑 -c）、
-//     HOME 指到空目錄、HOME 是相對路徑又設了 CDPATH（cd 不可以弄髒標準輸出）、複本裡多一個檔或目錄、PATH 前面有相對項目而複本裡放一支假 node、
+//     HOME 指到空目錄、環境帶進 guard_seen＝期望值（開頭先清空；對照組＝拿掉清空那一步真的照當下目錄那棵樹的鬆清單放行）、
+//     HOME 是相對路徑又設了 CDPATH（cd 不可以弄髒標準輸出）、複本裡多一個檔或目錄、tools 底下多一個一般檔（對照組＝tools 底下不限檔名的寫法照用）、
+//     PATH 前面有相對項目而複本裡放一支假 node、
 //     三種連結、查不了連結、沒有 find、佔位沒換、沒有 node、載入就崩；每一種都有「改回來就恢復」或對照組（多一個檔與假 node 的對照組＝修正前只查連結的寫法真的照用）；
 //     指紋對不上那一句一律不印 64 碼十六進位（tests/helpers/guard-rig.js 的 blocks()）；
 //   ⑥**核心宣稱：樹裡改清單沒有用**——工作樹把清單改弱、切到弱清單的分支、環境指向清單很鬆的倉庫，那一行都照複本擋
@@ -33,6 +35,9 @@
 //     對照組：那一行換了、這台機器還沒補＝全擋，補了＝照新清單擋。
 //   ⑫落地之後用這個家再試跑一次：這個家的登入設定往標準輸出印字＝退 1、這一次落地的那一份撤掉（之後那一行全擋、不是半套）；
 //     原本就在的、別的工作階段先落地的那一份，試跑沒過也不動；對照組＝登入設定安靜時照常落地。
+//   ⑭四個檔之一換成具名管道、或換成極大的檔（稀疏檔）：限時 5 秒內退 2（逾時算失敗：官方鉤子文件寫 PreToolUse 的指令鉤子逾時不擋）；
+//     對照組＝修正前的寫法（find 有輸出照樣算指紋、沒有大小上限）2 秒內結束不了；超過上限、指紋是對的那一份：照樣退 2、copyProblem 也不收
+//     （對照組＝拿掉大小上限的寫法照用）。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
@@ -49,7 +54,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
-  COPY_FILES, CLAUDE_BASE, CLAUDE_PLACEHOLDERS, CLAUDE_TEMPLATE_REL, CONFIG_CHANGE_MATCHER,
+  COPY_FILES, CLAUDE_BASE, CLAUDE_PLACEHOLDERS, CLAUDE_TEMPLATE_REL, CLAUDE_MAX_FILE_BYTES, CONFIG_CHANGE_MATCHER,
   fingerprintDir, treeFingerprint, claudeGroups, claudeLine, copyProblem, buildClaude, retire, parseArgs, Refusal,
 } = require('../tools/guard-copy.js');
 const {
@@ -79,7 +84,7 @@ const FP_FAIL = "原句轉給裁示者（補複本的順序在 tools/guard-copy.
  * 從那一行裡找出來、不逐字寫死：這一道的條件被改掉時，要紅在行為斷言、不是紅在對照組找不到字。
  */
 const oddCheckOf = (command) => {
-  const m = command.match(/guard_odd="\$\(\/usr\/bin\/env -i \/usr\/bin\/find .*?\)"(?= && guard_sum=)/u);
+  const m = command.match(/guard_odd="\$\(\/usr\/bin\/env -i \/usr\/bin\/find .*?\)"(?= && )/u);
   assert.ok(m, '前提：那一行裡有查多出來的檔那一道');
   return m[0];
 };
@@ -120,6 +125,10 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
     assert.equal(cmd.split(`/usr/bin/env -i ${bin}`).length - 1, uses, `${bin} 每一次出現都要包在清空的環境裡`);
   }
   assert.ok(cmd.includes('/usr/bin/env -i PATH="$PATH" node --preserve-symlinks --preserve-symlinks-main tools/forbidden-tools.js'), 'node 那一截：清空環境、只留 PATH、兩個旗標');
+  // 允許的兩處（settings.json、tools 底下那三個）都帶大小上限，數字＝CLAUDE_MAX_FILE_BYTES（copyProblem 用同一個）；find 的輸出是空的才算指紋（⑭真的跑）
+  assert.equal(cmd.split(` -size -${CLAUDE_MAX_FILE_BYTES}c`).length, 3, '允許的兩處都帶大小上限，數字跟 CLAUDE_MAX_FILE_BYTES 一樣');
+  assert.equal(cmd.split('-size').length, 3, '沒有別的大小條件');
+  assert.equal(cmd.split('&& case "$guard_odd" in "") guard_sum="$(').length, 2, 'find 的輸出是空的才去算指紋');
   assert.match(cmd, /不要手工造複本、不要自己改那一行，原句轉給裁示者/u, '指紋對不上那一句要叫 AI 停手、轉給裁示者');
 
   const change = doc.hooks.ConfigChange;
@@ -342,7 +351,7 @@ test('④那個名字已經在、但不自洽＝拒絕、不覆寫、不刪；�
   assert.deepEqual(fs.readdirSync(baseOf(badRaceHome)), [good.fp], '不自洽的那一份留著給人看，暫存骨架清掉');
 }));
 
-test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、CDPATH、多一個檔、複本裡的假 node、連結、沒有 find、佔位沒換、沒有 node、載入就崩', (t) => withScratch((scratch) => {
+test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、環境帶進 guard_seen、CDPATH、多一個檔或目錄、tools 底下多一個一般檔、複本裡的假 node、連結、沒有 find、佔位沒換、沒有 node、載入就崩', (t) => withScratch((scratch) => {
   const { home, fp, copyDir, cmd } = landed(scratch);
   const elsewhere = fs.mkdtempSync(path.join(scratch, 'elsewhere-'));
   for (const flag of ['-c', '-lc']) {
@@ -380,6 +389,13 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   }
   allows(hook(cmd, { home }), '對照組：HOME 指回有複本的家就恢復');
 
+  // 那一行開頭的 guard_seen=（先清空）：環境帶進比對的期望值、HOME 指到沒有複本的家、當下目錄是一棵清單很鬆的樹——照樣退 2。
+  // 不靠 bash（環境變數在任何 sh 都會變成同名的 shell 變數），所有機器都跑
+  const looseTree = sourceRepo(scratch, { forbidden: LOOSE });
+  const seeded = { home: fakeHome(scratch), tool: DENIED, cwd: looseTree, env: { guard_seen: `|${fp}  -` } };
+  blocks(hook(cmd, seeded), MISMATCH, '環境帶進 guard_seen＝期望值：照樣退 2');
+  allows(hook(swap(cmd, 'guard_seen=; ', ''), seeded), '對照組：拿掉先清空那一步，環境帶進來的值讓比對過關、照當下目錄那棵樹的鬆清單放行');
+
   // cd 後面的 >/dev/null：HOME 是相對路徑、又設了 CDPATH 時，cd 會往標準輸出印它進去的目錄——拒絕形狀被弄髒＝平台讀不出來＝放行
   const cdpathCwd = fs.mkdtempSync(path.join(scratch, 'cdpath-cwd-'));
   const relHome = { home: path.basename(home), cwd: cdpathCwd, env: { CDPATH: path.dirname(home) }, tool: DENIED };
@@ -403,6 +419,13 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   fs.mkdirSync(path.join(copyDir, 'tools', 'sub'));
   blocks(hook(cmd, { home }), MISMATCH, '複本裡多一個空目錄');
   fs.rmdirSync(path.join(copyDir, 'tools', 'sub'));
+  allows(hook(cmd, { home }), '對照組：拿掉就恢復');
+  // tools 底下多一個一般檔（名字不是那三個）：一律退 2。對照組＝tools 底下不限檔名的寫法，照用
+  const toolsExtra = path.join(copyDir, 'tools', 'extra.js');
+  fs.writeFileSync(toolsExtra, 'x');
+  blocks(hook(cmd, { home }), MISMATCH, 'tools 底下多一個一般檔');
+  allows(hook(swap(cmd, ' \\( -name forbidden-tools.js -o -name package.json -o -name settings-data.js \\)', ''), { home }), '對照組：tools 底下不限檔名的寫法，多一個一般檔照用');
+  fs.rmSync(toolsExtra);
   allows(hook(cmd, { home }), '對照組：拿掉就恢復');
   // PATH 有相對項目、複本目錄裡放一支假 node：那一行 cd 進複本之後才找 node，相對項目就是從複本目錄算的
   for (const [rel, entry] of [[path.join('node_modules', '.bin', 'node'), 'node_modules/.bin'], ['node', '.']]) {
@@ -720,4 +743,70 @@ test('⑬改了清單卻沒重印那一行＝靜靜照舊清單判（放行、�
   blocks(hook(reprinted, { home, tool: NEWLY }), MISMATCH, '那一行換了、這台機器還沒補那一份＝全擋');
   assert.equal(buildClaude({ from: 'HEAD', root: src, home, allowTemp: true }).failure, null);
   denies(hook(reprinted, { home, tool: NEWLY }), '補了那一份＝照新清單擋');
+}));
+
+test('⑭四個檔之一換成具名管道、或換成超過上限的檔：find 查到就不算指紋，很短的限時內退 2（逾時算失敗）；對照組＝修正前的寫法（照樣算指紋、沒有大小上限）逾時；超過上限但指紋是對的也照樣退 2、--claude 認自洽也不收', () => withScratch((scratch) => {
+  const { home, fp, copyDir, cmd } = landed(scratch);
+  // 修正前的寫法：find 有輸出照樣去算指紋、允許的檔沒有大小上限（從現在那一行換回來；要換的那一截不在＝當場紅）
+  // 在現在那一行的斷言都跑完之後才換（這一截被改掉時，要紅在行為斷言、不是紅在換不到字）
+  const LIMIT = ` -size -${CLAUDE_MAX_FILE_BYTES}c`;
+  const preFix = () => swap(swap(cmd, 'case "$guard_odd" in "") guard_sum=', 'guard_sum='), ' && guard_seen="|$guard_sum";; esac;', ' && guard_seen="$guard_odd|$guard_sum";').split(LIMIT).join('');
+  const QUICK = 5000;   // 現在的寫法：find 查到就退 2，連 shasum 都不叫——給 5 秒是讓機器很忙時也不假紅
+  const SLOW = 2000;    // 對照組：卡住的就是卡住，等多久都一樣
+  const timedOut = (r) => Boolean(r.error && r.error.code === 'ETIMEDOUT');
+
+  // 具名管道換掉 settings.json：shasum 打開它會一直等寫入的一方
+  const settingsAt = path.join(copyDir, 'settings.json');
+  const keptSettings = path.join(scratch, 'kept-settings.json');
+  fs.renameSync(settingsAt, keptSettings);
+  const mk = spawnSync('mkfifo', [settingsAt], { env: base, encoding: 'utf8' });
+  assert.equal(mk.status, 0, `前提：做得出具名管道（${mk.stderr}）`);
+  try {
+    const r = hook(cmd, { home, tool: DENIED, timeout: QUICK });
+    assert.ok(!timedOut(r), `設定檔換成具名管道：${QUICK / 1000} 秒內要結束（逾時＝平台放行）`);
+    blocks(r, MISMATCH, '設定檔換成具名管道');
+    const stuck = hook(preFix(), { home, tool: DENIED, timeout: SLOW });
+    assert.ok(timedOut(stuck), `對照組：修正前的寫法卡在具名管道上、${SLOW / 1000} 秒內沒有結束（退 ${stuck.status}）`);
+  } finally {
+    // 被殺掉的 sh 留下的 shasum 還卡在打開管道那一步：開一下寫入端再關掉，它讀到結尾就自己結束
+    for (let i = 0; i < 50; i += 1) {
+      let fd;
+      try { fd = fs.openSync(settingsAt, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK); } catch (e) { if (e.code === 'ENXIO') break; throw e; }
+      fs.closeSync(fd);
+      spawnSync('sleep', ['0.05'], { env: base });
+    }
+    fs.rmSync(settingsAt);
+    fs.renameSync(keptSettings, settingsAt);
+  }
+  allows(hook(cmd, { home }), '對照組：放回來就恢復');
+  denies(hook(preFix(), { home, tool: DENIED }), '對照組的前提：修正前的寫法在乾淨的複本上照清單擋（上面逾時的原因是具名管道、不是那一行本身壞了）');
+
+  // tools 底下的一個檔換成極大的檔（稀疏檔、不佔磁碟）：shasum 要讀完才比得出對不上
+  const pkgAt = path.join(copyDir, 'tools', 'package.json');
+  const keptPkg = path.join(scratch, 'kept-package.json');
+  fs.renameSync(pkgAt, keptPkg);
+  fs.writeFileSync(pkgAt, '');
+  // 16 GiB。推算：2026-09-19 那台機器 shasum 讀 1 GiB 稀疏檔約 3.6 秒＝16 GiB 約一分鐘；快十倍的機器也要五秒以上（兩個限時都等不到它讀完）
+  fs.truncateSync(pkgAt, 16 * 1024 ** 3);
+  try {
+    const r = hook(cmd, { home, tool: DENIED, timeout: QUICK });
+    assert.ok(!timedOut(r), `tools 底下的檔換成極大的檔：${QUICK / 1000} 秒內要結束（逾時＝平台放行）`);
+    blocks(r, MISMATCH, 'tools 底下的檔換成極大的檔');
+    const slow = hook(preFix(), { home, tool: DENIED, timeout: SLOW });
+    assert.ok(timedOut(slow), `對照組：修正前的寫法去讀那個極大的檔、${SLOW / 1000} 秒內沒有結束（退 ${slow.status}）`);
+  } finally {
+    fs.truncateSync(pkgAt, 0);   // 被殺掉的 sh 留下的 shasum 還在讀：截成 0，它馬上讀到結尾、自己結束
+    fs.rmSync(pkgAt);
+    fs.renameSync(keptPkg, pkgAt);
+  }
+  allows(hook(cmd, { home }), '對照組：放回來就恢復');
+  assert.equal(fingerprintDir(copyDir), fp, '放回來的就是原本那一份');
+
+  // 超過上限、但指紋是對的（不試跑、硬落地一份）：照樣退 2；copyProblem（--claude 認自洽、--retire 認可以刪）也不收
+  const big = landed(scratch, editFile('tools/settings-data.js', (c) => `${c}// ${'x'.repeat(CLAUDE_MAX_FILE_BYTES)}\n`), { runSelfTest: false });
+  assert.ok(fs.statSync(path.join(big.copyDir, 'tools', 'settings-data.js')).size >= CLAUDE_MAX_FILE_BYTES, '前提：真的不小於上限');
+  assert.equal(fingerprintDir(big.copyDir), big.fp, '前提：指紋是對的');
+  blocks(hook(big.cmd, { home: big.home }), MISMATCH, '超過上限、指紋是對的：照樣退 2');
+  allows(hook(big.cmd.split(LIMIT).join(''), { home: big.home }), '對照組：拿掉大小上限的寫法，這一份照用');
+  assert.match(copyProblem(big.copyDir, big.fp) || '', /不小於 1048576 位元組/u, 'copyProblem 也不收');
 }));

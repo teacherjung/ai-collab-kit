@@ -70,7 +70,8 @@
 //   ⚠️ 同上：驗收只准用測試鈕，任何會動到禁區的真工具一律絕不可以叫來試。
 //
 // 誠實劃界：指紋只蓋複本裡的檔，不蓋 node 本身、shasum 本身、PATH 找到哪一支 node（登入設定改了 PATH 就換了一支）；
-// 檢查與執行之間的極短空檔被換檔擋不住（防的是漂移與誤改，不是本機有人蓄意競速）；
+// 檢查與執行之間的極短空檔被換檔擋不住（防的是漂移與誤改，不是本機有人蓄意競速；Claude 側那一行的 find 查完、shasum 讀檔之前
+// 被換成具名管道＝那一行掛到平台逾時（官方鉤子文件寫 PreToolUse 的指令鉤子逾時不擋），也屬於這一條）；
 // 「已合併」看的是本機的 origin/<主幹> 追蹤參照（先 fetch）；自我試跑是在這支的環境裡跑，Codex 起鉤子的環境不一定一樣。
 // Claude 側釘指紋另外要知道的（只寫量到的；量測＝2026-09-18，Claude Code 2.1.275 桌面版，第一個使用專案的拋棄式樹）：
 //   ・量到的：鉤子退 2＋錯誤輸出真的擋工具；鉤子的環境有 HOME、用 /bin/sh 起、node 在 PATH 上找得到、shasum 是 /usr/bin/shasum；
@@ -82,7 +83,9 @@
 //   ・**鉤子的環境被塞變數（SHELLOPTS、匯入的 shell 函式、PATH）這一類擋不住，那一行裡關不完**：SHELLOPTS=noexec＝整行不執行、退 0；
 //     匯入的函式（BASH_FUNC_名字%%）換得掉 cd、echo（換成 exit 0＝退 0＝放行）；PATH 決定跑哪一支 node。那一行做了的只有：
 //     shasum、find、node 包進清空的環境（量過 NODE_OPTIONS、PERL5OPT 兩個進不來）、指紋比對用 case、設定變更攔截只剩 exit 2（這兩樣函式換不掉）、
-//     複本裡只准有那四個檔與 tools 目錄（PATH 有相對項目時 node 是從複本目錄找的，複本裡多一支檔就退 2）。
+//     複本裡只准有那四個檔（一般檔、各小於 CLAUDE_MAX_FILE_BYTES）與 tools 目錄（PATH 的相對項目從當下目錄＝複本目錄算：
+//     解到複本裡的（. 、node_modules/.bin）放一支假 node＝多一支檔＝退 2；解到複本外的（..）擋不住，屬於「PATH 決定跑哪一支 node」），
+//     查到多的東西就不去算指紋（具名管道、極大的檔不會讓那一行掛到平台逾時：tests/guard-copy-claude.test.js ⑭）。
 //     本機與專案設定檔的 env 鍵會不會傳進鉤子的環境沒量，當成會：絆線看它（tools/claude-pin.js）。考題＝tests/guard-copy-claude.test.js ⑦⑩⑪（⑪斷言放行＝照實的對照）。
 //   ・**複本不是鎖**：內容定址的目錄，誰照同一個算法都造得出自洽的一份。它擋的是漂移與誤改（樹裡改清單、切分支、走進別棵樹都沒有用），
 //     不是蓄意在倉庫外造一份弱複本、再把那一行指過去的人——那要動到專案的設定檔：提交了才進審查；只改工作樹不提交的話沒有人審，
@@ -124,6 +127,15 @@ const PLACEHOLDERS = ['{copyDir}', '{files}', '{fingerprint}'];
 const CLAUDE_PLACEHOLDERS = ['{files}', '{fingerprint}'];
 /** Claude 側複本的基底目錄（相對家目錄）；範本的指令裡寫的是同一串（對不上＝試跑找不到複本＝不落地）。 */
 const CLAUDE_BASE = ['.local', 'share', 'ai-collab-kit', 'guard'];
+/**
+ * Claude 側複本裡每個檔都要**小於**這個位元組數（1 MiB；第二輪審查 M）。範本那一行的 find 寫的是同一個數（-size -1048576c＝小於它），
+ * 查到不小於它的檔＝當成多出來的東西、不去算指紋、直接退 2；copyProblem（--claude 認「自洽」、--retire 認可以刪）也用它。
+ * 為什麼要上限：shasum 要讀完整個檔才比得出對不上，極大的檔會讓那一行拖到平台逾時，而 PreToolUse 的指令鉤子逾時不擋。
+ * 為什麼是 1 MiB：2026-09-19 四個檔最大的是 tools/forbidden-tools.js，不到 10 KB，上限是它的 100 倍以上（清單與程式再長也夠）；
+ * 那一天這台機器用 shasum 讀一個 1 GiB 的稀疏檔約 3.6 秒，讀四個 1 MiB 以內的檔不會拖到逾時。
+ * 改這個數＝範本那一行跟著改（tests/guard-copy-claude.test.js ①對兩邊）＝使用專案要重印那一行（指紋不變，那一行的字變了：等式題會紅）。
+ */
+const CLAUDE_MAX_FILE_BYTES = 1048576;
 /** 設定變更攔截只掛量過的那一個來源（2026-09-18；本機設定檔與使用者層沒量，local_settings 刻意不掛的推論見檔頭）。 */
 const CONFIG_CHANGE_MATCHER = 'project_settings';
 /** Claude 側複本的目錄名＝指紋：64 碼十六進位小寫。Codex 全域層那種人取的短名字不符合＝--retire 碰不到。 */
@@ -466,7 +478,7 @@ function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = t
 
 /**
  * 一份 Claude 側複本自不自洽：是真的目錄（不是連結）、裡面剛好那四個檔（不多不少、沒有連結、沒有別種東西）、
- * 從磁碟重算的指紋＝目錄名。回問題描述；自洽＝回 null。全程只讀。
+ * 每個檔小於 CLAUDE_MAX_FILE_BYTES、從磁碟重算的指紋＝目錄名。回問題描述；自洽＝回 null。全程只讀。
  */
 function copyProblem(dir, fp) {
   let st;
@@ -485,6 +497,12 @@ function copyProblem(dir, fp) {
   if (odd.length) return `裡面有連結或不是一般檔案的東西（${odd[0]}）`;
   const expected = [...new Set(COPY_FILES.flatMap((rel) => (rel.includes('/') ? [`${path.posix.dirname(rel)}/`, rel] : [rel])))].sort();
   if (JSON.stringify(found.sort()) !== JSON.stringify(expected)) return '裡面不是剛好那四個檔（多了或少了東西）';
+  // 大小上限跟那一行的 find 同一個數：先查大小，極大的檔不必讀完就知道不收
+  for (const rel of COPY_FILES) {
+    let size;
+    try { size = fs.statSync(path.join(dir, rel)).size; } catch (e) { return `檔案讀不到（${(e && e.code) || '不明'}）`; }
+    if (size >= CLAUDE_MAX_FILE_BYTES) return `${rel} 不小於 ${CLAUDE_MAX_FILE_BYTES} 位元組（那一行把它當成多出來的東西）`;
+  }
   try { if (fingerprintDir(dir) !== fp) return '內容重算的指紋跟目錄名不一樣'; } catch (e) { return `檔案讀不到（${(e && e.code) || '不明'}）`; }
   return null;
 }
@@ -701,6 +719,6 @@ if (require.main === module) process.exit(main());
 
 module.exports = {
   COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal,
-  CLAUDE_TEMPLATE_REL, CLAUDE_PLACEHOLDERS, CLAUDE_BASE, CONFIG_CHANGE_MATCHER, CLAUDE_GROUP_KEYS, CLAUDE_HOOK_KEYS, groupExtraKeys,
+  CLAUDE_TEMPLATE_REL, CLAUDE_PLACEHOLDERS, CLAUDE_BASE, CLAUDE_MAX_FILE_BYTES, CONFIG_CHANGE_MATCHER, CLAUDE_GROUP_KEYS, CLAUDE_HOOK_KEYS, groupExtraKeys,
   treeFingerprint, claudeGroups, claudeLine, copyProblem, buildClaude, retire, parseArgs,
 };
