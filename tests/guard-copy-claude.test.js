@@ -49,6 +49,8 @@
 //     （對照組＝拿掉大小上限的寫法照用）。
 //   ⑮（Codex r1 第 1 條）Claude 側的拒絕形狀要完整：攔截器印的拒絕缺 hookEventName、hookEventName 不對、permissionDecision 不是 deny、
 //     理由缺或空、最上層多一個鍵——從改過的來源重抽，試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收（先驗只差那一處）。
+//   ⑯（第 4 條，照實的對照）<指紋> 那一層本身換成指向內容相同目錄的連結＝那一行照用（它只查 cd 進去之後的裡面）；
+//     --claude、--retire 不收（copyProblem 說是連結）；連結改指到清單改弱的目錄＝指紋對不上、退 2。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明（⑪的 /bin/bash 那一發只看有沒有 /bin/bash）；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明；「撤不掉」那一段以 root 跑時不跑（改權限擋不住 root）。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
@@ -423,7 +425,7 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
     t.diagnostic('這台機器的 /bin/sh 不是 bash、用 CDPATH 找到目錄時也沒往標準輸出印字：CDPATH 的對照組做不出來，只跑了正面那一發');
   }
 
-  // 複本裡多一個檔（跟 --claude 認「自洽」同一個判準）：退 2
+  // 複本裡多一個檔：退 2（那一行查的是 cd 進去之後的複本裡面；<指紋> 那一層本身是連結那一行看不到：⑯）
   const ODD_CHECK = oddCheckOf(cmd);
   const extra = path.join(copyDir, 'extra.txt');
   fs.writeFileSync(extra, 'x');
@@ -917,4 +919,33 @@ test('⑮Claude 側的拒絕形狀要完整（Codex r1 第 1 條）：攔截器�
   assert.deepEqual([cli.status, cli.stdout], [1, ''], `缺 hookEventName：指令入口退 1（${cli.stderr}）`);
   assert.match(cli.stderr, /自我試跑沒過[\s\S]*hookEventName 不是 PreToolUse[\s\S]*沒有落地/u);
   assert.doesNotMatch(cli.stderr, /自我試跑：過/u);
+}));
+
+test('⑯照實的對照（Codex r1 第 4 條）：<指紋> 那一層本身換成連結、指到內容相同的目錄＝那一行照用（照清單判：該擋的擋、該放的放），它只查 cd 進去之後的複本裡面；那一層是連結由 --claude、--retire 拒絕（copyProblem 說是連結）；連結改指到清單改弱的目錄＝指紋對不上、退 2', () => withScratch((scratch) => {
+  const { src, home, fp, copyDir, cmd } = landed(scratch);
+  const same = path.join(scratch, 'same-content');
+  fs.renameSync(copyDir, same);   // 內容原封不動搬走，原位置換成指向它的連結
+  fs.symlinkSync(same, copyDir);
+  assert.ok(fs.lstatSync(copyDir).isSymbolicLink(), '前提：<指紋> 那一層是連結');
+  assert.equal(fingerprintDir(same), fp, '前提：連結指到的內容就是那一份');
+  for (const flag of ['-c', '-lc']) {
+    denies(hook(cmd, { home, flag, tool: DENIED }), `${flag}：那一層是連結、內容相同＝照清單擋`);
+    allows(hook(cmd, { home, flag }), `${flag}：那一層是連結、內容相同＝照清單放（那一行看不到那一層是連結）`);
+  }
+  assert.match(copyProblem(copyDir, fp) || '', /那個名字是一個連結/u, 'copyProblem（--claude 認自洽、--retire 認可以刪）說是連結');
+  const before = snapshot(same);
+  refuses(() => buildClaude({ from: 'HEAD', root: src, home, allowTemp: true }), /不是一份自洽的複本（那個名字是一個連結/u, '--claude 不認');
+  refuses(() => retire({ fp, home }), /不是一份自洽的複本（那個名字是一個連結/u, '--retire 不刪');
+  assert.deepEqual(snapshot(same), before, '連結指到的那一份沒有被動到');
+  // 內容仍要對上指紋：連結改指到清單改弱的目錄＝全擋，換不成弱清單
+  const weak = path.join(scratch, 'weak-content');
+  fs.cpSync(same, weak, { recursive: true });
+  fs.chmodSync(path.join(weak, 'settings.json'), 0o644);
+  fs.writeFileSync(path.join(weak, 'settings.json'), `${JSON.stringify({ forbidden: LOOSE }, null, 2)}\n`);
+  fs.unlinkSync(copyDir);
+  fs.symlinkSync(weak, copyDir);
+  for (const flag of ['-c', '-lc']) {
+    blocks(hook(cmd, { home, flag, tool: DENIED }), MISMATCH, `${flag}：連結指到清單改弱的目錄＝指紋對不上、退 2`);
+    blocks(hook(cmd, { home, flag }), MISMATCH, `${flag}：連結指到清單改弱的目錄：本來放行的也擋`);
+  }
 }));
