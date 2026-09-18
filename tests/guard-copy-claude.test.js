@@ -28,6 +28,8 @@
 //   ⑩函式換不掉的兩處：匯入名為 [、case 的函式，指紋比對照樣擋（對照組：寫成 [ … ] 時被改弱的複本真的放行）；匯入名為 exit 的函式，設定變更攔截照樣退 2；
 //   ⑪**照實的對照（斷言放行）**：SHELLOPTS=noexec、匯入名為 cd 或 echo 的函式、PATH 前面放一支假 node＝那一行放行、設定變更攔截那一條退 0——
 //     「鉤子的環境被塞變數這一類在那一行裡關不完」這句話靠它撐著；哪天變成擋得住，這題紅、提醒改文件。
+//   ⑬改了清單卻沒重印那一行＝那一行照舊指紋找到舊複本、靜靜照舊清單判（放行、兩個輸出都空的）；同一刻唯一會紅的是等式題；
+//     對照組：那一行換了、這台機器還沒補＝全擋，補了＝照新清單擋。
 //   ⑫落地之後用這個家再試跑一次：這個家的登入設定往標準輸出印字＝退 1、這一次落地的那一份撤掉（之後那一行全擋、不是半套）；
 //     原本就在的、別的工作階段先落地的那一份，試跑沒過也不動；對照組＝登入設定安靜時照常落地。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
@@ -51,6 +53,7 @@ const {
 const {
   KIT, FAKE, LOOSE, DENIED, ALLOWED, MISMATCH, STARTUP, base, git, sourceRepo, editFile, fakeHome, hook, tool, denies, allows, blocks, walk, withScratch, snapshot,
 } = require('./helpers/guard-rig.js');
+const { claudePinStatus } = require('../tools/claude-pin.js');
 
 const SHASUM = '/usr/bin/shasum';
 const template = () => JSON.parse(fs.readFileSync(path.join(KIT, CLAUDE_TEMPLATE_REL), 'utf8'));
@@ -666,4 +669,30 @@ test('⑫落地之後用這個家再試跑一次：這個家的登入設定往�
   const raced = buildClaude({ from: 'HEAD', root: good.src, home: raceHome, allowTemp: true, beforeLand: (dir) => fs.cpSync(good.copyDir, dir, { recursive: true }) });
   assert.deepEqual([Boolean(raced.failure), raced.existed, Boolean(raced.landedThenFailed)], [true, true, false]);
   assert.deepEqual(fs.readdirSync(baseOf(raceHome)), [good.fp], '別人先落地的那一份還在');
+}));
+
+test('⑬改了清單卻沒重印那一行＝靜靜照舊清單判（放行、兩個輸出都空的）；同一刻唯一會紅的是等式題（對照組：那一行換了、沒補複本＝全擋；補了＝照新清單擋）', () => withScratch((scratch) => {
+  const { src, home, cmd } = landed(scratch);   // 照原本的清單落地、那一行照原本的清單印
+  const NEWLY = 'mcp__other__newly_denied_tool';
+  allows(hook(cmd, { home, tool: NEWLY }), '前提：收緊之前這個名字照清單放行');
+  const groups = claudeLine(src).groups;
+  fs.mkdirSync(path.join(src, '.claude'));
+  fs.writeFileSync(path.join(src, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [groups.PreToolUse], ConfigChange: [groups.ConfigChange] } }, null, 2));
+  assert.equal(claudePinStatus(src).state, 'ok', '前提：收緊之前等式成立');
+
+  // 收緊清單（把這個名字加進逐字拒絕清單）、提交、當成已合併；那一行沒重印
+  const settingsFile = path.join(src, 'settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, forbidden: { ...settings.forbidden, deny: [...settings.forbidden.deny, NEWLY] } }, null, 2));
+  assert.equal(git(src, 'commit', '-qam', 'tighten').status, 0);
+  assert.equal(git(src, 'update-ref', 'refs/remotes/origin/main', 'HEAD').status, 0);
+  allows(hook(cmd, { home, tool: NEWLY }), '沒重印那一行：照舊指紋找到舊複本、照舊清單放行，兩個輸出都空的（沒有訊號）');
+  assert.equal(claudePinStatus(src).state, 'mismatch', '同一刻唯一會紅的：等式題');
+
+  // 對照組：那一行在同一支變更裡換了——這台機器還沒補那一份＝全擋（看得見）；補了＝照新清單擋
+  const reprinted = lineOf(src);
+  assert.notEqual(reprinted, cmd, '前提：清單改了，重印的那一行真的不同');
+  blocks(hook(reprinted, { home, tool: NEWLY }), MISMATCH, '那一行換了、這台機器還沒補那一份＝全擋');
+  assert.equal(buildClaude({ from: 'HEAD', root: src, home, allowTemp: true }).failure, null);
+  denies(hook(reprinted, { home, tool: NEWLY }), '補了那一份＝照新清單擋');
 }));
