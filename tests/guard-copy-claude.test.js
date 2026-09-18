@@ -34,6 +34,7 @@
 //     原本就在的、別的工作階段先落地的那一份，試跑沒過也不動；對照組＝登入設定安靜時照常落地。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明。
+//   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
 // ⚠️ 守不到的：真的 Claude 對話有沒有載入那兩組；ConfigChange 在平台上擋不擋——這裡只證明那一條指令退 2；平台的行為 2026-09-18 在
 //   2.1.275 量過一次、只量了專案設定檔這個來源；之後沒有任何例行動作重量它（測試鈕只走 PreToolUse 那一行）；
 //   鉤子的環境被塞變數這一類（⑪）；這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
@@ -321,7 +322,7 @@ test('④那個名字已經在、但不自洽＝拒絕、不覆寫、不刪；�
   assert.deepEqual(fs.readdirSync(baseOf(badRaceHome)), [good.fp], '不自洽的那一份留著給人看，暫存骨架清掉');
 }));
 
-test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、CDPATH、多一個檔、複本裡的假 node、連結、沒有 find、佔位沒換、沒有 node、載入就崩', () => withScratch((scratch) => {
+test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、CDPATH、多一個檔、複本裡的假 node、連結、沒有 find、佔位沒換、沒有 node、載入就崩', (t) => withScratch((scratch) => {
   const { home, fp, copyDir, cmd } = landed(scratch);
   const elsewhere = fs.mkdtempSync(path.join(scratch, 'elsewhere-'));
   for (const flag of ['-c', '-lc']) {
@@ -364,8 +365,12 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   const relHome = { home: path.basename(home), cwd: cdpathCwd, env: { CDPATH: path.dirname(home) }, tool: DENIED };
   denies(hook(cmd, relHome), 'HOME 是相對路徑又設了 CDPATH：標準輸出照樣整段是拒絕形狀');
   const chattyCd = hook(swap(cmd, ' >/dev/null 2>&1 && guard_odd=', ' 2>/dev/null && guard_odd='), relHome);
-  assert.ok(chattyCd.stdout.startsWith(path.dirname(home)), `對照組的前提：這樣設定時 cd 真的往標準輸出印字（「${chattyCd.stdout.slice(0, 120)}」）`);
-  assert.throws(() => denies(chattyCd, 'x'), '對照組：cd 不吞標準輸出時，拒絕形狀被弄髒');
+  if (chattyCd.stdout.startsWith(path.dirname(home)) || shIsBash()) {
+    assert.ok(chattyCd.stdout.startsWith(path.dirname(home)), `對照組的前提：這樣設定時 cd 真的往標準輸出印字（「${chattyCd.stdout.slice(0, 120)}」）`);
+    assert.throws(() => denies(chattyCd, 'x'), '對照組：cd 不吞標準輸出時，拒絕形狀被弄髒');
+  } else {
+    t.diagnostic('這台機器的 /bin/sh 不是 bash、用 CDPATH 找到目錄時也沒往標準輸出印字：CDPATH 的對照組做不出來，只跑了正面那一發');
+  }
 
   // 複本裡多一個檔（跟 --claude 認「自洽」同一個判準）：一律退 2
   const ODD_CHECK = oddCheckOf(cmd);
