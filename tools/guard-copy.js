@@ -27,13 +27,19 @@
 //     退 1＝寫了東西但沒成功（自我試跑沒過、或寫到一半出錯）：標準輸出是空的、沒有東西可以貼，目的地可能留有複本或半份，
 //     這一種用法不刪它——看完自己刪，下次換一個新的空目錄。
 //   node tools/guard-copy.js --claude [--from <已合併進主幹的版本>] [--deny-probe <照清單該擋的假工具名>]
-//     Claude 側補複本（不給 --from＝抽這棵樹設定的 origin/<主幹>）。先寫進基底目錄裡一個暫存骨架、把 HOME 指到骨架真的跑那一行，
+//     Claude 側補複本（不給 --from＝抽這棵樹設定的 origin/<主幹>）。要落地的話，先用這個家跑一次 /bin/sh -lc ':'：標準輸出不是空的
+//     （登入設定往標準輸出印字）＝不落地、退 1。再寫進基底目錄裡一個暫存骨架、把 HOME 指到骨架真的跑那一行，
 //     過了才改名落地成 <家目錄>/.local/share/ai-collab-kit/guard/<指紋>；落地之後把 HOME 指到這個家、照「已經在」那條路再跑一次
 //     （這一次才讀得到這個人的登入設定），沒過＝把這一次自己落地的那一份撤掉、退 1。
-//     暫存骨架（基底目錄裡 .staging- 開頭的目錄）試跑過不過都由這支自己清掉——這支被中途殺掉的話它會留著，可以直接刪，那一行不會去讀它。
-//     那個目錄已經在、而且自洽（是真的目錄、剛好那四個檔、沒有連結、重算的指紋＝目錄名）＝不寫，照樣試跑（HOME＝這個家）；在、但不自洽＝退 2，不覆寫也不刪它。
+//     暫存骨架（基底目錄裡 .staging- 開頭的目錄）試跑過不過都由這支自己清掉——清不掉時訊息照實說「暫存骨架沒清掉：<路徑>」；
+//     這支被中途殺掉的話它也會留著。兩種都可以直接刪，那一行不會去讀它。
+//     **落地之後、第二次試跑跑完之前被中斷（例如 Ctrl-C）＝那一份留著**、沒有在這個人的登入設定下驗過；下一次再跑走「已經在」那條路：
+//     試跑沒過只退 1、不撤它（訊息寫明那一行現在就照用這一份：讓登入設定安靜，或 --retire <指紋>，之後全擋、看得見）。
+//     那個目錄已經在、而且自洽（是真的目錄、剛好那四個檔、沒有連結、每個檔小於 1 MiB、重算的指紋＝目錄名）＝不寫，照樣試跑（HOME＝這個家）；
+//     在、但不自洽＝退 2，不覆寫也不刪它。
 //     標準輸出＝指紋一行；退 0＝那一份在而且試跑過；退 2＝拒絕（沒有落地任何東西）；
-//     退 1＝試跑沒過或途中出錯：這一次沒有留下落地的東西（落地後才沒過的撤掉了；撤不掉時訊息照實說它還在），原本就在的那一份不動。
+//     退 1＝試跑沒過或途中出錯：這一次沒有留下落地的東西（落地後才沒過的撤掉了；撤不掉時訊息照實說它還在），原本就在的那一份不動；
+//     例外＝上面那一種「落地後試跑途中被中斷」：那一份留著。
 //   node tools/guard-copy.js --claude-line
 //     只印：讀**工作樹**的四個檔與工作樹的範本（改清單的那一支變更還沒合併，也要能在同一支裡產出新的那一行），
 //     標準輸出＝要放進專案 .claude/settings.json 的兩組（PreToolUse 釘指紋那一行、ConfigChange 設定變更攔截）。不寫任何檔、不需要 git。
@@ -77,8 +83,10 @@
 //   ・量到的：鉤子退 2＋錯誤輸出真的擋工具；鉤子的環境有 HOME、用 /bin/sh 起、node 在 PATH 上找得到、shasum 是 /usr/bin/shasum；
 //     那一場（從專案根開的對話）工作目錄是專案根——釘指紋那一行不靠它（先 cd 進複本）。
 //   ・Claude 起鉤子是不是登入 shell 沒量，一律當成可能是：拒絕走標準輸出的 JSON，登入設定往標準輸出印字＝拒絕形狀被弄髒＝平台讀不出來＝放行。
-//     所以試跑 /bin/sh -c 與 -lc 各一遍、兩種都要過；新落地時跑兩次——落地前 HOME 指到暫存骨架（讀不到這個人的登入設定），
-//     改名落地之後照「已經在」那條路用這個家再跑一次，沒過＝撤掉這一次落地的那一份、退 1（別的工作階段先落地的那一份不動）。
+//     所以試跑 /bin/sh -c 與 -lc 各一遍、兩種都要過；新落地時先用這個家跑一次 /bin/sh -lc ':'（標準輸出不是空的＝不落地），
+//     再跑兩次試跑——落地前 HOME 指到暫存骨架（讀不到這個人的登入設定），
+//     改名落地之後照「已經在」那條路用這個家再跑一次，沒過＝撤掉這一次落地的那一份、退 1（別的工作階段先落地的那一份不動；
+//     第二次跑完之前被中斷＝那一份留著，見上面用法那一段）。
 //     試跑仍是在這支的環境裡跑：PATH 等等跟 Claude 起鉤子時的環境不一定一樣。
 //   ・**鉤子的環境被塞變數（SHELLOPTS、匯入的 shell 函式、PATH）這一類擋不住，那一行裡關不完**：SHELLOPTS=noexec＝整行不執行、退 0；
 //     匯入的函式（BASH_FUNC_名字%%）換得掉 cd、echo（換成 exit 0＝退 0＝放行）；PATH 決定跑哪一支 node。那一行做了的只有：
@@ -507,6 +515,18 @@ function copyProblem(dir, fp) {
   return null;
 }
 
+/**
+ * 落地前先用這個家跑一次 /bin/sh -lc ':'（第二輪審查 L）：標準輸出不是空的＝登入設定往標準輸出印字——拒絕走標準輸出，
+ * 會被弄髒＝放行。回失敗原因；安靜＝null。落地之後照樣用這個家再試跑一次（這一步只是把「落地了才發現」的機會縮到
+ * 「登入設定在兩次之間改了」）。
+ */
+function loginShellNoise(home) {
+  const r = spawnSync('/bin/sh', ['-lc', ':'], { cwd: os.tmpdir(), env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  if (r.error) return `落地前用這個家跑 /bin/sh -lc ':' 叫不起來（${r.error.code}）`;
+  if (r.stdout !== '') return `落地前用這個家跑 /bin/sh -lc ':'，標準輸出不是空的（「${r.stdout.slice(0, 120)}」）——登入設定往標準輸出印字：拒絕走標準輸出，會被弄髒＝放行；先讓登入設定安靜再補`;
+  return null;
+}
+
 /** 不給 --from 時抽哪個版本：這棵樹設定的 origin/<主幹>（extract() 照樣驗它真的在主幹裡）。 */
 function defaultRef(root) {
   let main;
@@ -516,9 +536,12 @@ function defaultRef(root) {
 }
 
 /**
- * Claude 側補複本：抽已合併的版本→在基底目錄裡的暫存骨架試跑（HOME 指到骨架）→過了才改名落地成 <基底>/<指紋>
+ * Claude 側補複本：抽已合併的版本→（要落地的話）先用這個家跑一次 /bin/sh -lc ':'，標準輸出不是空的就不落地（loginNoisy）
+ * →在基底目錄裡的暫存骨架試跑（HOME 指到骨架）→過了才改名落地成 <基底>/<指紋>
  * →落地之後用這個家（home）再試跑一次，沒過就撤掉這一次落地的那一份（landedThenFailed；withdrawn＝撤掉了沒有）。
- * 暫存骨架跟基底同一個目錄＝同一個檔案系統，改名才不會失敗；不論成敗都由這支自己清掉（只刪自己剛建的）。
+ * 暫存骨架跟基底同一個目錄＝同一個檔案系統，改名才不會失敗；不論成敗都由這支自己清掉（只刪自己剛建的）；
+ * 清不掉＝結果多帶 stagingLeft（丟出的錯也帶），不蓋掉已經算好的結果。
+ * 落地之後、第二次試跑跑完之前這支被中斷（例如 Ctrl-C）＝那一份留著；下一次再跑走「已經在」那條路：試跑沒過只退 1、不撤它。
  * beforeLand 只給考題用：落地前一刻叫它，模擬另一個工作階段搶先落地同一份。
  */
 function buildClaude({ from = null, root = ROOT, home = os.homedir(), allowTemp = false, runSelfTest = true, denyProbe = null, beforeLand = null } = {}) {
@@ -539,11 +562,32 @@ function buildClaude({ from = null, root = ROOT, home = os.homedir(), allowTemp 
     return { commit, tracking, copyDir, fp, existed: true, failure: test(home) };
   };
   if (fs.lstatSync(copyDir, { throwIfNoEntry: false })) return existing();   // lstat：名字是壞掉的連結也算「已經在」
+  if (runSelfTest) {
+    const noise = loginShellNoise(home);
+    if (noise) return { commit, tracking, copyDir, fp, existed: false, loginNoisy: true, failure: noise };   // 什麼都還沒寫
+  }
 
   fs.mkdirSync(base, { recursive: true });
   const staging = fs.mkdtempSync(path.join(base, '.staging-'));
+  let result;
+  let thrown = null;
   try {
-    const stagingHome = path.join(staging, 'home');
+    result = landVia(staging);
+  } catch (e) {
+    thrown = e;
+  }
+  // 清掉暫存骨架（只刪自己剛建的）。清不掉不可以蓋掉已經算好的結果（例如「撤不掉：那一份還在」）：另外照實說
+  let stagingLeft = null;
+  try { fs.rmSync(staging, { recursive: true, force: true }); } catch { stagingLeft = staging; }
+  if (thrown) {
+    if (stagingLeft && thrown && typeof thrown === 'object') thrown.stagingLeft = stagingLeft;
+    throw thrown;
+  }
+  return stagingLeft ? { ...result, stagingLeft } : result;
+
+  /** 在暫存骨架裡寫、試跑、改名落地、落地後用這個家再試跑（沒過＝撤回）。回結果；清骨架由外面做。 */
+  function landVia(stagingDir) {
+    const stagingHome = path.join(stagingDir, 'home');
     const staged = path.join(stagingHome, ...CLAUDE_BASE, fp);
     for (const rel of COPY_FILES) {
       fs.mkdirSync(path.dirname(path.join(staged, rel)), { recursive: true });
@@ -566,10 +610,8 @@ function buildClaude({ from = null, root = ROOT, home = os.homedir(), allowTemp 
     try { atHome = test(home); } catch (e) { atHome = `試跑途中出錯（${(e && (e.code || e.message)) || '不明'}）`; }
     if (!atHome) return { commit, tracking, copyDir, fp, existed: false, failure: null };
     let withdrawn = true;
-    try { fs.renameSync(copyDir, path.join(staging, 'withdrawn')); } catch { withdrawn = false; }
+    try { fs.renameSync(copyDir, path.join(stagingDir, 'withdrawn')); } catch { withdrawn = false; }
     return { commit, tracking, copyDir, fp, existed: false, landedThenFailed: true, withdrawn, failure: atHome };
-  } finally {
-    fs.rmSync(staging, { recursive: true, force: true });   // 只刪自己剛建的暫存骨架
   }
 }
 
@@ -631,30 +673,38 @@ function parseArgs(argv) {
 }
 
 function mainClaude(args, env) {
+  const leftNote = (p) => `暫存骨架沒清掉：${p}（可以直接刪，那一行不會去讀它）`;
   let r;
   try { r = buildClaude({ from: args.from, denyProbe: args.denyProbe === undefined ? null : args.denyProbe, allowTemp: env.KIT_GUARD_COPY_ALLOW_TEMP === '1' }); } catch (e) {
-    if (e instanceof Refusal) { process.stderr.write(`拒絕：${e.message}（沒有落地任何東西）\n`); return 2; }
-    process.stderr.write(`寫入或試跑途中出錯（${(e && (e.code || e.message)) || '不明'}）：沒有落地任何東西（暫存骨架若已經建了，這支自己清掉了）。\n`);
+    const left = e && e.stagingLeft ? `；${leftNote(e.stagingLeft)}` : '';
+    if (e instanceof Refusal) { process.stderr.write(`拒絕：${e.message}（沒有落地任何東西${left}）\n`); return 2; }
+    process.stderr.write(`寫入或試跑途中出錯（${(e && (e.code || e.message)) || '不明'}）：沒有落地任何東西${left || '（暫存骨架若已經建了，這支自己清掉了）'}。\n`);
     return 1;
   }
+  const left = r.stagingLeft ? [leftNote(r.stagingLeft)] : [];
   const summary = [`來源版本：${r.commit}（已在 ${r.tracking} 裡）`, `複本：${r.copyDir}（${r.existed ? '原本就在、自洽，沒有動它' : '新落地'}）`, `指紋：${r.fp}`];
   if (r.failure) {
     let where;
-    if (r.existed) where = `${r.copyDir} 原本就在，這支沒有動它`;
-    else if (!r.landedThenFailed) where = '沒有落地（暫存骨架這支自己清掉了）';
-    else if (r.withdrawn) where = '落地前的試跑（HOME 指到暫存骨架）過了，落地之後用這個家再試跑沒過＝在這個人的登入設定下試跑沒過：這一次落地的那一份已經撤掉，沒有留下任何東西';
-    else where = `落地前的試跑（HOME 指到暫存骨架）過了，落地之後用這個家再試跑沒過＝在這個人的登入設定下試跑沒過，而且撤不掉：${r.copyDir} 還在——看過之後自己處理（先 chmod -R u+w）`;
+    if (r.existed) {
+      where = `${r.copyDir} 原本就在，這支沒有動它——指紋是這一個的那一行現在就照用這一份；沒過的原因若是登入設定往標準輸出印字：讓它安靜，`
+        + `或 node tools/guard-copy.js --retire ${r.fp}（之後那一行全擋、看得見）`;
+    } else if (r.loginNoisy) where = '沒有落地任何東西';
+    else if (!r.landedThenFailed) where = r.stagingLeft ? '沒有落地' : '沒有落地（暫存骨架這支自己清掉了）';
+    else if (r.withdrawn) where = `落地前的試跑（HOME 指到暫存骨架）過了，落地之後用這個家再試跑沒過＝在這個人的登入設定下試跑沒過：這一次落地的那一份已經撤掉${r.stagingLeft ? '（改名進暫存骨架）' : '，沒有留下任何東西'}`;
+    else where = `落地前的試跑（HOME 指到暫存骨架）過了，落地之後用這個家再試跑沒過＝在這個人的登入設定下試跑沒過，而且撤不掉：${r.copyDir} 還在，指紋是這一個的那一行現在就照用這一份——看過之後自己處理（先 chmod -R u+w）`;
     process.stderr.write([`來源版本：${r.commit}（已在 ${r.tracking} 裡）`, `指紋：${r.fp}`,
-      `自我試跑沒過（${r.failure}）：${where}。不要手工造複本——原句轉給裁示者。`, ''].join('\n'));
+      `自我試跑沒過（${r.failure}）：${where}。不要手工造複本——原句轉給裁示者。`, ...left, ''].join('\n'));
     return 1;
   }
   let sameAsTree = null;
   try { sameAsTree = treeFingerprint() === r.fp; } catch { /* 這棵樹算不出指紋：下面照實說 */ }
+  // 改過一個位元組的副本是擺在另開的暫存目錄、HOME 指到那裡跑的（selfTest 的 dupRoot），不是這個家
   const tried = r.existed
-    ? '自我試跑：過（HOME 指到這個家，/bin/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕、改過一個位元組的副本退 2）。'
-    : '自我試跑：過（兩次，每次 /bin/sh -c 與 -lc 各一遍：落地前 HOME 指到暫存骨架、落地後 HOME 指到這個家；無害假名放行、該擋的假名印出拒絕、改過一個位元組的副本退 2）。';
+    ? '自我試跑：過（/bin/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕（HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））。'
+    : '自我試跑：過（落地前先用這個家跑 /bin/sh -lc \':\'，標準輸出是空的；之後兩次，每次 /bin/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕'
+      + '（第一次 HOME 指到暫存骨架、落地後第二次 HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））。';
   process.stdout.write(`${r.fp}\n`);
-  process.stderr.write([...summary, tried,
+  process.stderr.write([...summary, tried, ...left,
     sameAsTree === true ? '這棵樹現在的四個檔：同一個指紋。' : `這棵樹現在的四個檔：${sameAsTree === false ? '不是這個指紋' : '算不出指紋'}（樹落後、或有還沒合併的改動）——專案 .claude/settings.json 那一行要的是哪一份，以那一行寫的指紋為準。`,
     '接下來（人做；完整順序＝本檔檔頭）：關掉所有 Claude 對話重開，叫禁區清單上刻意放的無害測試工具（裝法見 templates/canary-install.md），要看到拒絕理由含「在拒絕清單上」才算數；看到「…（指紋對不上）」那一句＝那一行要的不是這一份。⚠️ 任何會動到禁區的真工具，不論在不在清單上、不論攔截器擋不擋得住，一律絕不可以叫來試。', ''].join('\n'));
   return 0;
