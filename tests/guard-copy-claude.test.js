@@ -834,6 +834,7 @@ test('⑭四個檔之一換成具名管道、或換成超過上限的檔：find 
   fs.renameSync(settingsAt, keptSettings);
   const mk = spawnSync('mkfifo', [settingsAt], { env: base, encoding: 'utf8' });
   assert.equal(mk.status, 0, `前提：做得出具名管道（${mk.stderr}）`);
+  let drainError = null;   // 收尾時遇到的意外錯誤：記下來、收完再丟（finally 裡直接 throw 會蓋掉上面斷言的失敗原因）
   try {
     const r = hook(cmd, { home, tool: DENIED, timeout: QUICK });
     assert.ok(!timedOut(r), `設定檔換成具名管道：${QUICK / 1000} 秒內要結束（逾時＝平台放行）`);
@@ -844,13 +845,14 @@ test('⑭四個檔之一換成具名管道、或換成超過上限的檔：find 
     // 被殺掉的 sh 留下的 shasum 還卡在打開管道那一步：開一下寫入端再關掉，它讀到結尾就自己結束
     for (let i = 0; i < 50; i += 1) {
       let fd;
-      try { fd = fs.openSync(settingsAt, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK); } catch (e) { if (e.code === 'ENXIO') break; throw e; }
+      try { fd = fs.openSync(settingsAt, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK); } catch (e) { if (e.code !== 'ENXIO') drainError = e; break; }
       fs.closeSync(fd);
       spawnSync('sleep', ['0.05'], { env: base });
     }
     fs.rmSync(settingsAt);
     fs.renameSync(keptSettings, settingsAt);
   }
+  if (drainError) throw drainError;
   allows(hook(cmd, { home }), '對照組：放回來就恢復');
   denies(hook(preFix(), { home, tool: DENIED }), '對照組的前提：修正前的寫法在乾淨的複本上照清單擋（上面逾時的原因是具名管道、不是那一行本身壞了）');
 
