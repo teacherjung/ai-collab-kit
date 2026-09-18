@@ -51,6 +51,9 @@
 //     理由缺或空、最上層多一個鍵——從改過的來源重抽，試跑沒過、不落地；硬落地之後那一行的輸出 denies() 也不收（先驗只差那一處）。
 //   ⑯（第 4 條，照實的對照）<指紋> 那一層本身換成指向內容相同目錄的連結＝那一行照用（它只查 cd 進去之後的裡面）；
 //     --claude、--retire 不收（copyProblem 說是連結）；連結改指到清單改弱的目錄＝指紋對不上、退 2。
+//   ⑰（第 2、3 條）--retire：基底本身或它的上層是連結、解開之後在假家的 .claude／.codex 底下＝退 2、什麼都不動（--claude 同一個情境也拒絕；
+//     對照組＝指到別處就真的刪掉）；基底讀不了（ELOOP、上層不給進、基底本身不給進）＝照實說確認不了，不說「沒有」、不說「刪到一半」
+//     （對照組＝真的不存在、上層是一般檔＝「沒有東西可以退役」）。不給進那兩發以 root 跑時不跑。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明（⑪的 /bin/bash 那一發只看有沒有 /bin/bash）；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明；「撤不掉」那一段以 root 跑時不跑（改權限擋不住 root）。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
@@ -948,4 +951,105 @@ test('⑯照實的對照（Codex r1 第 4 條）：<指紋> 那一層本身換�
     blocks(hook(cmd, { home, flag, tool: DENIED }), MISMATCH, `${flag}：連結指到清單改弱的目錄＝指紋對不上、退 2`);
     blocks(hook(cmd, { home, flag }), MISMATCH, `${flag}：連結指到清單改弱的目錄：本來放行的也擋`);
   }
+}));
+
+test('⑰--retire 不碰家目錄的 .claude／.codex（Codex r1 第 2 條）：基底目錄本身、或它的上層是連結，解開之後在那底下＝退 2、一個位元組都不動（--claude 同一個情境也拒絕）；對照組＝同樣的連結指到別處＝真的刪掉。讀不了基底（第 3 條）＝照實說確認不了、不說「沒有」', (t) => withScratch((scratch) => {
+  const good = landed(scratch);
+  const fp = good.fp;
+  // 在 <假家>/<where>/guard/<指紋> 放一份自洽的複本，再用連結把基底（base）或它的上層（ancestor）接過去
+  const plantVia = (where, linkAt) => {
+    const home = fakeHome(scratch);
+    const guardDir = path.join(home, where, 'guard');
+    fs.mkdirSync(guardDir, { recursive: true });
+    const target = path.join(guardDir, fp);
+    fs.cpSync(good.copyDir, target, { recursive: true });
+    const kit = path.join(home, '.local', 'share', 'ai-collab-kit');
+    if (linkAt === 'base') {
+      fs.mkdirSync(kit, { recursive: true });
+      fs.symlinkSync(guardDir, baseOf(home));
+    } else {
+      fs.mkdirSync(path.dirname(kit), { recursive: true });
+      fs.symlinkSync(path.join(home, where), kit);
+    }
+    assert.equal(fs.realpathSync(path.join(baseOf(home), fp)), fs.realpathSync(target), `前提：${where}（${linkAt}）：從基底走得到那一份`);
+    assert.equal(copyProblem(target, fp), null, `前提：${where}（${linkAt}）：那一份本身是自洽的（名字與內容都對）`);
+    return { home, target, top: path.join(home, where.split('/')[0]) };
+  };
+  for (const where of ['.claude/kit', '.codex/kit', '.CODEX/kit']) {
+    const d = where.split('/')[0].toLowerCase();
+    for (const linkAt of ['base', 'ancestor']) {
+      const why = `${where}（${linkAt === 'base' ? '基底本身' : '基底的上層'}是連結）`;
+      const { home, target, top } = plantVia(where, linkAt);
+      const before = snapshot(top);
+      refuses(() => retire({ fp, home }), new RegExp(`解開連結之後在家目錄的 \\${d} 底下`, 'u'), `${why}：--retire 要拒絕`);
+      const cli = tool(good.src, ['--retire', fp], { home });
+      assert.deepEqual([cli.status, cli.stdout], [2, ''], `${why}：指令入口退 2（${cli.stderr}）`);
+      assert.match(cli.stderr, new RegExp(`家目錄的 \\${d} 底下[\\s\\S]*什麼都沒刪`, 'u'));
+      refuses(() => buildClaude({ from: 'HEAD', root: good.src, home, allowTemp: true }), new RegExp(`複本不可以放在家目錄的 \\${d} 底下`, 'u'), `${why}：--claude 同一個情境也拒絕`);
+      assert.deepEqual(snapshot(top), before, `${why}：一個位元組、一個修改時間都不動`);
+      assert.equal(copyProblem(target, fp), null, `${why}：那一份還是完整的`);
+    }
+  }
+  // 基底是真的目錄、<指紋> 那個名字本身是連結指進 .claude：解開之後的目標在那底下＝同一句拒絕（不是等到 copyProblem 才說「是連結」）
+  const nameHome = fakeHome(scratch);
+  const inClaude = path.join(nameHome, '.claude', 'kit', fp);
+  fs.mkdirSync(path.dirname(inClaude), { recursive: true });
+  fs.cpSync(good.copyDir, inClaude, { recursive: true });
+  fs.mkdirSync(baseOf(nameHome), { recursive: true });
+  fs.symlinkSync(inClaude, path.join(baseOf(nameHome), fp));
+  const nameBefore = snapshot(path.join(nameHome, '.claude'));
+  refuses(() => retire({ fp, home: nameHome }), /解開連結之後在家目錄的 \.claude 底下/u, '<指紋> 那個名字是連結、指進 .claude');
+  assert.deepEqual(snapshot(path.join(nameHome, '.claude')), nameBefore);
+  // 對照組：同樣的連結（基底本身、基底的上層）指到家裡別的地方＝--retire 真的刪掉（拒絕的原因是位置，不是連結）
+  for (const linkAt of ['base', 'ancestor']) {
+    const { home, target } = plantVia('elsewhere/kit', linkAt);
+    const cli = tool(good.src, ['--retire', fp], { home });
+    assert.equal(cli.status, 0, `對照組（${linkAt}）：指到別處＝退 0（${cli.stderr}）`);
+    assert.ok(!fs.existsSync(target), `對照組（${linkAt}）：指到別處＝真的刪掉`);
+  }
+
+  // 讀不了基底：只有確實不存在才說「沒有」。對照組＝真的不存在（ENOENT）、上層是一般檔（ENOTDIR）
+  refuses(() => retire({ fp, home: fakeHome(scratch) }), /沒有東西可以退役/u, '對照組：基底不存在');
+  const fileHome = fakeHome(scratch);
+  fs.writeFileSync(path.join(fileHome, '.local'), 'x');
+  refuses(() => retire({ fp, home: fileHome }), /沒有東西可以退役/u, '對照組：.local 是一般檔（ENOTDIR）＝基底不可能存在');
+  const loopHome = fakeHome(scratch);
+  fs.mkdirSync(path.dirname(baseOf(loopHome)), { recursive: true });
+  fs.symlinkSync(baseOf(loopHome), baseOf(loopHome));
+  refuses(() => retire({ fp, home: loopHome }), /讀不了 Claude 側複本的基底目錄（ELOOP）：確認不了那一份在不在/u, '基底是繞圈的連結（ELOOP）');
+  const loopCli = tool(good.src, ['--retire', fp], { home: loopHome });
+  assert.deepEqual([loopCli.status, loopCli.stdout], [2, ''], loopCli.stderr);
+  assert.doesNotMatch(loopCli.stderr, /沒有東西可以退役/u, 'ELOOP 不可以說成沒有');
+  if (!process.getuid || process.getuid() === 0) {
+    t.diagnostic('以 root 跑（或沒有 getuid）：改權限擋不住 root，「有一層不給進」那兩發不跑');
+    return;
+  }
+  // 上層不給進（EACCES）：那一份在，只是確認不了
+  const lockedHome = landed(scratch).home;
+  const lockedCopy = path.join(baseOf(lockedHome), fp);
+  const lockedBefore = snapshot(baseOf(lockedHome));
+  fs.chmodSync(path.join(lockedHome, '.local'), 0o000);
+  let viaFn;
+  let viaCli;
+  try {
+    viaFn = (() => { try { retire({ fp, home: lockedHome }); return null; } catch (e) { return e; } })();
+    viaCli = tool(good.src, ['--retire', fp], { home: lockedHome });
+  } finally {
+    fs.chmodSync(path.join(lockedHome, '.local'), 0o755);
+  }
+  assert.ok(viaFn instanceof Refusal && /讀不了 Claude 側複本的基底目錄（EACCES）：確認不了那一份在不在/u.test(viaFn.message), `上層不給進：要照實說讀不了（${viaFn && viaFn.message}）`);
+  assert.doesNotMatch(viaFn.message, /沒有東西可以退役/u, 'EACCES 不可以說成沒有');
+  assert.deepEqual([viaCli.status, viaCli.stdout], [2, ''], `上層不給進：指令入口退 2（${viaCli.stderr}）`);
+  assert.match(viaCli.stderr, /EACCES[\s\S]*什麼都沒刪/u);
+  assert.doesNotMatch(viaCli.stderr, /沒有東西可以退役/u);
+  assert.deepEqual(snapshot(baseOf(lockedHome)), lockedBefore, '上層不給進：那一份完整留著');
+  assert.equal(copyProblem(lockedCopy, fp), null);
+  // 基底本身不給進：解得開基底、看不了裡面那一份＝照實說讀不了，不可以說成「刪到一半出錯」
+  fs.chmodSync(baseOf(lockedHome), 0o000);
+  let baseCli;
+  try { baseCli = tool(good.src, ['--retire', fp], { home: lockedHome }); } finally { fs.chmodSync(baseOf(lockedHome), 0o755); }
+  assert.deepEqual([baseCli.status, baseCli.stdout], [2, ''], `基底本身不給進：退 2（${baseCli.stderr}）`);
+  assert.match(baseCli.stderr, /讀不了 [^\n]*（EACCES）：確認不了那一份在不在[\s\S]*什麼都沒刪/u);
+  assert.doesNotMatch(baseCli.stderr, /刪到一半|沒有東西可以退役/u);
+  assert.deepEqual(snapshot(baseOf(lockedHome)), lockedBefore, '基底本身不給進：那一份完整留著');
 }));

@@ -46,6 +46,8 @@
 //   node tools/guard-copy.js --retire <64 碼指紋>
 //     退役一份舊的 Claude 側複本：只刪名字是 64 碼十六進位、而且自洽的目錄（這支工具唯一會刪別人看得到的東西的用法）；
 //     別種名字的目錄（Codex 全域層那種人取的短名字）一律不碰；名字對、內容不自洽＝不刪，看過之後自己處理。
+//     基底目錄（或它的上層）是連結、解開之後在家目錄的 .claude／.codex 底下＝退 2、不碰（跟 --claude 同一個檢查）；
+//     讀不了基底（例如有一層不給進）＝退 2、照實說確認不了、不刪；只有基底確實不存在才說「沒有東西可以退役」。
 //
 // Codex 全域層：裝與換只有一條順序（專案裡要看得到：套件的 README 不跟著搬進專案；README 第 3 步是同一份順序的抄本）：
 //   ⓪先確認禁區清單（settings.json 的 forbidden.deny）裡有一個刻意放的無害測試工具：它要是 Codex 連得到的伺服器上真的存在的 mcp__ 工具，就算真的執行了也不會動到禁區、不會造成任何改變，而且不可以是禁區連接器（forbidden.servers）上的任何工具——連唯讀的查詢也不行；原本還有別的攔截組並存時，挑一個只有這份清單擋、別組不擋的名字。套件帶了一支現成的＝tools/canary-server.js（掛上去只回一句 pong，什麼都不做），工具名 mcp__guard_canary__ping，兩家 AI 各登記一次的做法見 templates/canary-install.md。清單上還沒有就先加、合併，再從①開始——沒有就停下來，不可以拿任何別的工具代替。
@@ -196,6 +198,17 @@ const inside = (child, parent) => child === parent || child.startsWith(parent + 
  * （裁示批 r1 B3：第一次建立 .CODEX 就擋不住）。分大小寫的磁碟上多擋了 ~/.CODEX 這種名字，無害。
  */
 const insideAnyCase = (child, parent) => inside(child.toLowerCase(), parent.toLowerCase());
+/**
+ * 真實路徑 real 在不在這個家的 .codex／.claude 底下（大小寫不同、別名、還不存在的那一截都算：realish＋insideAnyCase）；在＝回那個名字。
+ * checkTarget（--to、--claude）與 retire（--retire；Codex r1 第 2 條）共用這一支。
+ */
+function platformDirOf(real, home) {
+  for (const d of ['.codex', '.claude']) {
+    if (insideAnyCase(real, realish(path.join(home, d)))) return d;
+  }
+  return null;
+}
+
 /** 工具名的合法字元（跟攔截器同一套）：不合法的名字攔截器本來就一律擋，拿來當試跑的「該擋的名字」證明不了清單。 */
 const PROBE_NAME = /^mcp__[A-Za-z0-9_.-]{1,195}$/u;
 
@@ -207,9 +220,8 @@ function checkTarget(to, { home = os.homedir(), allowTemp = false, shared = fals
   if (typeof to !== 'string' || !path.isAbsolute(to)) throw new Refusal('--to 要給絕對路徑（鉤子在任何目錄執行，相對路徑沒有意義）');
   const real = realish(path.normalize(to));
   if (!shared && unquotable(real)) throw new Refusal('複本路徑含單引號或控制字元，放不進鉤子指令');
-  for (const d of ['.codex', '.claude']) {
-    if (insideAnyCase(real, realish(path.join(home, d)))) throw new Refusal(`複本不可以放在家目錄的 ${d} 底下：那是 AI 平台自己的設定目錄，這支工具不碰`);
-  }
+  const platformDir = platformDirOf(real, home);
+  if (platformDir) throw new Refusal(`複本不可以放在家目錄的 ${platformDir} 底下：那是 AI 平台自己的設定目錄，這支工具不碰`);
   if (!allowTemp) {
     for (const t of [os.tmpdir(), ...TEMP_ROOTS]) {
       if (fs.existsSync(t) && insideAnyCase(real, realish(t))) {
@@ -664,6 +676,8 @@ function claudeLine(root = ROOT) {
 /**
  * 退役一份舊的 Claude 側複本。只刪：名字是 64 碼十六進位、是真的目錄、而且自洽的那一種——
  * 別種名字（Codex 全域層那種人取的短名字、路徑片段）一律不收；名字對但內容不自洽＝不刪（那不是這支造出來的樣子，要人看過）。
+ * 基底目錄（或它的上層）是連結、解開之後在這個家的 .claude／.codex 底下＝拒絕，什麼都不讀、不改、不刪；
+ * 基底或那一份讀不了（EACCES、ELOOP…）＝照實說確認不了、不刪；只有確實不存在（ENOENT、ENOTDIR）才說沒有。
  */
 function retire({ fp, home = os.homedir() }) {
   if (typeof fp !== 'string' || !FP_NAME.test(fp)) {
@@ -671,9 +685,23 @@ function retire({ fp, home = os.homedir() }) {
   }
   if (typeof home !== 'string' || !path.isAbsolute(home)) throw new Refusal('家目錄不是絕對路徑：算不出複本在哪裡');
   let base;
-  try { base = fs.realpathSync.native(path.join(home, ...CLAUDE_BASE)); } catch { throw new Refusal('這台機器沒有 Claude 側複本的基底目錄：沒有東西可以退役'); }
+  try { base = fs.realpathSync.native(path.join(home, ...CLAUDE_BASE)); } catch (e) {
+    // 只有「確實不存在」才說沒有（Codex r1 第 3 條）：ENOENT＝路徑上有一段不存在；ENOTDIR＝路徑上有一段是一般檔、不是目錄，
+    // 那個基底不可能存在。其餘（EACCES＝有一層不給進、ELOOP＝連結繞圈…）照實說確認不了
+    const code = (e && e.code) || '不明';
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw new Refusal('這台機器沒有 Claude 側複本的基底目錄：沒有東西可以退役');
+    throw new Refusal(`讀不了 Claude 側複本的基底目錄（${code}）：確認不了那一份在不在`);
+  }
+  // 基底（或它的上層）是連結、解開之後落在這個家的 .claude／.codex 底下＝不碰（Codex r1 第 2 條；跟 --claude 同一支 platformDirOf）。
+  // 在讀複本內容、改權限、刪除之前就拒絕
   const copyDir = path.join(base, fp);
-  if (!fs.lstatSync(copyDir, { throwIfNoEntry: false })) throw new Refusal(`沒有這一份：${copyDir}`);
+  for (const at of [base, realish(copyDir)]) {
+    const platformDir = platformDirOf(at, home);
+    if (platformDir) throw new Refusal(`${copyDir} 解開連結之後在家目錄的 ${platformDir} 底下（${at}）：那是 AI 平台自己的設定目錄，這支工具不碰`);
+  }
+  let st;
+  try { st = fs.lstatSync(copyDir, { throwIfNoEntry: false }); } catch (e) { throw new Refusal(`讀不了 ${copyDir}（${(e && e.code) || '不明'}）：確認不了那一份在不在`); }
+  if (!st) throw new Refusal(`沒有這一份：${copyDir}`);
   const problem = copyProblem(copyDir, fp);
   if (problem) throw new Refusal(`${copyDir} 不是一份自洽的複本（${problem}）：不刪。看過之後自己處理`);
   for (const p of [copyDir, ...new Set(COPY_FILES.filter((rel) => rel.includes('/')).map((rel) => path.join(copyDir, path.dirname(rel))))]) fs.chmodSync(p, 0o755);
