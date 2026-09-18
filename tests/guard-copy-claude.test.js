@@ -11,7 +11,8 @@
 //     ConfigChange 剛好一組、matcher 逐字＝project_settings、指令逐字＝exit 2（跑起來退 2、兩個輸出都空的）；範本原樣（佔位沒換）＝退 2；
 //   ②--claude-line 只讀不寫、不需要 git；它印的指紋＝同一份內容用 --claude 落地的目錄名＝/usr/bin/shasum 自己算的（三方互證）；
 //     複本裡 settings.json 的位元組逐字釘住（改寫法＝每台機器現有的複本全部失效）；工作樹沒提交的清單改動會改到它印的指紋、改不到複本；
-//   ③--claude 落地：位置、剛好四個唯讀檔、沒有暫存殘留；再跑一次＝不寫（位元組與修改時間不變）、照樣試跑；
+//   ③--claude 落地：位置、剛好四個唯讀檔、沒有暫存殘留；成功訊息分兩種（新落地＝兩次試跑都過、已經在＝這個家試跑過）；
+//     再跑一次＝不寫（位元組與修改時間不變）、照樣試跑；
 //     沒合併的版本、家目錄本身是倉庫＝拒絕、什麼都沒寫；試跑沒過（載入就崩、什麼都放、放行時印字、指紋檢查被拿掉）＝不落地、沒有殘留；
 //     範本從已合併的版本讀；
 //   ④那個名字已經在、但不自洽（改過一個位元組、多一個檔、名字是連結）＝拒絕、不覆寫、不刪；別的工作階段搶先落地＝自洽就算成功；
@@ -27,7 +28,10 @@
 //   ⑩函式換不掉的兩處：匯入名為 [、case 的函式，指紋比對照樣擋（對照組：寫成 [ … ] 時被改弱的複本真的放行）；匯入名為 exit 的函式，設定變更攔截照樣退 2；
 //   ⑪**照實的對照（斷言放行）**：SHELLOPTS=noexec、匯入名為 cd 或 echo 的函式、PATH 前面放一支假 node＝那一行放行、設定變更攔截那一條退 0——
 //     「鉤子的環境被塞變數這一類在那一行裡關不完」這句話靠它撐著；哪天變成擋得住，這題紅、提醒改文件。
-//   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑。
+//   ⑫落地之後用這個家再試跑一次：這個家的登入設定往標準輸出印字＝退 1、這一次落地的那一份撤掉（之後那一行全擋、不是半套）；
+//     原本就在的、別的工作階段先落地的那一份，試跑沒過也不動；對照組＝登入設定安靜時照常落地。
+//   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
+//   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明。
 // ⚠️ 守不到的：真的 Claude 對話有沒有載入那兩組；ConfigChange 在平台上擋不擋——這裡只證明那一條指令退 2；平台的行為 2026-09-18 在
 //   2.1.275 量過一次、只量了專案設定檔這個來源；之後沒有任何例行動作重量它（測試鈕只走 PreToolUse 那一行）；
 //   鉤子的環境被塞變數這一類（⑪）；這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
@@ -193,7 +197,7 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   assert.equal(again.status, 0, again.stderr);
   assert.equal(again.stdout, `${fp}\n`, '標準輸出＝指紋一行');
   assert.match(again.stderr, /原本就在、自洽，沒有動它/u);
-  assert.match(again.stderr, /自我試跑：過/u);
+  assert.match(again.stderr, /自我試跑：過（HOME 指到這個家，\/bin\/sh -c 與 -lc 各一遍/u, '已經在：試跑用的是這個家');
   assert.match(again.stderr, /這棵樹現在的四個檔：同一個指紋/u);
   assert.deepEqual(snapshot(baseOf(home)), before, '已經在而且自洽：一個位元組、一個修改時間都不可以變');
   // 已經在、但試跑沒過（這裡用一個照清單不擋的 --deny-probe 逼它沒過）：退 1、沒有動它
@@ -201,6 +205,14 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   assert.deepEqual([probeFails.status, probeFails.stdout], [1, ''], `給了照清單不擋的 --deny-probe：試跑要沒過、退 1（${probeFails.stderr}）`);
   assert.match(probeFails.stderr, /原本就在，這支沒有動它/u);
   assert.deepEqual(snapshot(baseOf(home)), before);
+
+  // 新落地（指令入口）：兩次試跑都過了才算數，訊息照實分開講
+  const firstHome = fakeHome(scratch);
+  const first = tool(src, ['--claude'], { home: firstHome });
+  assert.deepEqual([first.status, first.stdout], [0, `${fp}\n`], first.stderr);
+  assert.match(first.stderr, /（新落地）/u);
+  assert.match(first.stderr, /自我試跑：過（兩次，每次 \/bin\/sh -c 與 -lc 各一遍：落地前 HOME 指到暫存骨架、落地後 HOME 指到這個家/u, '新落地：兩次都過');
+  assert.deepEqual(fs.readdirSync(baseOf(firstHome)), [fp]);
 
   // 沒合併的版本：拒絕，家目錄裡什麼都沒有
   const fresh = fakeHome(scratch);
@@ -616,4 +628,42 @@ test('⑪照實的對照（守不到的）：SHELLOPTS=noexec、匯入的 shell 
   const runChange = (env) => spawnSync('/bin/sh', ['-c', change], { env: { ...base, HOME: empty, ...env }, input: '{}', encoding: 'utf8' }).status;
   assert.equal(runChange({}), 2, '前提：設定變更攔截那一條在乾淨的環境裡退 2');
   assert.equal(runChange({ SHELLOPTS: 'noexec' }), 0, '設定變更攔截那一條：SHELLOPTS=noexec 一樣退 0（守不到）');
+}));
+
+test('⑫落地之後用這個家再試跑一次：這個家的登入設定往標準輸出印字＝退 1、這一次落地的那一份撤掉；原本就在的、別的工作階段先落地的不動', (t) => withScratch((scratch) => {
+  const src = sourceRepo(scratch);
+  const chatty = (home) => { fs.writeFileSync(path.join(home, '.profile'), 'echo PROFILE-SAYS-HELLO\n'); return home; };
+  // 先證明這台機器的登入 shell 真的讀假家的 .profile（對照組），不然這一題證明不了什麼
+  const probe = spawnSync('/bin/sh', ['-lc', 'true'], { env: { ...base, HOME: chatty(fakeHome(scratch)) }, encoding: 'utf8' });
+  if (!probe.stdout.includes('PROFILE-SAYS-HELLO')) { t.skip('這台機器的登入 shell 不讀假家的 .profile：這一題的現象做不出來'); return; }
+
+  const home = chatty(fakeHome(scratch));
+  const r = buildClaude({ from: 'HEAD', root: src, home, allowTemp: true });
+  assert.match(r.failure || '', /\/bin\/sh -lc：無害的假名一個都沒有被乾淨地放行[\s\S]*PROFILE-SAYS-HELLO/u, `落地之後在這個家試跑要沒過（${r.failure}）`);
+  assert.deepEqual([r.existed, r.landedThenFailed, r.withdrawn], [false, true, true]);
+  assert.ok(!fs.existsSync(r.copyDir), '這一次落地的那一份要撤掉');
+  assert.deepEqual(fs.readdirSync(baseOf(home)), [], '基底目錄裡什麼都沒留（暫存骨架也清掉）');
+  const cli = tool(src, ['--claude'], { home });
+  assert.deepEqual([cli.status, cli.stdout], [1, ''], `指令入口：退 1、標準輸出空的（${cli.stderr}）`);
+  assert.match(cli.stderr, /在這個人的登入設定下試跑沒過：這一次落地的那一份已經撤掉/u);
+  assert.deepEqual(fs.readdirSync(baseOf(home)), []);
+  blocks(hook(lineOf(src), { home, tool: DENIED }), MISMATCH, '撤掉之後那一行全擋（看得見），不是半套');
+
+  // 對照組：同一份來源、登入設定安靜的家＝照常落地
+  const quiet = fakeHome(scratch);
+  assert.equal(buildClaude({ from: 'HEAD', root: src, home: quiet, allowTemp: true }).failure, null, '對照組：登入設定安靜時照常落地');
+
+  // 原本就在的那一份（先在安靜時落地、之後登入設定才開始印字）：試跑沒過、退 1，但那一份不動
+  const before = snapshot(baseOf(quiet));
+  chatty(quiet);
+  const existedRun = buildClaude({ from: 'HEAD', root: src, home: quiet, allowTemp: true });
+  assert.deepEqual([Boolean(existedRun.failure), existedRun.existed, Boolean(existedRun.landedThenFailed)], [true, true, false]);
+  assert.deepEqual(snapshot(baseOf(quiet)), before, '原本就在的那一份：一個位元組都不動');
+
+  // 別的工作階段搶先落地同一份：照「已經在」那條路，沒過也不刪別人的那一份
+  const good = landed(scratch);
+  const raceHome = chatty(fakeHome(scratch));
+  const raced = buildClaude({ from: 'HEAD', root: good.src, home: raceHome, allowTemp: true, beforeLand: (dir) => fs.cpSync(good.copyDir, dir, { recursive: true }) });
+  assert.deepEqual([Boolean(raced.failure), raced.existed, Boolean(raced.landedThenFailed)], [true, true, false]);
+  assert.deepEqual(fs.readdirSync(baseOf(raceHome)), [good.fp], '別人先落地的那一份還在');
 }));
