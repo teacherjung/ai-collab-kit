@@ -149,6 +149,8 @@ const CLAUDE_BASE = ['.local', 'share', 'ai-collab-kit', 'guard'];
 /**
  * Claude 側複本裡每個檔都要**小於**這個位元組數（1 MiB；第二輪審查 M）。範本那一行的 find 寫的是同一個數（-size -1048576c＝小於它），
  * 查到不小於它的檔＝當成多出來的東西、不去算指紋、直接退 2；copyProblem（--claude 認「自洽」、--retire 認可以刪）也用它。
+ * 兩邊同一個邊界：收＝小於 1048576 位元組（find 的 -size -1048576c＝小於；copyProblem 的 size >= 上限＝不收），剛好 1048576＝兩邊都不收
+ *（tests/guard-copy-claude.test.js ⑲ 對 settings.json 與 tools 底下的檔各跑剛好上限與少 1 位元組）。
  * 為什麼要上限：shasum 要讀完整個檔才比得出對不上，極大的檔會讓那一行拖到平台逾時，而 PreToolUse 的指令鉤子逾時不擋。
  * 為什麼是 1 MiB：2026-09-19 四個檔最大的是 tools/forbidden-tools.js，不到 10 KB，上限是它的 100 倍以上（清單與程式再長也夠）；
  * 那一天這台機器用 shasum 讀一個 1 GiB 的稀疏檔約 3.6 秒，讀四個 1 MiB 以內的檔不會拖到逾時。

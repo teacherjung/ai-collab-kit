@@ -54,6 +54,9 @@
 //   ⑰（第 2、3 條）--retire：基底本身或它的上層是連結、解開之後在假家的 .claude／.codex 底下＝退 2、什麼都不動（--claude 同一個情境也拒絕；
 //     對照組＝指到別處就真的刪掉）；基底讀不了（ELOOP、上層不給進、基底本身不給進）＝照實說確認不了，不說「沒有」、不說「刪到一半」
 //     （對照組＝真的不存在、上層是一般檔＝「沒有東西可以退役」）。不給進那兩發以 root 跑時不跑。
+//   ⑱（覆蓋缺口 M03）不給 --from＝抽設定登記的主幹：主幹叫 trunk＝抽 origin/trunk（誘餌 origin/main 指到比較舊的一顆）。
+//   ⑲（覆蓋缺口 M05）大小上限的邊界：剛好上限＝那一行退 2、copyProblem 不收；少 1 位元組＝都收（兩邊同一個邊界：收＝小於上限）；
+//     對照組＝那一行的上限往外推一格，剛好上限的照用。
 //   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明（⑪的 /bin/bash 那一發只看有沒有 /bin/bash）；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明；「撤不掉」那一段以 root 跑時不跑（改權限擋不住 root）。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
@@ -1052,4 +1055,64 @@ test('⑰--retire 不碰家目錄的 .claude／.codex（Codex r1 第 2 條）：
   assert.match(baseCli.stderr, /讀不了 [^\n]*（EACCES）：確認不了那一份在不在[\s\S]*什麼都沒刪/u);
   assert.doesNotMatch(baseCli.stderr, /刪到一半|沒有東西可以退役/u);
   assert.deepEqual(snapshot(baseOf(lockedHome)), lockedBefore, '基底本身不給進：那一份完整留著');
+}));
+
+test('⑱不給 --from＝抽這棵樹設定登記的主幹（覆蓋缺口 M03）：主幹叫 trunk＝抽 origin/trunk；對照組＝origin/main 指到主幹上一顆比較舊的提交，抽到它就是錯的', () => withScratch((scratch) => {
+  const src = sourceRepo(scratch, { mainBranch: 'trunk' });
+  const older = git(src, 'rev-parse', 'HEAD').stdout.trim();
+  const olderFp = treeFingerprint(src);
+  // trunk 上再提交一顆（清單收緊），推進 origin/trunk；origin/main 留在舊的那一顆（誘餌：它也在主幹裡，抽錯了 extract 照樣過）
+  const settingsFile = path.join(src, 'settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, forbidden: { ...settings.forbidden, deny: [...settings.forbidden.deny, 'mcp__other__newly_denied_tool'] } }, null, 2));
+  assert.equal(git(src, 'commit', '-qam', 'tighten').status, 0);
+  assert.equal(git(src, 'update-ref', 'refs/remotes/origin/trunk', 'HEAD').status, 0);
+  assert.equal(git(src, 'update-ref', 'refs/remotes/origin/main', older).status, 0);
+  const newer = git(src, 'rev-parse', 'HEAD').stdout.trim();
+  const newerFp = treeFingerprint(src);
+  assert.notEqual(newerFp, olderFp, '前提：兩顆的指紋不同');
+  assert.equal(git(src, 'merge-base', '--is-ancestor', older, 'refs/remotes/origin/trunk').status, 0, '前提：誘餌那一顆也在 origin/trunk 裡');
+
+  const home = fakeHome(scratch);
+  const cli = tool(src, ['--claude'], { home });
+  assert.deepEqual([cli.status, cli.stdout], [0, `${newerFp}\n`], `指令入口：抽的要是 origin/trunk 那一顆（${cli.stderr}）`);
+  assert.ok(cli.stderr.includes(`來源版本：${newer}（已在 origin/trunk 裡）`), cli.stderr);
+  assert.deepEqual(fs.readdirSync(baseOf(home)), [newerFp]);
+  const r = buildClaude({ root: src, home: fakeHome(scratch), allowTemp: true });
+  assert.deepEqual([r.failure, r.commit, r.tracking, r.fp], [null, newer, 'origin/trunk', newerFp], '函式入口：同一件事');
+}));
+
+test('⑲大小上限的邊界（覆蓋缺口 M05）：settings.json、tools 底下的檔各自墊到剛好 CLAUDE_MAX_FILE_BYTES＝那一行退 2、copyProblem 不收；少 1 位元組＝不因大小擋（試跑過、那一行照清單判、copyProblem 收）——兩邊同一個邊界（收＝小於上限）；對照組：那一行的上限往外推一格（-size -1048577c），剛好上限的照用', () => withScratch((scratch) => {
+  const LIMIT = ` -size -${CLAUDE_MAX_FILE_BYTES}c`;
+  const WIDER = ` -size -${CLAUDE_MAX_FILE_BYTES + 1}c`;
+  /** 落地一份：複本裡的 rel 剛好 bytes 位元組（tools/settings-data.js 墊一行註解；settings.json 墊清單裡一個攔截器不讀的欄位）。 */
+  const padded = (rel, bytes, buildOpts) => {
+    let srcOpts;
+    if (rel === 'settings.json') {
+      const len0 = Buffer.byteLength(`${JSON.stringify({ forbidden: { ...FAKE, _pad: '' } }, null, 2)}\n`);
+      srcOpts = { forbidden: { ...FAKE, _pad: 'x'.repeat(bytes - len0) } };
+    } else {
+      srcOpts = editFile(rel, (c) => `${c}//${'x'.repeat(bytes - Buffer.byteLength(c) - 3)}\n`);
+    }
+    const one = landed(scratch, srcOpts, buildOpts);
+    assert.equal(fs.statSync(path.join(one.copyDir, rel)).size, bytes, `前提：${rel} 剛好 ${bytes} 位元組`);
+    assert.equal(fingerprintDir(one.copyDir), one.fp, '前提：指紋是對的');
+    return one;
+  };
+  for (const rel of ['settings.json', 'tools/settings-data.js']) {
+    const at = padded(rel, CLAUDE_MAX_FILE_BYTES, { runSelfTest: false });
+    blocks(hook(at.cmd, { home: at.home, tool: DENIED }), MISMATCH, `${rel} 剛好上限：那一行退 2`);
+    blocks(hook(at.cmd, { home: at.home }), MISMATCH, `${rel} 剛好上限：本來放行的也擋`);
+    assert.match(copyProblem(at.copyDir, at.fp) || '', new RegExp(`${rel} 不小於 ${CLAUDE_MAX_FILE_BYTES} 位元組`, 'u'), `${rel} 剛好上限：copyProblem 不收`);
+
+    const below = padded(rel, CLAUDE_MAX_FILE_BYTES - 1, {});   // 試跑照跑：landed() 斷言它過了
+    denies(hook(below.cmd, { home: below.home, tool: DENIED }), `${rel} 少 1 位元組：照清單擋`);
+    allows(hook(below.cmd, { home: below.home }), `${rel} 少 1 位元組：照清單放（不因大小擋）`);
+    assert.equal(copyProblem(below.copyDir, below.fp), null, `${rel} 少 1 位元組：copyProblem 收`);
+
+    // 對照組放在行為斷言都跑完之後（那一行的上限被改掉時，要紅在上面的行為斷言、不是紅在這裡換不到字）
+    const wider = at.cmd.split(LIMIT).join(WIDER);
+    assert.equal(wider.split(WIDER).length, 3, '前提：那一行的兩處上限都換到了');
+    allows(hook(wider, { home: at.home }), `對照組：${rel} 剛好上限，上限往外推一格的寫法照用`);
+  }
 }));
