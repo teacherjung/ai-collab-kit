@@ -7,6 +7,7 @@
   "check-cross-merge.test.js",
   "check-review-verdicts.test.js",
   "check-stacked.test.js",
+  "claude-pin.test.js",
   "data-contract.test.js",
   "file-names.test.js",
   "filled-settings.test.js",

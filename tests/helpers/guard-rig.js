@@ -1,4 +1,4 @@
-// 考題專用：Claude 側釘指紋那幾題（tests/guard-copy-claude.test.js）共用的布置——
+// 考題專用：Claude 側釘指紋那幾題（tests/guard-copy-claude.test.js、tests/claude-pin.test.js）共用的布置——
 // 暫存的來源專案、假的家目錄、照鉤子的起法跑一次那一行指令。
 //
 // ⚠️ HOME 紀律：釘指紋那一行與 tools/guard-copy.js 的 --claude／--retire 都從 HOME 算複本的位置。
