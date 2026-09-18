@@ -4,6 +4,7 @@
 // ⚠️ HOME 紀律：釘指紋那一行與 tools/guard-copy.js 的 --claude／--retire 都從 HOME 算複本的位置。
 //   這裡每一個會起子行程的零件都**一定要**明講家目錄（home: null＝刻意不設 HOME）；漏給＝當場丟錯，
 //   不是沿用這支考卷自己的 HOME——沿用的話就會去讀寫真的 ~/.local/share/ai-collab-kit。
+//   home: null 只准配 -c（hook() 當場丟錯）：登入 shell 在 HOME 沒設時會照密碼檔找到真的家、讀那裡的登入設定。
 //   直接呼叫函式（buildClaude、retire）時一樣每次都帶 home。
 //   第二張網＝tests/filled-settings.test.js：巢狀那一輪把 HOME 換成空的暫存目錄並盯著它零寫入；只罩得到巢狀那一輪。
 // （tests/guard-copy.test.js 有一組同名的零件，刻意沒有抽過來共用：那一支是「Codex 全域層的行為沒有變」的證據，這一批不動它。）
@@ -60,9 +61,14 @@ const editFile = (rel, fn) => ({ edit: (dir) => fs.writeFileSync(path.join(dir, 
 /** 一個空的假家目錄。 */
 const fakeHome = (scratch) => fs.mkdtempSync(path.join(scratch, 'home-'));
 
-/** 照鉤子的起法跑一次。回 spawnSync 結果。 */
-const hook = (command, { home, tool = ALLOWED, flag = '-c', cwd = os.tmpdir(), env = {} } = {}) =>
-  spawnSync('/bin/sh', [flag, command], { cwd, env: { ...base, ...homeEnv(home), ...env }, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+/**
+ * 照鉤子的起法跑一次。回 spawnSync 結果。
+ * HOME 沒設（home: null）只准配 -c：登入 shell 在 HOME 沒設時會照密碼檔找到真的家、去讀那裡的登入設定。
+ */
+const hook = (command, { home, tool = ALLOWED, flag = '-c', cwd = os.tmpdir(), env = {} } = {}) => {
+  if (home === null && flag !== '-c') throw new Error('考題的 HOME 紀律：HOME 沒設只准配 -c（登入 shell 會去讀真的家的登入設定）');
+  return spawnSync('/bin/sh', [flag, command], { cwd, env: { ...base, ...homeEnv(home), ...env }, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+};
 
 /** 跑某一份來源專案自己的 tools/guard-copy.js 指令入口（暫存區放行只給考題用）。 */
 const tool = (root, args, { home, env = {} } = {}) =>
@@ -80,6 +86,9 @@ const blocks = (r, re, why) => {
   assert.equal(r.status, 2, `${why}：退出碼 ${r.status}（${r.stderr}）`);
   assert.equal(r.stdout, '', why);
   assert.match(r.stderr, re, why);
+  // 指紋對不上那一句不可以遞出任何 64 碼十六進位（現算的、寫死的都不行：AI 拿到就可能去手改那一行）。
+  // 起不來那一條不套：node 自己的錯誤輸出會帶複本的路徑，目錄名就是那一行寫死的指紋
+  if (re === MISMATCH) assert.doesNotMatch(r.stderr, /[0-9a-f]{64}/u, `${why}：指紋對不上那一句不可以印出指紋`);
 };
 
 function walk(dir) {

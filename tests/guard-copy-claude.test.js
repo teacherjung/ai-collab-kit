@@ -3,26 +3,34 @@
 //
 // 為什麼：活讀裝法每次呼叫都讀當下那棵樹的清單——在樹裡把清單改弱、切到弱清單的分支，下一次呼叫就照弱的判。
 // 釘指紋那一行只寫指紋，判斷改讀倉庫外、內容定址的固定複本 $HOME/.local/share/ai-collab-kit/guard/<指紋>：
-// 樹裡的清單怎麼改都沒有用；這台機器沒補複本＝全擋（看得見）。
+// 樹裡的清單怎麼改都沒有用；這台機器沒有那一行要的那一份複本＝全擋（看得見）。
 //
 // 守得到的（每一題都真的用 /bin/sh 跑印出來的指令，HOME 一律指到暫存的假家目錄）：
 //   ①範本的形狀：PreToolUse 剛好一組（matcher ^mcp__、一條指令）、{files} 與 {fingerprint} 各剛好一個、沒有 {copyDir}、
-//     不含任何機器路徑、shasum 與 find 每一次出現都包在清空的環境裡；ConfigChange 剛好一組、matcher 逐字＝project_settings、
-//     那一條指令真的跑起來退 2、標準輸出空的、錯誤輸出有字；範本原樣（佔位沒換）＝退 2；
+//     不含任何機器路徑、shasum 與 find 每一次出現都包在清空的環境裡、指紋比對用 case（不用 [ 或 test）；
+//     ConfigChange 剛好一組、matcher 逐字＝project_settings、指令逐字＝exit 2（跑起來退 2、兩個輸出都空的）；範本原樣（佔位沒換）＝退 2；
 //   ②--claude-line 只讀不寫、不需要 git；它印的指紋＝同一份內容用 --claude 落地的目錄名＝/usr/bin/shasum 自己算的（三方互證）；
 //     複本裡 settings.json 的位元組逐字釘住（改寫法＝每台機器現有的複本全部失效）；工作樹沒提交的清單改動會改到它印的指紋、改不到複本；
 //   ③--claude 落地：位置、剛好四個唯讀檔、沒有暫存殘留；再跑一次＝不寫（位元組與修改時間不變）、照樣試跑；
-//     沒合併的版本＝拒絕、什麼都沒寫；試跑沒過（載入就崩、什麼都放、放行時印字、指紋檢查被拿掉）＝不落地、沒有殘留；範本從已合併的版本讀；
+//     沒合併的版本、家目錄本身是倉庫＝拒絕、什麼都沒寫；試跑沒過（載入就崩、什麼都放、放行時印字、指紋檢查被拿掉）＝不落地、沒有殘留；
+//     範本從已合併的版本讀；
 //   ④那個名字已經在、但不自洽（改過一個位元組、多一個檔、名字是連結）＝拒絕、不覆寫、不刪；別的工作階段搶先落地＝自洽就算成功；
-//   ⑤那一行真的跑一遍（-c 與 -lc、從別的目錄起）：擋、放、四個檔各改一個位元組、少檔、複本改名（總煞車）、HOME 沒設、HOME 指到空目錄、
-//     三種連結、查不了連結、沒有 find、佔位沒換、沒有 node、載入就崩；每一種都有「改回來就恢復」或對照組；
+//   ⑤那一行真的跑一遍（-c 與 -lc、從別的目錄起）：擋、放、四個檔各改一個位元組、少檔、複本改名（總煞車）、HOME 沒設（只跑 -c）、
+//     HOME 指到空目錄、HOME 是相對路徑又設了 CDPATH（cd 不可以弄髒標準輸出）、複本裡多一個檔或目錄、PATH 前面有相對項目而複本裡放一支假 node、
+//     三種連結、查不了連結、沒有 find、佔位沒換、沒有 node、載入就崩；每一種都有「改回來就恢復」或對照組（多一個檔與假 node 的對照組＝修正前只查連結的寫法真的照用）；
+//     指紋對不上那一句一律不印 64 碼十六進位（tests/helpers/guard-rig.js 的 blocks()）；
 //   ⑥**核心宣稱：樹裡改清單沒有用**——工作樹把清單改弱、切到弱清單的分支、環境指向清單很鬆的倉庫，那一行都照複本擋
 //    （對照組：同樣的情境，活讀那一行真的放行）；
-//   ⑦環境變數夾帶進不來：NODE_OPTIONS；PERL5OPT 偽造 shasum 的輸出（對照組：拿掉 shasum 外面那層清空環境，被改弱的複本真的過得了指紋檢查而放行）；
+//   ⑦量到的兩個環境變數進不來：NODE_OPTIONS；PERL5OPT 偽造 shasum 的輸出（對照組：拿掉 shasum 外面那層清空環境，被改弱的複本真的過得了指紋檢查而放行）；
 //   ⑧--retire：只刪名字是 64 碼、自洽的目錄（唯讀的也刪得掉）；短名字（Codex 全域層那種）、路徑片段、不自洽、名字是連結、不存在＝拒絕、什麼都沒動；
-//   ⑨參數入口：四種用法不能混用。
-// ⚠️ 守不到的：真的 Claude 對話有沒有載入那兩組、ConfigChange 在平台上擋不擋（這裡只證明那一條指令退 2；平台的行為 2026-09-18 在
-//   2.1.275 量過一次、只量了專案設定檔這個來源，之後靠每次改清單時按測試鈕重量）；這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
+//   ⑨參數入口：四種用法不能混用；
+//   ⑩函式換不掉的兩處：匯入名為 [、case 的函式，指紋比對照樣擋（對照組：寫成 [ … ] 時被改弱的複本真的放行）；匯入名為 exit 的函式，設定變更攔截照樣退 2；
+//   ⑪**照實的對照（斷言放行）**：SHELLOPTS=noexec、匯入名為 cd 或 echo 的函式、PATH 前面放一支假 node＝那一行放行、設定變更攔截那一條退 0——
+//     「鉤子的環境被塞變數這一類在那一行裡關不完」這句話靠它撐著；哪天變成擋得住，這題紅、提醒改文件。
+//   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑。
+// ⚠️ 守不到的：真的 Claude 對話有沒有載入那兩組；ConfigChange 在平台上擋不擋——這裡只證明那一條指令退 2；平台的行為 2026-09-18 在
+//   2.1.275 量過一次、只量了專案設定檔這個來源；之後沒有任何例行動作重量它（測試鈕只走 PreToolUse 那一行）；
+//   鉤子的環境被塞變數這一類（⑪）；這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
 //   node 本身；檢查與執行之間的極短空檔；複本不是鎖（誰都造得出自洽的一份）；Windows（指令是 sh）。
 //   ⚠️ 突變指引：動到那四個檔的突變會先死在指紋檢查（紅的原因不對）——矩陣類的突變要照「改→重新落地→再跑」的順序做。
 'use strict';
@@ -55,6 +63,26 @@ function landed(scratch, srcOpts = {}, buildOpts = {}) {
   return { src, home, fp: r.fp, copyDir: r.copyDir, cmd: lineOf(src), r };
 }
 const refuses = (fn, re, why) => assert.throws(fn, (e) => e instanceof Refusal && re.test(e.message), why);
+/** 指紋對不上那一條路的結尾（突變與對照組用）。 */
+const FP_FAIL = "原句轉給裁示者（補複本的順序在 tools/guard-copy.js 檔頭）' >&2; exit 2;; esac";
+/**
+ * 那一行裡查「複本裡只有那四個檔與 tools 目錄」的那一道（對照組用：拿掉它、換回修正前只查連結的寫法、吞掉 find 的失敗）。
+ * 從那一行裡找出來、不逐字寫死：這一道的條件被改掉時，要紅在行為斷言、不是紅在對照組找不到字。
+ */
+const oddCheckOf = (command) => {
+  const m = command.match(/guard_odd="\$\(\/usr\/bin\/env -i \/usr\/bin\/find .*?\)"(?= && guard_sum=)/u);
+  assert.ok(m, '前提：那一行裡有查多出來的檔那一道');
+  return m[0];
+};
+const LINKS_ONLY = 'guard_odd="$(/usr/bin/env -i /usr/bin/find . -type l 2>/dev/null)"';
+const PRESERVE = ' --preserve-symlinks --preserve-symlinks-main';
+/** 把那一行的某一截換掉；要換的那一截不在＝考題自己壞了（突變了個寂寞），當場紅。 */
+const swap = (command, from, to) => {
+  assert.equal(command.split(from).length, 2, `前提：那一行裡剛好有一段「${from.slice(0, 60)}…」`);
+  return command.replace(from, () => to);
+};
+/** /bin/sh 是不是 bash：匯入函式（BASH_FUNC_名字%%）、SHELLOPTS 這兩招是 bash 的，別的 sh 上那幾段跳過並寫明。 */
+const shIsBash = () => spawnSync('/bin/sh', ['-c', 'printf %s "${BASH_VERSION-}"'], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout !== '';
 
 test('前提：這台機器有 /bin/sh、/usr/bin/env、/usr/bin/find、/usr/bin/shasum（少一支，釘指紋那一行在這台機器上一律退 2）', () => {
   for (const p of ['/bin/sh', '/usr/bin/env', '/usr/bin/find', SHASUM]) assert.ok(fs.existsSync(p), `沒有 ${p}`);
@@ -83,13 +111,17 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
   const change = doc.hooks.ConfigChange;
   assert.equal(change.length, 1);
   assert.equal(CONFIG_CHANGE_MATCHER, 'project_settings', '只量過這一個來源');
-  assert.deepEqual([change[0].matcher, change[0].hooks.length, change[0].hooks[0].type], [CONFIG_CHANGE_MATCHER, 1, 'command'], 'matcher 逐字＝project_settings（掛 local_settings 會傷日常）');
+  assert.deepEqual([change[0].matcher, change[0].hooks.length, change[0].hooks[0].type], [CONFIG_CHANGE_MATCHER, 1, 'command'], 'matcher 逐字＝project_settings（local_settings 沒量，刻意不掛）');
+  // 只剩 exit 2：擋下時訊息沒有人收得到（量到＋官方文件），而 exit 是特殊內建、匯入的函式換不掉（⑩真的跑）
+  assert.equal(change[0].hooks[0].command, 'exit 2', '設定變更攔截那一條只有 exit 2');
   const home = fakeHome(scratch);
   for (const flag of ['-c', '-lc']) {
     const r = spawnSync('/bin/sh', [flag, change[0].hooks[0].command], { cwd: scratch, env: { ...base, HOME: home }, input: '{}', encoding: 'utf8' });
-    assert.deepEqual([r.status, r.stdout], [2, ''], `${flag}：設定變更攔截那一條要退 2、標準輸出空的（${r.stderr}）`);
-    assert.ok(r.stderr.trim(), `${flag}：退 2 要帶錯誤輸出`);
+    assert.deepEqual([r.status, r.stdout, r.stderr], [2, '', ''], `${flag}：設定變更攔截那一條要退 2、兩個輸出都空的`);
   }
+  // 指紋比對用 case、不用 [ … ]（匯入的函式換得掉 [，換不掉 case：⑩真的跑）
+  assert.match(cmd, /case "\$guard_seen" in "\|\$fp {2}-"\) ;;/u, '指紋比對用 case');
+  assert.doesNotMatch(cmd, /(^|[\s;&|(])(\[|test)\s/u, '那一行不可以用 [ 或 test（函式換得掉）');
   // 填好的那一行也不含機器路徑：家目錄、暫存目錄、這份套件在哪裡，一個都不可以出現
   const filled = claudeGroups('a'.repeat(64), JSON.stringify(doc));
   assert.deepEqual(filled.ConfigChange, change[0], '設定變更攔截那一組原樣（沒有佔位）');
@@ -187,6 +219,15 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   // 暫存區的放行是明寫的旗標：不給就拒絕（考題的假家目錄都在暫存區）
   refuses(() => buildClaude({ from: 'HEAD~1', root: src, home: fresh }), /暫存區/u, '暫存區');
   assert.deepEqual(fs.readdirSync(fresh), [], '以上每一種拒絕都沒有寫東西');
+  // 家目錄本身是一個倉庫（把家目錄的設定檔放進版控的做法）：基底目錄在版本控制目錄裡＝拒絕、什麼都沒寫
+  const repoHome = fakeHome(scratch);
+  assert.equal(git(repoHome, 'init', '-q').status, 0);
+  const repoBefore = snapshot(repoHome);
+  refuses(() => buildClaude({ from: 'HEAD~1', root: src, home: repoHome, allowTemp: true }), /目的地在版本控制目錄裡/u, '家目錄本身是倉庫');
+  assert.deepEqual(snapshot(repoHome), repoBefore, '家目錄是倉庫：什麼都沒寫');
+  const repoCli = tool(src, ['--claude', '--from', 'HEAD~1'], { home: repoHome });
+  assert.deepEqual([repoCli.status, repoCli.stdout], [2, ''], `家目錄是倉庫：指令入口退 2（${repoCli.stderr}）`);
+  assert.deepEqual(snapshot(repoHome), repoBefore);
 
   // 試跑沒過＝不落地、沒有殘留。四種壞法各自要被抓到：
   const failsWith = (srcOpts, re, why) => {
@@ -201,7 +242,7 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   const crash = failsWith(editFile('tools/settings-data.js', () => "'use strict';\nthrow new Error('載入就崩');\n"), /沒有被乾淨地放行[\s\S]*退 2/u, '攔截器載入就崩');
   failsWith(editFile('tools/forbidden-tools.js', (c) => c.replace("return { code: 0, output: d.deny ? hookOutput(d.why, name) : '' };", "return { code: 0, output: '' };")), /沒有一個被擋下/u, '攔截器被改成什麼都放');
   failsWith(editFile('tools/forbidden-tools.js', (c) => c.replace("if (r.output) process.stdout.write(`${r.output}\\n`);", "process.stdout.write(r.output ? `${r.output}\\n` : 'hello\\n');")), /沒有被乾淨地放行/u, '放行時往標準輸出印字');
-  failsWith(editFile(CLAUDE_TEMPLATE_REL, (c) => c.replace("原句轉給裁示者（補複本的順序在 tools/guard-copy.js 檔頭）' >&2; exit 2; }", "原句轉給裁示者（補複本的順序在 tools/guard-copy.js 檔頭）' >&2; exit 0; }")), /指紋檢查沒有作用/u, '範本的指紋檢查被改成不擋（提交進版本）');
+  failsWith(editFile(CLAUDE_TEMPLATE_REL, (c) => { const out = c.replace(FP_FAIL, FP_FAIL.replace('exit 2', 'exit 0')); assert.notEqual(out, c, '前提：真的改到範本'); return out; }), /指紋檢查沒有作用/u, '範本的指紋檢查被改成不擋（提交進版本）');
   const cliBad = tool(crash.bad, ['--claude'], { home: crash.badHome });
   assert.deepEqual([cliBad.status, cliBad.stdout], [1, ''], `指令入口：試跑沒過＝退 1、標準輸出空的（${cliBad.stderr}）`);
   assert.match(cliBad.stderr, /自我試跑沒過[\s\S]*沒有落地/u);
@@ -221,7 +262,7 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   // 範本從已合併的版本讀：工作樹把指紋檢查改成不擋，試跑照提交的那一份＝照常過
   const clean = sourceRepo(scratch);
   const tpl = path.join(clean, CLAUDE_TEMPLATE_REL);
-  const loosened = fs.readFileSync(tpl, 'utf8').replace("檔頭）' >&2; exit 2; }", "檔頭）' >&2; exit 0; }");
+  const loosened = fs.readFileSync(tpl, 'utf8').replace(FP_FAIL, FP_FAIL.replace('exit 2', 'exit 0'));
   assert.notEqual(loosened, fs.readFileSync(tpl, 'utf8'), '前提：真的改到範本');
   fs.writeFileSync(tpl, loosened);
   assert.equal(buildClaude({ from: 'HEAD', root: clean, home: fakeHome(scratch), allowTemp: true }).failure, null, '試跑用的是已合併版本的範本');
@@ -265,7 +306,7 @@ test('④那個名字已經在、但不自洽＝拒絕、不覆寫、不刪；�
   assert.deepEqual(fs.readdirSync(baseOf(badRaceHome)), [good.fp], '不自洽的那一份留著給人看，暫存骨架清掉');
 }));
 
-test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、連結、沒有 find、佔位沒換、沒有 node、載入就崩', () => withScratch((scratch) => {
+test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、總煞車、HOME 沒設或指到空目錄、CDPATH、多一個檔、複本裡的假 node、連結、沒有 find、佔位沒換、沒有 node、載入就崩', () => withScratch((scratch) => {
   const { home, fp, copyDir, cmd } = landed(scratch);
   const elsewhere = fs.mkdtempSync(path.join(scratch, 'elsewhere-'));
   for (const flag of ['-c', '-lc']) {
@@ -295,12 +336,45 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   blocks(hook(cmd, { home, tool: DENIED }), MISMATCH, '複本改名：該擋的也是退 2，不是靜靜放行');
   fs.renameSync(`${copyDir}.away`, copyDir);
   allows(hook(cmd, { home }), '對照組：放回來就恢復');
-  // HOME：沒設、指到沒有複本的地方＝退 2（不可以退別的碼：平台只把退 2 當成擋）
+  // HOME：沒設、指到沒有複本的地方＝退 2（不可以退別的碼：平台只把退 2 當成擋）。
+  // HOME 沒設只跑 -c：登入 shell 在 HOME 沒設時會照密碼檔找到真的家、去讀那裡的登入設定（考題不碰真的家）
+  blocks(hook(cmd, { home: null }), MISMATCH, '-c：HOME 沒設');
   for (const flag of ['-c', '-lc']) {
-    blocks(hook(cmd, { home: null, flag }), MISMATCH, `${flag}：HOME 沒設`);
     blocks(hook(cmd, { home: fakeHome(scratch), flag, tool: DENIED }), MISMATCH, `${flag}：HOME 指到空目錄（這台機器沒補複本）`);
   }
   allows(hook(cmd, { home }), '對照組：HOME 指回有複本的家就恢復');
+
+  // cd 後面的 >/dev/null：HOME 是相對路徑、又設了 CDPATH 時，cd 會往標準輸出印它進去的目錄——拒絕形狀被弄髒＝平台讀不出來＝放行
+  const cdpathCwd = fs.mkdtempSync(path.join(scratch, 'cdpath-cwd-'));
+  const relHome = { home: path.basename(home), cwd: cdpathCwd, env: { CDPATH: path.dirname(home) }, tool: DENIED };
+  denies(hook(cmd, relHome), 'HOME 是相對路徑又設了 CDPATH：標準輸出照樣整段是拒絕形狀');
+  const chattyCd = hook(swap(cmd, ' >/dev/null 2>&1 && guard_odd=', ' 2>/dev/null && guard_odd='), relHome);
+  assert.ok(chattyCd.stdout.startsWith(path.dirname(home)), `對照組的前提：這樣設定時 cd 真的往標準輸出印字（「${chattyCd.stdout.slice(0, 120)}」）`);
+  assert.throws(() => denies(chattyCd, 'x'), '對照組：cd 不吞標準輸出時，拒絕形狀被弄髒');
+
+  // 複本裡多一個檔（跟 --claude 認「自洽」同一個判準）：一律退 2
+  const ODD_CHECK = oddCheckOf(cmd);
+  const extra = path.join(copyDir, 'extra.txt');
+  fs.writeFileSync(extra, 'x');
+  assert.equal(fingerprintDir(copyDir), fp, '前提：多一個檔不改四個檔的指紋');
+  blocks(hook(cmd, { home }), MISMATCH, '複本裡多一個檔');
+  allows(hook(swap(cmd, ODD_CHECK, LINKS_ONLY), { home }), '對照組：修正前只查連結的寫法，多一個檔照用');
+  fs.rmSync(extra);
+  fs.mkdirSync(path.join(copyDir, 'tools', 'sub'));
+  blocks(hook(cmd, { home }), MISMATCH, '複本裡多一個空目錄');
+  fs.rmdirSync(path.join(copyDir, 'tools', 'sub'));
+  allows(hook(cmd, { home }), '對照組：拿掉就恢復');
+  // PATH 有相對項目、複本目錄裡放一支假 node：那一行 cd 進複本之後才找 node，相對項目就是從複本目錄算的
+  for (const [rel, entry] of [[path.join('node_modules', '.bin', 'node'), 'node_modules/.bin'], ['node', '.']]) {
+    const fake = path.join(copyDir, rel);
+    fs.mkdirSync(path.dirname(fake), { recursive: true });
+    fs.writeFileSync(fake, '#!/bin/sh\ncat >/dev/null\nexit 0\n', { mode: 0o755 });
+    const relPath = { home, tool: DENIED, env: { PATH: `${entry}:${base.PATH}` } };
+    blocks(hook(cmd, relPath), MISMATCH, `PATH 前面放 ${entry}＋複本裡的假 node`);
+    allows(hook(swap(cmd, ODD_CHECK, LINKS_ONLY), relPath), `對照組：修正前的寫法，PATH 前面放 ${entry}＋複本裡的假 node＝真的被拿來跑而放行`);
+    fs.rmSync(path.join(copyDir, rel.split(path.sep)[0]), { recursive: true });
+    denies(hook(cmd, relPath), `對照組：假 node 拿掉、PATH 照舊＝照清單擋（擋下假 node 的是查多出來的檔那一道）`);
+  }
 
   // 連結：另一份內容相同、只有清單放寬的複本；把這一份的某一處換成指向它的連結，shasum 跟著連結算出一樣的指紋，
   // node 卻從連結真正的位置找旁邊的檔＝讀到放寬的清單。兩道各自擋得住；對照組＝兩道都拿掉，真的放行
@@ -308,19 +382,18 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   fs.cpSync(copyDir, loose, { recursive: true });
   for (const p of walk(loose)) fs.chmodSync(p, 0o755);
   fs.writeFileSync(path.join(loose, 'settings.json'), `${JSON.stringify({ forbidden: LOOSE }, null, 2)}\n`);
+  // 原本那一份先搬到複本外面（留在複本裡＝多一個檔，會被查多出來的檔那一道先擋下，量不到連結那一道）
+  const savedOf = (rel) => path.join(scratch, `saved-${rel.split(path.sep).join('-')}`);
   const swapToLink = (rel, target) => {
     const at = path.join(copyDir, rel);
-    const saved = `${at}.saved`;
+    const saved = savedOf(rel);
     fs.chmodSync(path.dirname(at), 0o755);
     fs.renameSync(at, saved);
     fs.symlinkSync(target, at);
     return () => { fs.unlinkSync(at); fs.renameSync(saved, at); };
   };
-  const LINK_CHECK = ' && guard_links="$(/usr/bin/env -i /usr/bin/find . -type l 2>/dev/null)" && [ -z "$guard_links" ]';
-  const PRESERVE = ' --preserve-symlinks --preserve-symlinks-main';
-  assert.ok(cmd.includes(LINK_CHECK) && cmd.includes(PRESERVE), '前提：指令裡有兩道');
-  const onlyPreserve = cmd.replace(LINK_CHECK, '');
-  const neither = onlyPreserve.replace(PRESERVE, '');
+  const onlyPreserve = swap(cmd, ODD_CHECK, 'guard_odd=');
+  const neither = swap(onlyPreserve, PRESERVE, '');
   let restore = swapToLink(path.join('tools', 'forbidden-tools.js'), path.join(loose, 'tools', 'forbidden-tools.js'));
   assert.equal(fingerprintDir(copyDir), fp, '前提：換成內容相同的連結，指紋一樣');
   allows(hook(neither, { home, tool: DENIED }), '對照組：兩道都拿掉時，入口換成連結真的讀到放寬的清單而放行');
@@ -333,19 +406,19 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
       assert.notEqual(find.status, 0, '前提：這樣設定之後 find 真的失敗');
       assert.equal(fingerprintDir(copyDir), fp, '前提：四個檔照樣讀得到、指紋一樣');
       blocks(hook(cmd, { home, tool: DENIED }), MISMATCH, '查不了有沒有連結');
-      const swallowed = cmd.replace(LINK_CHECK, ' && [ -z "$(/usr/bin/env -i /usr/bin/find . -type l 2>/dev/null)" ]').replace(PRESERVE, '');
-      allows(hook(swallowed, { home, tool: DENIED }), '對照組：只看輸出空不空、又不帶旗標的寫法，這個情況真的放行');
+      const swallowed = swap(swap(cmd, ODD_CHECK, ODD_CHECK.replace(' 2>/dev/null)"', ' 2>/dev/null || :)"')), PRESERVE, '');
+      allows(hook(swallowed, { home, tool: DENIED }), '對照組：只看輸出空不空（吞掉 find 的失敗）、又不帶旗標的寫法，這個情況真的放行');
     } finally {
       fs.chmodSync(path.join(copyDir, 'tools'), 0o755);
     }
   }
   restore();
-  blocks(hook(cmd.replace('/usr/bin/find', '/nonexistent/find'), { home }), MISMATCH, '找不到 find 也擋');
+  blocks(hook(swap(cmd, '/usr/bin/find', '/nonexistent/find'), { home }), MISMATCH, '找不到 find 也擋');
   restore = swapToLink('tools', path.join(loose, 'tools'));
   blocks(hook(cmd, { home, tool: DENIED }), MISMATCH, 'tools 目錄換成連結');
   restore();
   restore = swapToLink('settings.json', path.join(scratch, 'moved-settings-link-target'));
-  fs.copyFileSync(`${path.join(copyDir, 'settings.json')}.saved`, path.join(scratch, 'moved-settings-link-target'));
+  fs.copyFileSync(savedOf('settings.json'), path.join(scratch, 'moved-settings-link-target'));
   blocks(hook(cmd, { home }), MISMATCH, '設定檔換成內容相同的連結');
   restore();
   denies(hook(cmd, { home, tool: DENIED }), '對照組：連結都拿掉就恢復');
@@ -402,7 +475,7 @@ test('⑥核心宣稱：樹裡改清單沒有用——工作樹改弱、切到�
   allows(hook(cmd, { home, cwd: loose }), '對照組：該放的照樣放');
 }));
 
-test('⑦環境變數夾帶進不來：NODE_OPTIONS；PERL5OPT 偽造 shasum 的輸出', (t) => withScratch((scratch) => {
+test('⑦量到的兩個環境變數進不來：NODE_OPTIONS 夾帶程式、PERL5OPT 偽造 shasum 的輸出（這一類沒有關完：⑪）', (t) => withScratch((scratch) => {
   const { home, fp, copyDir, cmd } = landed(scratch);
   const evil = path.join(scratch, 'evil.js');
   fs.writeFileSync(evil, 'process.exit(0);\n');
@@ -499,3 +572,48 @@ test('⑨參數入口：四種用法不能混用；舊的 --from／--to 照舊',
     assert.deepEqual(fs.readdirSync(home), [], '用法錯誤什麼都不寫');
   });
 });
+
+test('⑩函式換不掉的兩處：指紋比對用 case、設定變更攔截只剩 exit 2——匯入名為 [、case、exit 的函式照樣擋（對照組：比對寫成 [ … ] 時，被改弱的複本真的放行）', (t) => withScratch((scratch) => {
+  if (!shIsBash()) { t.skip('這台機器的 /bin/sh 不是 bash：匯入函式（BASH_FUNC_名字%%）是 bash 的做法，這一題的現象做不出來'); return; }
+  const { home, fp, copyDir, cmd } = landed(scratch);
+  // 把複本的清單改弱（目錄名不變）：指紋對不上，照理退 2
+  fs.chmodSync(path.join(copyDir, 'settings.json'), 0o644);
+  fs.writeFileSync(path.join(copyDir, 'settings.json'), `${JSON.stringify({ forbidden: LOOSE }, null, 2)}\n`);
+  assert.notEqual(fingerprintDir(copyDir), fp, '前提：複本真的被改弱了');
+  const bracket = { 'BASH_FUNC_[%%': '() { return 0; }' };
+  for (const flag of ['-c', '-lc']) {
+    blocks(hook(cmd, { home, flag, tool: DENIED, env: bracket }), MISMATCH, `${flag}：匯入名為 [ 的函式：指紋比對照樣擋`);
+  }
+  const oldCompare = swap(swap(cmd, 'case "$guard_seen" in "|$fp  -") ;; *) echo', '[ "$guard_seen" = "|$fp  -" ] || { echo'), "' >&2; exit 2;; esac;", "' >&2; exit 2; };");
+  blocks(hook(oldCompare, { home, tool: DENIED }), MISMATCH, '對照組的前提：[ … ] 的寫法在乾淨的環境裡也擋');
+  allows(hook(oldCompare, { home, tool: DENIED, env: bracket }), '對照組：匯入名為 [ 的函式，[ … ] 的寫法真的把被改弱的複本放行');
+  blocks(hook(cmd, { home, tool: DENIED, env: { 'BASH_FUNC_case%%': '() { return 0; }' } }), MISMATCH, '匯入名為 case 的函式（保留字）：照樣擋');
+
+  const change = template().hooks.ConfigChange[0].hooks[0].command;
+  const runChange = (cmdText, env) => spawnSync('/bin/sh', ['-c', cmdText], { env: { ...base, HOME: home, ...env }, input: '{}', encoding: 'utf8' });
+  assert.equal(runChange(`true; ${change}`, { 'BASH_FUNC_true%%': '() { exit 0; }' }).status, 0, '對照組：同一個環境裡匯入的函式真的會跑（換掉 true 就在 exit 2 之前退 0）');
+  assert.equal(runChange(change, { 'BASH_FUNC_exit%%': '() { return 0; }' }).status, 2, '匯入名為 exit 的函式：設定變更攔截那一條照樣退 2（特殊內建）');
+}));
+
+test('⑪照實的對照（守不到的）：SHELLOPTS=noexec、匯入的 shell 函式（cd、echo）、PATH 前面放一支假 node＝那一行放行——這一題斷言「放行」，是為了讓文件那句「這一類在那一行裡關不完」有考題撐著；平台或 shell 改版後變成擋得住，這題會紅，提醒改文件', (t) => withScratch((scratch) => {
+  const { home, cmd } = landed(scratch);
+  // PATH：指紋蓋不到 PATH 找到哪一支 node（不靠 bash）
+  const fakeBin = fs.mkdtempSync(path.join(scratch, 'fakebin-'));
+  fs.writeFileSync(path.join(fakeBin, 'node'), '#!/bin/sh\ncat >/dev/null\nexit 0\n', { mode: 0o755 });
+  denies(hook(cmd, { home, tool: DENIED }), '前提：乾淨的環境照清單擋');
+  allows(hook(cmd, { home, tool: DENIED, env: { PATH: `${fakeBin}:${base.PATH}` } }), 'PATH 前面放一支假 node：指紋對、跑的是假 node＝放行（守不到）');
+  if (!shIsBash()) { t.skip('這台機器的 /bin/sh 不是 bash：SHELLOPTS 與匯入函式那幾段做不出來（PATH 那一段照跑了）'); return; }
+
+  const empty = fakeHome(scratch);   // 沒有複本的家：乾淨的環境全擋
+  for (const flag of ['-c', '-lc']) {
+    blocks(hook(cmd, { home: empty, flag, tool: DENIED }), MISMATCH, `${flag} 前提：沒有複本的家，乾淨的環境全擋`);
+    allows(hook(cmd, { home: empty, flag, tool: DENIED, env: { SHELLOPTS: 'noexec' } }), `${flag}：SHELLOPTS=noexec＝整行不執行、退 0（守不到）`);
+    for (const fn of ['cd', 'echo']) {
+      allows(hook(cmd, { home: empty, flag, tool: DENIED, env: { [`BASH_FUNC_${fn}%%`]: '() { exit 0; }' } }), `${flag}：匯入名為 ${fn} 的函式（換成 exit 0）＝退 0（守不到）`);
+    }
+  }
+  const change = template().hooks.ConfigChange[0].hooks[0].command;
+  const runChange = (env) => spawnSync('/bin/sh', ['-c', change], { env: { ...base, HOME: empty, ...env }, input: '{}', encoding: 'utf8' }).status;
+  assert.equal(runChange({}), 2, '前提：設定變更攔截那一條在乾淨的環境裡退 2');
+  assert.equal(runChange({ SHELLOPTS: 'noexec' }), 0, '設定變更攔截那一條：SHELLOPTS=noexec 一樣退 0（守不到）');
+}));

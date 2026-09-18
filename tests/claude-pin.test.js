@@ -81,7 +81,13 @@ test('②夾具：等式題真的會紅——相符、清單改一個字、指�
 
   const flip = (fp) => (fp[0] === '0' ? '1' : '0') + fp.slice(1);
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [swapFp(g.PreToolUse, flip)], ConfigChange: [g.ConfigChange] } }) })), 'mismatch', '那一行的指紋改一碼');
-  assert.equal(state(project(scratch, { settings: (g) => { const p = pinned(g); p.hooks.PreToolUse[0].hooks[0].command = p.hooks.PreToolUse[0].hooks[0].command.replace('exit 2; }; /usr/bin/env', 'exit 0; }; /usr/bin/env'); return p; } })), 'mismatch', '那一行被改過字（指紋對不上改成不擋）');
+  assert.equal(state(project(scratch, { settings: (g) => {
+    const p = pinned(g);
+    const before = p.hooks.PreToolUse[0].hooks[0].command;
+    p.hooks.PreToolUse[0].hooks[0].command = before.replace('exit 2;; esac;', 'exit 0;; esac;');
+    assert.notEqual(p.hooks.PreToolUse[0].hooks[0].command, before, '前提：真的改到那一行');
+    return p;
+  } })), 'mismatch', '那一行被改過字（指紋對不上改成不擋）');
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [{ ...g.PreToolUse, matcher: '^mcp__only_this__' }], ConfigChange: [g.ConfigChange] } }) })), 'mismatch', 'matcher 被改窄');
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [g.PreToolUse] } }) })), 'mismatch', '少了 ConfigChange 那一組');
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [g.PreToolUse], ConfigChange: [{ ...g.ConfigChange, matcher: 'local_settings' }] } }) })), 'mismatch', 'ConfigChange 的 matcher 被換');
