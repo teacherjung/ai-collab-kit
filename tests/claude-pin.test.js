@@ -1,7 +1,8 @@
 // 守 Claude 側釘指紋那一行「有沒有跟著這棵樹換」（規矩 B1）：等式題＋絆線題。判準＝tools/claude-pin.js（純函式）。
 //
-// 為什麼：釘指紋那一行的指紋是寫死的。改了那四個檔卻沒有重印那一行，要到合併之後、每台機器重開對話才會看到全擋；
-// 這一題把它提早到考卷——使用專案的 .claude/settings.json 有釘指紋那一組時，PreToolUse 與 ConfigChange 那兩組必須
+// 為什麼：釘指紋那一行的指紋是寫死的。改了那四個檔卻沒有重印那一行＝那一行照舊指紋找到舊複本、靜靜照舊清單判
+// （收緊不生效、沒有任何訊號）；唯一會紅的就是這一題（使用專案要有、而且不能跳過）。
+// 使用專案的 .claude/settings.json 有釘指紋那一組時，PreToolUse 與 ConfigChange 那兩組必須
 // 逐字等於「這棵樹的範本＋這棵樹四個檔的指紋」（＝node tools/guard-copy.js --claude-line 印的那兩組）。
 //
 // 這支考題跟著 tests/ 搬進使用專案，所以「本倉庫」那兩題讀的就是那個專案自己的 .claude/。
@@ -9,7 +10,8 @@
 //   ①本倉庫：有釘指紋那一組＝兩組逐字相符，否則紅；沒有 .claude/settings.json、或裝的是活讀那一份＝**跳過並寫明原因**（不是靜靜通過）；
 //   ②夾具證明①真的會紅：相符＝ok；清單改一個字、那一行的指紋改一碼、那一行被改過字、少了或改了 ConfigChange 那一組、同一組放兩次、
 //     多一條舊指紋的、清單沒填、設定檔不是合法 JSON＝mismatch；活讀＝live；沒有 .claude＝absent；
-//   ③絆線：本機設定檔有 hooks 鍵、有停用所有鉤子的開關（不論值）、不是合法 JSON，或專案設定檔有那個開關＝紅；檔案不在、只有別的鍵＝沒事。
+//   ③絆線：本機設定檔有 hooks 鍵、有停用所有鉤子的開關（不論值）、有 env 鍵、不是合法 JSON，或專案設定檔有那個開關或 env 鍵＝紅；
+//     檔案不在、只有別的鍵＝沒事。
 // ⚠️ 守不到的：
 //   這裡看不出「這個專案本來應該是釘的」——那一行被退回活讀，①是跳過、不是紅。**「一定要是釘指紋那一組」由使用專案自己的考題釘**
 //   （require('../tools/claude-pin.js')，斷言 claudePinStatus(根目錄).state 是 'ok'）；
@@ -22,7 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { claudeLine, CLAUDE_TEMPLATE_REL } = require('../tools/guard-copy.js');
-const { claudePinStatus, localSettingsProblems, SETTINGS_REL, LOCAL_SETTINGS_REL, DISABLE_ALL_HOOKS } = require('../tools/claude-pin.js');
+const { claudePinStatus, localSettingsProblems, SETTINGS_REL, LOCAL_SETTINGS_REL, DISABLE_ALL_HOOKS, ENV_KEY } = require('../tools/claude-pin.js');
 const { KIT, FAKE, LOOSE, withScratch } = require('./helpers/guard-rig.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -52,7 +54,7 @@ test('①本倉庫：.claude/settings.json 有釘指紋那一組＝兩組逐字�
   assert.deepEqual(s, { state: 'ok', problems: [] }, s.problems.join('\n'));
 });
 
-test('③本倉庫的絆線：本機設定檔不可以有鉤子或停用所有鉤子的開關（絆線不是閘：那個檔不進版控，只有本機這一次看得到）', (t) => {
+test('③本倉庫的絆線：本機設定檔不可以有鉤子、停用所有鉤子的開關、env 鍵（絆線不是閘：那個檔不進版控，只有本機這一次看得到）', (t) => {
   if (!fs.existsSync(path.join(ROOT, LOCAL_SETTINGS_REL))) t.diagnostic(`${LOCAL_SETTINGS_REL} 不在：這一次沒有東西可以看`);
   assert.deepEqual(localSettingsProblems(ROOT), []);
 });
@@ -114,12 +116,14 @@ test('②夾具：等式題真的會紅——相符、清單改一個字、指�
   assert.notEqual(claudeLine(project(scratch)).fp, claudeLine(project(scratch, { forbidden: LOOSE })).fp);
 }));
 
-test('③夾具：絆線真的會紅——本機設定檔有 hooks、有停用所有鉤子的開關、不是合法 JSON；專案設定檔有那個開關', () => withScratch((scratch) => {
+test('③夾具：絆線真的會紅——本機設定檔有 hooks、有停用所有鉤子的開關、有 env、不是合法 JSON；專案設定檔有那個開關或 env', () => withScratch((scratch) => {
   const withLocal = (local, settings = pinned) => {
     const dir = project(scratch, { settings });
     if (local !== undefined) fs.writeFileSync(path.join(dir, LOCAL_SETTINGS_REL), typeof local === 'string' ? local : JSON.stringify(local));
     return localSettingsProblems(dir);
   };
+  // 鍵名逐字：停用所有鉤子的開關＝官方鉤子文件寫的 "disableAllHooks"（出處見 tools/claude-pin.js 檔頭）；下面的夾具用常數，這一行釘常數本身
+  assert.equal(DISABLE_ALL_HOOKS, 'disableAllHooks', '官方鉤子文件寫的鍵名');
   assert.deepEqual(withLocal(undefined), [], '本機設定檔不在＝沒事');
   assert.deepEqual(withLocal({ permissions: { allow: ['Bash(ls:*)'] } }), [], '只有別的鍵（平台自己寫的「以後不要再問」）＝沒事');
   assert.equal(withLocal({ hooks: { PreToolUse: [] } }).length, 1, 'hooks 鍵（空的也算：那個位置不准放鉤子）');
@@ -133,5 +137,16 @@ test('③夾具：絆線真的會紅——本機設定檔有 hooks、有停用�
   assert.equal(withLocal('{ 壞掉').length, 1, '不是合法的 JSON：看不出裡面有沒有鉤子＝紅');
   assert.equal(withLocal('"字串"').length, 1, '最外層不是物件');
   assert.equal(withLocal(undefined, (g) => ({ ...pinned(g), [DISABLE_ALL_HOOKS]: true })).length, 1, '專案設定檔有那個開關');
+  // env 鍵：平台設定的 env 會不會傳進鉤子的環境沒量，當成會（空的也算）
+  assert.equal(ENV_KEY, 'env');
+  for (const value of [{}, { SHELLOPTS: 'noexec' }]) {
+    const p = withLocal({ [ENV_KEY]: value });
+    assert.equal(p.length, 1, `本機設定檔的 env 鍵設成 ${JSON.stringify(value)} 也算`);
+    assert.match(p[0], /settings\.local\.json 有 env 鍵/u);
+  }
+  const projEnv = withLocal(undefined, (g) => ({ ...pinned(g), [ENV_KEY]: { PATH: '/x' } }));
+  assert.equal(projEnv.length, 1, '專案設定檔有 env 鍵');
+  assert.match(projEnv[0], /settings\.json 有 env 鍵/u);
+  assert.equal(withLocal({ hooks: {}, [DISABLE_ALL_HOOKS]: true, [ENV_KEY]: {} }).length, 3, '三樣都有＝三條');
   assert.deepEqual(localSettingsProblems(project(scratch)), [], '連 .claude 都沒有＝沒事');
 }));
