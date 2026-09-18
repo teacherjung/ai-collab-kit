@@ -9,6 +9,7 @@
 //   ①範本的形狀：PreToolUse 剛好一組（matcher ^mcp__、一條指令）、{files} 與 {fingerprint} 各剛好一個、沒有 {copyDir}、
 //     不含任何機器路徑、shasum 與 find 每一次出現都包在清空的環境裡、指紋比對用 case（不用 [ 或 test）；
 //     ConfigChange 剛好一組、matcher 逐字＝project_settings、指令逐字＝exit 2（跑起來退 2、兩個輸出都空的）；範本原樣（佔位沒換）＝退 2；
+//     兩組的組只有 matcher、hooks，鉤子物件只有 type、command——多一個鍵（async、if、args、timeout、組的別的鍵）＝--claude-line／--claude 拒絕；
 //   ②--claude-line 只讀不寫、不需要 git；它印的指紋＝同一份內容用 --claude 落地的目錄名＝/usr/bin/shasum 自己算的（三方互證）；
 //     複本裡 settings.json 的位元組逐字釘住（改寫法＝每台機器現有的複本全部失效）；工作樹沒提交的清單改動會改到它印的指紋、改不到複本；
 //   ③--claude 落地：位置、剛好四個唯讀檔、沒有暫存殘留；成功訊息分兩種（新落地＝兩次試跑都過、已經在＝這個家試跑過）；
@@ -102,6 +103,11 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
   const pre = doc.hooks.PreToolUse;
   assert.equal(pre.length, 1);
   assert.deepEqual([pre[0].matcher, pre[0].hooks.length, pre[0].hooks[0].type], ['^mcp__', 1, 'command']);
+  // 組與鉤子物件剛好這幾個鍵：多一個（async、if、args、timeout…）都可能讓那一組不擋（下面「範本壞了＝拒絕」逐發試）
+  for (const event of ['PreToolUse', 'ConfigChange']) {
+    assert.deepEqual(Object.keys(doc.hooks[event][0]).sort(), ['hooks', 'matcher'], `${event} 那一組的鍵`);
+    assert.deepEqual(Object.keys(doc.hooks[event][0].hooks[0]).sort(), ['command', 'type'], `${event} 那一個鉤子物件的鍵`);
+  }
   const cmd = pre[0].hooks[0].command;
   for (const ph of CLAUDE_PLACEHOLDERS) assert.equal(cmd.split(ph).length, 2, `${ph} 要剛好一個`);
   assert.ok(!cmd.includes('{copyDir}'), '那一行跨機器共用：不可以有複本路徑的佔位');
@@ -144,6 +150,16 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
   refuses(() => claudeGroups('a'.repeat(64), broken((d) => { d.hooks.PreToolUse[0].hooks[0].command += ' # {fingerprint}'; })), /不是剛好一個/u, '多一個佔位');
   refuses(() => claudeGroups('a'.repeat(64), broken((d) => { d.hooks.PreToolUse[0].hooks[0].command += " # '{copyDir}'"; })), /\{copyDir\}/u, '混進複本路徑的佔位');
   refuses(() => claudeGroups('de1cfb4', JSON.stringify(doc)), /64 碼/u, '指紋不是 64 碼');
+  // 鉤子物件多一個官方文件列的欄位（async＝背景跑不擋、if＝只在符合規則時跑、args＝不經 shell、timeout＝逾時不擋）、組多一個鍵＝拒絕
+  for (const [key, value] of [['async', true], ['if', 'Bash(*)'], ['args', []], ['timeout', 1]]) {
+    for (const event of ['PreToolUse', 'ConfigChange']) {
+      refuses(() => claudeGroups('a'.repeat(64), broken((d) => { d.hooks[event][0].hooks[0][key] = value; })),
+        new RegExp(`${event} 那一組多了鍵（hooks\\[0\\]\\.${key}）`, 'u'), `${event} 的鉤子物件多了 ${key}`);
+    }
+  }
+  for (const event of ['PreToolUse', 'ConfigChange']) {
+    refuses(() => claudeGroups('a'.repeat(64), broken((d) => { d.hooks[event][0].description = '多一個鍵'; })), new RegExp(`${event} 那一組多了鍵（description）`, 'u'), `${event} 的組多一個鍵`);
+  }
 }));
 
 test('②--claude-line 只讀不寫、不需要 git；指紋三方互證；複本裡設定檔的位元組逐字釘住；沒提交的清單改動只改得到那一行', () => withScratch((scratch) => {
@@ -230,6 +246,10 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   refuses(() => buildClaude({ root: sourceRepo(scratch, { merged: false }), home: fresh, allowTemp: true }), /不是這個倉庫裡的一個版本/u, '不給 --from、本機沒有 origin/<主幹>');
   refuses(() => buildClaude({ from: 'HEAD', root: sourceRepo(scratch, { edit: (dir) => fs.rmSync(path.join(dir, CLAUDE_TEMPLATE_REL)) }), home: fresh, allowTemp: true }), /裡沒有 templates\/hook-claude-pinned\.json/u, '那個版本還沒有這份範本');
   refuses(() => buildClaude({ from: 'HEAD', root: sourceRepo(scratch, editFile(CLAUDE_TEMPLATE_REL, (c) => c.replace('"matcher": "^mcp__"', '"matcher": "^mcp__unrelated__"'))), home: fresh, allowTemp: true }), /形狀不對/u, '那個版本的範本形狀不對（matcher 被改掉）');
+  refuses(() => buildClaude({ from: 'HEAD', root: sourceRepo(scratch, editFile(CLAUDE_TEMPLATE_REL, (c) => { const d = JSON.parse(c); d.hooks.ConfigChange[0].hooks[0].async = true; return JSON.stringify(d); })), home: fresh, allowTemp: true }), /ConfigChange 那一組多了鍵（hooks\[0\]\.async）/u, '那個版本的範本：設定變更攔截那一條多了 async');
+  const asyncLine = tool(sourceRepo(scratch, editFile(CLAUDE_TEMPLATE_REL, (c) => { const d = JSON.parse(c); d.hooks.PreToolUse[0].hooks[0].async = true; return JSON.stringify(d); })), ['--claude-line'], { home: fresh });
+  assert.deepEqual([asyncLine.status, asyncLine.stdout], [2, ''], `--claude-line：範本那一行多了 async＝退 2、什麼都不印（${asyncLine.stderr}）`);
+  assert.match(asyncLine.stderr, /PreToolUse 那一組多了鍵（hooks\[0\]\.async）/u);
   refuses(() => buildClaude({ from: 'HEAD', root: sourceRepo(scratch, { forbidden: { name: '測試禁區', patterns: ['^create_widget$'] } }), home: fresh, allowTemp: true }), /--deny-probe/u, '只靠樣式規則的清單、沒給 --deny-probe');
   refuses(() => buildClaude({ from: 'HEAD', root: src, home: 'relative/home', allowTemp: true }), /家目錄不是絕對路徑/u, '家目錄不是絕對路徑');
   // 暫存區的放行是明寫的旗標：不給就拒絕（考題的假家目錄都在暫存區）

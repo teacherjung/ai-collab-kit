@@ -9,6 +9,8 @@
 //
 // ①等式 claudePinStatus(root)：專案 .claude/settings.json 有釘指紋那一組時，PreToolUse 與 ConfigChange 那兩組必須
 //   **逐字等於**「這棵樹的範本＋這棵樹四個檔的指紋」（＝node tools/guard-copy.js --claude-line 印的那兩組），而且各剛好一組。
+//   看起來就是那一組（指令提到固定複本的位置、或逐字是範本那一條）卻多了鍵＝mismatch，並說出是哪個鍵
+//   （組只准有 matcher、hooks，鉤子物件只准有 type、command；官方鉤子文件列的 async、if、args、timeout 等欄位任一個都可能讓那一組不擋）。
 //   回 { state, problems }：
 //     absent＝沒有 .claude/settings.json（這個倉庫沒裝 Claude 側）；live＝有，但沒有任何一條鉤子指令提到固定複本的位置（活讀裝法、或沒裝）；
 //     ok＝兩組都逐字相符；mismatch＝提到了固定複本的位置、卻不是剛好那兩組（problems 列出原因）。
@@ -32,7 +34,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const { CLAUDE_BASE, CLAUDE_TEMPLATE_REL, treeFingerprint, claudeGroups, Refusal } = require('./guard-copy.js');
+const { CLAUDE_BASE, CLAUDE_TEMPLATE_REL, treeFingerprint, claudeGroups, groupExtraKeys, Refusal } = require('./guard-copy.js');
 
 const SETTINGS_REL = path.join('.claude', 'settings.json');
 const LOCAL_SETTINGS_REL = path.join('.claude', 'settings.local.json');
@@ -86,6 +88,16 @@ function claudePinStatus(root) {
   const problems = [];
   for (const event of EVENTS) {
     const groups = read.doc.hooks && Array.isArray(read.doc.hooks[event]) ? read.doc.hooks[event] : [];
+    // 看起來就是那一組、卻多了鍵（async、if、args、timeout…任一個都可能讓它不擋）：說出是哪個鍵（下面逐字比也會紅，只是說不出原因）
+    groups.forEach((g, i) => {
+      const ours = g && Array.isArray(g.hooks) && g.hooks.some((h) => h && typeof h.command === 'string'
+        && (h.command.includes(PINNED_MARK) || h.command === expected[event].hooks[0].command));
+      const extra = ours ? groupExtraKeys(g) : [];
+      if (extra.length) {
+        problems.push(`${SETTINGS_REL} 的 hooks.${event}[${i}] 多了鍵（${extra.join('、')}）：組只准有 matcher、hooks，鉤子物件只准有 type、command`
+          + '（官方鉤子文件列的 async、if、args、timeout 等欄位任一個都可能讓那一組不擋）；重跑 node tools/guard-copy.js --claude-line、把印出的那兩組原樣放進去');
+      }
+    });
     const same = groups.filter((g) => isDeepStrictEqual(g, expected[event]));
     if (same.length !== 1) {
       problems.push(`${SETTINGS_REL} 的 hooks.${event} 裡，逐字等於「這棵樹的範本＋這棵樹四個檔的指紋」的那一組有 ${same.length} 組（要剛好一組）：`

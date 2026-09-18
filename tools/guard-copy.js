@@ -296,6 +296,23 @@ function hookGroup({ copyDir, fp }, templateText) {
 }
 
 /**
+ * Claude 側那兩組的組與鉤子物件只准有這幾個鍵（第二輪審查 J）。官方鉤子文件（https://code.claude.com/docs/en/hooks 的
+ * Common fields 與 Command hook fields 兩張表，2026-09-19 讀；是文件、不是量測）另外列了會改變那一組怎麼跑的欄位：
+ * async＝在背景跑、不擋；if＝只有工具呼叫符合那一條權限規則時才跑；args＝不經 shell、把 command 當執行檔直接跑；
+ * timeout＝到時間就取消，而 PreToolUse 的指令鉤子逾時不擋；另有 asyncRewake、shell、once、statusMessage。
+ * 多一個鍵就拒絕，不逐一判斷它是不是無害的。Codex 全域層共用的 soleGroup 刻意不動（那一層的輸出不變）。
+ */
+const CLAUDE_GROUP_KEYS = ['hooks', 'matcher'];
+const CLAUDE_HOOK_KEYS = ['command', 'type'];
+/** 一個物件裡不在允許清單上的鍵（照原本的順序）。不是物件＝回一個說明。 */
+const extraKeys = (obj, allowed) => (obj && typeof obj === 'object' && !Array.isArray(obj) ? Object.keys(obj).filter((k) => !allowed.includes(k)) : ['（不是物件）']);
+/** 一組的多餘鍵：組本身的、每一個鉤子物件的（寫成 hooks[序號].鍵名）。 */
+const groupExtraKeys = (group) => [
+  ...extraKeys(group, CLAUDE_GROUP_KEYS),
+  ...(group && Array.isArray(group.hooks) ? group.hooks.flatMap((h, i) => extraKeys(h, CLAUDE_HOOK_KEYS).map((k) => `hooks[${i}].${k}`)) : []),
+];
+
+/**
  * Claude 側釘指紋範本的兩組，佔位換掉：PreToolUse＝釘指紋那一行；ConfigChange＝設定變更攔截（沒有佔位，原樣）。
  * 那一行不可以有複本路徑的佔位：它進版控、跨機器共用，寫死任何一台機器的路徑都是錯的。
  */
@@ -307,6 +324,12 @@ function claudeGroups(fp, templateText) {
   const change = soleGroup(templateText, 'ConfigChange', CONFIG_CHANGE_MATCHER);
   for (const ph of PLACEHOLDERS) {
     if (change.command.includes(ph)) throw new Refusal(`設定變更攔截那一條指令不可以有佔位（${ph}）`);
+  }
+  for (const [event, { group }] of [['PreToolUse', pre], ['ConfigChange', change]]) {
+    const extra = groupExtraKeys(group);
+    if (extra.length) {
+      throw new Refusal(`接線範本 ${event} 那一組多了鍵（${extra.join('、')}）：組只准有 matcher、hooks，鉤子物件只准有 type、command——官方鉤子文件列的 async、if、args、timeout 等欄位任一個都可能讓那一組不擋`);
+    }
   }
   return {
     PreToolUse: { matcher: pre.group.matcher, hooks: [{ ...pre.group.hooks[0], command: filled }] },
@@ -678,5 +701,6 @@ if (require.main === module) process.exit(main());
 
 module.exports = {
   COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal,
-  CLAUDE_TEMPLATE_REL, CLAUDE_PLACEHOLDERS, CLAUDE_BASE, CONFIG_CHANGE_MATCHER, treeFingerprint, claudeGroups, claudeLine, copyProblem, buildClaude, retire, parseArgs,
+  CLAUDE_TEMPLATE_REL, CLAUDE_PLACEHOLDERS, CLAUDE_BASE, CONFIG_CHANGE_MATCHER, CLAUDE_GROUP_KEYS, CLAUDE_HOOK_KEYS, groupExtraKeys,
+  treeFingerprint, claudeGroups, claudeLine, copyProblem, buildClaude, retire, parseArgs,
 };

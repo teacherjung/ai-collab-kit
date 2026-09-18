@@ -9,7 +9,8 @@
 // 守得到的：
 //   ①本倉庫：有釘指紋那一組＝兩組逐字相符，否則紅；沒有 .claude/settings.json、或裝的是活讀那一份＝**跳過並寫明原因**（不是靜靜通過）；
 //   ②夾具證明①真的會紅：相符＝ok；清單改一個字、那一行的指紋改一碼、那一行被改過字、少了或改了 ConfigChange 那一組、同一組放兩次、
-//     多一條舊指紋的、清單沒填、設定檔不是合法 JSON＝mismatch；活讀＝live；沒有 .claude＝absent；
+//     多一條舊指紋的、清單沒填、設定檔不是合法 JSON＝mismatch；那一組或鉤子物件多一個鍵（async、if、args、timeout、組的別的鍵）＝mismatch、
+//     而且說出是哪個鍵；活讀＝live；沒有 .claude＝absent；
 //   ③絆線：本機設定檔有 hooks 鍵、有停用所有鉤子的開關（不論值）、有 env 鍵、不是合法 JSON，或專案設定檔有那個開關或 env 鍵＝紅；
 //     檔案不在、只有別的鍵＝沒事。
 // ⚠️ 守不到的：
@@ -97,6 +98,21 @@ test('②夾具：等式題真的會紅——相符、清單改一個字、指�
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [g.PreToolUse, g.PreToolUse], ConfigChange: [g.ConfigChange] } }) })), 'mismatch', '同一組放兩次');
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PreToolUse: [swapFp(g.PreToolUse, flip), g.PreToolUse], ConfigChange: [g.ConfigChange] } }) })), 'mismatch', '多一條舊指紋的');
   assert.equal(state(project(scratch, { settings: (g) => ({ hooks: { PostToolUse: [g.PreToolUse], ConfigChange: [g.ConfigChange] } }) })), 'mismatch', '那一組掛錯事件');
+  // 那一組多一個鍵（官方文件列的 async、if、args、timeout 任一個都可能讓它不擋）：mismatch，而且說出是哪個鍵
+  const extraKey = (event, where, key, value) => claudePinStatus(project(scratch, { settings: (g) => {
+    const p = pinned(g);
+    if (where === 'hook') p.hooks[event][0].hooks[0][key] = value; else p.hooks[event][0][key] = value;
+    return p;
+  } }));
+  for (const [event, where, key, value, named] of [
+    ['PreToolUse', 'hook', 'async', true, 'hooks[0].async'], ['PreToolUse', 'hook', 'timeout', 1, 'hooks[0].timeout'],
+    ['ConfigChange', 'hook', 'if', 'Bash(*)', 'hooks[0].if'], ['ConfigChange', 'hook', 'args', [], 'hooks[0].args'],
+    ['PreToolUse', 'group', 'description', 'x', 'description']]) {
+    const s = extraKey(event, where, key, value);
+    assert.equal(s.state, 'mismatch', `${event} 多了 ${named}`);
+    assert.ok(s.problems.some((p) => p.includes(`hooks.${event}[0] 多了鍵（${named}）`)), `${event} 多了 ${named}：要說出是哪個鍵（${s.problems.join(' / ')}）`);
+  }
+  assert.ok(!claudePinStatus(ok).problems.some((p) => p.includes('多了鍵')), '對照組：照印的放進去＝沒有多出來的鍵');
 
   // 算不出這棵樹該有的那兩組：清單沒填、範本不在——設定檔卻提到固定複本＝紅（不是跳過）
   const unfilled = project(scratch, { settings: pinned });
