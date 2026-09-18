@@ -121,10 +121,22 @@ function checkTarget(to, { home = os.homedir(), allowTemp = false } = {}) {
 }
 
 /**
+ * 複本裡 settings.json 的位元組：只留 forbidden 那一塊、固定的寫法（縮排 2、結尾一個換行）。
+ * 抽成一支：這個寫法是指紋的一部分——改它＝每台機器上現有的複本全部對不上（要重抽、重按信任）；之後要從別的來源算同一個指紋，也只准走這一支。
+ * @param {unknown} settings 解析過的整份設定
+ * @param {string} unfilled 清單沒填時的拒絕訊息
+ */
+function forbiddenOnly(settings, unfilled) {
+  const f = settings && settings.forbidden;
+  if (!f || typeof f !== 'object' || Array.isArray(f) || !f.name || f.name === UNSET) throw new Refusal(unfilled);
+  return Buffer.from(`${JSON.stringify({ forbidden: f }, null, 2)}\n`, 'utf8');
+}
+
+/**
  * 從版本控制讀出複本內容與接線範本（不讀工作樹：沒提交的改動不可能進複本、也不可能改到要按信任的那一行）。
  * 那個版本必須已經在 origin/<主幹> 裡：只要求「提交過」的話，本機沒推、沒審的提交照樣進得來。
  */
-function extract(ref, root = ROOT) {
+function extract(ref, root = ROOT, templateRel = TEMPLATE_REL) {
   if (typeof ref !== 'string' || !ref || ref.startsWith('-')) throw new Refusal('--from 要給一個版本（分支名或提交碼）');
   const git = (args, encoding) => spawnSync('git', args, { cwd: root, env: gitEnv(), encoding, maxBuffer: 64 * 1024 * 1024 });
   const rev = git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], 'utf8');
@@ -146,77 +158,107 @@ function extract(ref, root = ROOT) {
   if (git(['merge-base', '--is-ancestor', commit, tracking], 'utf8').status !== 0) {
     throw new Refusal(`版本 ${commit.slice(0, 12)} 還不在 origin/${main} 裡：只抽已經合併的版本（先 git fetch；還沒合併就等合併）`);
   }
-  const f = settings.forbidden;
-  if (!f || typeof f !== 'object' || Array.isArray(f) || !f.name || f.name === UNSET) {
-    throw new Refusal('那個版本的禁區清單還沒填：裝上去只會把所有 mcp__ 工具全部擋掉，先填清單、合併之後再抽');
-  }
-  files.set('settings.json', Buffer.from(`${JSON.stringify({ forbidden: f }, null, 2)}\n`, 'utf8'));
-  return { commit, files, template: show(TEMPLATE_REL).toString('utf8'), tracking: `origin/${main}` };
+  files.set('settings.json', forbiddenOnly(settings, '那個版本的禁區清單還沒填：裝上去只會把所有 mcp__ 工具全部擋掉，先填清單、合併之後再抽'));
+  return { commit, files, template: show(templateRel).toString('utf8'), tracking: `origin/${main}` };
 }
 
-/** 範本的那一組接線，三個佔位換掉；範本的佔位不是剛好各一個＝範本壞了，拒絕。 */
-function hookGroup({ copyDir, fp }, templateText) {
+/** 範本裡某一種鉤子的那一組：要剛好一組、matcher 逐字相符、剛好一條指令型鉤子。回那一組與它的指令。 */
+function soleGroup(templateText, event, matcher) {
   let doc;
   try { doc = JSON.parse(templateText); } catch { throw new Refusal('接線範本不是合法的 JSON'); }
-  const group = doc && doc.hooks && doc.hooks.PreToolUse && doc.hooks.PreToolUse[0];
+  const list = doc && doc.hooks && doc.hooks[event];
+  const group = list && list[0];
   const command = group && group.hooks && group.hooks[0] && group.hooks[0].command;
   if (typeof command !== 'string') throw new Refusal('接線範本裡找不到那一條指令');
-  // 整組的形狀也要對：matcher 不是 ^mcp__、不是指令型、多出別的組或別的鉤子＝印出來的那一組不會照預期攔（裁示批 r1 T2）
-  if (doc.hooks.PreToolUse.length !== 1 || group.matcher !== '^mcp__' || group.hooks.length !== 1 || group.hooks[0].type !== 'command') {
-    throw new Refusal('接線範本那一組的形狀不對（要剛好一組、matcher 是 ^mcp__、剛好一條指令型鉤子）');
+  // 整組的形狀也要對：matcher 不對、不是指令型、多出別的組或別的鉤子＝印出來的那一組不會照預期攔（裁示批 r1 T2）
+  if (list.length !== 1 || group.matcher !== matcher || group.hooks.length !== 1 || group.hooks[0].type !== 'command') {
+    throw new Refusal(`接線範本那一組的形狀不對（要剛好一組、matcher 是 ${matcher}、剛好一條指令型鉤子）`);
   }
-  for (const ph of PLACEHOLDERS) {
+  return { group, command };
+}
+
+/** 把佔位換掉；範本的佔位不是剛好各一個＝範本壞了，拒絕。 */
+function fill(command, values) {
+  for (const ph of Object.keys(values)) {
     if (command.split(ph).length !== 2) throw new Refusal(`範本的指令裡「${ph}」不是剛好一個`);
   }
-  const filled = command.replace('{copyDir}', () => copyDir).replace('{files}', () => COPY_FILES.join(' ')).replace('{fingerprint}', () => fp);
+  return Object.keys(values).reduce((c, ph) => c.replace(ph, () => values[ph]), command);
+}
+
+/** Codex 全域層範本的那一組接線，三個佔位換掉。 */
+function hookGroup({ copyDir, fp }, templateText) {
+  const { group, command } = soleGroup(templateText, 'PreToolUse', '^mcp__');
+  const filled = fill(command, { '{copyDir}': copyDir, '{files}': COPY_FILES.join(' '), '{fingerprint}': fp });
   return { matcher: group.matcher, hooks: [{ ...group.hooks[0], command: filled }] };
 }
 
-const runHook = (command, tool) => spawnSync('/bin/sh', ['-lc', command], { cwd: os.tmpdir(), input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+/** flag 不給＝Codex 的起法（/bin/sh -lc）；env 不給＝沿用這支自己的環境。 */
+const runHook = (command, tool, { flag = '-lc', env } = {}) =>
+  spawnSync('/bin/sh', [flag, command], { cwd: os.tmpdir(), env, input: JSON.stringify({ tool_name: tool }), encoding: 'utf8' });
+
+const isDenyShape = (text) => {
+  try { return JSON.parse(text.trim()).hookSpecificOutput.permissionDecision === 'deny'; } catch { return false; }
+};
 
 /**
- * 照 Codex 的起法（/bin/sh -lc）真的跑那一行指令，任一項不符就回失敗原因：
+ * 試跑的擺法：三項檢查是同一套，「怎麼把那一行指令對到某一份複本」與「拒絕長什麼樣」抽成參數。
+ * root＝擺複本的那個根：Codex 全域層是複本目錄自己（路徑寫死在指令裡＝換指令裡的路徑）。
+ */
+const codexRig = ({ fp, template }) => ({
+  flags: ['-lc'],
+  copyDirIn: (root) => root,
+  aim: (root) => ({ command: hookGroup({ copyDir: root, fp }, template).hooks[0].command, env: undefined }),
+  denied: (r) => r.status === 2 && r.stdout === '' && isDenyShape(r.stderr),
+  deniedAs: '擋成退 2',
+});
+
+/**
+ * 照鉤子的起法（Codex＝/bin/sh -lc）真的跑那一行指令，任一項不符就回失敗原因：
  *   ①無害假名要**放行**：退 0、兩個輸出都空的（依序試幾個，有一個過就算；清單壞到什麼都擋、登入設定往輸出印字，都在這裡露出來）；
  *   ②照清單該擋的假名要**擋**：退 2、錯誤輸出是拒絕的形狀（依序試幾個；攔截器被改成什麼都放，這裡露出來）；
- *   ③指紋檢查要真的在：同一行指令指向一份改過一個位元組的副本，要退 2 而且是指紋那一句。
+ *   ③指紋檢查要真的在：同一行指令對到一份改過一個位元組的副本，要退 2 而且是指紋那一句。
  * 全程只跑指令、不把複本裡的程式載進這支（驗的就是鉤子實際會走的那一條路）。
  */
-function selfTest({ copyDir, fp, template, forbidden, denyProbe = null }) {
-  const command = hookGroup({ copyDir, fp }, template).hooks[0].command;
+function selfTest({ copyDir, fp, template, forbidden, denyProbe = null, rig = codexRig({ fp, template }), root = copyDir }) {
+  const from = rig.copyDirIn(root);
   const show = (r) => `退 ${r.status}；標準輸出「${r.stdout.slice(0, 120)}」；錯誤輸出「${r.stderr.slice(0, 200)}」`;
+  for (const flag of rig.flags) {
+    const tag = rig.flags.length > 1 ? `/bin/sh ${flag}：` : '';
+    const { command, env } = rig.aim(root);
 
-  let allowName = null;
-  let lastAllow = null;
-  for (const name of ALLOW_PROBES) {
-    lastAllow = runHook(command, name);
-    if (lastAllow.status === 0 && lastAllow.stdout === '' && lastAllow.stderr === '') { allowName = name; break; }
-  }
-  if (!allowName) return `無害的假名一個都沒有被乾淨地放行（最後一次：${show(lastAllow)}）——清單壞到什麼都擋、或登入設定往標準輸出印字（要先讓它安靜）`;
-
-  // 有給 --deny-probe 就只試那一個（給了卻不擋＝失敗，不改試別的）；沒給就從清單自動產生
-  const denyCandidates = denyProbe ? [denyProbe] : autoDenyProbes(forbidden);
-  let denied = false;
-  let lastDeny = null;
-  for (const name of denyCandidates) {
-    lastDeny = runHook(command, name);
-    let shape = false;
-    try { shape = JSON.parse(lastDeny.stderr.trim()).hookSpecificOutput.permissionDecision === 'deny'; } catch { /* 不是拒絕形狀 */ }
-    if (lastDeny.status === 2 && lastDeny.stdout === '' && shape) { denied = true; break; }
-  }
-  if (!denied) return `照清單該擋的假名沒有一個被擋成退 2（試了 ${denyCandidates.length} 個${lastDeny ? `；最後一次：${show(lastDeny)}` : ''}）——攔截器被改成什麼都放、或清單沒有有效規則`;
-
-  const dup = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-copy-selftest-'));
-  try {
-    for (const rel of COPY_FILES) {
-      fs.mkdirSync(path.dirname(path.join(dup, rel)), { recursive: true });
-      fs.copyFileSync(path.join(copyDir, rel), path.join(dup, rel));
-      fs.chmodSync(path.join(dup, rel), 0o644);
+    let allowName = null;
+    let lastAllow = null;
+    for (const name of ALLOW_PROBES) {
+      lastAllow = runHook(command, name, { flag, env });
+      if (lastAllow.status === 0 && lastAllow.stdout === '' && lastAllow.stderr === '') { allowName = name; break; }
     }
-    fs.appendFileSync(path.join(dup, 'settings.json'), ' ');
-    const tampered = runHook(hookGroup({ copyDir: dup, fp }, template).hooks[0].command, allowName);
-    if (tampered.status !== 2 || !/指紋對不上/u.test(tampered.stderr)) return `指紋檢查沒有作用：改過一個位元組的副本沒有被擋（${show(tampered)}）`;
-  } finally {
-    fs.rmSync(dup, { recursive: true, force: true });   // 只刪自己剛建的試跑副本
+    if (!allowName) return `${tag}無害的假名一個都沒有被乾淨地放行（最後一次：${show(lastAllow)}）——清單壞到什麼都擋、或登入設定往標準輸出印字（要先讓它安靜）`;
+
+    // 有給 --deny-probe 就只試那一個（給了卻不擋＝失敗，不改試別的）；沒給就從清單自動產生
+    const denyCandidates = denyProbe ? [denyProbe] : autoDenyProbes(forbidden);
+    let denied = false;
+    let lastDeny = null;
+    for (const name of denyCandidates) {
+      lastDeny = runHook(command, name, { flag, env });
+      if (rig.denied(lastDeny)) { denied = true; break; }
+    }
+    if (!denied) return `${tag}照清單該擋的假名沒有一個被${rig.deniedAs}（試了 ${denyCandidates.length} 個${lastDeny ? `；最後一次：${show(lastDeny)}` : ''}）——攔截器被改成什麼都放、或清單沒有有效規則`;
+
+    const dupRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-copy-selftest-'));
+    try {
+      const dup = rig.copyDirIn(dupRoot);
+      for (const rel of COPY_FILES) {
+        fs.mkdirSync(path.dirname(path.join(dup, rel)), { recursive: true });
+        fs.copyFileSync(path.join(from, rel), path.join(dup, rel));
+        fs.chmodSync(path.join(dup, rel), 0o644);
+      }
+      fs.appendFileSync(path.join(dup, 'settings.json'), ' ');
+      const aimed = rig.aim(dupRoot);
+      const tampered = runHook(aimed.command, allowName, { flag, env: aimed.env });
+      if (tampered.status !== 2 || !/指紋對不上/u.test(tampered.stderr)) return `${tag}指紋檢查沒有作用：改過一個位元組的副本沒有被擋（${show(tampered)}）`;
+    } finally {
+      fs.rmSync(dupRoot, { recursive: true, force: true });   // 只刪自己剛建的試跑副本
+    }
   }
   return null;
 }
@@ -231,19 +273,27 @@ function autoDenyProbes(forbidden) {
   ].filter((n) => typeof n === 'string' && PROBE_NAME.test(n));
 }
 
-function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = true, denyProbe = null }) {
+function checkDenyProbe(denyProbe) {
   if (denyProbe !== null && (typeof denyProbe !== 'string' || !PROBE_NAME.test(denyProbe))) {
     throw new Refusal('--deny-probe 要是合法的假工具名（mcp__ 開頭、只用英數與 _ . -）：不合法的名字攔截器本來就擋，證明不了清單');
   }
-  const copyDir = checkTarget(to, { home, allowTemp });
-  const { commit, files, template, tracking } = extract(from, root);
-  const forbiddenBlock = JSON.parse(files.get('settings.json').toString('utf8')).forbidden;
+}
+
+/** 試跑要有「照清單該擋」的名字可以用：只靠樣式規則的清單產不出來，沒給 --deny-probe 就拒絕（此時什麼都還沒寫）。 */
+function requireDenySource(f, { runSelfTest, denyProbe }) {
   // 只看「清單有沒有這幾種欄位」，不看合不合文法：壞掉的清單要走到試跑，由「無害名字也被擋、設定壞掉」那一句露出來
-  const f = forbiddenBlock;
   const hasAutoSource = (Array.isArray(f.servers) && f.servers.length) || (Array.isArray(f.verbs) && f.verbs[0] && Array.isArray(f.nouns) && f.nouns[0]) || (Array.isArray(f.deny) && f.deny.length);
   if (runSelfTest && !denyProbe && !hasAutoSource) {
     throw new Refusal('這份清單只靠樣式規則（沒有連接器、動詞＋名詞、逐字拒絕清單），工具自己想不出該擋的試跑名字：用 --deny-probe 給一個照清單該擋的假工具名（只當字串餵給攔截器）');
   }
+}
+
+function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = true, denyProbe = null }) {
+  checkDenyProbe(denyProbe);
+  const copyDir = checkTarget(to, { home, allowTemp });
+  const { commit, files, template, tracking } = extract(from, root);
+  const forbiddenBlock = JSON.parse(files.get('settings.json').toString('utf8')).forbidden;
+  requireDenySource(forbiddenBlock, { runSelfTest, denyProbe });
   hookGroup({ copyDir, fp: '0'.repeat(64) }, template);   // 先驗範本，範本壞了就什麼都不寫
   fs.mkdirSync(copyDir, { recursive: true });
   for (const rel of COPY_FILES) {
@@ -256,21 +306,32 @@ function build({ from, to, root = ROOT, home, allowTemp = false, runSelfTest = t
   return { commit, tracking, copyDir, fp, group, failure };
 }
 
+const USAGE = [
+  '用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄> [--deny-probe <照清單該擋的假工具名>]',
+  '',
+].join('\n');
+
+/** 回 { mode, from, to, denyProbe }；不合用法＝null。每個旗標最多一次；帶值的旗標後面一定要有值。 */
 function parseArgs(argv) {
+  const takesValue = { '--from': 'from', '--to': 'to', '--deny-probe': 'denyProbe' };
+  const bare = {};
   const out = {};
-  for (let i = 0; i < argv.length; i += 2) {
-    const [k, v] = [argv[i], argv[i + 1]];
-    const key = { '--from': 'from', '--to': 'to', '--deny-probe': 'denyProbe' }[k];
-    if (!key || v === undefined || out[key] !== undefined) return null;
-    out[key] = v;
+  for (let i = 0; i < argv.length; i += 1) {
+    const k = argv[i];
+    const key = takesValue[k] || bare[k];
+    if (!key || out[key] !== undefined) return null;
+    if (bare[k]) { out[key] = true; continue; }
+    i += 1;
+    if (argv[i] === undefined) return null;
+    out[key] = argv[i];
   }
-  return out.from && out.to ? out : null;
+  return out.from && out.to ? { mode: 'codex', from: out.from, to: out.to, denyProbe: out.denyProbe } : null;
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
   const args = parseArgs(argv);
   if (!args) {
-    process.stderr.write('用法：node tools/guard-copy.js --from <已合併進主幹的版本> --to <絕對路徑的空目錄> [--deny-probe <照清單該擋的假工具名>]\n');
+    process.stderr.write(USAGE);
     return 2;
   }
   let r;
@@ -294,4 +355,4 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal };
+module.exports = { COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal, parseArgs };
