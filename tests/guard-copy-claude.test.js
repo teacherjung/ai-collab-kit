@@ -5,7 +5,8 @@
 // 釘指紋那一行只寫指紋，判斷改讀倉庫外、內容定址的固定複本 $HOME/.local/share/ai-collab-kit/guard/<指紋>：
 // 樹裡的清單怎麼改都沒有用；這台機器沒有那一行要的那一份複本＝全擋（看得見）。
 //
-// 守得到的（每一題都真的用 /bin/sh 跑印出來的指令，HOME 一律指到暫存的假家目錄）：
+// 守得到的（跑那一行的題都用 /bin/sh 跑印出來的指令——⑪另有一發用 /bin/bash；HOME 都指到暫存的假家目錄，只有⑤一發刻意不設 HOME、只跑 -c；
+// ⑨只測參數入口、不跑 sh）：
 //   ①範本的形狀：PreToolUse 剛好一組（matcher ^mcp__、一條指令）、{files} 與 {fingerprint} 各剛好一個、沒有 {copyDir}、
 //     不含任何機器路徑、shasum 與 find 每一次出現都包在清空的環境裡、指紋比對用 case（不用 [ 或 test）；
 //     ConfigChange 剛好一組、matcher 逐字＝project_settings、指令逐字＝exit 2（跑起來退 2、兩個輸出都空的）；範本原樣（佔位沒換）＝退 2；
@@ -29,9 +30,13 @@
 //   ⑦量到的兩個環境變數進不來：NODE_OPTIONS；PERL5OPT 偽造 shasum 的輸出（對照組：拿掉 shasum 外面那層清空環境，被改弱的複本真的過得了指紋檢查而放行）；
 //   ⑧--retire：只刪名字是 64 碼、自洽的目錄（唯讀的也刪得掉）；短名字（Codex 全域層那種）、路徑片段、不自洽、名字是連結、不存在＝拒絕、什麼都沒動；
 //   ⑨參數入口：四種用法不能混用；
-//   ⑩函式換不掉的兩處：匯入名為 [、case 的函式，指紋比對照樣擋（對照組：寫成 [ … ] 時被改弱的複本真的放行）；匯入名為 exit 的函式，設定變更攔截照樣退 2；
-//   ⑪**照實的對照（斷言放行）**：SHELLOPTS=noexec、匯入名為 cd 或 echo 的函式、PATH 前面放一支假 node＝那一行放行、設定變更攔截那一條退 0——
-//     「鉤子的環境被塞變數這一類在那一行裡關不完」這句話靠它撐著；哪天變成擋得住，這題紅、提醒改文件。
+//   ⑩在 /bin/sh（POSIX 模式）下函式換不掉的兩處：匯入名為 [ 的函式，指紋比對（case）照樣擋（對照組：寫成 [ … ] 時被改弱的複本真的放行）；
+//     匯入名為 exit 的函式，設定變更攔截照樣退 2（特殊內建）。case 是保留字：bash 匯入不了名為 case 的函式，所以不當一發斷言；
+//   ⑪**照實的對照（斷言放行）**：SHELLOPTS=noexec、匯入名為 cd 或 echo 的函式、PATH 前面放一支假 node＝那一行放行、設定變更攔截那一條退 0；
+//     /bin/bash（非 POSIX 模式）匯入名為 exit 的函式＝設定變更攔截那一條退 0（對照：/bin/bash --posix 退 2）——
+//     「這一類擋不住（設定變更攔截那一條一樣）」「exit 換不掉只在 POSIX 模式成立」這兩句靠它撐著。
+//     會讓它紅的只有跑考卷這台機器的 /bin/sh 或 /bin/bash 行為變了；平台那一側（起鉤子時清不清環境、用哪一種 shell 起、
+//     會不會把設定檔的 env 傳進來）這題看不到；/bin/sh 不是 bash 時 SHELLOPTS 與匯入函式那幾段是跳過，沒有 /bin/bash 時那一發是跳過。
 //   ⑬改了清單卻沒重印那一行＝那一行照舊指紋找到舊複本、靜靜照舊清單判（放行、兩個輸出都空的）；同一刻唯一會紅的是等式題；
 //     對照組：那一行換了、這台機器還沒補＝全擋，補了＝照新清單擋。
 //   ⑫這個家的登入設定往標準輸出印字：從一開始就印＝落地前那一次 /bin/sh -lc ':' 就量到、什麼都沒寫、退 1；
@@ -42,12 +47,13 @@
 //   ⑭四個檔之一換成具名管道、或換成極大的檔（稀疏檔）：限時 5 秒內退 2（逾時算失敗：官方鉤子文件寫 PreToolUse 的指令鉤子逾時不擋）；
 //     對照組＝修正前的寫法（find 有輸出照樣算指紋、沒有大小上限）2 秒內結束不了；超過上限、指紋是對的那一份：照樣退 2、copyProblem 也不收
 //     （對照組＝拿掉大小上限的寫法照用）。
-//   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
+//   ⑩⑪匯入函式與 SHELLOPTS 那幾段只在 /bin/sh 是 bash 的機器跑，不是就跳過並寫明（⑪的 /bin/bash 那一發只看有沒有 /bin/bash）；⑦的 PERL5OPT 那一段只在 /usr/bin/shasum 是 perl 腳本時跑；
 //   ⑫只在這台機器的登入 shell 真的讀假家的 .profile 時跑（先用對照組驗），不是就跳過並寫明；「撤不掉」那一段以 root 跑時不跑（改權限擋不住 root）。
 //   ⑤的 CDPATH 對照組：/bin/sh 不是 bash、而且 cd 用 CDPATH 時沒印字的機器上不跑（留一句診斷；正面那一發照跑）。
 // ⚠️ 守不到的：真的 Claude 對話有沒有載入那兩組；ConfigChange 在平台上擋不擋——這裡只證明那一條指令退 2；平台的行為 2026-09-18 在
 //   2.1.275 量過一次、只量了專案設定檔這個來源；之後沒有任何例行動作重量它（測試鈕只走 PreToolUse 那一行）；
-//   鉤子的環境被塞變數這一類（⑪）；這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
+//   鉤子的環境被塞變數這一類（⑪；設定變更攔截那一條一樣擋不住）；平台實際用哪一種 shell 起鉤子（量到 /bin/sh、官方文件寫預設 bash）；
+//   這台機器真的家目錄裡有沒有複本（考題一律用假家目錄）；
 //   node 本身；檢查與執行之間的極短空檔；複本不是鎖（誰都造得出自洽的一份）；Windows（指令是 sh）。
 //   ⚠️ 突變指引：動到那四個檔的突變會先死在指紋檢查（紅的原因不對）——矩陣類的突變要照「改→重新落地→再跑」的順序做。
 'use strict';
@@ -102,7 +108,7 @@ const swap = (command, from, to) => {
 /** /bin/sh 是不是 bash：匯入函式（BASH_FUNC_名字%%）、SHELLOPTS 這兩招是 bash 的，別的 sh 上那幾段跳過並寫明。 */
 const shIsBash = () => spawnSync('/bin/sh', ['-c', 'printf %s "${BASH_VERSION-}"'], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout !== '';
 
-test('前提：這台機器有 /bin/sh、/usr/bin/env、/usr/bin/find、/usr/bin/shasum（少一支，釘指紋那一行在這台機器上一律退 2）', () => {
+test('前提：這台機器有 /bin/sh、/usr/bin/env、/usr/bin/find、/usr/bin/shasum（少一支，釘指紋那一行在這台機器上退 2）', () => {
   for (const p of ['/bin/sh', '/usr/bin/env', '/usr/bin/find', SHASUM]) assert.ok(fs.existsSync(p), `沒有 ${p}`);
 });
 
@@ -139,14 +145,14 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
   assert.equal(change.length, 1);
   assert.equal(CONFIG_CHANGE_MATCHER, 'project_settings', '只量過這一個來源');
   assert.deepEqual([change[0].matcher, change[0].hooks.length, change[0].hooks[0].type], [CONFIG_CHANGE_MATCHER, 1, 'command'], 'matcher 逐字＝project_settings（local_settings 沒量，刻意不掛）');
-  // 只剩 exit 2：擋下時訊息沒有人收得到（量到＋官方文件），而 exit 是特殊內建、匯入的函式換不掉（⑩真的跑）
+  // 只剩 exit 2：擋下時訊息沒有人收得到（量到＋官方文件），而在 /bin/sh（POSIX 模式）下 exit 是特殊內建、匯入的函式換不掉（⑩真的跑；非 POSIX 模式的 bash 換得掉：⑪）
   assert.equal(change[0].hooks[0].command, 'exit 2', '設定變更攔截那一條只有 exit 2');
   const home = fakeHome(scratch);
   for (const flag of ['-c', '-lc']) {
     const r = spawnSync('/bin/sh', [flag, change[0].hooks[0].command], { cwd: scratch, env: { ...base, HOME: home }, input: '{}', encoding: 'utf8' });
     assert.deepEqual([r.status, r.stdout, r.stderr], [2, '', ''], `${flag}：設定變更攔截那一條要退 2、兩個輸出都空的`);
   }
-  // 指紋比對用 case、不用 [ … ]（匯入的函式換得掉 [，換不掉 case：⑩真的跑）
+  // 指紋比對用 case、不用 [ … ]（匯入的函式換得掉 [；case 是保留字、不是指令：⑩真的跑匯入名為 [ 的函式）
   assert.match(cmd, /case "\$guard_seen" in "\|\$fp {2}-"\) ;;/u, '指紋比對用 case');
   assert.doesNotMatch(cmd, /(^|[\s;&|(])(\[|test)\s/u, '那一行不可以用 [ 或 test（函式換得掉）');
   // 填好的那一行也不含機器路徑：家目錄、暫存目錄、這份套件在哪裡，一個都不可以出現
@@ -415,7 +421,7 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
     t.diagnostic('這台機器的 /bin/sh 不是 bash、用 CDPATH 找到目錄時也沒往標準輸出印字：CDPATH 的對照組做不出來，只跑了正面那一發');
   }
 
-  // 複本裡多一個檔（跟 --claude 認「自洽」同一個判準）：一律退 2
+  // 複本裡多一個檔（跟 --claude 認「自洽」同一個判準）：退 2
   const ODD_CHECK = oddCheckOf(cmd);
   const extra = path.join(copyDir, 'extra.txt');
   fs.writeFileSync(extra, 'x');
@@ -427,7 +433,7 @@ test('⑤那一行真的跑一遍：擋、放、改一個位元組、少檔、�
   blocks(hook(cmd, { home }), MISMATCH, '複本裡多一個空目錄');
   fs.rmdirSync(path.join(copyDir, 'tools', 'sub'));
   allows(hook(cmd, { home }), '對照組：拿掉就恢復');
-  // tools 底下多一個一般檔（名字不是那三個）：一律退 2。對照組＝tools 底下不限檔名的寫法，照用
+  // tools 底下多一個一般檔（名字不是那三個）：退 2。對照組＝tools 底下不限檔名的寫法，照用
   const toolsExtra = path.join(copyDir, 'tools', 'extra.js');
   fs.writeFileSync(toolsExtra, 'x');
   blocks(hook(cmd, { home }), MISMATCH, 'tools 底下多一個一般檔');
@@ -643,7 +649,7 @@ test('⑨參數入口：四種用法不能混用；舊的 --from／--to 照舊',
   });
 });
 
-test('⑩函式換不掉的兩處：指紋比對用 case、設定變更攔截只剩 exit 2——匯入名為 [、case、exit 的函式照樣擋（對照組：比對寫成 [ … ] 時，被改弱的複本真的放行）', (t) => withScratch((scratch) => {
+test('⑩在 /bin/sh（POSIX 模式）下函式換不掉的兩處：指紋比對用 case——匯入名為 [ 的函式照樣擋（對照組：比對寫成 [ … ] 時，被改弱的複本真的放行）；設定變更攔截只剩 exit 2——匯入名為 exit 的函式照樣退 2', (t) => withScratch((scratch) => {
   if (!shIsBash()) { t.skip('這台機器的 /bin/sh 不是 bash：匯入函式（BASH_FUNC_名字%%）是 bash 的做法，這一題的現象做不出來'); return; }
   const { home, fp, copyDir, cmd } = landed(scratch);
   // 把複本的清單改弱（目錄名不變）：指紋對不上，照理退 2
@@ -657,7 +663,7 @@ test('⑩函式換不掉的兩處：指紋比對用 case、設定變更攔截只
   const oldCompare = swap(swap(cmd, 'case "$guard_seen" in "|$fp  -") ;; *) echo', '[ "$guard_seen" = "|$fp  -" ] || { echo'), "' >&2; exit 2;; esac;", "' >&2; exit 2; };");
   blocks(hook(oldCompare, { home, tool: DENIED }), MISMATCH, '對照組的前提：[ … ] 的寫法在乾淨的環境裡也擋');
   allows(hook(oldCompare, { home, tool: DENIED, env: bracket }), '對照組：匯入名為 [ 的函式，[ … ] 的寫法真的把被改弱的複本放行');
-  blocks(hook(cmd, { home, tool: DENIED, env: { 'BASH_FUNC_case%%': '() { return 0; }' } }), MISMATCH, '匯入名為 case 的函式（保留字）：照樣擋');
+  // case 是保留字：bash 匯入不了名為 case 的函式（匯入時就報錯、case 照常），那一行怎麼改那一發都是綠的，所以不當斷言
 
   const change = template().hooks.ConfigChange[0].hooks[0].command;
   const runChange = (cmdText, env) => spawnSync('/bin/sh', ['-c', cmdText], { env: { ...base, HOME: home, ...env }, input: '{}', encoding: 'utf8' });
@@ -665,13 +671,22 @@ test('⑩函式換不掉的兩處：指紋比對用 case、設定變更攔截只
   assert.equal(runChange(change, { 'BASH_FUNC_exit%%': '() { return 0; }' }).status, 2, '匯入名為 exit 的函式：設定變更攔截那一條照樣退 2（特殊內建）');
 }));
 
-test('⑪照實的對照（守不到的）：SHELLOPTS=noexec、匯入的 shell 函式（cd、echo）、PATH 前面放一支假 node＝那一行放行——這一題斷言「放行」，是為了讓文件那句「這一類在那一行裡關不完」有考題撐著；平台或 shell 改版後變成擋得住，這題會紅，提醒改文件', (t) => withScratch((scratch) => {
+test('⑪照實的對照（守不到的）：SHELLOPTS=noexec、匯入的 shell 函式（cd、echo）、PATH 前面放一支假 node＝那一行放行，設定變更攔截那一條在 SHELLOPTS=noexec 下、以及 /bin/bash（非 POSIX 模式）匯入名為 exit 的函式時退 0——斷言「放行」是為了讓文件那幾句有考題撐著；跑考卷這台機器的 /bin/sh 或 /bin/bash 行為變了才會紅，平台那一側（起鉤子時清不清環境、用哪一種 shell 起、會不會把設定檔的 env 傳進來）這題看不到；/bin/sh 不是 bash 時那幾段是跳過', (t) => withScratch((scratch) => {
   const { home, cmd } = landed(scratch);
   // PATH：指紋蓋不到 PATH 找到哪一支 node（不靠 bash）
   const fakeBin = fs.mkdtempSync(path.join(scratch, 'fakebin-'));
   fs.writeFileSync(path.join(fakeBin, 'node'), '#!/bin/sh\ncat >/dev/null\nexit 0\n', { mode: 0o755 });
   denies(hook(cmd, { home, tool: DENIED }), '前提：乾淨的環境照清單擋');
   allows(hook(cmd, { home, tool: DENIED, env: { PATH: `${fakeBin}:${base.PATH}` } }), 'PATH 前面放一支假 node：指紋對、跑的是假 node＝放行（守不到）');
+  // /bin/bash（非 POSIX 模式）：匯入名為 exit 的函式換得掉 exit——設定變更攔截那一條退 0。只看有沒有 /bin/bash，不靠 /bin/sh 是不是 bash
+  const change = template().hooks.ConfigChange[0].hooks[0].command;
+  if (fs.existsSync('/bin/bash')) {
+    const bashRun = (args) => spawnSync('/bin/bash', [...args, change], { env: { ...base, HOME: home, 'BASH_FUNC_exit%%': '() { return 0; }' }, input: '{}', encoding: 'utf8' }).status;
+    assert.equal(bashRun(['--posix', '-c']), 2, '對照組：同一個環境、/bin/bash --posix（POSIX 模式）＝照樣退 2');
+    assert.equal(bashRun(['-c']), 0, '/bin/bash -c（非 POSIX 模式）：匯入名為 exit 的函式換掉 exit＝設定變更攔截那一條退 0（守不到）');
+  } else {
+    t.diagnostic('這台機器沒有 /bin/bash：非 POSIX 模式 bash 那一發跳過');
+  }
   if (!shIsBash()) { t.skip('這台機器的 /bin/sh 不是 bash：SHELLOPTS 與匯入函式那幾段做不出來（PATH 那一段照跑了）'); return; }
 
   const empty = fakeHome(scratch);   // 沒有複本的家：乾淨的環境全擋
@@ -682,7 +697,6 @@ test('⑪照實的對照（守不到的）：SHELLOPTS=noexec、匯入的 shell 
       allows(hook(cmd, { home: empty, flag, tool: DENIED, env: { [`BASH_FUNC_${fn}%%`]: '() { exit 0; }' } }), `${flag}：匯入名為 ${fn} 的函式（換成 exit 0）＝退 0（守不到）`);
     }
   }
-  const change = template().hooks.ConfigChange[0].hooks[0].command;
   const runChange = (env) => spawnSync('/bin/sh', ['-c', change], { env: { ...base, HOME: empty, ...env }, input: '{}', encoding: 'utf8' }).status;
   assert.equal(runChange({}), 2, '前提：設定變更攔截那一條在乾淨的環境裡退 2');
   assert.equal(runChange({ SHELLOPTS: 'noexec' }), 0, '設定變更攔截那一條：SHELLOPTS=noexec 一樣退 0（守不到）');
