@@ -386,6 +386,8 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
       assert.equal(rn.code, 2, `${why}、主目錄的 .git 壞了：${rn.lines.join('\n')}`);
       assert.match(rn.lines[0], /git 打不開/u);
       if (!ceilingHolds) assert.match(rn.lines[0], /在主目錄問到的是另一個倉庫（'.+'）/u, rn.lines[0]);
+      if (!ceilingHolds) assert.match(rn.lines[1], /多半不是設定：主目錄自己那份 \.git 壞了/u, `問到另一個倉庫時照實說成因多半不是設定：${rn.lines.join('\n')}`);
+      if (!ceilingHolds) assert.doesNotMatch(rn.lines.join('\n'), /原因多半在共用設定檔/u, '不說原因多半在共用設定檔');
       fs.renameSync(`${mainHead}.moved`, mainHead);
       assert.equal(runChecks({ settings: reg, cwd: nested.wt }).code, 0, `還原之後＝0（${why}）`);
     }
@@ -412,6 +414,7 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
     const rb = runChecks({ settings: reg, cwd: boWt });
     assert.equal(rb.code, 2, rb.lines.join('\n'));
     assert.match(rb.lines[0], /git 打不開（在主目錄問到的是另一個倉庫（'.+'））/u, rb.lines[0]);
+    assert.match(rb.lines[1], /多半不是設定：主目錄自己那份 \.git 壞了/u, rb.lines.join('\n'));
     assert.doesNotMatch(rb.lines.join('\n'), /判成裸倉庫|core\.bare/u, `不說主目錄被判成裸倉庫、不給 core.bare 的還原：${rb.lines.join('\n')}`);
     // 只給自查、而且查的是這個倉庫自己的共用設定檔（不是上層那個裸儲存庫的）
     const boFiles = commandLines(rb).map((l) => (l.match(/^git config --file '(.+)' --show-origin --list$/u) || [])[1]);

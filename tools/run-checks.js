@@ -145,7 +145,7 @@ function mainProblem(git) {
   const seen = pathOut(who);
   const same = samePath(seen, common);
   if (same === null) return { ...unreadable(`在主目錄問到的共用目錄 ${shq(seen)} 或這棵樹的共用目錄讀不到`), unknown: true };
-  if (!same) return unreadable(`在主目錄問到的是另一個倉庫（${shq(seen)}）`);
+  if (!same) return { ...unreadable(`在主目錄問到的是另一個倉庫（${shq(seen)}）`), other: true };
   const bare = ask('rev-parse', '--is-bare-repository');
   if (bare.error || bare.status !== 0) return failed(bare);
   if (bare.stdout.trim() !== 'false') return { state: 'main-bare', main, common, origins: bareOrigins(main) };
@@ -387,8 +387,8 @@ const AFTER = {
 
 /**
  * 把 treeState 的結果寫成給人看的幾行；before＝三關前（退 2），否則是三關後（退 1），prior＝三關前那一次的結果。
- * 三關後、跑之前是好的那幾種新訊息（主目錄兩種、錨點、HEAD 解析不到）都說「多半是某一題、也可能是同一段時間別的工作階段」：
- *   兩者從這裡分不出來。跑之前錨點沒驗、三關後才驗到的那一種不說（它用三關前那一套判斷）；既有的 AFTER 兩句不動。
+ * 三關後、跑之前是好的那幾種新訊息（主目錄判成裸、主目錄打不開、錨點、HEAD 解析不到）都說「多半是某一題、也可能是同一段時間別的工作階段」：
+ *   兩者從這裡分不出來。主目錄「問不到是不是這個倉庫」那一句不這樣說（它沒量到壞，只是驗不到）。跑之前錨點沒驗、三關後才驗到的那一種不說（它用三關前那一套判斷）；既有的 AFTER 兩句不動。
  */
 function explain(st, before, prior) {
   const main = st.main && shq(st.main);
@@ -403,18 +403,23 @@ function explain(st, before, prior) {
   if (st.state === 'main-unreadable') {
     let head = before
       ? `主目錄 ${main} 的 git 打不開（${st.err}）：從這棵連結工作樹看一切正常，主目錄那邊的 git 指令卻會失敗。專案設定登記了主目錄是一般工作樹（checks.mainWorktree），不放行。`
-      : `三關跑完之後，主目錄 ${main} 的 git 打不開（${st.err}）（跑之前是好的）：有一題改了主目錄讀的設定${orOther}。先看設定檔、還原，再查是哪一題。`;
+      : `三關跑完之後，主目錄 ${main} 的 git 打不開（${st.err}）（跑之前是好的）：有一題動了主目錄的 .git 或它讀的設定${orOther}。先看、還原，再查是哪一題。`;
     // 身分比對讀不到（stat 失敗）：沒量到打不開，只是驗不到——照實說問不到，一樣不放行
     if (st.unknown) head = `${before ? '' : '三關跑完之後，'}主目錄 ${main} 問不到是不是這個倉庫（${st.err}）${before ? '' : '（跑之前是好的）'}：專案設定登記了主目錄是一般工作樹（checks.mainWorktree），驗不到就不放行。`;
     // 成因不只一種（core.bare、core.worktree、include…），精準的還原要自己解讀設定檔：這裡只給自查。
     // 主目錄自己的 config.worktree 存在才給那一行（檔不存在時 git config --file 會退非零，照貼就斷）
     const own = path.join(st.common, 'config.worktree');
     const hasOwn = isFile(own);
+    // 問到的是另一個倉庫＝主目錄自己那份 .git 沒被 Git 認出來（例如 HEAD 不見），多半不是設定：照實先說這一句
+    const cause = st.other
+      ? ['  這一種多半不是設定：主目錄自己那份 .git 壞了（例如 HEAD 不見），Git 才改去開了別的倉庫。先看主目錄的 .git 底下的檔還完不完整；設定檔也站在倉庫外面讀得到，一起看：']
+      : [];
     return [
       head,
-      hasOwn
+      ...cause,
+      ...(st.other ? [] : [hasOwn
         ? '  原因多半在共用設定檔或主目錄自己的 config.worktree；兩個都站在倉庫外面讀得到，先看它們：'
-        : '  原因多半在共用設定檔；站在倉庫外面也讀得到，先看它：',
+        : '  原因多半在共用設定檔；站在倉庫外面也讀得到，先看它：']),
       `git config --file ${shq(path.join(st.common, 'config'))} --show-origin --list`,
       ...(hasOwn ? [`git config --file ${shq(own)} --show-origin --list`] : []),
     ];
