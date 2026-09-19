@@ -50,8 +50,13 @@ const pathOut = (r) => String((r && r.stdout) || '').replace(/\n$/u, '');
 const short = (sha) => String(sha).slice(0, 12);
 const isDir = (p) => { try { return p !== '' && fs.statSync(p).isDirectory(); } catch { return false; } };
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
-/** 站在主目錄問 Git 的環境：清 GIT_ 之後，再禁止往主目錄的上層找倉庫（見 mainProblem）。 */
+/**
+ * 站在主目錄問 Git 的環境：清 GIT_ 之後，再請 Git 不要往主目錄的上層找倉庫。這只是第一道（見 mainProblem）：
+ * GIT_CEILING_DIRECTORIES 是冒號分隔的清單，主目錄的上層路徑含冒號時它就不代表那個目錄、擋不住；判準是身分比對。
+ */
 const mainEnv = (main) => ({ ...gitEnv(), GIT_CEILING_DIRECTORIES: path.dirname(main) });
+/** 兩個路徑解開符號連結後是不是同一個（有一邊解不開＝不算同一個）。 */
+const samePath = (a, b) => { try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return false; } };
 const firstLine = (s) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || '沒有訊息';
 /** 設定值寫進訊息：JSON 字面，再把 JSON 不跳脫的 DEL 與分行符號也寫成 \\uXXXX（訊息要維持一行）。 */
 const show = (v) => String(JSON.stringify(v)).replace(/[\u007f\u0085\u2028\u2029]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -97,15 +102,21 @@ function treeOptions(checks) {
  * 否則回 { state: 'main-bare'|'main-unreadable', … }。
  * 為什麼要問：原專案 08-09 事故的形狀之一——共用設定被寫進 core.bare=true，這棵連結工作樹自己的設定蓋住了、
  *   從這裡看一切正常，主目錄那邊卻 git status／add／commit 全部 fatal。這棵樹的生效值看不出來，只能去主目錄問 Git。
- * 射程（整句照實）：**共用目錄叫 .git 才問；只問「主目錄裸不裸」「Git 給不給得出主目錄的工作樹根、那個根是不是存在的目錄」**。
+ * 射程（整句照實）：**共用目錄叫 .git 才問；只問「主目錄裸不裸」「在主目錄問到的是不是這個倉庫」
+ *   「Git 給不給得出主目錄的工作樹根、那個根是不是存在的目錄」**。
  *   不驗：共用目錄不叫 .git 的布局（store.git 這種裸儲存庫、--separate-git-dir、子模組的 .git/modules/<名>）——
  *   主目錄在哪 Git 說不出來；其中 --separate-git-dir 的主目錄被寫壞是真的壞，這裡看不到（全綠那一行會說這次沒驗）。
  *   主目錄的工作樹根被指到「存在的別處」：跟合法地用 core.worktree 搬家分不開。別棵連結樹。
  *   登記是整個專案共用一個值：有一份複本用「proj/.git 是裸儲存庫＋連結樹」的布局，那一份會被擋（看得見，考題釘著）。
  * 布林、include、擴充何時生效、最後一筆，全部交給 Git 開主目錄時自己判（問的子行程站在主目錄、一樣清 GIT_）；
  *   這裡不讀任何設定檔（搬家前準備 r2〜r3 直讀設定連兩輪誤擋的教訓，見 treeState）。
- *   問的子行程不准往主目錄的上層找倉庫（GIT_CEILING_DIRECTORIES）：主目錄自己那份 .git 壞了、上層又剛好是別的倉庫時，
- *   Git 會改去開上層那個、回報一切正常。
+ * 問到的必須是這個倉庫：主目錄自己那份 .git 壞了（例如 HEAD 不見）、上層又剛好是別的倉庫時，Git 會改去開上層那個、回報一切正常。
+ *   第一道＝GIT_CEILING_DIRECTORIES（不准往主目錄的上層找；上層路徑不含冒號時，Git 在主目錄直接退非零＝打不開）。
+ *   判準＝身分比對：站在主目錄問到的共用目錄，兩邊都解開符號連結之後，要等於這棵樹的共用目錄；不等於＝打不開。
+ *   上層路徑含冒號時第一道失效（那個變數是冒號分隔的清單），由身分比對接住（考題兩種路徑成對釘著）。
+ *   身分比對放在「裸不裸」那一問之後、問工作樹根之前：確認問到的是這個倉庫，工作樹根那一問的答案與錯誤訊息才是在講這個倉庫。
+ *   （git 2.39.5 量過：主目錄的 core.worktree 指到「只有最後一層不存在」或一個檔案時，裸不裸那一問成功、身分那一問也成功，
+ *   回的是主目錄自己那份 .git——這兩種照舊由工作樹根那一問擋、訊息不變。）
  */
 function mainProblem(git) {
   const d = git('rev-parse', '--path-format=absolute', '--git-common-dir');
@@ -117,6 +128,10 @@ function mainProblem(git) {
   const bare = ask('rev-parse', '--is-bare-repository');
   if (bare.error || bare.status !== 0) return { state: 'main-unreadable', main, common, err: firstLine(bare.error ? bare.error.message : bare.stderr) };
   if (bare.stdout.trim() !== 'false') return { state: 'main-bare', main, common, origins: bareOrigins(main) };
+  const who = ask('rev-parse', '--path-format=absolute', '--git-common-dir');
+  if (who.error || who.status !== 0) return { state: 'main-unreadable', main, common, err: firstLine(who.error ? who.error.message : who.stderr) };
+  const seen = pathOut(who);
+  if (!samePath(seen, common)) return { state: 'main-unreadable', main, common, err: `在主目錄問到的是另一個倉庫（${shq(seen)}）` };
   const top = ask('rev-parse', '--show-toplevel');
   const root = pathOut(top);
   // 退非零時輸出是空的、isDir('') 也是 false，所以一句就夠；給得出而且是存在的目錄＝不管它在哪（合法搬家分不開）。
@@ -156,8 +171,8 @@ function bareOrigins(main) {
  *   照原樣印（不加引號、不跳脫）。
  * 刻意不做：比對三關前後的索引（會誤擋同一棵樹上別的工作階段 git add）；驗索引檔尾巴的檢查碼或 fsck
  *   （普通的 git status 會把壞掉的檢查碼重算、把損毀封進去）。
- * 還原要看最新提交裡它是什麼：是檔案（blob）＝整份換回最新提交；是目錄（tree）＝錨點填錯了（要填檔案），
- *   重建索引也不會好，不給指令；沒有＝登記跟專案對不上，不給指令。
+ * 還原要看最新提交裡它是什麼：是檔案（blob）＝整份換回最新提交；是目錄（tree）或沒有＝重建索引也不會好，不給指令
+ *   （三關前＝錨點填錯了或登記跟專案對不上；三關後、跑之前驗過都在＝它是只暫存、還沒提交的檔，見 anchorRestoreLines）。
  */
 function anchorProblem(git, anchors, cwd, tree, indexEmpty) {
   const r = spawnSync('git', ['--literal-pathspecs', 'ls-files', '-z', '--', ...anchors], { cwd, encoding: 'utf8', env: gitEnv(), maxBuffer: ANCHOR_MAX_BUFFER });
@@ -295,8 +310,11 @@ function bareRestoreLines(st, before) {
 
 /**
  * anchor-missing 的後半段。三關後 HEAD 被移動了＝先找回原本那一顆（只給看紀錄的指令、不給會丟提交的指令）；
- * 其餘看最新提交裡它是什麼：檔案＝整份換回最新提交；目錄或沒有＝不給指令。改登記那句只在三關前給
- * （三關後跑之前都在，改登記就是把登記改成配合被弄壞的樣子）。
+ * 其餘看最新提交裡它是什麼：檔案＝整份換回最新提交；目錄或沒有＝不給指令。
+ *   三關前：目錄＝錨點填錯了（要填檔案）、沒有＝登記跟專案對不上，兩種都說在同一支變更裡改登記。
+ *   三關後（跑之前驗過錨點、都在）：目錄或沒有都一樣＝跑之前它在索引裡，是只暫存、還沒提交的檔（例如 HEAD 裡的目錄被換成同名的檔），
+ *   有一題把它從索引拿掉了：叫人把它重新暫存回去，不叫人改登記（改登記就是把登記改成配合被弄壞的樣子）。
+ *   ⚠️ 跑之前 HEAD 解析不到（錨點那一次沒驗）、三關中途做了第一顆提交時，「跑之前都在」這個前提不成立，這裡分不出來、照樣這樣說。
  */
 function anchorRestoreLines(st, before, prior) {
   if (!before && prior && prior.head && st.head !== prior.head) {
@@ -313,7 +331,9 @@ function anchorRestoreLines(st, before, prior) {
       : `  最新提交裡本來就沒有：${notInHead.join('、')}（跑之前在索引裡＝只暫存、還沒提交）：有一題把它從索引拿掉了。不要改登記，把它重新暫存回去（git add）。`);
   }
   if (st.dirs.length) {
-    lines.push(`  在最新提交裡是目錄：${st.dirs.join('、')}。錨點要填檔案、不能填目錄（重建索引也不會好）：在同一支變更裡改 settings.json 的 checks.indexAnchors。`);
+    lines.push(before
+      ? `  在最新提交裡是目錄：${st.dirs.join('、')}。錨點要填檔案、不能填目錄（重建索引也不會好）：在同一支變更裡改 settings.json 的 checks.indexAnchors。`
+      : `  最新提交裡它是目錄：${st.dirs.join('、')}（跑之前索引裡是檔案＝只暫存、還沒提交）：有一題把它從索引拿掉了。不要改登記，把原本暫存的檔案重新暫存回去（git add）。`);
   }
   if (st.inHead.length) {
     // 三關前多半是人有意暫存的；三關後（跑之前都在）多半是某一題動的，也可能是同一段時間別的工作階段有意的暫存
