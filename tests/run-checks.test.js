@@ -8,14 +8,19 @@
 //   ⑨三關跑的過程中倉庫的共用設定或這棵樹自己的設定被改了＝1（就算從這棵樹看生效值健康；原專案 08-09 的形狀）；只讀＝0；
 //     有提交卻索引檔不見＝2、跑完才不見＝1；沒登記下面兩項時的正面控制：空索引、擴充關＋共用 core.bare=true＋連結樹
 //     （這個夾具的主目錄其實打不開，登記了就擋，見⑩）、真的裸儲存庫＋連結樹（含 r3 的三種擴充寫法）都＝0（搬家前準備）；
-//   ⑩登記了 checks.mainWorktree＝「一般工作樹」：從連結樹看健康、主目錄卻被判成裸倉庫或打不開＝跑之前 2、跑完才壞 1，
-//     訊息裡的還原指令從別的目錄照貼跑得動（路徑含空白、單引號、全形括號與中文）；沒登記照舊放行；帶著髒 GIT_DIR 照樣擋；
-//     合法布局（每棵樹都覆寫、從主目錄跑、store.git、--separate-git-dir、core.worktree 合法搬家）登記了也＝0；
+//   ⑩登記了 checks.mainWorktree＝「一般工作樹」：從連結樹看健康、主目錄卻被判成裸倉庫或打不開（含工作樹根指到檔案、
+//     主目錄自己的 config.worktree 寫壞、主目錄放在別的倉庫底下而自己那份 .git 壞了）＝跑之前 2、跑完才壞 1，
+//     訊息裡的還原或自查指令從別的目錄照貼跑得動（路徑含空白、單引號、全形括號與中文）；沒登記照舊放行；
+//     帶著髒 GIT_DIR 照樣擋、還原改的是這個倉庫的設定檔；合法布局（每棵樹都覆寫、從主目錄跑、core.worktree 合法搬家、
+//     資料夾名字結尾是空白）登記了也＝0，store.git、--separate-git-dir 登記了＝0 而且全綠那一行說這次沒驗；
 //     照實的代價：proj/.git 是裸儲存庫＋連結樹，登記了＝2；
 //   ⑪登記了 checks.indexAnchors：錨點不在這棵樹的索引裡（整份清空、少一筆、路徑位元組被改）＝跑之前 2、跑完才不見 1，
-//     還原照貼跑得動；問錨點那一次 git 失敗＝不放行（不當成都在）；沒登記照舊放行；稀疏索引、取消追蹤或改名非錨點、暫存修改錨點
-//     登記了也＝0；暫存刪除全部、已提交改名錨點照登記擋；
-//   ⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；三關後樹壞了、設定也變了＝兩段都印。
+//     還原照貼跑得動（稀疏 checkout 照貼之後樹是乾淨的）；錨點名字含 : 或 - 開頭、中文、雙引號；問錨點那一次 git 失敗＝不放行
+//     （不當成都在），帶著髒 GIT_DIR 照樣問對倉庫；沒登記照舊放行；取消追蹤或改名非錨點、暫存修改錨點登記了也＝0；
+//     暫存刪除全部、已提交改名錨點照登記擋；填了目錄＝2、不給指令；三關中途 HEAD 解析不到（switch --orphan 等）＝1、
+//     照貼切回去；三關中途提交了刪除錨點＝1、不叫人改登記；HEAD 解析不到（剛 init、在還沒有提交的分支上）＝0、全綠那一行說沒驗；
+//   ⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；三關後樹壞了、設定也變了＝兩段都印；
+//     三關後讀不到設定指紋＝說沒辦法比對、不說被改了。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查；
 //   兩個登記本身守不到的形狀（tools/run-checks.js 的 mainProblem、anchorProblem 註解與 MACHINES.md 的 E2、E3 那一列）。
 'use strict';
@@ -258,7 +263,7 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
   const root = fs.mkdtempSync(path.join(os.tmpdir(), ODD_PREFIX));
   const away = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-away-'));   // 照貼指令的「別的目錄」（不在任何倉庫裡）
   try {
-    const { g, status } = gitKit();
+    const { raw: rawGit, g, status } = gitKit();
     const loose = withKeys({});
     const reg = withKeys(MAIN_REG);
     const setShared = (p, ...a) => g(root, 'config', '--file', p.cfg, ...a);   // 站在倉庫外面改：主目錄打不開時也改得動
@@ -277,6 +282,7 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
       const r = runChecks({ settings: reg, cwd: p1.wt });
       assert.equal(r.code, 2, `登記了（${v}）：${r.lines.join('\n')}`);
       assert.match(r.lines[0], /被 Git 判成裸倉庫了/u);
+      assert.doesNotMatch(r.lines.join('\n'), /不是這個倉庫自己的設定檔/u, `對照組（${v}）：只有倉庫自己的設定檔一筆 true，不提醒 include`);
       assert.ok(commandLines(r).every((l) => RESTORE_BARE.test(l)), `給的是還原、不是自查（${v}）：${r.lines.join('\n')}`);
       assert.equal(paste(r, away).length, 1, `剛好一行還原（${v}）：${r.lines.join('\n')}`);
       assert.equal(status(p1.main), 0, `照貼還原之後主目錄打得開（${v}）`);
@@ -321,6 +327,69 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
       assert.ok(seen.includes(target), `自查那一行照貼跑得動、看得到成因（${why}）：${seen}`);
       setShared(p2, '--unset', 'core.worktree');
     }
+    // 共用 core.worktree 指到一個存在的「檔案」：主目錄照樣打不開（「在不在」要問成「是不是存在的目錄」）
+    const aFile = path.join(root, 'not-a-dir');
+    fs.writeFileSync(aFile, 'x\n');
+    setShared(p2, 'core.worktree', aFile);
+    assert.notEqual(status(p2.main), 0, '前提（指到檔案）：主目錄打不開');
+    assert.equal(status(p2.wt), 0, '前提（指到檔案）：連結樹照常');
+    assert.equal(runChecks({ settings: loose, cwd: p2.wt }).code, 0, '沒登記（指到檔案）＝照舊放行');
+    const rf = runChecks({ settings: reg, cwd: p2.wt });
+    assert.equal(rf.code, 2, `指到檔案：${rf.lines.join('\n')}`);
+    assert.match(rf.lines[0], /不存在或不是目錄/u);
+    assert.ok(paste(rf, away).join('').includes(aFile), rf.lines.join('\n'));
+    setShared(p2, '--unset', 'core.worktree');
+
+    // 成因在主目錄自己的 config.worktree（擴充開；使用專案就是這種）：多給一行自查，照貼看得到成因
+    const own = makePair(g, root, 'own', { ext: true });
+    const ownCfg = path.join(own.main, '.git', 'config.worktree');
+    const bad = `/nowhere-own-${process.pid}/zz`;
+    g(root, 'config', '--file', ownCfg, 'core.worktree', bad);
+    assert.notEqual(status(own.main), 0, '前提：主目錄打不開');
+    assert.equal(status(own.wt), 0, '前提：連結樹照常');
+    assert.equal(runChecks({ settings: loose, cwd: own.wt }).code, 0, '沒登記＝照舊放行');
+    const ro = runChecks({ settings: reg, cwd: own.wt });
+    assert.equal(ro.code, 2, ro.lines.join('\n'));
+    const seenOwn = paste(ro, away);
+    assert.equal(seenOwn.length, 2, `共用設定檔與主目錄自己的 config.worktree 各一行：${ro.lines.join('\n')}`);
+    assert.ok(seenOwn.join('').includes(bad), `照貼兩行自查、看得到成因：${seenOwn.join('')}`);
+    fs.rmSync(ownCfg);
+    assert.equal(runChecks({ settings: reg, cwd: own.wt }).code, 0, '拿掉之後＝0');
+
+    // 主目錄放在另一個倉庫底下、主目錄自己那份 .git 壞了（HEAD 不見）：問主目錄時不准往上層找，不然問到的是上層那個倉庫
+    const parent = path.join(root, 'nest');
+    fs.mkdirSync(parent);
+    g(parent, 'init', '-q');
+    const nested = makePair(g, parent, 'sub', { ext: true });
+    assert.equal(runChecks({ settings: reg, cwd: nested.wt }).code, 0, '對照組：巢狀、健康＝0');
+    const mainHead = path.join(nested.main, '.git', 'HEAD');
+    fs.renameSync(mainHead, `${mainHead}.moved`);
+    assert.equal(status(nested.wt), 0, '前提（巢狀）：連結樹照常');
+    assert.equal(fs.realpathSync(g(nested.main, 'rev-parse', '--show-toplevel')), fs.realpathSync(parent), '前提（巢狀）：在主目錄問 Git，問到的是上層那個倉庫');
+    assert.equal(runChecks({ settings: loose, cwd: nested.wt }).code, 0, '沒登記（巢狀）＝照舊放行');
+    const rn = runChecks({ settings: reg, cwd: nested.wt });
+    assert.equal(rn.code, 2, `巢狀、主目錄的 .git 壞了：${rn.lines.join('\n')}`);
+    assert.match(rn.lines[0], /git 打不開/u);
+    fs.renameSync(`${mainHead}.moved`, mainHead);
+    assert.equal(runChecks({ settings: reg, cwd: nested.wt }).code, 0, '還原之後＝0');
+
+    // 資料夾名字結尾是空白（主目錄與連結樹都是）：Git 印的路徑不可以整串 trim
+    const spaced = path.join(root, 'spaced');
+    const spMain = path.join(spaced, 'proj ');
+    const spWt = path.join(spaced, 'wt ');
+    fs.mkdirSync(spMain, { recursive: true });
+    g(spMain, 'init', '-q');
+    fs.writeFileSync(path.join(spMain, 'a.txt'), 'x\n');
+    g(spMain, 'add', '.');
+    g(spMain, 'commit', '-q', '-m', 'base');
+    g(spMain, 'worktree', 'add', '-q', '--detach', spWt);
+    assert.equal(status(spMain), 0, '前提：主目錄打得開');
+    assert.equal(status(spWt), 0, '前提：連結樹打得開');
+    assert.match(rawGit(spMain, 'rev-parse', '--show-toplevel').stdout, / \n$/u, '前提：Git 印的主目錄路徑結尾真的是空白');
+    assert.match(rawGit(spWt, 'rev-parse', '--show-toplevel').stdout, / \n$/u, '前提：Git 印的連結樹路徑結尾真的是空白');
+    const rs = runChecks({ settings: reg, cwd: spWt });
+    assert.equal(rs.code, 0, `結尾是空白的主目錄與連結樹，登記了也＝0：${rs.lines.join('\n')}`);
+    assert.equal(runChecks({ settings: reg, cwd: spMain }).code, 0, '從結尾是空白的主目錄本身跑＝0');
 
     // 共用 core.bare=true、後面 include 一檔寫 false、連結樹自己覆寫 false：生效值說不裸，主目錄照樣打不開
     const p9 = makePair(g, root, 'nine', { ext: true });
@@ -346,9 +415,20 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
     const r4 = runChecks({ settings: breaker(MAIN_REG), cwd: p1.wt });
     assert.equal(r4.code, 1, r4.lines.join('\n'));
     assert.match(r4.lines.join('\n'), /三關跑完之後，主目錄/u);
+    assert.match(r4.lines.join('\n'), /或是不是同一段時間有別的工作階段在動/u, '三關後也可能是別的工作階段：照實說');
+    assert.doesNotMatch(r4.lines.join('\n'), /本來就是裸儲存庫/u, '三關後（跑之前是好的）不提「本來就是裸儲存庫」');
     assert.equal(paste(r4, away).length, 1, r4.lines.join('\n'));
     assert.equal(status(p1.main), 0, '照貼還原之後主目錄打得開');
     fs.rmSync(mainOwn);
+    // 三關中途把主目錄弄到打不開（共用 core.worktree 指到不存在的地方）：樹的狀態與設定指紋兩段都印
+    const lostRoot = `/nowhere-mid-${process.pid}/zz`;
+    const r4u = runChecks({ settings: withKeys(MAIN_REG, [['git', 'config', '--file', p2.cfg, 'core.worktree', lostRoot]]), cwd: p2.wt });
+    assert.equal(r4u.code, 1, r4u.lines.join('\n'));
+    assert.match(r4u.lines.join('\n'), /三關跑完之後，主目錄 .+ 的 git 打不開/u);
+    assert.match(r4u.lines.join('\n'), /或是不是同一段時間有別的工作階段在動/u, '三關後也可能是別的工作階段：照實說');
+    assert.match(r4u.lines.join('\n'), /設定被改了/u, '設定指紋那一段也印');
+    assert.ok(paste(r4u, away).join('').includes(lostRoot), r4u.lines.join('\n'));
+    setShared(p2, '--unset', 'core.worktree');
 
     // 5. 行程帶著 GIT_DIR（指向另一個健康倉庫）：問主目錄的子行程也要清掉它，不然問到的是那個健康倉庫
     const healthy = makePair(g, root, 'healthy', { ext: true });
@@ -358,6 +438,14 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
     let dirty;
     try { dirty = runChecks({ settings: reg, cwd: p1.wt }); } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; }
     assert.equal(dirty.code, 2, `帶著髒 GIT_DIR 也要擋：${dirty.lines.join('\n')}`);
+    // 問 core.bare 出處的那一次也要清：不然問到那個健康倉庫、沒有 true，就只給自查
+    const fixes = commandLines(dirty);
+    assert.equal(fixes.length, 1, `帶著髒 GIT_DIR：剛好一行還原：${dirty.lines.join('\n')}`);
+    const [, quoted] = fixes[0].match(/^git config --file '(.+)' --replace-all core\.bare false$/u) || [];
+    assert.ok(quoted, `給的是還原、不是自查：${fixes[0]}`);
+    assert.equal(fs.realpathSync(quoted.replace(/'\\''/gu, "'")), fs.realpathSync(p1.cfg), `改的是這個倉庫的共用設定檔，不是 GIT_DIR 指的那個：${fixes[0]}`);
+    paste(dirty, away);
+    assert.equal(status(p1.main), 0, '照貼還原之後主目錄打得開');
     setShared(p1, 'core.bare', 'false');
 
     // 6. 合法布局，登記了也＝0
@@ -371,10 +459,16 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
     const store = path.join(root, 'store.git');
     g(root, 'clone', '-q', '--bare', healthy.main, store);
     g(store, 'worktree', 'add', '-q', '--detach', path.join(root, 'store-wt'));
-    assert.equal(runChecks({ settings: reg, cwd: path.join(root, 'store-wt') }).code, 0, '真的裸儲存庫（store.git）＋連結樹＝0');
+    const skippedMain = /登記了、這次沒驗：主目錄是不是一般工作樹（checks\.mainWorktree；共用目錄不叫 \.git/u;
+    const rStore = runChecks({ settings: reg, cwd: path.join(root, 'store-wt') });
+    assert.equal(rStore.code, 0, '真的裸儲存庫（store.git）＋連結樹＝0');
+    assert.match(rStore.lines.at(-1), skippedMain, `登記了卻驗不到：全綠那一行要說：${rStore.lines.at(-1)}`);
     g(root, 'clone', '-q', '--separate-git-dir', path.join(root, 'gitstore'), healthy.main, path.join(root, 'sep'));
     g(path.join(root, 'sep'), 'worktree', 'add', '-q', '--detach', path.join(root, 'sep-wt'));
-    assert.equal(runChecks({ settings: reg, cwd: path.join(root, 'sep-wt') }).code, 0, '--separate-git-dir＋連結樹＝0');
+    const rSep = runChecks({ settings: reg, cwd: path.join(root, 'sep-wt') });
+    assert.equal(rSep.code, 0, '--separate-git-dir＋連結樹＝0');
+    assert.match(rSep.lines.at(-1), skippedMain, `登記了卻驗不到：全綠那一行要說：${rSep.lines.at(-1)}`);
+    assert.doesNotMatch(runChecks({ settings: reg, cwd: every.wt }).lines.at(-1), /登記了、這次沒驗/u, '對照組：驗得到的布局不說沒驗');
     const moved = makePair(g, root, 'moved', { ext: false });
     const elsewhere = path.join(root, 'elsewhere');
     fs.mkdirSync(elsewhere);
@@ -405,7 +499,8 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
   try {
     const { raw, g } = gitKit();
     const repo = path.join(root, 'repo');
-    const ANCHORS = ['anchor.txt', 'deep/x/anchor2.txt', ':odd'];
+    // : 開頭（pathspec 語法）、- 開頭（選項）、中文與全形括號、雙引號（Git 預設會替後兩種加引號跳脫）
+    const ANCHORS = ['anchor.txt', 'deep/x/anchor2.txt', ':odd', '-dash.txt', '文件/說明（一）.md', 'a"b.txt'];
     for (const f of [...ANCHORS, 'other.txt', 'dir2/y.txt']) {
       fs.mkdirSync(path.dirname(path.join(repo, f)), { recursive: true });
       fs.writeFileSync(path.join(repo, f), `${f}\n`);
@@ -418,10 +513,22 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
     const check = (settings = reg) => runChecks({ settings, cwd: repo });
     const indexFile = g(repo, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
 
-    // 1. 健康＝0（含 : 開頭的錨點）
+    // 1. 健康＝0（含 : 開頭、- 開頭、中文、雙引號的錨點）
     const fine = check();
     assert.equal(fine.code, 0, fine.lines.join('\n'));
-    assert.doesNotMatch(fine.lines.join('\n'), /索引錨點（checks\.indexAnchors）/u, '登記了就不再說沒驗');
+    assert.doesNotMatch(fine.lines.join('\n'), /索引錨點（checks\.indexAnchors/u, '登記了就不再說沒驗');
+    // 行程帶著 GIT_DIR（指向另一個沒有這些錨點的健康倉庫）：問錨點那一次也要清掉它，不然問到的是那個倉庫、判成找不到
+    const elsewhere = path.join(root, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    g(elsewhere, 'init', '-q');
+    fs.writeFileSync(path.join(elsewhere, 'z.txt'), 'z\n');
+    g(elsewhere, 'add', '.');
+    g(elsewhere, 'commit', '-q', '-m', 'z');
+    const prevDir = process.env.GIT_DIR;
+    process.env.GIT_DIR = path.join(elsewhere, '.git');
+    let dirty;
+    try { dirty = check(); } finally { if (prevDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prevDir; }
+    assert.equal(dirty.code, 0, `帶著髒 GIT_DIR、樹是健康的＝0：${dirty.lines.join('\n')}`);
     // 問錨點的那一次 git 失敗（PATH 最前面放一支假 git，只讓帶 --literal-pathspecs 的那一次退 128）：不可以當成都在
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
     const fakeBin = path.join(root, 'fake-bin');
@@ -445,7 +552,8 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
       assert.equal(check(loose).code, 0, `沒登記（${why}）＝照舊放行`);
       const r = check();
       assert.equal(r.code, 2, `${why}：${r.lines.join('\n')}`);
-      assert.match(r.lines[0], /登記的全部不見/u);
+      assert.match(r.lines[0], /登記的全部不見：索引整份是空的/u);
+      assert.match(r.lines.join('\n'), /有意暫存刪除或改名錨點的話不要照做/u, '三關前：先提醒有意暫存的不要照做');
       assert.equal(paste(r, away).length, 1, r.lines.join('\n'));
       assert.equal(check().code, 0, `照貼還原之後＝0（${why}）`);
     }
@@ -455,8 +563,29 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
     const r12 = check();
     assert.equal(r12.code, 2, r12.lines.join('\n'));
     assert.match(r12.lines[0], /：anchor\.txt。$/u, `只列少掉的那一個：${r12.lines[0]}`);
+    // 只登記這一個、只拿掉它：登記的全部不見，但索引裡還有別的檔＝不說「整份是空的」
+    const onlyOne = check(withKeys({ indexAnchors: ['anchor.txt'] }));
+    assert.equal(onlyOne.code, 2, onlyOne.lines.join('\n'));
+    assert.match(onlyOne.lines[0], /登記的全部不見/u);
+    assert.doesNotMatch(onlyOne.lines[0], /整份/u, `索引裡還有別的檔：${onlyOne.lines[0]}`);
     assert.equal(paste(r12, away).length, 1);
     assert.equal(check().code, 0, '照貼還原之後＝0');
+    // 整份清空、登記裡又有一筆最新提交裡本來就沒有：兩段都說（一段叫你改登記、一段給還原）
+    g(repo, 'read-tree', '--empty');
+    const mixed = check(withKeys({ indexAnchors: [...ANCHORS, 'ghost.txt'] }));
+    assert.equal(mixed.code, 2, mixed.lines.join('\n'));
+    assert.match(mixed.lines[0], /登記的全部不見：索引整份是空的/u, mixed.lines[0]);
+    assert.match(mixed.lines.join('\n'), /最新提交裡也沒有：ghost\.txt。登記跟專案對不上/u);
+    assert.equal(commandLines(mixed).length, 1, mixed.lines.join('\n'));
+    g(repo, 'read-tree', 'HEAD');
+    // 錨點填成目錄：最新提交裡它是目錄，重建索引也不會好＝不給指令、說要填檔案
+    for (const anchors of [['dir2'], [...ANCHORS, 'dir2']]) {
+      const d = check(withKeys({ indexAnchors: anchors }));
+      assert.equal(d.code, 2, d.lines.join('\n'));
+      assert.match(d.lines.join('\n'), /在最新提交裡是目錄：dir2。錨點要填檔案、不能填目錄/u, d.lines.join('\n'));
+      assert.equal(commandLines(d).length, 0, `填了目錄不給 git 指令：${d.lines.join('\n')}`);
+      assert.doesNotMatch(d.lines.join('\n'), /只是少了這幾筆/u, '登記填錯不是索引丟了東西');
+    }
 
     // 4. 索引裡那一筆的路徑被改了一個位元組（檢查碼沒重算）
     const buf = fs.readFileSync(indexFile);
@@ -478,10 +607,85 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
       g(repo, 'read-tree', 'HEAD');
       const r = check(withKeys({ indexAnchors: ANCHORS }, [cmd]));
       assert.equal(r.code, 1, r.lines.join('\n'));
-      assert.match(r.lines.join('\n'), /三關跑完之後，這棵樹的索引/u);
+      const text = r.lines.join('\n');
+      assert.match(text, /三關跑完之後，這棵樹的索引/u);
+      assert.match(text, /或是不是同一段時間有別的工作階段在動/u, '三關後也可能是別的工作階段：照實說');
+      assert.match(text, /如果是同一段時間別的工作階段有意暫存刪除或改名錨點，不要照做/u, '三關後的提醒放在指令之前');
+      assert.doesNotMatch(text, /改 settings\.json/u, '三關後（跑之前都在）不叫人改登記');
+      assert.doesNotMatch(text, /本來就是裸儲存庫/u);
       assert.equal(paste(r, away).length, 1);
       assert.equal(check().code, 0, '照貼還原之後＝0');
     }
+
+    // 5b. 三關中途 HEAD 被動了
+    const branch = g(repo, 'symbolic-ref', '--short', 'HEAD');
+    const base = g(repo, 'rev-parse', 'HEAD');
+    const as = (cmd) => ['sh', '-c', cmd];
+    const commitCmd = 'git -c user.name=t -c user.email=t@x commit -q --allow-empty -m moved';
+    // (a) 切到還沒有提交的分支：錨點那一項被跳過，不可以放行
+    assert.equal(check(withKeys({}, [as('git switch -q --orphan tmp')])).code, 0, '沒登記（switch --orphan）＝照舊放行');
+    g(repo, 'switch', '-q', branch);
+    // 帶著髒 GIT_DIR（指向 elsewhere，它也有同名分支、指在別顆）跑：問原本的分支在哪那一次也要清，不然會判成分支被移動了
+    process.env.GIT_DIR = path.join(elsewhere, '.git');
+    let orphan;
+    try { orphan = check(withKeys({ indexAnchors: ANCHORS }, [as('git switch -q --orphan tmp')])); } finally { if (prevDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prevDir; }
+    assert.equal(g(elsewhere, 'symbolic-ref', '--short', 'HEAD'), branch, '前提：elsewhere 也有同名分支');
+    assert.notEqual(g(elsewhere, 'rev-parse', 'HEAD'), base, '前提：elsewhere 那個同名分支指在別顆');
+    assert.equal(orphan.code, 1, `三關中途 switch --orphan：${orphan.lines.join('\n')}`);
+    assert.match(orphan.lines.join('\n'), /HEAD 解析不到了/u);
+    assert.doesNotMatch(orphan.lines.join('\n'), /改 settings\.json/u, '不叫人改登記');
+    assert.deepEqual(commandLines(orphan).map((l) => l.replace(/^git -C '.+' /u, '')), [`switch '${branch}'`], orphan.lines.join('\n'));
+    paste(orphan, away);
+    assert.equal(g(repo, 'status', '--porcelain'), '', '照貼之後樹是乾淨的');
+    assert.equal(check().code, 0, '照貼之後＝0');
+    // (b) checkout --orphan 再清空索引（檔案還在工作區）：switch 會被拒絕，改用訊息裡「只把 HEAD 指回去」那一句
+    const co = check(withKeys({ indexAnchors: ANCHORS }, [as('git checkout -q --orphan x && git rm -r -q --cached .')]));
+    assert.equal(co.code, 1, co.lines.join('\n'));
+    assert.doesNotMatch(co.lines.join('\n'), /改 settings\.json/u);
+    const [, pointer] = co.lines.join('\n').match(/改用 (git -C .+?) 只把 HEAD 指回去/u) || [];
+    assert.ok(pointer, co.lines.join('\n'));
+    assert.equal(spawnSync('sh', ['-c', pointer], { cwd: away, encoding: 'utf8', env: gitEnv() }).status, 0, `照貼 ${pointer}`);
+    const after = check();
+    assert.equal(after.code, 2, `HEAD 指回去之後，索引還是空的：${after.lines.join('\n')}`);
+    paste(after, away);
+    assert.equal(g(repo, 'status', '--porcelain'), '', '照貼之後樹是乾淨的');
+    assert.equal(check().code, 0, '照貼之後＝0');
+    // (c) 分離的 HEAD：切回那一顆提交
+    g(repo, 'switch', '-q', '--detach');
+    const det = check(withKeys({ indexAnchors: ANCHORS }, [as('git switch -q --orphan tmp')]));
+    assert.equal(det.code, 1, det.lines.join('\n'));
+    assert.deepEqual(commandLines(det).map((l) => l.replace(/^git -C '.+' /u, '')), [`switch --detach ${base}`], det.lines.join('\n'));
+    paste(det, away);
+    assert.equal(check().code, 0, '照貼之後＝0');
+    g(repo, 'switch', '-q', branch);
+    // (d) 分支被移動了（先提交一顆才切走）：不切回那個分支，切回跑之前那一顆
+    const movedRun = check(withKeys({ indexAnchors: ANCHORS }, [as(`${commitCmd} && git switch -q --orphan tmp`)]));
+    assert.equal(movedRun.code, 1, movedRun.lines.join('\n'));
+    assert.match(movedRun.lines.join('\n'), /已經不指在跑之前那一顆上/u);
+    assert.deepEqual(commandLines(movedRun).map((l) => l.replace(/^git -C '.+' /u, '')), [`switch --detach ${base}`], movedRun.lines.join('\n'));
+    paste(movedRun, away);
+    assert.equal(check().code, 0, '照貼之後＝0');
+    g(repo, 'switch', '-q', branch);
+    g(repo, 'reset', '-q', '--hard', base);
+    // (e) 提交了刪除錨點（HEAD 被移動）：不叫人改登記，指去看 HEAD 移動紀錄
+    const oops = check(withKeys({ indexAnchors: ANCHORS }, [as(`git rm -q --cached anchor.txt && ${commitCmd.replace('--allow-empty -m moved', '-m oops')}`)]));
+    assert.equal(oops.code, 1, oops.lines.join('\n'));
+    assert.match(oops.lines.join('\n'), /HEAD 被移動了/u);
+    assert.doesNotMatch(oops.lines.join('\n'), /改 settings\.json/u, '三關中途提交了刪除：不叫人改登記');
+    assert.deepEqual(commandLines(oops).map((l) => l.replace(/^git -C '.+' /u, '')), ['reflog -n 5'], oops.lines.join('\n'));
+    paste(oops, away);
+    g(repo, 'reset', '-q', base);
+    assert.equal(check().code, 0, '退回之後＝0');
+    // (f) 跑之前只暫存、還沒提交的錨點被拿掉：HEAD 沒動，叫人重新暫存、不叫人改登記
+    fs.writeFileSync(path.join(repo, 'fresh.txt'), 'fresh\n');
+    g(repo, 'add', 'fresh.txt');
+    const withFresh = withKeys({ indexAnchors: [...ANCHORS, 'fresh.txt'] }, [['git', 'rm', '-q', '--cached', 'fresh.txt']]);
+    const staged = check(withFresh);
+    assert.equal(staged.code, 1, staged.lines.join('\n'));
+    assert.match(staged.lines.join('\n'), /最新提交裡本來就沒有：fresh\.txt.*重新暫存/u);
+    assert.doesNotMatch(staged.lines.join('\n'), /改 settings\.json/u);
+    assert.equal(commandLines(staged).length, 0, staged.lines.join('\n'));
+    fs.rmSync(path.join(repo, 'fresh.txt'));
 
     // 6. 合法、登記了也＝0
     g(repo, 'rm', '-q', '--cached', 'other.txt');
@@ -494,12 +698,22 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
     g(repo, 'add', 'anchor.txt');
     assert.equal(check().code, 0, '暫存修改錨點＝0');
     g(repo, 'reset', '-q', '--hard');
-    g(repo, 'sparse-checkout', 'init', '--cone', '--sparse-index');
-    g(repo, 'sparse-checkout', 'set', 'dir2');
-    assert.ok(!fs.existsSync(path.join(repo, 'deep')), '前提：錨點所在的目錄不在磁碟上');
-    assert.match(raw(repo, 'ls-files', '--sparse').stdout, /^deep\/$/mu, '前提：索引裡 deep 收成一筆稀疏目錄');
-    assert.equal(check().code, 0, '稀疏 cone＋稀疏索引＝0');
-    g(repo, 'sparse-checkout', 'disable');
+    // 稀疏 cone（有沒有稀疏索引兩種）：健康＝0；拿掉一個錨點，照貼訊息裡每一行還原之後，樹是乾淨的、範圍外的檔仍標成不在工作區
+    for (const flavor of ['--sparse-index', '--no-sparse-index']) {
+      g(repo, 'sparse-checkout', 'init', '--cone', flavor);
+      g(repo, 'sparse-checkout', 'set', 'dir2');
+      assert.ok(!fs.existsSync(path.join(repo, 'deep')), `前提（${flavor}）：錨點所在的目錄不在磁碟上`);
+      if (flavor === '--sparse-index') assert.match(raw(repo, 'ls-files', '--sparse').stdout, /^deep\/$/mu, '前提：索引裡 deep 收成一筆稀疏目錄');
+      assert.equal(check().code, 0, `稀疏 cone（${flavor}）＝0`);
+      g(repo, 'rm', '-q', '--cached', 'anchor.txt');
+      const sp = check();
+      assert.equal(sp.code, 2, sp.lines.join('\n'));
+      assert.equal(paste(sp, away).length, 2, `稀疏的樹要多一行 reapply：${sp.lines.join('\n')}`);
+      assert.equal(g(repo, 'status', '--porcelain'), '', `照貼之後樹是乾淨的（${flavor}）`);
+      assert.match(raw(repo, 'ls-files', '-v', '--', 'deep/x/anchor2.txt').stdout, /^S /u, `範圍外的檔仍標成不在工作區（${flavor}）`);
+      assert.equal(check().code, 0, `照貼之後＝0（${flavor}）`);
+      g(repo, 'sparse-checkout', 'disable');
+    }
 
     // 7. 照登記擋的（專案自己選的）
     g(repo, 'rm', '-r', '-q', '.');
@@ -513,13 +727,34 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
     assert.match(stale.lines.join('\n'), /最新提交裡也沒有：anchor\.txt。登記跟專案對不上/u);
     assert.equal(commandLines(stale).length, 0, '登記跟專案對不上時不給 git 指令（重建索引也不會好）');
     assert.equal(check(withKeys({ indexAnchors: ['renamed.txt', 'deep/x/anchor2.txt', ':odd'] })).code, 0, '登記跟著改＝0');
+
+    // 8. HEAD 解析不到（剛 init、或目前在還沒有提交的分支上）：登記了也不驗＝0，全綠那一行照實說這次沒驗
+    const fresh = path.join(root, 'fresh');
+    fs.mkdirSync(fresh);
+    g(fresh, 'init', '-q');
+    const three = withKeys({ indexAnchors: ['package.json', 'AGENTS.md', 'server.js'] });
+    const skippedAnchor = /登記了、這次沒驗：索引錨點（checks\.indexAnchors；HEAD 解析不到/u;
+    const empty = runChecks({ settings: three, cwd: fresh });
+    assert.equal(empty.code, 0, `剛 init、還沒提交：${empty.lines.join('\n')}`);
+    assert.match(empty.lines.at(-1), skippedAnchor, empty.lines.at(-1));
+    fs.writeFileSync(path.join(fresh, 'package.json'), '{}\n');
+    g(fresh, 'add', 'package.json');
+    assert.equal(runChecks({ settings: three, cwd: fresh }).code, 0, '剛 init、只暫存了一個錨點、還沒提交＝0');
+    g(fresh, 'commit', '-q', '-m', 'first');
+    const firstCommit = runChecks({ settings: three, cwd: fresh });
+    assert.equal(firstCommit.code, 2, `對照組：有提交之後同一份登記就驗：${firstCommit.lines.join('\n')}`);
+    assert.match(firstCommit.lines.join('\n'), /最新提交裡也沒有/u);
+    g(fresh, 'switch', '-q', '--orphan', 'other');
+    const onOrphan = runChecks({ settings: three, cwd: fresh });
+    assert.equal(onOrphan.code, 0, `有提交、但目前在還沒有提交的分支上：${onOrphan.lines.join('\n')}`);
+    assert.match(onOrphan.lines.at(-1), skippedAnchor, onOrphan.lines.at(-1));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(away, { recursive: true, force: true });
   }
 });
 
-test('⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；登記了三關前後都照登記驗；三關後兩種壞法都印', () => {
+test('⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；登記了三關前後都照登記驗；三關後兩種壞法都印、讀不到指紋不說被改了；三關後 HEAD 不見＝1', () => {
   const calls = [];
   const seen = [];
   const run = (argv) => { calls.push(argv); return { status: 0 }; };
@@ -573,4 +808,23 @@ test('⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒�
   assert.equal(r.code, 1);
   assert.match(r.lines.join('\n'), /被指到別處了/u);
   assert.match(r.lines.join('\n'), /設定被改了/u);
+  // 三關後指紋讀不到（例如這棵樹的 .git 檔被刪掉）：不說「被改了」，照實說沒辦法比對
+  n = 0;
+  let prints = 0;
+  const gone = runChecks({ settings: withKeys({}), run, tree: flip, fingerprint: () => (prints++ === 0 ? 'v0' : null) });
+  assert.equal(gone.code, 1);
+  assert.doesNotMatch(gone.lines.join('\n'), /設定被改了/u, gone.lines.join('\n'));
+  assert.match(gone.lines.join('\n'), /沒辦法比對/u);
+
+  // 登記了錨點、跑之前 HEAD 解析得到、跑完解析不到＝1；沒登記、或跑之前就解析不到＝0
+  const heads = (a, b) => { let k = 0; return () => ({ state: 'ok', head: k++ === 0 ? a : b, branch: null, tree: '/t', skipped: [] }); };
+  const anchored = withKeys({ indexAnchors: ['a'] });
+  const lost = runChecks({ settings: anchored, run, tree: heads('c0ffee', null), fingerprint: () => 'same' });
+  assert.equal(lost.code, 1, lost.lines.join('\n'));
+  assert.match(lost.lines[1], /HEAD 解析不到了（跑之前在 c0ffee，分離的 HEAD）/u);
+  assert.equal(runChecks({ settings: withKeys({}), run, tree: heads('c0ffee', null), fingerprint: () => 'same' }).code, 0, '沒登記錨點＝照舊放行');
+  assert.equal(runChecks({ settings: anchored, run, tree: heads(null, null), fingerprint: () => 'same' }).code, 0, '跑之前就解析不到＝不驗、放行');
+  // 登記了、這次沒驗：全綠那一行跟「沒登記、所以沒驗」並列
+  const note = runChecks({ settings: withKeys({ mainWorktree: '一般工作樹' }), run, tree: () => ({ state: 'ok', skipped: ['某一項（原因）'] }), fingerprint: () => 'same' });
+  assert.equal(note.lines.at(-1), '三關全綠（1 關）。沒登記、所以沒驗：索引錨點（checks.indexAnchors）。登記了、這次沒驗：某一項（原因）。');
 });
