@@ -9,11 +9,15 @@
 //     有提交卻索引檔不見＝2、跑完才不見＝1；沒登記下面兩項時的正面控制：空索引、擴充關＋共用 core.bare=true＋連結樹
 //     （這個夾具的主目錄其實打不開，登記了就擋，見⑩）、真的裸儲存庫＋連結樹（含 r3 的三種擴充寫法）都＝0（搬家前準備）；
 //   ⑩登記了 checks.mainWorktree＝「一般工作樹」：從連結樹看健康、主目錄卻被判成裸倉庫或打不開（含工作樹根指到檔案、
-//     主目錄自己的 config.worktree 寫壞、主目錄放在別的倉庫底下而自己那份 .git 壞了——上層路徑含冒號與不含冒號成對）＝跑之前 2、跑完才壞 1，
+//     主目錄自己的 config.worktree 寫壞、主目錄放在別的倉庫底下而自己那份 .git 壞了——上層路徑含冒號與不含冒號成對、
+//     上層是路徑含冒號的裸儲存庫時判成「問到的是另一個倉庫」而不給改上層設定檔的指令）＝跑之前 2、跑完才壞 1，
+//     身分那一問問到的共用目錄讀不到＝擋、照實說問不到（假 git 造的）；
 //     訊息裡的還原或自查指令從別的目錄照貼跑得動（路徑含空白、單引號、全形括號與中文）；沒登記照舊放行；
 //     帶著髒 GIT_DIR 照樣擋、還原改的是這個倉庫的設定檔；合法布局（每棵樹都覆寫、從主目錄跑、core.worktree 合法搬家、
 //     資料夾名字結尾是空白）登記了也＝0，store.git、--separate-git-dir 登記了＝0 而且全綠那一行說這次沒驗；
 //     照實的代價：proj/.git 是裸儲存庫＋連結樹，登記了＝2；
+//   ⑩b 大小寫不分的檔案系統上（分大小寫的就跳過、寫明原因），建連結樹之後主目錄或它的上層只改了大小寫：登記了也＝0；
+//     主目錄自己那份 .git 壞了照樣＝2（上層改了大小寫、再上一層是別的倉庫時第一道失效，靠身分比對擋）；
 //   ⑪登記了 checks.indexAnchors：錨點不在這棵樹的索引裡（整份清空、少一筆、路徑位元組被改）＝跑之前 2、跑完才不見 1，
 //     還原照貼跑得動（稀疏 checkout 照貼之後樹是乾淨的；路徑位元組被改的照貼之後索引清單＝最新提交的清單）；
 //     錨點名字含 : 或 - 開頭、中文、雙引號；問錨點那一次 git 失敗＝不放行
@@ -22,7 +26,8 @@
 //     暫存刪除全部、已提交改名錨點照登記擋；填了目錄＝2、不給指令；三關中途 HEAD 解析不到（switch --orphan 等）＝1、
 //     照貼切回去；三關中途提交了刪除錨點＝1、不叫人改登記；跑之前只暫存的錨點被拿掉（含最新提交裡是同名目錄的）＝1、
 //     叫人重新暫存、不叫人改登記；HEAD 解析不到（剛 init、在還沒有提交的分支上）＝0、全綠那一行說沒驗
-//     （三關前解析不到、三關中途做了第一顆提交也照實說三關前那一次沒驗）；
+//     （三關前解析不到、三關中途做了第一顆提交也照實說三關前那一次沒驗）；三關前解析不到、三關中途做了第一顆提交而錨點不對
+//     （填成目錄、登記的有一個從來沒進過索引）＝1、用三關前那一套判斷（叫人改登記、不說跑之前怎樣），下一次跑＝2 說同一件事；
 //   ⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；三關後樹壞了、設定也變了＝兩段都印；
 //     三關後讀不到設定指紋＝說沒辦法比對、不說被改了。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查；
@@ -384,6 +389,63 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
       fs.renameSync(`${mainHead}.moved`, mainHead);
       assert.equal(runChecks({ settings: reg, cwd: nested.wt }).code, 0, `還原之後＝0（${why}）`);
     }
+    // 上層路徑含冒號、而且上層是裸儲存庫（git init --bare 出來的）：身分那一問排在裸不裸之前，判成「問到的是另一個倉庫」；
+    // 排在後面的話會判成主目錄被判成裸倉庫，還原指令改的是上層那個裸儲存庫的設定檔
+    const bo = path.join(root, 'bo:x.git');
+    fs.mkdirSync(bo);
+    g(bo, 'init', '-q', '--bare');
+    const boMain = path.join(bo, 'project');
+    const boWt = path.join(bo, 'wt');
+    fs.mkdirSync(boMain);
+    g(boMain, 'init', '-q');
+    fs.writeFileSync(path.join(boMain, 'a.txt'), 'x\n');
+    g(boMain, 'add', '.');
+    g(boMain, 'commit', '-q', '-m', 'base');
+    g(boMain, 'worktree', 'add', '-q', '--detach', boWt);
+    assert.equal(runChecks({ settings: reg, cwd: boWt }).code, 0, '對照組：上層是裸儲存庫、健康＝0');
+    const boHead = path.join(boMain, '.git', 'HEAD');
+    fs.renameSync(boHead, `${boHead}.moved`);
+    assert.equal(status(boWt), 0, '前提：連結樹照常');
+    const boAsk = (...a) => spawnSync('git', a, { cwd: boMain, encoding: 'utf8', env: { ...gitEnv(), GIT_CEILING_DIRECTORIES: bo } });
+    assert.equal(fs.realpathSync(boAsk('rev-parse', '--path-format=absolute', '--git-common-dir').stdout.replace(/\n$/u, '')), fs.realpathSync(bo), '前提：用執行器同一種環境站在主目錄問，問到的是上層那個裸儲存庫');
+    assert.equal(boAsk('rev-parse', '--is-bare-repository').stdout.trim(), 'true', '前提：先問裸不裸的話，Git 會說裸');
+    const rb = runChecks({ settings: reg, cwd: boWt });
+    assert.equal(rb.code, 2, rb.lines.join('\n'));
+    assert.match(rb.lines[0], /git 打不開（在主目錄問到的是另一個倉庫（'.+'））/u, rb.lines[0]);
+    assert.doesNotMatch(rb.lines.join('\n'), /判成裸倉庫|core\.bare/u, `不說主目錄被判成裸倉庫、不給 core.bare 的還原：${rb.lines.join('\n')}`);
+    // 只給自查、而且查的是這個倉庫自己的共用設定檔（不是上層那個裸儲存庫的）
+    const boFiles = commandLines(rb).map((l) => (l.match(/^git config --file '(.+)' --show-origin --list$/u) || [])[1]);
+    assert.equal(boFiles.length, 1, rb.lines.join('\n'));
+    assert.ok(boFiles[0], `給的是自查、不是還原：${rb.lines.join('\n')}`);
+    assert.equal(fs.realpathSync(boFiles[0].replace(/'\\''/gu, "'")), fs.realpathSync(path.join(boMain, '.git', 'config')), rb.lines.join('\n'));
+    paste(rb, away);
+    fs.renameSync(`${boHead}.moved`, boHead);
+    assert.equal(runChecks({ settings: reg, cwd: boWt }).code, 0, '還原之後＝0（上層是裸儲存庫）');
+    // 身分那一問問到的共用目錄讀不到（stat 失敗）：當成不是同一個、照實說問不到。用假 git 造——真的 Git 回的是它剛打開的目錄，
+    // 沒找到用真的 Git 造得出來的方法
+    const probe = makePair(g, root, 'probe', { ext: false });
+    const probeReal = fs.realpathSync(probe.main);
+    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    const fakeBin = path.join(root, 'fake-bin-who');
+    fs.mkdirSync(fakeBin);
+    fs.writeFileSync(path.join(fakeBin, 'git'), `#!/bin/sh\ncase " $* " in *" --git-common-dir "*) if [ "$(pwd -P)" = "$KIT_FAKE_MAIN" ]; then printf '%s\\n' "$KIT_FAKE_SEEN"; exit 0; fi;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const faked = (seenPath) => {
+      const prev = { PATH: process.env.PATH, KIT_FAKE_MAIN: process.env.KIT_FAKE_MAIN, KIT_FAKE_SEEN: process.env.KIT_FAKE_SEEN };
+      Object.assign(process.env, { PATH: `${fakeBin}${path.delimiter}${prev.PATH}`, KIT_FAKE_MAIN: probeReal, KIT_FAKE_SEEN: seenPath });
+      try { return runChecks({ settings: reg, cwd: probe.wt }); } finally {
+        for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+      }
+    };
+    const other = faked(path.join(p2.main, '.git'));
+    assert.equal(other.code, 2, `對照組：假 git 真的接上了（回別的倉庫＝擋）：${other.lines.join('\n')}`);
+    assert.match(other.lines[0], /問到的是另一個倉庫/u, other.lines[0]);
+    const nowhere = path.join(root, 'no-such-dir', '.git');
+    const unknown = faked(nowhere);
+    assert.equal(unknown.code, 2, unknown.lines.join('\n'));
+    assert.match(unknown.lines[0], /問不到是不是這個倉庫（在主目錄問到的共用目錄 '.+' 或這棵樹的共用目錄讀不到）：.+驗不到就不放行。$/u, unknown.lines[0]);
+    assert.doesNotMatch(unknown.lines[0], /另一個倉庫|打不開|會失敗/u, `讀不到不說成另一個倉庫、也不說打不開：${unknown.lines[0]}`);
+    paste(unknown, away);
+    assert.equal(runChecks({ settings: reg, cwd: probe.wt }).code, 0, '對照組：拿掉假 git＝0');
 
     // 資料夾名字結尾是空白（主目錄與連結樹都是）：Git 印的路徑不可以整串 trim
     const spaced = path.join(root, 'spaced');
@@ -502,6 +564,56 @@ test('⑩主目錄布局（登記了 checks.mainWorktree 才驗）：主目錄�
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(away, { recursive: true, force: true });
+  }
+});
+
+test('⑩b 主目錄或它的上層只改了大小寫（大小寫不分的檔案系統）：身分比對看裝置與 inode，同一個目錄＝0；主目錄自己那份 .git 壞了照樣擋', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), ODD_PREFIX));
+  try {
+    const probe = path.join(root, 'CaseProbe');
+    fs.mkdirSync(probe);
+    const folded = path.join(root, 'caseprobe');
+    if (!fs.existsSync(folded)) {
+      t.skip('這台的檔案系統分大小寫：只差大小寫的兩個名字是兩個不同的目錄，「只改了大小寫、其實是同一個目錄」這個形狀造不出來');
+      return;
+    }
+    assert.equal(fs.statSync(folded).ino, fs.statSync(probe).ino, '前提：這台的檔案系統不分大小寫（兩個名字是同一個目錄）');
+    const { g, status } = gitKit();
+    const reg = withKeys(MAIN_REG);
+    // (1) 主目錄本身改了大小寫：第一道照樣擋得住（上層沒改）。(2) 主目錄的上層改了大小寫、再上一層是別的倉庫：
+    //   這棵樹記的上層還是舊的大小寫，Git 比對 GIT_CEILING_DIRECTORIES 時分大小寫、對不上＝第一道失效，靠身分比對擋
+    for (const [why, renamed] of [['主目錄本身', 'main'], ['主目錄的上層', 'up']]) {
+      const outer = path.join(root, renamed === 'main' ? 'case-main' : 'case-up');
+      fs.mkdirSync(outer);
+      if (renamed === 'up') g(outer, 'init', '-q');
+      const pair = makePair(g, outer, 'Up', { ext: true });   // outer/Up/main＋outer/Up/wt
+      const mainNow = renamed === 'main' ? path.join(outer, 'Up', 'MAIN') : path.join(outer, 'up', 'main');
+      if (renamed === 'main') fs.renameSync(pair.main, mainNow);
+      else fs.renameSync(path.join(outer, 'Up'), path.join(outer, 'up'));
+      const wtNow = path.join(path.dirname(mainNow), 'wt');
+      assert.equal(status(wtNow), 0, `前提（${why}）：連結樹的 git status 退 0`);
+      assert.equal(status(mainNow), 0, `前提（${why}）：主目錄的 git status 退 0`);
+      const fromWt = g(wtNow, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+      const fromMain = g(mainNow, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+      assert.notEqual(fromWt, fromMain, `前提（${why}）：兩邊 Git 印的共用目錄字串不同（比字串會誤擋）`);
+      assert.notEqual(fs.realpathSync(fromWt), fs.realpathSync(fromMain), `前提（${why}）：解開符號連結之後字串也不同`);
+      const healthy = runChecks({ settings: reg, cwd: wtNow });
+      assert.equal(healthy.code, 0, `${why}只改了大小寫、登記了＝0：${healthy.lines.join('\n')}`);
+      const mainHead = path.join(mainNow, '.git', 'HEAD');
+      fs.renameSync(mainHead, `${mainHead}.moved`);
+      assert.equal(status(wtNow), 0, `前提（${why}）：主目錄的 .git 壞了、連結樹照常`);
+      const ceiled = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: path.dirname(fromWt), encoding: 'utf8', env: { ...gitEnv(), GIT_CEILING_DIRECTORIES: path.dirname(path.dirname(fromWt)) } });
+      if (renamed === 'main') assert.notEqual(ceiled.status, 0, `前提（${why}）：第一道擋得住、Git 退非零`);
+      else assert.equal(fs.realpathSync(ceiled.stdout.replace(/\n$/u, '')), fs.realpathSync(path.join(outer, '.git')), `前提（${why}）：第一道擋不住、問到的是再上一層那個倉庫`);
+      const broken = runChecks({ settings: reg, cwd: wtNow });
+      assert.equal(broken.code, 2, `${why}只改了大小寫、主目錄的 .git 壞了：${broken.lines.join('\n')}`);
+      assert.match(broken.lines[0], /git 打不開/u, broken.lines[0]);
+      if (renamed === 'up') assert.match(broken.lines[0], /在主目錄問到的是另一個倉庫/u, broken.lines[0]);
+      fs.renameSync(`${mainHead}.moved`, mainHead);
+      assert.equal(runChecks({ settings: reg, cwd: wtNow }).code, 0, `還原之後＝0（${why}）`);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -809,6 +921,42 @@ test('⑪索引錨點（登記了 checks.indexAnchors 才驗）：錨點不在�
     const again = onlyPkg([OK_CMD]);
     assert.equal(again.code, 0, again.lines.join('\n'));
     assert.doesNotMatch(again.lines.at(-1), /登記了、這次沒驗/u, `對照組：前後都驗到就不說沒驗：${again.lines.at(-1)}`);
+    // 三關前跳過、三關後才驗到而且不對＝1，但跑之前沒驗過：不可以用三關後那一套（跑之前都在、有一題拿掉了、不要改登記），
+    // 改用三關前那一套判斷；下一次跑（三關前就驗到）說的是同一件事
+    const firstCommit1 = ['sh', '-c', 'git -c user.name=t -c user.email=t@x commit -q -m first'];
+    const lateRun = (name, anchors, files) => {
+      const dir = path.join(root, name);
+      for (const f of files) {
+        fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+        fs.writeFileSync(path.join(dir, f), `${f}\n`);
+      }
+      g(dir, 'init', '-q');
+      g(dir, 'add', '--', ...files);
+      assert.notEqual(raw(dir, 'rev-parse', '--verify', '-q', 'HEAD').status, 0, `前提（${name}）：跑之前 HEAD 解析不到`);
+      const settings = withKeys({ indexAnchors: anchors }, [firstCommit1]);
+      const r = runChecks({ settings, cwd: dir });
+      assert.equal(raw(dir, 'rev-parse', '--verify', '-q', 'HEAD').status, 0, `前提（${name}）：跑完 HEAD 解析得到`);
+      const text = r.lines.join('\n');
+      assert.equal(r.code, 1, text);
+      assert.match(r.lines[1], /^專案登記的索引錨點（checks\.indexAnchors）跑之前 HEAD 解析不到、這一項沒驗；三關跑完之後才驗到，找不到：/u, text);
+      assert.doesNotMatch(text.replace(/跑之前 HEAD 解析不到/gu, ''), /跑之前/u, `除了「跑之前 HEAD 解析不到」，不說跑之前怎樣：${text}`);
+      assert.doesNotMatch(text, /不要改登記|有一題把它從索引拿掉了|只暫存、還沒提交/u, `不用三關後那一套：${text}`);
+      assert.doesNotMatch(text, /只是少了這幾筆/u, `登記填錯不是索引丟了東西：${text}`);
+      assert.match(text, /在同一支變更裡改 settings\.json 的 checks\.indexAnchors/u, `叫人改登記：${text}`);
+      assert.equal(commandLines(r).length, 0, text);
+      const next = runChecks({ settings: withKeys({ indexAnchors: anchors }), cwd: dir });
+      assert.equal(next.code, 2, `下一次跑（三關前就驗到）：${next.lines.join('\n')}`);
+      assert.match(next.lines.join('\n'), /在同一支變更裡改 settings\.json 的 checks\.indexAnchors/u, `下一次跑說的是同一件事：${next.lines.join('\n')}`);
+      return text;
+    };
+    // (1) 錨點填成有檔的目錄
+    const lateDir = lateRun('late-dir', ['docs'], ['docs/a.md']);
+    assert.match(lateDir, /在最新提交裡是目錄：docs。錨點要填檔案、不能填目錄/u, lateDir);
+    // (2) 登記了兩個、只暫存了一個：另一個最新提交裡也沒有＝登記跟專案對不上
+    const lateGhost = lateRun('late-ghost', ['package.json', 'AGENTS.md'], ['package.json']);
+    assert.match(lateGhost, /找不到：AGENTS\.md。/u, lateGhost);
+    assert.match(lateGhost, /最新提交裡也沒有：AGENTS\.md。登記跟專案對不上/u, lateGhost);
+    assert.doesNotMatch(lateGhost, /跑之前都在/u, lateGhost);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(away, { recursive: true, force: true });
