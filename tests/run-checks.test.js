@@ -31,15 +31,17 @@
 //     （填成目錄、登記的有一個從來沒進過索引）＝1、用三關前那一套判斷（叫人改登記、不說跑之前怎樣），下一次跑＝2 說同一件事；
 //   ⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；三關後樹壞了、設定也變了＝兩段都印；
 //     三關後讀不到設定指紋＝說沒辦法比對、不說被改了；
-//   ⑬既有狀態（登記不登記都一樣）：這棵樹被判成裸倉庫＝列 core.bare 出處、每一筆 true 一行還原、從別的目錄照貼跑得動——
-//     原專案 08-09 事故的真實形狀（擴充開、沒有任何一棵樹覆寫、用 GIT_DIR 指向 .git/worktrees/<名> 跑 git init 造）三關前與三關中途
-//     照貼之後三關執行器與主目錄的 git status 都＝0；單一倉庫（Git 印相對路徑）、這棵樹自己的 config.worktree、include 引進的檔
-//     （先提醒）照貼之後三關執行器＝0；
-//     這個目錄本身就是裸儲存庫＝提醒在指令之前、Git 一筆 core.bare 都列不出來＝不給指令；git 打不開（壞布林值兩處、這棵樹自己的
-//     core.worktree 指到不存在、.git 指標檔斷、HEAD 亂碼、不是倉庫）與索引整份亂碼＝印 Git 的原話（逐字對過）、不給指令，
-//     git 起不來＝印 Node 給的原因、不冒稱是 Git 說的；三關後索引那一句跑之前 HEAD 解析不到就不說「跑之前是好的」；
+//   ⑬既有狀態（登記不登記都一樣）：這棵樹被判成裸倉庫＝列 core.bare 出處；true 那一筆在名叫 .git 的共用目錄底下的 config、
+//     或這棵樹自己的 config.worktree＝一行還原、從別的目錄照貼跑得動——原專案 08-09 事故的真實形狀（擴充開、沒有任何一棵樹覆寫、
+//     用 GIT_DIR 指向 .git/worktrees/<名> 跑 git init 造）三關前與三關中途照貼之後三關執行器與主目錄的 git status 都＝0；
+//     單一倉庫（Git 印相對路徑；從經過符號連結的路徑跑也一樣）、這棵樹自己的 config.worktree 照貼之後三關執行器＝0；
+//     include 引進的那一筆、共用目錄不叫 .git（裸儲存庫＋連結樹、站在裸儲存庫裡面跑）只列出處、說為什麼不給，一行都不給時
+//     開頭不說「先還原再推」；Git 一筆 core.bare 都列不出來＝不給指令；git 打不開（壞布林值兩處、這棵樹自己的
+//     core.worktree 指到不存在、.git 指標檔斷、HEAD 亂碼、不是倉庫、站在 .git 裡面跑）與索引整份亂碼＝印 Git 的原話（逐字對過）、
+//     不給指令；沒拿到 Git 的回答（目錄不存在、三關中途被刪掉）＝印 Node 的錯誤代碼、不冒稱是 Git 說的；
+//     三關後索引那一句跑之前 HEAD 解析不到就不說「跑之前是好的」；
 //   ⑭git ls-files 印 2 MiB（假 git）的健康倉庫＝0（原本收全部輸出＝判成索引讀不了），失敗照樣擋、印 Git 的原話（最多三行）；
-//     git 失敗卻什麼都沒印＝照實說沒印；
+//     git 失敗卻什麼都沒印、被訊號殺掉＝照樣擋、照實說；
 //   ⑮設定指紋的兩支 git 帶著髒 GIT_DIR／GIT_WORK_TREE 照樣讀這棵樹的設定（三關中途改了共用設定或這棵樹自己的 config.worktree＝1）。
 // ⚠️ 守不到的：三關命令本身對不對；鉤子有沒有被啟用（每個複本要自己設）；雲端有沒有設成必過檢查；
 //   兩個登記本身守不到的形狀（tools/run-checks.js 的 mainProblem、anchorProblem 註解與 MACHINES.md 的 E2、E3 那一列）。
@@ -1149,6 +1151,20 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     assert.equal(rsm.code, 1, rsm.lines.join('\n'));
     assert.equal(paste(rsm, away).length, 1);
     assert.equal(runChecks({ settings: loose, cwd: solo }).code, 0, '三關中途那一種照貼還原之後＝0');
+    // 從經過符號連結的路徑跑：出處換成絕對路徑用的基準是這個路徑、Git 說的共用目錄是解開連結之後的——兩個字串不同，
+    // 比對要看裝置與 inode：照樣給還原、不誤報成別的倉庫的設定檔
+    const soloLink = path.join(root, 'solo-link');
+    fs.symlinkSync(solo, soloLink);
+    g(solo, 'config', 'core.bare', 'true');
+    const rl = runChecks({ settings: loose, cwd: soloLink });
+    const rlText = rl.lines.join('\n');
+    assert.equal(rl.code, 2, rlText);
+    assert.equal(commandLines(rl).length, 1, `經過符號連結照樣給還原：${rlText}`);
+    const [, linkQuoted] = commandLines(rl)[0].match(/^git config --file '(.+)' --replace-all core\.bare false$/u) || [];
+    assert.ok(linkQuoted && linkQuoted.replace(/'\\''/gu, "'") !== fs.realpathSync(path.join(solo, '.git', 'config')), `前提（對照）：還原那一行的路徑字串跟解開連結的不同（比字串會對不上）：${rlText}`);
+    assert.doesNotMatch(rlText, /不是這個倉庫自己的設定檔|不給還原/u, `不誤報成別的倉庫的設定檔：${rlText}`);
+    assert.equal(paste(rl, away).length, 1);
+    assert.equal(runChecks({ settings: loose, cwd: soloLink }).code, 0, '經過符號連結照貼還原之後＝0');
 
     // 4. 這棵樹自己的 config.worktree 被寫 bare = true（主目錄照常）：只有 true 那一筆給還原，改的是那一檔，它算這個倉庫自己的
     const own = makePair(g, root, 'own', { ext: true });
@@ -1165,7 +1181,8 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     paste(ro, away);
     assert.equal(runChecks({ settings: loose, cwd: own.wt }).code, 0, '照貼還原之後＝0');
 
-    // 5. 共用設定檔與 include 引進的檔各寫一筆 true：兩筆各給一行還原，改 include 那一檔之前先提醒它可能被別的倉庫共用
+    // 5. 共用設定檔與 include 引進的檔各寫一筆 true：共用設定檔（共用目錄叫 .git）那一筆給還原；include 引進的那一筆只列出處、
+    //    說為什麼不給（可能也被別的倉庫共用）。Git 開倉庫時不照 include 判裸不裸，所以照貼那一行之後就好了
     const inc = makePair(g, root, 'inc', { ext: true });
     const incTrue = path.join(root, 'tree-bare-true.inc');
     fs.writeFileSync(incTrue, '[core]\n\tbare = true\n');
@@ -1173,28 +1190,51 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     g(root, 'config', '--file', inc.cfg, 'include.path', incTrue);
     assert.equal(g(inc.wt, 'rev-parse', '--is-bare-repository'), 'true', '前提：連結樹被判成裸的');
     const ri = runChecks({ settings: loose, cwd: inc.wt });
-    assert.equal(ri.code, 2, ri.lines.join('\n'));
-    assert.deepEqual(commandLines(ri).map(restoredFile).sort(), [inc.cfg, incTrue].map((f) => fs.realpathSync(f)).sort(), ri.lines.join('\n'));
-    assert.ok(precedes(ri, /下面有 1 行改的不是這個倉庫自己的設定檔/u), `include 那一檔的提醒在指令之前：${ri.lines.join('\n')}`);
-    assert.equal(paste(ri, away).length, 2);
-    assert.equal(runChecks({ settings: loose, cwd: inc.wt }).code, 0, '兩行都照貼之後＝0');
+    const riText = ri.lines.join('\n');
+    assert.equal(ri.code, 2, riText);
+    assert.deepEqual(commandLines(ri).map(restoredFile), [fs.realpathSync(inc.cfg)], `只有共用設定檔那一筆給還原：${riText}`);
+    assert.ok(ri.lines.some((l) => l.includes(incTrue)), `include 那一檔照樣列在出處裡：${riText}`);
+    assert.ok(precedes(ri, /不是這個倉庫自己的設定檔的那幾筆（include 引進的、或家目錄那一份）不給還原/u), `說為什麼不給、在指令之前：${riText}`);
+    assert.equal(ri.lines[0], '這棵樹在跑三關之前就已經是裸倉庫了：先還原再推。', '有給還原＝開頭照舊');
+    assert.equal(paste(ri, away).length, 1);
+    assert.equal(g(root, 'config', '--file', incTrue, '--get', 'core.bare'), 'true', '前提：include 那一檔沒動');
+    assert.equal(runChecks({ settings: loose, cwd: inc.wt }).code, 0, '照貼那一行之後＝0');
 
-    // 6. 這個目錄本身就是裸儲存庫：擋照舊；有 core.bare = true 時一樣給還原，但「本來就是裸儲存庫的話不要照做」在指令之前（照實的代價）；
-    //    Git 一筆 core.bare 都列不出來（判成裸的依據不是設定）＝不給任何指令（原本那一行自查照貼自己就退 1）
+    // 6. 共用目錄不叫 .git（可能本來就是裸儲存庫）：只列出處、不給任何指令、照實說為什麼不給，開頭不說「先還原再推」（內部審查中①）
+    const noFix = (res, why) => {
+      const text = res.lines.join('\n');
+      assert.equal(res.code, 2, `${why}：${text}`);
+      assert.equal(commandLines(res).length, 0, `${why}：不給任何指令：${text}`);
+      assert.doesNotMatch(text, /core\.bare false/u, `${why}：不給改成 false 的指令：${text}`);
+      assert.equal(res.lines[0], '這棵樹在跑三關之前就被 Git 判成裸倉庫了（沒有工作樹）：三關要在工作樹裡跑，不放行。', `${why}：${text}`);
+      assert.doesNotMatch(text, /先還原再推/u, `${why}：不給還原就不說先還原：${text}`);
+      return text;
+    };
+    // (a) 裸儲存庫＋連結工作樹（擴充開、連結樹沒覆寫）：從連結樹跑
+    const bsrc = makePair(g, root, 'bsrc', { ext: false });
+    const bstore = path.join(root, 'bl-store.git');
+    const blinked = path.join(root, 'bl-linked');
+    g(root, 'clone', '-q', '--bare', bsrc.main, bstore);
+    g(bstore, 'config', 'extensions.worktreeConfig', 'true');
+    g(bstore, 'worktree', 'add', '-q', '--detach', blinked);
+    const listed = () => g(bstore, 'worktree', 'list', '--porcelain');
+    assert.match(listed(), /^bare$/mu, '前提：worktree list 把那個儲存庫標成 bare');
+    assert.equal(g(blinked, 'rev-parse', '--is-bare-repository'), 'true', '前提：連結樹沒覆寫、被判成裸的');
+    const rbl = runChecks({ settings: loose, cwd: blinked });
+    assert.match(noFix(rbl, '裸儲存庫＋連結樹'), /共用設定檔那一筆不給還原：共用目錄不叫 \.git/u);
+    assert.match(listed(), /^bare$/mu, '跑完那個儲存庫照樣是 bare');
+    // (b) 站在裸儲存庫裡面跑
     const store = path.join(root, 'store.git');
     g(root, 'init', '-q', '--bare', store);
     const rst = runChecks({ settings: loose, cwd: store });
-    assert.equal(rst.code, 2, rst.lines.join('\n'));
-    assert.equal(commandLines(rst).length, 1, rst.lines.join('\n'));
-    assert.equal(restoredFile(commandLines(rst)[0]), fs.realpathSync(path.join(store, 'config')), 'Git 印相對的 file:config，換成絕對的');
-    assert.ok(precedes(rst, /本來就是裸儲存庫的話不要照做/u), rst.lines.join('\n'));
+    assert.match(noFix(rst, '站在裸儲存庫裡面'), /共用設定檔那一筆不給還原：共用目錄不叫 \.git/u);
+    assert.ok(rst.lines.some((l) => l.includes(`${store}/config`) || l.includes(fs.realpathSync(path.join(store, 'config')))), `照樣列出處（Git 印相對的 file:config，換成絕對的）：${rst.lines.join('\n')}`);
+    // (c) Git 一筆 core.bare 都列不出來（判成裸的依據不是設定）＝不給任何指令（原本那一行自查照貼自己就退 1）
     g(store, 'config', '--unset', 'core.bare');
     assert.equal(g(store, 'rev-parse', '--is-bare-repository'), 'true', '前提：拿掉 core.bare 之後 Git 還是判成裸的');
     assert.equal(raw(store, 'config', '--get-all', 'core.bare').status, 1, '前提：一筆 core.bare 都沒有、Git 退 1');
     const rnk = runChecks({ settings: loose, cwd: store });
-    assert.equal(rnk.code, 2, rnk.lines.join('\n'));
-    assert.match(rnk.lines.join('\n'), /Git 列不出任何一筆 core\.bare/u);
-    assert.equal(commandLines(rnk).length, 0, `不給照貼會失敗的指令：${rnk.lines.join('\n')}`);
+    assert.match(noFix(rnk, '一筆都沒有'), /Git 列不出任何一筆 core\.bare/u);
 
     // 7. git 打不開（not-a-repo 那一族）：印 Git 的原話（跟站在同一個目錄問 Git 得到的第一行逐字相同）、不給任何指令
     const saysFirst = (cwd) => {
@@ -1221,7 +1261,8 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
         assert.equal(r.code, 2, `${why}：${text}`);
         assert.equal(r.lines[0], '這裡不是版本控制的工作樹。');
         assert.ok(r.lines.includes(`    ${want}`), `Git 的原話逐字照印（${why}）：${text}`);
-        assert.match(text, /只印 Git 的原話、不給還原指令/u);
+        assert.match(text, /只印 Git 的原話、不給還原指令：如果有東西壞了/u);
+        assert.match(text, /Git 原話裡若附了建議的指令，這裡沒有驗過/u);
         assert.equal(commandLines(r).length, 0, `不給指令（${why}）：${text}`);
       }
     }
@@ -1231,16 +1272,33 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     assert.match(rm.lines.join('\n'), /三關跑完之後這棵樹不是工作樹了/u);
     assert.ok(rm.lines.includes(`    ${saysFirst(midBad.wt)}`), `三關中途寫壞的也印 Git 的原話：${rm.lines.join('\n')}`);
     assert.equal(commandLines(rm).length, 0, rm.lines.join('\n'));
-    // 根本不是倉庫；目錄不存在（git 起不來＝印 Node 給的原因，不冒稱是 Git 說的）
+    // 根本不是倉庫；站在 .git 目錄裡面跑（is-bare 那一問過了、工作樹根那一問才失敗）：什麼都沒壞，一樣印 Git 的原話
     const ra = runChecks({ settings: loose, cwd: away });
     assert.equal(ra.code, 2);
     assert.ok(ra.lines.includes(`    ${saysFirst(away)}`), ra.lines.join('\n'));
+    const dotGit = path.join(own.main, '.git');   // 健康的那一對（第 4 段照貼還原過）
+    const inside = raw(dotGit, 'rev-parse', '--show-toplevel');
+    assert.equal(raw(dotGit, 'rev-parse', '--is-bare-repository').stdout.trim(), 'false', '前提：站在 .git 裡面，is-bare 那一問過得了');
+    assert.notEqual(inside.status, 0, '前提：工作樹根那一問失敗');
+    const rg = runChecks({ settings: loose, cwd: dotGit });
+    assert.equal(rg.code, 2, rg.lines.join('\n'));
+    assert.ok(rg.lines.includes(`    ${inside.stderr.split('\n').find(Boolean)}`), `工作樹根那一問的 Git 原話照印：${rg.lines.join('\n')}`);
+    assert.equal(commandLines(rg).length, 0, rg.lines.join('\n'));
+    // 目錄不存在（三關前；三關中途被刪掉）：Node 那一層就出錯、沒拿到 Git 的回答＝印 Node 的錯誤代碼，不說「git 起不來」、不冒稱是 Git 說的
     const noDir = runChecks({ settings: loose, cwd: path.join(root, 'no-such-dir') });
     assert.equal(noDir.code, 2);
-    assert.match(noDir.lines.join('\n'), /git 起不來（.*ENOENT.*）。/u, noDir.lines.join('\n'));
-    assert.doesNotMatch(noDir.lines.join('\n'), /Git 的原話/u, 'git 沒起來：不冒稱是 Git 說的');
+    assert.ok(noDir.lines.includes('  沒拿到 Git 的回答（Node：ENOENT）。'), noDir.lines.join('\n'));
+    assert.doesNotMatch(noDir.lines.join('\n'), /Git 的原話|起不來/u, '沒拿到 Git 的回答：不冒稱是 Git 說的、不說 git 起不來');
+    const doomed = path.join(root, 'doomed');
+    fs.mkdirSync(doomed);
+    g(doomed, 'init', '-q');
+    const gone = runChecks({ settings: withKeys({}, [['sh', '-c', 'rm -rf "$1"', 'rm', doomed]]), cwd: doomed });
+    assert.ok(!fs.existsSync(doomed), '前提：那一關真的把這棵樹的目錄刪掉了');
+    assert.equal(gone.code, 1, gone.lines.join('\n'));
+    assert.ok(gone.lines.includes('  沒拿到 Git 的回答（Node：ENOENT）。'), `三關中途刪掉目錄：${gone.lines.join('\n')}`);
+    assert.doesNotMatch(gone.lines.join('\n'), /起不來/u, gone.lines.join('\n'));
 
-    // 8. 索引整份亂碼：擋、印 Git 的原話（Git 先印 error 那一行、再印 fatal 那一行，兩行都印）
+    // 8. 索引整份亂碼：擋、印 Git 的原話（這一份亂碼 Git 先印 error 那一行、再印 fatal 那一行，兩行都印）
     const ig = makePair(g, root, 'idx', { ext: true });
     fs.writeFileSync(g(ig.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index'), 'garbage garbage garbage garbage\n');
     const lsSaid = raw(ig.wt, 'ls-files');
@@ -1283,7 +1341,7 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
     g(repo, 'add', '.');
     g(repo, 'commit', '-q', '-m', 'base');
     // PATH 最前面放一支假 git，只接管「git ls-files」與「git ls-files -z」（不帶其他參數）：照 KIT_FAKE_LS 印 2 MiB 退 0、
-    // 什麼都不印退 1、或印五行錯誤退 128；其餘一律交給真的 git
+    // 什麼都不印退 1、印五行錯誤退 128、或被訊號殺掉（自己 kill -TERM）；其餘一律交給真的 git
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
     const fakeBin = path.join(root, 'fake-bin-ls');
     fs.mkdirSync(fakeBin);
@@ -1295,6 +1353,7 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
       `    big) '${process.execPath}' -e 'process.stdout.write("x".repeat(2 * 1024 * 1024))'; exit $?;;`,
       '    quiet) exit 1;;',
       '    loud) for i in 1 2 3 4 5; do echo "fatal: injected $i" >&2; done; exit 128;;',
+      '    killed) kill -TERM $$;;',
       '  esac',
       'fi',
       `exec '${realGit}' "$@"`,
@@ -1329,6 +1388,13 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
     const loud = withFake('loud', () => runChecks({ settings: withKeys({}), cwd: repo }));
     assert.equal(loud.code, 2, loud.lines.join('\n'));
     assert.deepEqual(loud.lines.slice(1), ['  Git 的原話：', '    fatal: injected 1', '    fatal: injected 2', '    fatal: injected 3', '    （後面還有 2 行沒印）'], loud.lines.join('\n'));
+    // 被訊號殺掉（沒有退出碼）：照樣擋，照實說是訊號
+    const direct2 = withFake('killed', () => spawnSync('git', ['ls-files'], { cwd: repo, env: gitEnv() }));
+    assert.equal(direct2.status, null, '前提：假 git 真的被訊號殺掉、沒有退出碼');
+    assert.equal(direct2.signal, 'SIGTERM', '前提：是 SIGTERM');
+    const killed = withFake('killed', () => runChecks({ settings: withKeys({}), cwd: repo }));
+    assert.equal(killed.code, 2, killed.lines.join('\n'));
+    assert.deepEqual(killed.lines.slice(1), ['  Git 沒有印錯誤訊息（被訊號 SIGTERM 結束）。'], killed.lines.join('\n'));
     // git 打不開、卻什麼都沒印（假 git 讓 is-bare 那一問靜靜退 1）：照實說沒印，不說「只印 Git 的原話」
     const mute = withFake('mute', () => runChecks({ settings: withKeys({}), cwd: repo }));
     assert.equal(mute.code, 2, mute.lines.join('\n'));

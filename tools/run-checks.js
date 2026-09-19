@@ -16,7 +16,8 @@
 //   反過來（跑之前解析不到、跑完解析得到）：三關後那一次照驗，不對＝退 1，訊息用三關前那一套判斷（跑之前沒驗過，不能說「跑之前都在」）。
 //   為什麼要登記、不自己猜：「主目錄本來就是裸儲存庫」「有意暫存刪除全部檔案」跟壞掉的樣子，從 Git 看起來一模一樣；
 //   意圖只能由專案說（搬家前準備 r2 B1、B2 的審查者自己給的路）。
-// 既有狀態擋下時也說壞在哪：這棵樹自己被判成裸倉庫＝列 core.bare 出處、每一筆 true 一行還原（跟主目錄同一套）；
+// 既有狀態擋下時也說壞在哪：這棵樹自己被判成裸倉庫＝列 core.bare 出處；true 那一筆在「名叫 .git 的共用目錄底下的 config」或
+//   「這棵樹自己的 config.worktree」才給一行還原，其餘說為什麼不給（共用目錄不叫 .git＝可能本來就是裸儲存庫；見 treeBare）；
 //   git 打不開（not-a-repo）或索引讀不了＝印 Git 自己的錯誤訊息原文，不給還原（要定位是哪一個檔就得自己解讀
 //   Git 的設定規則與倉庫布局——.git 指標檔、commondir、哪一層設定生效——那是重做 Git，搬家前準備 r2〜r3 的教訓）。
 // 所有外部指令的環境先清掉 GIT_ 那一族（規矩 E4）。
@@ -49,7 +50,7 @@ const hasControl = (s) => Array.from(s).some((c) => {
 const ANCHOR_MAX_BUFFER = 64 * 1024 * 1024;
 /** 問「索引是不是整份空的」那一次的輸出上限：只要知道有沒有一筆，超過上限（Node 回 ENOBUFS）＝有東西。 */
 const EMPTY_PROBE_BUFFER = 1024;
-/** Git 的錯誤訊息最多印幾行（索引壞了時 Git 先印 error 那一行、再印 fatal 那一行）。 */
+/** Git 的錯誤訊息最多印幾行（例如索引壞了時 Git 可能先印 error 那一行、再印 fatal 那一行；整份只剩幾個位元組的亂碼時只印一行 fatal）。 */
 const GIT_SAYS_MAX = 3;
 const MAIN_SKIP = '主目錄是不是一般工作樹（checks.mainWorktree；共用目錄不叫 .git，主目錄在哪 Git 說不出來）';
 const ANCHOR_SKIP = '索引錨點（checks.indexAnchors；HEAD 解析不到：剛 init、或目前在還沒有提交的分支上）';
@@ -79,12 +80,13 @@ const samePath = (a, b) => {
 };
 const firstLine = (s) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || '沒有訊息';
 /**
- * 一次 git 呼叫失敗時 Git 自己說了什麼：{ lines（標準錯誤輸出的非空行，照原文、只去掉行尾空白）, status }；
- * 起不來（例如 git 不在 PATH 上、或這個目錄不存在）＝{ spawn: Node 給的原因 }——不冒稱是 Git 說的。寫成訊息見 gitSaysLines。
+ * 一次 git 呼叫失敗時 Git 自己說了什麼：{ lines（標準錯誤輸出的非空行，照原文、只去掉行尾空白）, status, signal }；
+ * Node 那一層就出錯、沒拿到 Git 的回答（例如這個目錄不存在或被刪掉、git 不在 PATH 上、輸出超過上限）＝{ spawn: Node 的錯誤代碼 }——
+ *   不猜是哪一種、也不冒稱是 Git 說的。寫成訊息見 gitSaysLines。
  */
 const gitSays = (r) => (r.error
-  ? { spawn: r.error.message }
-  : { lines: String(r.stderr || '').split('\n').map((l) => l.replace(/\s+$/u, '')).filter(Boolean), status: r.status });
+  ? { spawn: r.error.code || r.error.message }
+  : { lines: String(r.stderr || '').split('\n').map((l) => l.replace(/\s+$/u, '')).filter(Boolean), status: r.status, signal: r.signal });
 /** 設定值寫進訊息：JSON 字面，再把 JSON 不跳脫的 DEL 與分行符號也寫成 \\uXXXX（訊息要維持一行）。 */
 const show = (v) => String(JSON.stringify(v)).replace(/[\u007f\u0085\u2028\u2029]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
@@ -197,17 +199,28 @@ function bareOrigins(dir) {
 }
 
 /**
- * 這棵樹自己被 Git 判成裸倉庫（既有的 bare 狀態）：一併問 core.bare 每一筆的出處（站在這棵樹問），訊息照主目錄那一套給還原。
- * own＝這個倉庫自己的兩份設定檔（Git 說的共用設定檔、這棵樹自己的 config.worktree），只拿來判斷要不要提醒 include。
+ * 這棵樹自己被 Git 判成裸倉庫（既有的 bare 狀態）：一併問 core.bare 每一筆的出處（站在這棵樹問），訊息照主目錄那一套列出處。
+ * 還原指令射程比主目錄那一路窄（內部審查中①）：只有 true 那一筆在「名叫 .git 的共用目錄底下的 config」或「這棵樹自己的
+ *   config.worktree」才給（fixable）。共用目錄不叫 .git 時它可能本來就是裸儲存庫（store.git＋連結工作樹、站在裸儲存庫裡面跑）——
+ *   從 Git 看跟壞掉的一模一樣，照貼會把合法的裸儲存庫改成非裸；跟主目錄那一路「共用目錄叫 .git 才問」同一個射程。
+ *   ⚠️ 量到守不到的一種（git 2.39.5）：裸儲存庫把 core.bare=true 放在它自己的 config.worktree、又站在它裡面跑——
+ *   那一檔就是「這棵樹自己的 config.worktree」，照這條規則仍會給指令（照做會把它改成非裸）。
+ * sharedCfg＝Git 說的共用設定檔、commonIsDotGit＝共用目錄叫不叫 .git，只用在訊息（說為什麼不給）。
  * 不新增判準：擋不擋照舊只看 rev-parse --is-bare-repository。
  */
 function treeBare(git, cwd) {
-  const own = [];
+  const fixable = [];
+  let sharedCfg = null;
+  let commonIsDotGit = false;
   const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
-  if (!common.error && common.status === 0) own.push(path.join(pathOut(common), 'config'));
+  if (!common.error && common.status === 0) {
+    sharedCfg = path.join(pathOut(common), 'config');
+    commonIsDotGit = path.basename(pathOut(common)) === '.git';
+    if (commonIsDotGit) fixable.push(sharedCfg);
+  }
   const perTree = git('rev-parse', '--path-format=absolute', '--git-path', 'config.worktree');
-  if (!perTree.error && perTree.status === 0) own.push(pathOut(perTree));
-  return { state: 'bare', origins: bareOrigins(cwd), own };
+  if (!perTree.error && perTree.status === 0) fixable.push(pathOut(perTree));
+  return { state: 'bare', origins: bareOrigins(cwd), fixable, sharedCfg, commonIsDotGit };
 }
 
 /**
@@ -344,6 +357,9 @@ function configFingerprint(cwd) {
  * 還原指令一筆 true 一行、獨佔一行、後面不接字（照貼才不會斷）；要人先想一下的話（reminder 與那兩句提醒）一律放在指令之前。
  * 每一筆 true 都改掉＝不必判斷哪一筆生效（不重做「最後一筆生效」那條規則）。
  * 不給還原的時候也不給自查指令：Git 列的全部出處已經印在訊息裡（原本那一行自查在 Git 一筆都列不出來時，照貼自己就退 1）。
+ * 這棵樹那一路（st.fixable 有值）：只有落在 fixable 裡的 true 給還原（射程見 treeBare），其餘照實說為什麼不給；主目錄那一路照舊
+ *   （它只在共用目錄叫 .git 時才問），include 引進的也給、先提醒。
+ * 檔案的比對一律看裝置與 inode（站在這棵樹問時，出處換成絕對路徑用的基準可能經過符號連結，比字串會對不上）。
  */
 function bareRestoreLines(st, reminder) {
   const list = st.origins;
@@ -356,24 +372,34 @@ function bareRestoreLines(st, reminder) {
   if (!trues.length || list.some((o) => !o.origin.startsWith('file:'))) {
     return [...lines, '  出處裡有不是檔案的，或沒有一筆是 true：這裡不給還原指令。'];
   }
+  const is = (list2, o) => list2.some((f) => samePath(f, o.origin.slice(5)) === true);
+  const fixes = st.fixable ? trues.filter((o) => is(st.fixable, o)) : trues;
+  const held = trues.filter((o) => !fixes.includes(o));
+  if (held.some((o) => st.sharedCfg && is([st.sharedCfg], o))) {
+    lines.push('  共用設定檔那一筆不給還原：共用目錄不叫 .git，這可能本來就是裸儲存庫（例如裸儲存庫加連結工作樹、或站在裸儲存庫裡面跑），從 Git 看跟壞掉的一模一樣，照做會把它改成非裸的。');
+  }
+  if (held.some((o) => !(st.sharedCfg && is([st.sharedCfg], o)))) {
+    lines.push('  不是這個倉庫自己的設定檔的那幾筆（include 引進的、或家目錄那一份）不給還原：它們可能也被別的倉庫共用。');
+  }
+  if (!fixes.length) return lines;
   lines.push('  還原之前先看一眼是誰寫的：已知的機制是環境變數 GIT_DIR 指向 .git/worktrees/<名> 時跑了 git init。');
   if (reminder) lines.push(reminder);
-  // 自己的兩份設定檔用裝置與 inode 比（站在這棵樹問時，出處換成絕對路徑用的基準可能經過符號連結，比字串會誤報 include）
-  const own = st.own || [];
-  const foreign = trues.filter((o) => !own.some((f) => samePath(f, o.origin.slice(5)) === true));
+  const foreign = st.fixable ? [] : fixes.filter((o) => !is(st.own || [], o));
   if (foreign.length) {
     lines.push(`  下面有 ${foreign.length} 行改的不是這個倉庫自己的設定檔（include 引進的、或家目錄那一份），它可能也被別的倉庫共用：先確認再改。`);
   }
-  lines.push('  還原（每一筆 true 各改回 false；在哪個目錄跑都可以）：');
-  for (const o of trues) lines.push(`git config --file ${shq(o.origin.slice(5))} --replace-all core.bare false`);
+  lines.push(`  還原（${held.length ? '上面說不給的以外，' : ''}每一筆 true 各改回 false；在哪個目錄跑都可以）：`);
+  for (const o of fixes) lines.push(`git config --file ${shq(o.origin.slice(5))} --replace-all core.bare false`);
   return lines;
 }
 
 /** not-a-repo、index-unusable 的後半段：Git 自己說了什麼（照原文，最多 GIT_SAYS_MAX 行）。 */
 function gitSaysLines(said) {
   if (!said) return [];
-  if (said.spawn) return [`  git 起不來（${said.spawn}）。`];
-  if (!said.lines.length) return [`  Git 沒有印錯誤訊息（退出碼 ${said.status === null ? '沒有' : said.status}）。`];
+  if (said.spawn) return [`  沒拿到 Git 的回答（Node：${said.spawn}）。`];
+  if (!said.lines.length) {
+    return [`  Git 沒有印錯誤訊息（${said.status === null ? `被訊號 ${said.signal || '（不明）'} 結束` : `退出碼 ${said.status}`}）。`];
+  }
   const shown = said.lines.slice(0, GIT_SAYS_MAX);
   const rest = said.lines.length - shown.length;
   return ['  Git 的原話：', ...shown.map((l) => `    ${l}`), ...(rest > 0 ? [`    （後面還有 ${rest} 行沒印）`] : [])];
@@ -445,8 +471,10 @@ const AFTER_BROKEN = '三關跑完之後這棵樹不是工作樹了（跑之前�
 /** 三關後的索引那一句：跑之前 HEAD 解析不到＝索引那一項沒驗，不能說「跑之前是好的」。 */
 const AFTER_INDEX_UNCHECKED = '三關跑完之後這棵樹的索引檔不見了或讀不了（跑之前 HEAD 解析不到、這一項沒驗；三關跑完 HEAD 解析得到了）：先重建索引、再查是哪一題。';
 /** git 打不開時為什麼不給還原：成因各在不同的檔，要定位就得自己解讀 Git 的設定與倉庫布局。 */
-const NO_RESTORE = '  這一種只印 Git 的原話、不給還原指令：要知道壞在哪一個檔，得自己解讀 Git 的設定規則與倉庫布局（.git 指標檔、哪一層設定），這支不做。';
+const NO_RESTORE = '  這裡只印 Git 的原話、不給還原指令：如果有東西壞了，要從 Git 的原話找出是哪一個檔（替你找就得自己解讀 Git 的設定規則與倉庫布局，這支不做）。Git 原話裡若附了建議的指令，這裡沒有驗過。';
 const TREE_BARE_REMINDER = '  先看這個目錄底下原本有沒有專案的檔：本來就是裸儲存庫的話不要照做（三關要在工作樹裡跑）。';
+/** 這棵樹被判成裸倉庫、三關前、一行還原都不給的時候的開頭（不說「先還原再推」：後面說的是為什麼不給）。 */
+const BEFORE_BARE_NO_FIX = '這棵樹在跑三關之前就被 Git 判成裸倉庫了（沒有工作樹）：三關要在工作樹裡跑，不放行。';
 const MAIN_BARE_REMINDER = '  先看主目錄底下原本有沒有專案的檔：本來就是裸儲存庫的話不要照做，這份登記不適用這台（見 MACHINES.md 的 E2、E3 那一列）。';
 
 /**
@@ -454,14 +482,19 @@ const MAIN_BARE_REMINDER = '  先看主目錄底下原本有沒有專案的檔�
  * 三關後、跑之前是好的那幾種新訊息（主目錄判成裸、主目錄打不開、錨點、HEAD 解析不到）都說「多半是某一題、也可能是同一段時間別的工作階段」：
  *   兩者從這裡分不出來。主目錄「問不到是不是這個倉庫」那一句不這樣說（它沒量到壞，只是驗不到）。跑之前錨點沒驗、三關後才驗到的那一種不說（它用三關前那一套判斷）；
  *   既有的三關後那幾句（樹被指到別處、索引、不是工作樹了）不加這一句。
- * 既有狀態：這棵樹被判成裸倉庫＝後面接出處與還原（跟主目錄同一套）；git 打不開、索引讀不了＝後面接 Git 的原話。
+ * 既有狀態：這棵樹被判成裸倉庫＝後面接出處與還原（射程見 treeBare；三關前一行還原都不給時開頭不說「先還原再推」）；
+ *   git 打不開、索引讀不了＝後面接 Git 的原話。
  *   三關後的索引那一句：跑之前 HEAD 解析不到（索引那一項沒驗）就不說「跑之前是好的」。
  */
 function explain(st, before, prior) {
   const main = st.main && shq(st.main);
   const orOther = '（或是不是同一段時間有別的工作階段在動）';
   if (st.state === 'head-gone') return headGoneLines(st);
-  if (st.state === 'bare') return [before ? BEFORE.bare : AFTER_BROKEN, ...bareRestoreLines(st, before ? TREE_BARE_REMINDER : null)];
+  if (st.state === 'bare') {
+    const rest = bareRestoreLines(st, before ? TREE_BARE_REMINDER : null);
+    const fixes = rest.some((l) => l.startsWith('git '));
+    return [before ? (fixes ? BEFORE.bare : BEFORE_BARE_NO_FIX) : AFTER_BROKEN, ...rest];
+  }
   if (st.state === 'not-a-repo') {
     return [before ? NOT_A_REPO : AFTER_BROKEN, ...gitSaysLines(st.said), ...(st.said && st.said.lines && st.said.lines.length ? [NO_RESTORE] : [])];
   }
@@ -476,7 +509,8 @@ function explain(st, before, prior) {
     return [head, ...bareRestoreLines(st, before ? MAIN_BARE_REMINDER : null)];
   }
   if (st.state === 'main-unreadable') {
-    // 問到的是另一個倉庫：在主目錄下一般的 git 指令（不像這裡擋著不准往上層找）會落到那個倉庫、不會失敗（Codex r2 那一條低）。
+    // 問到的是另一個倉庫：在主目錄下一般的 git 指令（不像這裡擋著不准往上層找）會落到那個倉庫（Codex r2 那一條低）；
+    // 那個倉庫是裸的時，git status、git log 照樣會失敗（git 2.39.5 量到都退 128），所以這裡不說會不會失敗。
     // 其餘：這裡擋著不准往上層找所以打不開；一般的 git 指令在主目錄放在別的倉庫底下時同樣會落到那個倉庫，不一定失敗
     const where = st.other
       ? '在主目錄下一般的 git 指令卻會落到那個倉庫、碰不到這個專案'
