@@ -1068,7 +1068,7 @@ test('⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒�
   assert.equal(note.lines.at(-1), '三關全綠（1 關）。沒登記、所以沒驗：索引錨點（checks.indexAnchors）。登記了、這次沒驗：某一項（原因）。');
 });
 
-test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這棵樹被判成裸倉庫＝列 core.bare 出處、每一筆 true 一行還原、照貼跑得動（原專案 08-09 事故的真實形狀，三關前與三關中途）；git 打不開、索引讀不了＝印 Git 的原話、不給指令；三關後索引那一句照實', () => {
+test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這棵樹被判成裸倉庫＝列 core.bare 出處、射程內的 true 才給還原（每一筆一行）、照貼跑得動（原專案 08-09 事故的真實形狀，三關前與三關中途）；git 打不開、索引讀不了＝印 Git 的原話、不給指令；三關後索引那一句照實', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), ODD_PREFIX));
   const away = fs.mkdtempSync(path.join(os.tmpdir(), 'run-checks-away-'));
   try {
@@ -1381,7 +1381,7 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
     g(repo, 'add', '.');
     g(repo, 'commit', '-q', '-m', 'base');
     // PATH 最前面放一支假 git，只接管「git ls-files」與「git ls-files -z」（不帶其他參數）：照 KIT_FAKE_LS 印 2 MiB 退 0、
-    // 什麼都不印退 1、印五行錯誤退 128、或被訊號殺掉（自己 kill -TERM）；其餘一律交給真的 git
+    // 什麼都不印退 1、印五行錯誤退 128、被訊號殺掉（自己 kill -TERM），或（probe）只在 ls-files -z 那一次記一行開始、印 2 MiB、再記一行印完；其餘一律交給真的 git
     const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
     const fakeBin = path.join(root, 'fake-bin-ls');
     fs.mkdirSync(fakeBin);
@@ -1394,14 +1394,15 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
       '    quiet) exit 1;;',
       '    loud) for i in 1 2 3 4 5; do echo "fatal: injected $i" >&2; done; exit 128;;',
       '    killed) kill -TERM $$;;',
+      `    probe) if [ "$*" = "ls-files -z" ]; then echo probe-start >> "$KIT_FAKE_LOG"; '${process.execPath}' -e 'process.stdout.write("x".repeat(2 * 1024 * 1024))'; echo probe-done >> "$KIT_FAKE_LOG"; fi; exit 0;;`,
       '  esac',
       'fi',
       `exec '${realGit}' "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
     const withFake = (mode, fn) => {
-      const prev = { PATH: process.env.PATH, KIT_FAKE_LS: process.env.KIT_FAKE_LS };
-      Object.assign(process.env, { PATH: `${fakeBin}${path.delimiter}${prev.PATH}`, KIT_FAKE_LS: mode });
+      const prev = { PATH: process.env.PATH, KIT_FAKE_LS: process.env.KIT_FAKE_LS, KIT_FAKE_LOG: process.env.KIT_FAKE_LOG };
+      Object.assign(process.env, { PATH: `${fakeBin}${path.delimiter}${prev.PATH}`, KIT_FAKE_LS: mode, KIT_FAKE_LOG: path.join(root, 'fake-ls.log') });
       try { return fn(); } finally {
         for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
       }
@@ -1421,6 +1422,21 @@ test('⑭追蹤檔很多的健康倉庫不會因為 git ls-files 的輸出太多
     assert.equal(ghost.code, 2, ghost.lines.join('\n'));
     assert.match(ghost.lines[0], /登記的全部不見/u, ghost.lines[0]);
     assert.doesNotMatch(ghost.lines[0], /整份/u, `輸出超過上限＝索引裡有東西：${ghost.lines[0]}`);
+    // 問「整份是不是空的」那一次：只在登記的錨點全部不見時才問，而且輸出上限很小（超過就被 Node 停掉、不收完）。
+    // 假 git 的 probe 模式只接管那一次（ls-files -z），開始與印完各記一行：被停掉＝沒有「印完」那一行
+    const fakeLog = path.join(root, 'fake-ls.log');
+    const probeRun = (anchors) => {
+      fs.rmSync(fakeLog, { force: true });
+      const r = withFake('probe', () => runChecks({ settings: withKeys({ indexAnchors: anchors }), cwd: repo }));
+      return { r, log: fs.existsSync(fakeLog) ? fs.readFileSync(fakeLog, 'utf8') : '' };
+    };
+    const partial = probeRun(['anchor.txt', 'ghost.txt']);
+    assert.equal(partial.r.code, 2, partial.r.lines.join('\n'));
+    assert.equal(partial.log, '', `只缺一部分錨點：不問整份是不是空的（假 git 的紀錄：${JSON.stringify(partial.log)}）`);
+    const all = probeRun(['ghost.txt']);
+    assert.equal(all.r.code, 2, all.r.lines.join('\n'));
+    assert.match(all.log, /probe-start/u, `錨點全部不見：問一次（假 git 的紀錄：${JSON.stringify(all.log)}）`);
+    assert.doesNotMatch(all.log, /probe-done/u, '那一次的輸出超過上限就被停掉、沒有收完 2 MiB');
     // 不收輸出不等於不看退出碼：ls-files 失敗照樣擋
     const quiet = withFake('quiet', () => runChecks({ settings: withKeys({}), cwd: repo }));
     assert.equal(quiet.code, 2, quiet.lines.join('\n'));
