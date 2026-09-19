@@ -32,10 +32,12 @@
 //   ⑫兩個登記寫錯＝2、一關都不跑、訊息指出哪一格；沒寫或寫「未設定」＝沒登記、全綠那一行照實說沒驗；三關後樹壞了、設定也變了＝兩段都印；
 //     三關後讀不到設定指紋＝說沒辦法比對、不說被改了；
 //   ⑬既有狀態（登記不登記都一樣）：這棵樹被判成裸倉庫＝列 core.bare 出處；true 那一筆在名叫 .git 的共用目錄底下的 config、
-//     或這棵樹自己的 config.worktree＝一行還原、從別的目錄照貼跑得動——原專案 08-09 事故的真實形狀（擴充開、沒有任何一棵樹覆寫、
-//     用 GIT_DIR 指向 .git/worktrees/<名> 跑 git init 造）三關前與三關中途照貼之後三關執行器與主目錄的 git status 都＝0；
-//     單一倉庫（Git 印相對路徑；從經過符號連結的路徑跑也一樣）、這棵樹自己的 config.worktree 照貼之後三關執行器＝0；
-//     include 引進的那一筆、共用目錄不叫 .git（裸儲存庫＋連結樹、站在裸儲存庫裡面跑）只列出處、說為什麼不給，一行都不給時
+//     或這棵樹自己的 config.worktree（連結樹的、或共用目錄名叫 .git 時）＝一行還原、從別的目錄照貼跑得動——原專案 08-09 事故的
+//     真實形狀（擴充開、沒有任何一棵樹覆寫、用 GIT_DIR 指向 .git/worktrees/<名> 跑 git init 造）三關前與三關中途照貼之後
+//     三關執行器與主目錄的 git status 都＝0；單一倉庫（Git 印相對路徑；從經過符號連結的路徑跑也一樣）、連結樹自己的
+//     config.worktree（共用目錄叫不叫 .git 各一題）、從主目錄跑而主目錄自己的 config.worktree 被寫壞，照貼之後三關執行器＝0；
+//     include 引進的那一筆、共用目錄不叫 .git（裸儲存庫＋連結樹、站在裸儲存庫裡面跑、裸儲存庫把 bare 放在自己的
+//     config.worktree）只列出處、說為什麼不給，一行都不給時
 //     開頭不說「先還原再推」；Git 一筆 core.bare 都列不出來＝不給指令；git 打不開（壞布林值兩處、這棵樹自己的
 //     core.worktree 指到不存在、.git 指標檔斷、HEAD 亂碼、不是倉庫、站在 .git 裡面跑）與索引整份亂碼＝印 Git 的原話（逐字對過）、
 //     不給指令；沒拿到 Git 的回答（目錄不存在、三關中途被刪掉）＝印 Node 的錯誤代碼、不冒稱是 Git 說的；
@@ -1180,6 +1182,17 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     assert.doesNotMatch(ro.lines.join('\n'), /不是這個倉庫自己的設定檔/u, `這棵樹自己的 config.worktree 算這個倉庫自己的：${ro.lines.join('\n')}`);
     paste(ro, away);
     assert.equal(runChecks({ settings: loose, cwd: own.wt }).code, 0, '照貼還原之後＝0');
+    // 從主目錄本身跑、主目錄自己的 config.worktree 被寫 bare = true（共用目錄叫 .git）：一樣給還原、照貼之後＝0
+    const m1 = makePair(g, root, 'm1', { ext: true });
+    const m1Own = path.join(m1.main, '.git', 'config.worktree');
+    g(root, 'config', '--file', m1Own, 'core.bare', 'true');
+    assert.notEqual(status(m1.main), 0, '前提：主目錄打不開');
+    const rm1 = runChecks({ settings: loose, cwd: m1.main });
+    assert.equal(rm1.code, 2, rm1.lines.join('\n'));
+    assert.deepEqual(commandLines(rm1).map(restoredFile), [fs.realpathSync(m1Own)], rm1.lines.join('\n'));
+    paste(rm1, away);
+    assert.equal(status(m1.main), 0, '照貼還原之後主目錄打得開');
+    assert.equal(runChecks({ settings: loose, cwd: m1.main }).code, 0, '照貼還原之後＝0（從主目錄本身跑）');
 
     // 5. 共用設定檔與 include 引進的檔各寫一筆 true：共用設定檔（共用目錄叫 .git）那一筆給還原；include 引進的那一筆只列出處、
     //    說為什麼不給（可能也被別的倉庫共用）。Git 開倉庫時不照 include 判裸不裸，所以照貼那一行之後就好了
@@ -1220,14 +1233,15 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     const listed = () => g(bstore, 'worktree', 'list', '--porcelain');
     assert.match(listed(), /^bare$/mu, '前提：worktree list 把那個儲存庫標成 bare');
     assert.equal(g(blinked, 'rev-parse', '--is-bare-repository'), 'true', '前提：連結樹沒覆寫、被判成裸的');
+    const GATED = /共用目錄不叫 \.git，所以這個倉庫自己的設定檔那幾筆不給還原：這可能本來就是裸儲存庫/u;
     const rbl = runChecks({ settings: loose, cwd: blinked });
-    assert.match(noFix(rbl, '裸儲存庫＋連結樹'), /共用設定檔那一筆不給還原：共用目錄不叫 \.git/u);
+    assert.match(noFix(rbl, '裸儲存庫＋連結樹'), GATED);
     assert.match(listed(), /^bare$/mu, '跑完那個儲存庫照樣是 bare');
     // (b) 站在裸儲存庫裡面跑
     const store = path.join(root, 'store.git');
     g(root, 'init', '-q', '--bare', store);
     const rst = runChecks({ settings: loose, cwd: store });
-    assert.match(noFix(rst, '站在裸儲存庫裡面'), /共用設定檔那一筆不給還原：共用目錄不叫 \.git/u);
+    assert.match(noFix(rst, '站在裸儲存庫裡面'), GATED);
     assert.ok(rst.lines.some((l) => l.includes(`${store}/config`) || l.includes(fs.realpathSync(path.join(store, 'config')))), `照樣列出處（Git 印相對的 file:config，換成絕對的）：${rst.lines.join('\n')}`);
     // (c) Git 一筆 core.bare 都列不出來（判成裸的依據不是設定）＝不給任何指令（原本那一行自查照貼自己就退 1）
     g(store, 'config', '--unset', 'core.bare');
@@ -1235,6 +1249,32 @@ test('⑬既有狀態擋下時說壞在哪（登記不登記都一樣）：這�
     assert.equal(raw(store, 'config', '--get-all', 'core.bare').status, 1, '前提：一筆 core.bare 都沒有、Git 退 1');
     const rnk = runChecks({ settings: loose, cwd: store });
     assert.match(noFix(rnk, '一筆都沒有'), /Git 列不出任何一筆 core\.bare/u);
+    // (d) b1d：裸儲存庫把 core.bare=true 放在它自己的 config.worktree（擴充開）、站在它裡面跑——那一檔是「這棵樹自己的
+    //     config.worktree」，但它不是連結樹的、共用目錄也不叫 .git：只列出處、不給指令（裁示者收窄）
+    const b1d = path.join(root, 'b1d.git');
+    g(root, 'clone', '-q', '--bare', bsrc.main, b1d);
+    g(b1d, 'config', 'extensions.worktreeConfig', 'true');
+    g(b1d, 'config', '--unset', 'core.bare');
+    g(b1d, 'config', '--worktree', 'core.bare', 'true');
+    const b1dWt = path.join(root, 'b1d-linked');
+    g(b1d, 'worktree', 'add', '-q', '--detach', b1dWt);
+    assert.equal(g(b1d, 'rev-parse', '--is-bare-repository'), 'true', '前提（b1d）：它本來就是裸的');
+    assert.match(g(b1d, 'worktree', 'list', '--porcelain'), /^bare$/mu, '前提（b1d）：worktree list 把它標成 bare');
+    assert.equal(g(b1dWt, 'rev-parse', '--is-bare-repository'), 'false', '前提（b1d）：它的連結樹照常（讀不到它的 config.worktree）');
+    assert.ok(raw(b1d, 'config', '-z', '--show-origin', '--get-all', 'core.bare').stdout.startsWith('file:config.worktree\0'), '前提（b1d）：唯一那一筆 true 在它自己的 config.worktree');
+    const rb1 = runChecks({ settings: loose, cwd: b1d });
+    const rb1Text = noFix(rb1, 'b1d');
+    assert.match(rb1Text, GATED);
+    assert.doesNotMatch(rb1Text, /include 引進的、或家目錄那一份/u, `理由是共用目錄不叫 .git、不是 include：${rb1Text}`);
+    assert.equal(g(b1d, 'rev-parse', '--is-bare-repository'), 'true', '跑完它照樣是裸的');
+    // 對照：同一個共用目錄不叫 .git 的儲存庫，連結樹自己的 config.worktree 被寫 bare = true（位於 <共用目錄>/worktrees/<名>/ 底下）＝給還原
+    g(b1dWt, 'config', '--worktree', 'core.bare', 'true');
+    const rbw = runChecks({ settings: loose, cwd: b1dWt });
+    assert.equal(rbw.code, 2, rbw.lines.join('\n'));
+    assert.deepEqual(commandLines(rbw).map(restoredFile), [fs.realpathSync(path.join(b1d, 'worktrees', 'b1d-linked', 'config.worktree'))], `連結樹自己的 config.worktree 照樣給還原：${rbw.lines.join('\n')}`);
+    paste(rbw, away);
+    assert.equal(runChecks({ settings: loose, cwd: b1dWt }).code, 0, '照貼還原之後＝0（連結樹）');
+    assert.equal(g(b1d, 'rev-parse', '--is-bare-repository'), 'true', '照貼之後那個裸儲存庫照樣是裸的');
 
     // 7. git 打不開（not-a-repo 那一族）：印 Git 的原話（跟站在同一個目錄問 Git 得到的第一行逐字相同）、不給任何指令
     const saysFirst = (cwd) => {

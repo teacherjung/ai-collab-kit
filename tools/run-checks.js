@@ -200,27 +200,34 @@ function bareOrigins(dir) {
 
 /**
  * 這棵樹自己被 Git 判成裸倉庫（既有的 bare 狀態）：一併問 core.bare 每一筆的出處（站在這棵樹問），訊息照主目錄那一套列出處。
- * 還原指令射程比主目錄那一路窄（內部審查中①）：只有 true 那一筆在「名叫 .git 的共用目錄底下的 config」或「這棵樹自己的
- *   config.worktree」才給（fixable）。共用目錄不叫 .git 時它可能本來就是裸儲存庫（store.git＋連結工作樹、站在裸儲存庫裡面跑）——
+ * 還原指令射程比主目錄那一路窄（內部審查中①、裁示者收窄 b1d）：只有 true 那一筆在「名叫 .git 的共用目錄底下的 config」、
+ *   或「這棵樹自己的 config.worktree——連結樹的（位於 <共用目錄>/worktrees/<名>/ 底下），或共用目錄名叫 .git 時」才給（fixable）。
+ *   這個倉庫自己的設定檔、但共用目錄不叫 .git 的（gated：共用設定檔；站在裸儲存庫裡面時它自己的 config.worktree）只列出處：
+ *   它可能本來就是裸儲存庫（store.git＋連結工作樹、站在裸儲存庫裡面跑、裸儲存庫把 core.bare 放在自己的 config.worktree）——
  *   從 Git 看跟壞掉的一模一樣，照貼會把合法的裸儲存庫改成非裸；跟主目錄那一路「共用目錄叫 .git 才問」同一個射程。
- *   ⚠️ 量到守不到的一種（git 2.39.5）：裸儲存庫把 core.bare=true 放在它自己的 config.worktree、又站在它裡面跑——
- *   那一檔就是「這棵樹自己的 config.worktree」，照這條規則仍會給指令（照做會把它改成非裸）。
- * sharedCfg＝Git 說的共用設定檔、commonIsDotGit＝共用目錄叫不叫 .git，只用在訊息（說為什麼不給）。
+ *   「連結樹」只拿 Git 說的兩個路徑比（這棵樹的 config.worktree 往上兩層、跟 <共用目錄>/worktrees 是不是同一個目錄），不讀布局檔。
+ *   ⚠️ 守不到（刻意維持）：名叫 .git 的裸儲存庫（proj/.git 那種）從 Git 看跟事故形狀一模一樣，照樣給還原（照做會把它改成非裸；
+ *   提醒放在指令之前）。
  * 不新增判準：擋不擋照舊只看 rev-parse --is-bare-repository。
  */
 function treeBare(git, cwd) {
   const fixable = [];
-  let sharedCfg = null;
+  const gated = [];
+  let commonDir = null;
   let commonIsDotGit = false;
   const common = git('rev-parse', '--path-format=absolute', '--git-common-dir');
   if (!common.error && common.status === 0) {
-    sharedCfg = path.join(pathOut(common), 'config');
-    commonIsDotGit = path.basename(pathOut(common)) === '.git';
-    if (commonIsDotGit) fixable.push(sharedCfg);
+    commonDir = pathOut(common);
+    commonIsDotGit = path.basename(commonDir) === '.git';
+    (commonIsDotGit ? fixable : gated).push(path.join(commonDir, 'config'));
   }
   const perTree = git('rev-parse', '--path-format=absolute', '--git-path', 'config.worktree');
-  if (!perTree.error && perTree.status === 0) fixable.push(pathOut(perTree));
-  return { state: 'bare', origins: bareOrigins(cwd), fixable, sharedCfg, commonIsDotGit };
+  if (!perTree.error && perTree.status === 0) {
+    const own = pathOut(perTree);
+    const linked = commonDir !== null && samePath(path.dirname(path.dirname(own)), path.join(commonDir, 'worktrees')) === true;
+    (commonIsDotGit || linked ? fixable : gated).push(own);
+  }
+  return { state: 'bare', origins: bareOrigins(cwd), fixable, gated };
 }
 
 /**
@@ -375,10 +382,11 @@ function bareRestoreLines(st, reminder) {
   const is = (list2, o) => list2.some((f) => samePath(f, o.origin.slice(5)) === true);
   const fixes = st.fixable ? trues.filter((o) => is(st.fixable, o)) : trues;
   const held = trues.filter((o) => !fixes.includes(o));
-  if (held.some((o) => st.sharedCfg && is([st.sharedCfg], o))) {
-    lines.push('  共用設定檔那一筆不給還原：共用目錄不叫 .git，這可能本來就是裸儲存庫（例如裸儲存庫加連結工作樹、或站在裸儲存庫裡面跑），從 Git 看跟壞掉的一模一樣，照做會把它改成非裸的。');
+  const gated = st.gated || [];
+  if (held.some((o) => is(gated, o))) {
+    lines.push('  共用目錄不叫 .git，所以這個倉庫自己的設定檔那幾筆不給還原：這可能本來就是裸儲存庫（例如裸儲存庫加連結工作樹、或站在裸儲存庫裡面跑），從 Git 看跟壞掉的一模一樣，照做會把它改成非裸的。');
   }
-  if (held.some((o) => !(st.sharedCfg && is([st.sharedCfg], o)))) {
+  if (held.some((o) => !is(gated, o))) {
     lines.push('  不是這個倉庫自己的設定檔的那幾筆（include 引進的、或家目錄那一份）不給還原：它們可能也被別的倉庫共用。');
   }
   if (!fixes.length) return lines;
