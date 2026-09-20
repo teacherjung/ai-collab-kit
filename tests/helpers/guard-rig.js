@@ -7,7 +7,20 @@
 //   home: null 只准配 -c（hook() 當場丟錯）：登入 shell 在 HOME 沒設時會照密碼檔找到真的家、讀那裡的登入設定。
 //   直接呼叫函式（buildClaude、retire）時一樣每次都帶 home。
 //   第二張網＝tests/filled-settings.test.js：巢狀那一輪把 HOME 換成空的暫存目錄並盯著它零寫入；只罩得到巢狀那一輪。
-// （tests/guard-copy.test.js 有一組同名的零件，刻意沒有抽過來共用：那一支是「Codex 全域層的行為沒有變」的證據，這一批不動它。）
+// 跟 tests/guard-copy.test.js 的重複零件：**已經評估過，決定不整併**（2026-09-20）——下一個人不用再評估一次。
+//   重複的是哪些（兩邊同名的 15 個，內建模組的 require 不算）：KIT、FAKE、DENIED、ALLOWED、MISMATCH、STARTUP、
+//   base、git、sourceRepo、hook、denies、allows、blocks、withScratch、walk。
+//   不整併的理由有兩層：
+//   ①那一支守的是 Codex 全域層、這一支守的是 Claude 側釘指紋，兩邊各自是對方「那一層的行為沒有變」的獨立證據。
+//     抽成同一份之後，那一份被改鬆會同時鬆掉兩層的判準，而兩支考題還是綠的——兩份證據一起倒。
+//     （同一個理由的第二個實例在下面 denyShapeProblem：受審的程式改鬆了，考題的尺不可以跟著鬆。）
+//   ②同名不同義，併起來要先把差異攤平，攤平本身就會弄壞一邊：denies 在那一支是「退 2＋錯誤輸出是拒絕形狀」、
+//     在這一支是「退 0＋標準輸出整段是完整的拒絕形狀」；hook 的預設起法一個是 -lc、一個是 -c；
+//     KIT 在那一支是往上一層、在這一支是往上兩層（檔案放的位置不同）；
+//     base 與 git 在這一支刻意把 HOME 拿掉、每一次起子行程都強迫明講家目錄（見上面的 HOME 紀律），
+//     那一支沒有這條紀律也不需要（Codex 全域層那一行把複本的絕對路徑寫死在指令裡，不從 HOME 算）——
+//     併起來只有兩條路：把紀律加到那一支（多餘）或從這一支拿掉（那一行讀 HOME，拿掉就會去讀寫真的家目錄）。
+//   代價照實說：兩邊各自維護，改了一邊要自己想要不要也改另一邊；**沒有任何考題會因為兩邊不一致而紅**。
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
