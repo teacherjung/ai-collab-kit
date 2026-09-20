@@ -28,6 +28,8 @@
    - 產出：產得出下面那份 JSON、印得出來源版本、檔案是 `-rw-r--r--`、**目錄是 `drwxr-xr-x`，而且在 `umask 077` 與 `umask 022` 下都是**（對照組：換回舊寫法 `mkdir -p`，`umask 077` 下量到的是 `drwx------`＝一般帳號穿不過去的那一種）。
    - 停手：`SHAPE` 空著、填 `.*`、比不到；筆數不符；清單混進帶括號的規則、非 `mcp__` 開頭的規則；**清單裡是沒填完的佔位**（名字含角括號）；**伺服器登記名那一段含點號**（`mcp__demo.server__create_widget`，而且是照舊版範本自己給的那個 `SHAPE` 範例填的——舊版會照樣裝進去，現在停手）；名字含空白；伺服器段或工具段是空的；目的地已經有一般檔；目的地是**指到不存在目標的符號連結**；目的地的目錄已經在但權限不是 root 755。
    - 唯讀核對指令：逐字相同、內容漂開、最外層多一個鍵、`permissions` 底下多 `allow`、檔不在、讀不到（`EACCES`）、**空檔**、壞 JSON、**`REF` 指到不存在的參照**，九種各跑一次，退出碼 0／4／4／4／1／2／3／3／5。
+   - **`GIT_` 那一族的反例**（兩段指令各跑一次）：兩棵假倉庫 A、B 各有自己的清單，`REPO` 指 A、環境裡塞 `GIT_DIR` 指向 B。**修之前**——安裝那一段把 **B 的清單**寫進目的檔，連印出來的「來源版本」都是 B 的版本碼（＝連留痕都是錯的）；唯讀核對那一段把受管檔（內容＝A 的清單）判成「不一樣」。**修之後**——兩段都讀到 A，安裝產出 A 的清單、核對印「逐字相同」退 0；乾淨環境下的正對照也還是 A。
+   - **那兩個權限比對的格式**：2026-09-21 在這台 macOS（Darwin 24.6.0）量過 `stat -f "%OLp"` 印的是**不帶前導 0 的** `755`／`644`（`stat -f "%OLp %u"` 印「`755` 空格 擁有者編號」），所以跟 `"755 0"`／`"644 0"` 逐字比是成立的；`%Lp`、`%A` 也印 `755`。⚠️ **只在 macOS 量過**（這份範本本來就只給 macOS），別的系統的 `stat` 不是這個格式。另外量到 `%OLp` 只印**低三位**：黏著位元的 `1755` 目錄印 `755`、系統暫存目錄那種 `1777` 印 `777`——所以這個檢查看不到 setuid／setgid／黏著位元（寫進「守不到」，不改格式字串）。
    - 第 5 節救援那一段（同樣在暫存目錄、拿掉 `sudo`）：位置是**指向另一個 700 目錄的符號連結**時停手，**那個目錄的權限與擁有者原封不動**（舊版沒有這道前提時，量到它被改成 755）；位置是一般檔時停手、檔案權限沒被動；真的是目錄而且 700 時照樣修回 755。
    - **沒有跑過的**：任何真的動到 `/Library` 的那一步（`sudo install`／`sudo chmod`／`sudo rm`／`sudo rmdir`），那是裁示者自己在自己的機器上貼；平台讀不讀得到這個檔、那幾行有沒有真的在生效，這裡一律量不到——那是「驗收」那一節的事。
 
@@ -82,7 +84,8 @@ const re = new RegExp(shape, "u");
 if (re.test("mcp__zz__anything_at_all") && re.test("mcp__yy__something_else")) stop("SHAPE 太寬，停手：兩個隨便編的名字都通過了");
 const want = Number(expect);
 if (!Number.isInteger(want) || want < 1) stop("EXPECT 不是正整數，停手：" + expect);
-const git = (a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" });
+const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+const git = (a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", env: gitEnv });
 const deny = JSON.parse(git(["show", ref + ":" + src])).permissions.deny;
 if (!Array.isArray(deny)) stop("來源那一格不是清單，停手");
 if (deny.length !== want) stop("來源不是剛好 " + want + " 支，停手：" + JSON.stringify(deny));
@@ -105,6 +108,7 @@ process.stdout.write(text);
 
 每一段在幹嘛（要改它的人先看懂這幾條）：
 
+- **叫 git 之前先把 `GIT_` 開頭那一族環境變數整族清掉**（兩段指令都清）。這不是潔癖：`GIT_DIR` 只要存在，`git -C <路徑>` 就**形同沒寫**——它去讀環境指的那個倉庫。從帶著那一族變數的環境貼（連結工作樹、git 鉤子、包裝過的終端機），來源清單就會從**別棵樹**讀出來，而筆數與 `SHAPE` 都過的話，你會用管理員權限寫出一份「看起來合法、其實比不到這台連接器」的拒絕清單——平台對這種比不到**不給任何警告**（見上面「取捨」第 1 條）。**按前綴整族清、不列名**：那一族會長（`GIT_CONFIG_COUNT`、`GIT_CONFIG_KEY_n`…），列名補不完；補不完就要關門。⚠️ 只清 `GIT_` 前綴，`GITHUB_` 不受影響；`HOME`、`PATH` 刻意不動（`PATH` 清掉就找不到 git）。
 - **先產生、再檢查、才安裝**：內容用 `JSON.stringify` 產、再 `JSON.parse` 驗一次。這個檔不是合法 JSON ＝ **這台機器的 Claude Code 整個起不來**（文件：refuses to start），所以絕不能讓手打的字進去。
 - **不覆蓋**：目的地已經有東西（一般檔、目錄、或**指到不存在目標的符號連結**）就印出來並停手。連結那一種特別要擋：只用「檔案存在嗎」問，斷掉的連結會答「不在」，接著 `install` 會把連結移掉、照樣裝上去（量到的）。要換內容＝先看過、自己刪掉、再跑一次（刪法見第 5 節）。
 - **檔與目錄的權限都寫死、都不靠 umask**：檔 644、目錄 755、擁有者都是 root。**目錄這一半是必須的**：`mkdir -p` 會吃 umask，在 `umask 077` 下用 root 建出來的目錄是 700（量到的），一般帳號穿不過去＝受管檔讀不到；而文件寫這個檔或它的目錄**讀不到**、又沒有別的管理來源時，指定登入類型的對話會**啟動就結束**。所以這一行改用 `install -d -m 755`、先 `umask 022`（管中間那幾層目錄），裝完再把兩個權限印出來核一次。
@@ -160,7 +164,8 @@ const permKeys = permsOk ? Object.keys(perms) : null;
 const shapeOk = show(topKeys) === show(["permissions"]) && show(permKeys) === show(["deny"]) && Array.isArray(managedDeny) && managedDeny.every((x) => typeof x === "string");
 console.log(shapeOk ? "結構對：整個檔只有 permissions.deny 這一條路，裡面全是字串" : "結構不對（只准 permissions.deny）：最外層的鍵＝" + show(topKeys) + "，permissions 底下的鍵＝" + show(permKeys));
 let repoDeny;
-try { repoDeny = JSON.parse(execFileSync("git", ["-C", repo, "show", ref + ":" + src], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).permissions.deny; }
+const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+try { repoDeny = JSON.parse(execFileSync("git", ["-C", repo, "show", ref + ":" + src], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: gitEnv })).permissions.deny; }
 catch (e) { console.log("讀不到來源清單（REPO／REF／SRC 有一格不對，或那個參照不存在）：比不了，這一次什麼都沒驗到（退 5）"); console.log("  " + String((e && e.message) || e).split("\n")[0]); process.exit(5); }
 const sameOk = show(managedDeny) === show(repoDeny);
 console.log(sameOk ? "那幾行跟清單逐字相同" : "不一樣\n  受管：" + show(managedDeny) + "\n  清單：" + show(repoDeny));
@@ -169,6 +174,7 @@ process.exit(shapeOk && sameOk ? 0 : 4);
 ```
 
 ⚠️ 它比的是**檔案內容**，不是**平台解析後生效的清單**——所以它取代不了第 4 步，兩個都要。
+⚠️ 它跟安裝那一行一樣，叫 git 之前先把 `GIT_` 開頭那一族清掉。沒清的話它會去比**別棵樹**的清單，「相同」與「不一樣」**兩個方向都可能說錯**（量到的：受管檔本來跟 `REPO` 那一棵逐字相同，帶著指到別棵樹的 `GIT_DIR` 跑，舊版印「不一樣」、退 4）。
 退出碼（量到的）：**0＝結構對而且逐字相同**；1＝受管檔不在；2＝**讀不到＝判斷不了**（不是「不在」；讀不到的受管檔在「沒有別的管理來源」的前提下會讓 claude.ai／Console 登入的對話一開就結束，要當成壞事處理）；3＝讀得到但沒有預期的結構（空檔與壞 JSON 兩種，訊息會分開說——空檔平台當成空物件、不會起不來，壞 JSON 才會）；4＝結構或內容不對；5＝讀不到來源清單（`REPO`／`REF`／`SRC` 填錯，或那個參照不存在）。
 ⚠️ 這**不是完整分類**：上面沒列到的例外（例如 node 自己爆掉）會退 1，而 1 同時是「受管檔不在」的碼——所以**不要只看退出碼**，要看印出來那幾行字。
 ⚠️ 它驗的範圍到這裡為止：最外層只有 `permissions`、`permissions` 底下只有 `deny`、`deny` 裡全是字串、而且那幾行跟清單逐字相同。**再往外它就看不到了**——那幾支工具真的存不存在、平台有沒有載入、有沒有在擋，都是**真平台的行為，這一輪一個都沒量到**。第 3、4、5 步各自往那個方向多證明一點（各自證明到什麼、證明不到什麼，看上面那張表），但三步加起來也不等於「真工具被擋住了」。
@@ -197,7 +203,8 @@ process.exit(shapeOk && sameOk ? 0 : 4);
 6. **它不是鎖**：文件寫本機管理員可以自己改受管來源，而這台的管理員多半就是裁示者本人；檔案一變，正在跑的對話會重新讀進去（不必重開）——所以「驗過了」不代表現在還是那樣。它擋的是誤觸與冒名，不是擋有管理員權限的人。
 7. **只證明那一刻**：平台改版之後沒有任何例行動作重量它。第 3 節下半段那四下就是為此而寫的。
 8. **裝錯權限只有「裝的那一刻」看得到**：第 2 節那一行建目錄時把權限寫死成 root 755、既有目錄不對就停手——但它只在你跑它的那一刻看。之後有人去改那個目錄或那個檔的權限，沒有任何東西會說話；文件寫**讀不到、而且沒有別的管理來源提供政策**時，用 claude.ai／Claude Console 登入的那種對話會**啟動就結束**（讀不到的受管檔比沒有受管檔更糟）。救法寫在第 5 節。
-9. **套件自己的絆線看不到這一層**：`tools/claude-pin.js` 的註解已經寫明「平台的其他設定層（使用者層、受管設定層）與別的送貨管道這裡看不到」。所以這個檔在不在、內容對不對、跟清單有沒有漂開，**沒有任何考題、沒有任何合併閘看得到**——考題刻意不讀真的家目錄與系統目錄，受管檔又只在某一台機器上。**只有人照第 3 節看得到。**
+9. **權限那個檢查只看低三位**：`stat -f "%OLp"` 印的是權限的低三位（量到的），所以目錄上的 setuid／setgid／黏著位元它看不到，`1755` 會被當成 `755` 放行。這裡刻意不改那個格式字串（它現在是對的，改了整組比對要重驗）；真要管特殊位元是另一件事，請寫回這一條、不要順手收緊。
+10. **套件自己的絆線看不到這一層**：`tools/claude-pin.js` 的註解已經寫明「平台的其他設定層（使用者層、受管設定層）與別的送貨管道這裡看不到」。所以這個檔在不在、內容對不對、跟清單有沒有漂開，**沒有任何考題、沒有任何合併閘看得到**——考題刻意不讀真的家目錄與系統目錄，受管檔又只在某一台機器上。**只有人照第 3 節看得到。**
 
 ---
 
