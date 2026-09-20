@@ -305,23 +305,42 @@ test('⑬疑似照時間新到舊排、逐則只印最近 8 則，其餘收成�
   assert.equal(few.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l)).length, 3, few);
 });
 
-test('⑬b 同一秒跨過上限：剛貼的那一則要在逐則清單裡（平台給的順序後面的算後到），而且不可以宣稱「更早」', () => {
+test('⑬b 同一秒跨過上限：照平台給的原始順序決定誰後到（逐筆核對是哪 8 則），而且不可以宣稱「更早」', () => {
   // 複審後掃第 1 條：同一秒 9 則時，若只按時間排（差值 0、順序不變），列出的會是陣列**前** 8 則，
   // 而剛貼的那一則（平台給在最後）反而被收進「另有」——這一欄的用途就沒了。
+  // r3 第 2 條：夾具不可以讓「標題編號／留言編號／陣列位置」同步遞增，不然按內文或編號排序的錯誤寫法也會全綠。
   const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
   const same = new Date(Date.UTC(2026, 8, 20)).toISOString();
-  const nine = Array.from({ length: 9 }, (_, i) => c(`## ❓ 待裁：同秒第 ${i + 1} 則忘了寫日期`, { createdAt: same, id: `same${i + 1}` }));
+  // 平台順序＝same1…same9（編號遞增），標題編號刻意打亂＝按內文排序會排成另一個樣子
+  const titles = [7, 1, 9, 4, 8, 2, 6, 3, 5];
+  const nine = titles.map((t, i) => c(`## ❓ 待裁：標題 ${t} 忘了寫日期`, { createdAt: same, id: `same${i + 1}` }));
   const out = run({ settings, platform: { ask: () => nine } }).lines.join('\n');
   assert.match(out, /疑似（長得像留痕但不採計）：9 則，以下列最近 8 則/u, out);
-  const listed = out.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l));
-  assert.equal(listed.length, 8, out);
-  assert.match(listed[0], /同秒第 9 則/u, `平台給在最後的（最晚貼的）要排第一：\n${out}`);
-  assert.match(listed[7], /同秒第 2 則/u, `被收起來的要是最早那一則：\n${out}`);
+  const ids = out.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l)).map((l) => /留言 (same\d)/u.exec(l)[1]);
+  assert.deepEqual(ids, ['same9', 'same8', 'same7', 'same6', 'same5', 'same4', 'same3', 'same2'],
+    `同一秒要照平台給的原始順序、後到的排前面（逐筆核對，不可以靠標題或編號的巧合）：\n${out}`);
   assert.match(out, /・另有 1 則（最早 2026-09-20），不逐則列/u, out);
   assert.doesNotMatch(out, /更早/u, `同一秒不可以說更早：\n${out}`);
-  assert.doesNotMatch(out, /同秒第 1 則/u, '收起來的那一則不逐則列');
   // 正好 8 則（等於上限）：不印收合行、也不寫「以下列最近」
   const eight = run({ settings, platform: { ask: () => nine.slice(0, 8) } }).lines.join('\n');
   assert.match(eight, /疑似（長得像留痕但不採計）：8 則\n/u, eight);
   assert.doesNotMatch(eight, /以下列最近|另有/u, eight);
+});
+
+test('⑬c 同一秒、兩輪疑似混在一起：決勝鍵要讀平台給的原始位置，不是它在疑似清單裡的位置', () => {
+  // r3 第 1 條（我自己引入的回歸）：疑似是分兩輪蒐集的——第二輪那一族（形狀合格、沒配到任何比它早的問題、
+  // 讀到一半停住）被接在清單**尾巴**，跟它自己的時間與平台順序都無關。拿「在疑似清單裡的位置」當決勝鍵，
+  // 平台最後給的那一則（今天剛貼、剛寫壞的）反而會被擠出逐則清單。
+  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
+  const same = new Date(Date.UTC(2026, 8, 20)).toISOString();
+  const stray = (i) => c(`## ⚖️ Boss 裁示（2026-09-20）：第二輪那一族 ${i}\n原話（對話中，Alpha 轉述）：**「甲」**\n> 引用，機器讀到這裡就停\nhttps://x/pull/7#issuecomment-nobody`,
+    { author: 'boss-acct', createdAt: same, id: `R${i}` });
+  const eight = Array.from({ length: 8 }, (_, i) => stray(i + 1));           // 平台先給這 8 則（第二輪才進疑似）
+  const newest = c('## ❓ 待裁：今天剛寫壞的這一則', { createdAt: same, id: 'N9' });   // 平台最後給這一則（第一輪就進疑似）
+  const out = run({ settings, platform: { ask: () => [...eight, newest] } }).lines.join('\n');
+  assert.match(out, /疑似（長得像留痕但不採計）：9 則，以下列最近 8 則/u, out);
+  const ids = out.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l)).map((l) => /留言 (N9|R\d)/u.exec(l)[1]);
+  assert.equal(ids[0], 'N9', `平台最後給的那一則要排第一（它今天剛貼）：\n${out}`);
+  assert.deepEqual(ids, ['N9', 'R8', 'R7', 'R6', 'R5', 'R4', 'R3', 'R2'], `逐筆核對：\n${out}`);
+  assert.match(out, /・另有 1 則（最早 2026-09-20），不逐則列/u, out);
 });
