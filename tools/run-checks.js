@@ -51,9 +51,12 @@ const ANCHOR_MAX_BUFFER = 64 * 1024 * 1024;
 /**
  * 問「索引是不是整份空的」那一次的輸出上限：只要知道有沒有一筆，超過上限＝有東西。
  * 刻意設得很小（不是隨手寫的數字）：這一問只需要分辨「空的」跟「不是空的」，早一點被截斷就少讀一點進記憶體。
- * 量到的（macOS、Node v26.0.0）：子行程印的東西超過 maxBuffer 時，spawnSync 用 SIGTERM 把它殺掉、不等它自己結束，
- * 回的 error.code 是 ENOBUFS、status 是 null、signal 是 'SIGTERM'。這裡的判斷寫成「有 error 就不算空的」，
- * 所以不必分辨是哪一種錯。「很小」這件事由 tests/run-checks.test.js ⑭ 的 probe-small 那一段釘住（上限改大＝紅）。
+ * 量到的（macOS、Node v26.0.0）：子行程印的東西超過 maxBuffer 時，spawnSync 用 SIGTERM 把它殺掉，
+ * 回的 error.code 是 ENOBUFS、status 是 null、signal 是 'SIGTERM'；它仍然等那支子行程收場，
+ * 只是不等子行程把原定的事做完。這裡的判斷寫成「有 error 就不算空的」，所以不必分辨是哪一種錯。
+ * 「很小」由 tests/run-checks.test.js ⑭ 釘住（那一題錄下這一次呼叫實際用的上限與回傳）。
+ * ⚠️ 釘的粒度：那一題的樣本印 1536 位元組，所以**這個上限改成 1536 以上才會紅**，1025〜1535 之間照樣綠（量過）。
+ * 它證的是「這個上限比 1536 小」，不是精確釘死 1024。
  */
 const EMPTY_PROBE_BUFFER = 1024;
 /** Git 的錯誤訊息最多印幾行（例如索引壞了時 Git 可能先印 error 那一行、再印 fatal 那一行；整份只剩幾個位元組的亂碼時只印一行 fatal）。 */
