@@ -1167,8 +1167,17 @@ test('⑳拒絕形狀同時有兩個問題時，說的是檢查順序在前面�
       }
       return out;
     }));
-    // 不是空包彈：那份來源印出來的拒絕，兩個問題真的都在（直接叫它自己的 hookOutput，不必先落地）
-    p.both(JSON.parse(require(path.join(src, 'tools', 'forbidden-tools.js')).hookOutput('試跑', '測試禁區')));
+    // 不是空包彈：那份來源印出來的拒絕，兩個問題真的都在（叫它自己的 hookOutput，不必先落地）。
+    // 用子行程叫、不把那份改過的攔截器載進這支考題：①跟這一族的紀律一致（試跑那條路也是只跑指令、
+    // 不把複本裡的程式載進來）②每一發都是乾淨的 require 快取，不會被上一發的載入結果影響
+    // ③使用專案的 lint 禁止「require 的模組名不是字面量」（它是 xlsx 收斂點護欄的一部分），
+    //   在這裡寫動態 require 會讓同步過去的那一支紅。
+    const said = spawnSync(process.execPath,
+      ['-e', 'process.stdout.write(require(process.argv[1]).hookOutput("試跑", "測試禁區"))',
+        path.join(src, 'tools', 'forbidden-tools.js')],
+      { encoding: 'utf8', env: { PATH: process.env.PATH } });
+    assert.equal(said.status, 0, `${p.why}：叫那份來源的 hookOutput 應該要成功（${said.stderr}）`);
+    p.both(JSON.parse(said.stdout));
     const r = buildClaude({ from: 'HEAD', root: src, home: fakeHome(scratch), allowTemp: true });
     assert.match(r.failure || '', /照清單該擋的假名沒有一個被擋下/u, `${p.why}：試跑要沒過（${r.failure}）`);
     assert.match(r.failure, p.says, `${p.why}：要說前面那一句（${r.failure}）`);
