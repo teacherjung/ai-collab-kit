@@ -276,11 +276,28 @@ test('⑬疑似照時間新到舊排、逐則只印最近 8 則，其餘收成�
   assert.equal(listed.length, 8, `逐則印的要剛好 8 則：\n${out}`);
   assert.match(listed[0], /第 12 則/u, `最新的排第一：${listed[0]}`);
   assert.match(listed[7], /第 5 則/u, `第八則是第 8 新的那一則：${listed[7]}`);
-  assert.match(out, /・另有 4 則更早的（最早 2026-08-02），不逐則列/u, out);
+  assert.match(out, /・另有 4 則（最早 2026-08-02），不逐則列/u, out);
+  assert.doesNotMatch(out, /更早/u, '收合那一行不可以說「更早」：同一秒的留言可能剛好跨過上限（r1 第 2 條）');
   assert.doesNotMatch(out, /第 1 則|第 2 則|第 3 則|第 4 則/u, '收起來的那四則不逐則列');
   // 少於上限時不印那一行、也不寫「以下列最近」
   const few = run({ settings, platform: { ask: () => many.slice(0, 3) } }).lines.join('\n');
   assert.match(few, /疑似（長得像留痕但不採計）：3 則\n/u, few);
   assert.doesNotMatch(few, /以下列最近|另有/u, few);
   assert.equal(few.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l)).length, 3, few);
+});
+
+test('⑬b 同一秒跨過上限：收合那一行不可以宣稱「更早」，而且列出的仍是 8 則', () => {
+  // r1 第 2 條：9 則都在同一秒時，第 9 則其實跟前 8 則同時，寫「更早」就是假話。
+  const settings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
+  const same = new Date(Date.UTC(2026, 8, 20)).toISOString();
+  const nine = Array.from({ length: 9 }, (_, i) => c(`## ❓ 待裁：同秒第 ${i + 1} 則忘了寫日期`, { createdAt: same, id: `same${i + 1}` }));
+  const out = run({ settings, platform: { ask: () => nine } }).lines.join('\n');
+  assert.match(out, /疑似（長得像留痕但不採計）：9 則，以下列最近 8 則/u, out);
+  assert.equal(out.split('\n').filter((l) => /^ {2}・\d{4}-\d{2}-\d{2}｜/u.test(l)).length, 8, out);
+  assert.match(out, /・另有 1 則（最早 2026-09-20），不逐則列/u, out);
+  assert.doesNotMatch(out, /更早/u, `同一秒不可以說更早：\n${out}`);
+  // 正好 8 則（等於上限）：不印收合行、也不寫「以下列最近」
+  const eight = run({ settings, platform: { ask: () => nine.slice(0, 8) } }).lines.join('\n');
+  assert.match(eight, /疑似（長得像留痕但不採計）：8 則\n/u, eight);
+  assert.doesNotMatch(eight, /以下列最近|另有/u, eight);
 });
