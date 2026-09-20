@@ -48,7 +48,13 @@ const hasControl = (s) => Array.from(s).some((c) => {
 });
 /** 錨點那一次 ls-files 的輸出上限：錨點若寫成目錄，會列出整個目錄（填目錄的訊息見 anchorRestoreLines）。 */
 const ANCHOR_MAX_BUFFER = 64 * 1024 * 1024;
-/** 問「索引是不是整份空的」那一次的輸出上限：只要知道有沒有一筆，超過上限（Node 回 ENOBUFS）＝有東西。 */
+/**
+ * 問「索引是不是整份空的」那一次的輸出上限：只要知道有沒有一筆，超過上限＝有東西。
+ * 刻意設得很小（不是隨手寫的數字）：這一問只需要分辨「空的」跟「不是空的」，早一點被截斷就少讀一點進記憶體。
+ * 量到的（macOS、Node v26.0.0）：子行程印的東西超過 maxBuffer 時，spawnSync 用 SIGTERM 把它殺掉、不等它自己結束，
+ * 回的 error.code 是 ENOBUFS、status 是 null、signal 是 'SIGTERM'。這裡的判斷寫成「有 error 就不算空的」，
+ * 所以不必分辨是哪一種錯。「很小」這件事由 tests/run-checks.test.js ⑭ 的 probe-small 那一段釘住（上限改大＝紅）。
+ */
 const EMPTY_PROBE_BUFFER = 1024;
 /** Git 的錯誤訊息最多印幾行（例如索引壞了時 Git 可能先印 error 那一行、再印 fatal 那一行；整份只剩幾個位元組的亂碼時只印一行 fatal）。 */
 const GIT_SAYS_MAX = 3;
@@ -250,8 +256,9 @@ function anchorProblem(git, anchors, cwd, tree) {
   const listed = new Set(r.stdout.split('\0'));
   const missing = anchors.filter((a) => !listed.has(a));
   if (!missing.length) return null;
-  // 登記的全部不見時，訊息要分「索引整份是空的」還是只是沒有這幾筆：只要知道有沒有一筆，所以輸出上限設很小、
-  // 超過上限（ENOBUFS，只在輸出超過上限時出現）＝有東西；問不到＝不說整份是空的
+  // 登記的全部不見時，訊息要分「索引整份是空的」還是只是沒有這幾筆：只要知道有沒有一筆，所以輸出上限設很小
+  // （EMPTY_PROBE_BUFFER；超過上限＝Node 把那支 git 殺掉、回 ENOBUFS）。判斷是「沒有 error、退 0、而且輸出是空的」
+  // 才說整份是空的——超過上限與其他任何問不到的情形都不說
   let indexEmpty = false;
   if (missing.length === anchors.length) {
     const e = spawnSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: EMPTY_PROBE_BUFFER });
