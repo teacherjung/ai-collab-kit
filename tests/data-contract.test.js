@@ -8,7 +8,7 @@
 // 守得到的：每一條契約檢查各有一發壞資料釘著；產生器拿到壞資料不產生半成品。
 // 規矩本文的**範本形狀**（條號在最前、子點縮排與編號、標籤前後空行、記號原樣保住、記號外跳脫）
 // 也在這裡用一份最小資料正向釘住：rules-length 那題的 plain(build)===buildRaw 與 build 共用同一份範本，
-// 證明不了範本本身對不對；真資料有沒有子點、有沒有記號是資料碰巧決定的，不能靠它撐，所以形狀題是範本的唯一一張網。
+// 證明不了範本本身對不對；真資料有沒有子點、有沒有記號是資料碰巧決定的，不能靠它撐。量過（r1）：拿掉形狀題，子點結構（縮排、編號、標籤前後空行）就沒有別題釘；條號格式仍由產物逐字元題釘、角色粗體仍由 inline 題釘——所以形狀題是子點結構唯一的直接輸出樣本，不是整個範本的唯一一張網。
 // ⚠️ 守不到的：資料填的內容對不對（合格不代表那條規矩寫得好）；也不宣稱這些檢查涵蓋了所有壞寫法。
 'use strict';
 const test = require('node:test');
@@ -46,8 +46,20 @@ function goodRules() {
     ],
     tag: '雲端：只驗 **實作者** 那一欄；照抄 `未執行：<原因>`；見 K2-3',
   };
+  // 寬位數父項（「10. 」四格）底下的第二層、連續的第二層編號、明寫 level:1：單位數樣本釘不住可變寬度（r1 第 2 條）。
+  const wide = {
+    n: 12,
+    text: '寬位數',
+    items: [
+      ...Array.from({ length: 10 }, () => ({ text: '項', numbered: true })),
+      { text: '子', level: 2, numbered: true },
+      { text: '丑', level: 2, numbered: true },
+      { text: '明寫一層', level: 1 },
+    ],
+    tag: '靠自覺',
+  };
   const a = section('A', 10);
-  a.rules.push(rich);
+  a.rules.push(rich, wide);
   return { title: '標題', preamble: '指路那一句', roles: ROLES.slice(), sections: [a, section('B', 10)] };
 }
 const mutate = (fn) => { const d = goodRules(); fn(d); return d; };
@@ -147,11 +159,16 @@ test('字數函式：主句與子點都算、只扣合格記號的 ** 與反引�
   assert.equal(charsOf('「擁有者」說「沒有」'), 10, '「」照算');
   assert.equal(charsOf('a b c'), 3, '空白不算');
   assert.equal(charsOf('主句', [{ text: '**實作者** 照做' }]), 2 + 5, '子點裡的記號一樣只扣記號');
+  // r1 第 1 條：只扣「合格記號」——灰底框裡的星號是要照抄的正文，不是記號。少了這兩發，把 join 之後再把 ** 全部拿掉的錯法照樣全綠，
+  // 一個裝滿星號的框就能把超長本文算成沒超過。
+  assert.equal(charsOf('`**外人**`'), 6, '灰底框裡的 ** 是正文，照算');
+  assert.equal(charsOf('主句', [{ text: '`****`' }]), 2 + 4, '子點的灰底框裡只有星號，四個都算');
+  assert.equal(charsOf('𝟘𝟙'), 2, '算的是碼位不是 UTF-16 單元（一個非 BMP 字算 1）');
 });
 
 test('字數函式：標題、開頭指路、小節標題、條號、標籤都不算（不靠相減——相減時這幾欄兩邊相同會抵消）', () => {
-  // A1〜A10、B1〜B10 各 7 字（A10、B10 各 8 字）＝142；A11 主句 16、子點 13＋4＋4＋3＋3＋7＝50。手算，不由程式重算一次。
-  const expected = 142 + 16 + 13 + 4 + 4 + 3 + 3 + 7;
+  // A1〜A10、B1〜B10 各 7 字（A10、B10 各 8 字）＝142；A11 主句 16、子點 13＋4＋4＋3＋3＋7＝50；A12 主句 3、子點 10×1＋1＋1＋4＝16。手算，不由程式重算一次。
+  const expected = 142 + 16 + 13 + 4 + 4 + 3 + 3 + 7 + 3 + 10 + 1 + 1 + 4;
   assert.equal(rules.countRules(goodRules()), expected, '對照組：這份最小資料的字數');
   const longer = '拉得很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長很長';
   assert.equal(rules.countRules(mutate((d) => { d.title = `標題${longer}`; })), expected, '本文標題不算');
@@ -190,9 +207,22 @@ test('A1 範本的形狀：條號在最前、子點攤開、第二層縮排＝�
     '',
     '（雲端：只驗 **實作者** 那一欄；照抄 `未執行：<原因>`；見 K2\\-3）',
     '',
+    '【A12】寬位數',
+  ].join('\n');
+  assert.ok(md.includes(rich), `帶子點的那一條產出來不是預期的形狀：\n${md.slice(md.indexOf('【A11】'), md.indexOf('【A12】'))}`);
+  const wide = [
+    '【A12】寬位數',
+    '',
+    ...Array.from({ length: 10 }, (_, i) => `${i + 1}. 項`),
+    '    1. 子',
+    '    2. 丑',
+    '- 明寫一層',
+    '',
+    '（靠自覺）',
+    '',
     '## B、第 B 節',
   ].join('\n');
-  assert.ok(md.includes(rich), `帶子點的那一條產出來不是預期的形狀：\n${md.slice(md.indexOf('【A11】'), md.indexOf('## B、'))}`);
+  assert.ok(md.includes(wide), `寬位數父項那一條產出來不是預期的形狀（第二層要縮「10. 」的四格、連續編號、明寫 level:1 仍是第一層）：\n${md.slice(md.indexOf('【A12】'), md.indexOf('## B、'))}`);
   assert.ok(md.endsWith('（靠自覺）\n'), '結尾是最後一條的標籤加一個換行');
   assert.equal(rules.plain(md), rules.buildRaw(goodRules()), '解回來就是範本填上原文');
 });
