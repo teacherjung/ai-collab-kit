@@ -38,7 +38,7 @@ const { MACHINE: CASEBOOK, NOT_CARRIED_REASON } = require('../tools/build-casebo
 
 const ROOT = path.join(__dirname, '..');
 const NESTED = process.env.KIT_NESTED_SUITE === '1';
-/** 工具與考題從根目錄讀的那幾份（套件倉庫 README「搬進一個專案」第 1 步同一份清單）。 */
+/** 工具與考題從根目錄讀的那幾份；複本裡的 settings.json 會換成下面填了假值的那一份，PROJECT-SETTINGS.md 由它重新產生。 */
 const ROOT_FILES = ['settings.json', 'rules.json', 'RULES.md', 'MACHINES.md', 'PROJECT-SETTINGS.md'];
 const ROOT_DIRS = ['tools', 'tests', 'templates'];   // cases/ 刻意不帶（上面「案例簿」那段）
 
