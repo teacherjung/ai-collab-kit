@@ -36,6 +36,20 @@ const path = require('node:path');
 const { build, read, outFile, STATES } = require('../tools/build-settings.js');
 const { read: readRules } = require('../tools/build-rules.js');
 const { unfilled, UNFILLED_FILE } = require('./helpers/kit-copy.js');
+const { spawnSync } = require('node:child_process');
+const { gitEnv } = require('../tools/git-env.js');
+
+/**
+ * 把遠端網址拆成路徑的每一段（去掉 .git、小寫）：https://host/a/b.git、ssh://user@host/a/b.git、
+ * user@host:a/b.git（scp 簡寫）、本機路徑都收。只在「倉庫身分對得上遠端」那一題用。
+ */
+function remoteSegments(url) {
+  let p = url.trim();
+  const scp = /^[^/@:]+@[^/:]+:(.+)$/u.exec(p);
+  if (scp) p = scp[1];
+  else { try { p = new URL(p).pathname; } catch { /* 不是網址＝本機路徑，照原樣拆 */ } }
+  return p.replace(/\.git\/?$/u, '').split('/').filter(Boolean).map((s) => s.toLowerCase());
+}
 
 test('PROJECT-SETTINGS.md 與 settings.json 產生的結果逐字元相同（設定說明是產物、不要手改）', () => {
   assert.equal(
@@ -244,6 +258,33 @@ test('⑨b 空白設定跟 settings.json 在套件共用的欄位逐字相同（
   assert.deepEqual(u.gates.map(gateKey).sort(), a.gates.map(gateKey).sort(), '閘的名字、條號或指令兩份不一樣');
   assert.deepEqual(u.locations.map((l) => [l.item, l.rules]), a.locations.map((l) => [l.item, l.rules]), '位置表的項目或條號兩份不一樣');
   assert.equal(u.accountRule, a.accountRule, '貼文帳號資格兩份不一樣');
+});
+
+test('設定的倉庫身分要跟這棵樹的遠端倉庫對得上（照舊習慣抄了套件根目錄那份設定卡＝紅）', (t) => {
+  // 為什麼（裁示者 2026-09-27 要的）：套件倉庫根目錄的 settings.json 填了套件自己的值之後，新專案照舊習慣抄它，
+  // 合併指令就會去問、甚至合併套件倉庫的變更；而從設定到按鍵之前，沒有任何一處核對「設定寫的倉庫」跟「這棵樹連到哪個倉庫」。
+  // 判法：platform.project 的每一段，要等於 origin 網址路徑最後的那幾段（去掉 .git；大小寫不分——多數平台不分）。
+  // 守不到的：沒有 origin、或 settings.json 不在某個倉庫的根目錄（考題在複本裡跑）＝跳過並寫明；
+  //   它只比「兩者一致」，origin 本身指錯倉庫看不出來；倉庫身分沒填（空白設定）也跳過。
+  const project = read().platform && read().platform.project;
+  if (!project || project === '未設定') { t.skip('倉庫身分沒填（空白設定）：沒有東西可以比'); return; }
+  const root = path.join(__dirname, '..');
+  const git = (...args) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', env: gitEnv() });
+  const top = git('rev-parse', '--show-toplevel');
+  if (top.status !== 0 || fs.realpathSync(top.stdout.trim()) !== fs.realpathSync(root)) { t.skip('settings.json 所在的目錄不是某個倉庫的根目錄（考題在複本裡跑）：沒有遠端可以比'); return; }
+  const url = git('remote', 'get-url', 'origin');
+  if (url.status !== 0) { t.skip('這個倉庫沒有 origin 遠端：沒有東西可以比'); return; }
+  const want = project.split('/').filter(Boolean).map((s) => s.toLowerCase());
+  assert.ok(want.length >= 1, '倉庫身分要至少有一段');
+  assert.deepEqual(
+    remoteSegments(url.stdout).slice(-want.length),
+    want,
+    `settings.json 的 platform.project 是「${project}」，這棵樹的 origin 卻是 ${url.stdout.trim()}：設定卡指向別的倉庫（抄到套件根目錄那份？），合併指令與閘會去動那個倉庫`,
+  );
+  // 對照組：拆網址的那一支要認得三種寫法
+  assert.deepEqual(remoteSegments('git@github.com:Owner/Repo.git'), ['owner', 'repo'], 'scp 簡寫要拆得出來');
+  assert.deepEqual(remoteSegments('https://example.com/a/b/c.git/'), ['a', 'b', 'c'], 'https 多層路徑要拆得出來');
+  assert.deepEqual(remoteSegments('ssh://git@example.com/x/y.git'), ['x', 'y'], 'ssh 網址要拆得出來');
 });
 
 test('照 GitHub 範本填完平台動作與合併指令，設定說明書照樣產得出來；合併訊息的換行留在指令裡（搬家修正 r1 B1）', () => {
