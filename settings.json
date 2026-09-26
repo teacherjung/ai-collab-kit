@@ -197,7 +197,8 @@
   "verbs": [],
   "nouns": [],
   "readPrefixes": [],
-  "patterns": []
+  "patterns": [],
+  "patternsReadSafe": []
  },
  "acceptance": {
   "tiers": [
@@ -320,13 +321,13 @@
    "name": "協作欄位閘（四欄齊全、實作者不等於獨立審查者）",
    "rules": "A2、E1",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "結論聯集閘（阻擋各自撤銷、放行只認指定那一位對目前版本的通過）",
    "rules": "F4、F5",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "禁區攔截器（判斷一份，兩家 AI 的鉤子都呼叫它）",
@@ -350,7 +351,7 @@
    "name": "雲端三關與協作欄位閘的範本",
    "rules": "E3",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "清版本控制環境變數的共用實作（GIT_ 前綴整族清）",
@@ -392,19 +393,19 @@
    "name": "堆疊閘（底必須是主幹、不可以有別支疊在上面）",
    "rules": "H2",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "真考卷閘（必過檢查在那顆版本上真的跑過且成功）",
    "rules": "H3",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "跨變更試合併閘（與每支以主幹為底的開著變更真合起來跑三關）",
    "rules": "H4",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   },
   {
    "name": "驗收分級工具（路徑家族表住設定；只算不擋）",
@@ -446,7 +447,7 @@
    "name": "待裁清單工具（掃整個專案的留言；只列不擋）",
    "rules": "D1",
    "state": "已啟用",
-   "verified": ""
+   "verified": "2026-09-27"
   }
  ]
 }
