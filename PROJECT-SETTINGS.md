@@ -37,9 +37,9 @@
 | 忽略清單、檢查豁免允許清單 | E7 | 忽略＝\.gitignore（由 settings\.json 的 ignoreLists 登記、tests\/ignore\-lists\.test\.js 逐字比對）；檢查豁免：無 |
 | 路標考題掃描的目錄範圍 | K3 | tests\/signposts\.test\.js：掃 tests\/ 第一層的 \*\.test\.js 與 tests\/helpers\/ 第一層的 \.js（目錄寫死、不讀這一格） |
 | 三關的實際命令、執行環境版本、稽核等級（或唯一設定檔位置） | E2、E3 | settings\.json 的 checks：只有 node \-\-test 一關（套件零相依，沒有型別與風格兩關）；雲端＝\.github\/workflows\/ci\.yml 的「三關」job 呼叫 tools\/run\-checks\.js；執行環境版本＝\.node\-version；本機推送前鉤子：套件倉庫沒裝（core\.hooksPath 沒設），E2 在本倉庫靠自覺 |
-| 必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單） | E3、H3 | 正本在 GitHub：main 分支保護的 required\_status\_checks（唯讀重讀：gh api repos\/teacherjung\/ai\-collab\-kit\/branches\/main\/protection\/required\_status\_checks）；檢查名逐字對應 \.github\/workflows\/ci\.yml 與 \.github\/workflows\/collab\-fields\.yml 的 job 名 |
+| 必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單） | E3、H3 | 正本在 GitHub：main 分支保護的 required\_status\_checks（唯讀重讀：gh api repos\/teacherjung\/ai\-collab\-kit\/branches\/main\/protection\/required\_status\_checks）；檢查名逐字對應 \.github\/workflows\/ci\.yml 與 \.github\/workflows\/collab\-fields\.yml 的 job 名；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集） |
 | 合併步驟登記正本（閘登記對帳題讀它） | H1 | settings\.json 的 gates（登記；每筆＝name／rules／command／args／state）；各閘腳本＝tools\/gates\/\*\.js；對帳考題＝tests\/settings\.test\.js（磁碟上的閘 vs 登記的閘）；合併指令 tools\/merge\.js 只跑登記為已啟用的閘、任一非零就停 |
-| 合併前必做的驗收依據 | A5 | 無合併前驗收：套件倉庫沒有畫面與部署；改動同步進使用專案時照那個專案的驗收走。合併預授權＝本檔 mergeAuthorization 那一格 |
+| 合併前必做的驗收依據 | A5 | 無合併前驗收：套件倉庫沒有畫面與部署；改動同步進使用專案時照那個專案的驗收走。合併預授權＝settings\.json 的 mergeAuthorization（PROJECT\-SETTINGS\.md 第十一節） |
 | 合併後驗收分級與動作的正本（路徑家族表＋各級動作） | H6 | 未啟用：套件倉庫沒有畫面與部署，acceptance 維持未設定；改動在同步進使用專案那一支照該專案的分級驗收 |
 
 主幹分支名（原閘寫死 main，規矩 H2、H3、H4）：main
@@ -134,7 +134,7 @@
 
 ## 十一、合併預授權（規矩 A5）
 
-未設定。預授權不取代 A5 列的其餘條件。
+有，常設（裁示者 William 2026\-09\-26 在施工對話裡回「a 照理財網頁的常設授權：複審通過、閘全綠就直接合（建議）：這可以後應該可預設不用再問我了」，Claude 轉述、貼在 ai\-collab\-kit \#13 留言 5847452089；本格即正本）：獨立審查者對目前受審版本留下合規「通過」、登記的閘全綠，且變更說明的「\#\#\# 複審後掃」小標已填（本倉庫沒有掃描器＝逐字「未執行：本專案無掃描器」）＝由審過這支的那一方照登記的閘與合併指令合併、不必再問。他在對話裡看到的選項 a 原文是「照理財網頁的常設授權：複審通過、閘全綠就直接合」；「複審後掃小標已填」那半句是理財網頁那條授權本來就有的條件、由 Claude 沿用，不是他這次的原話。裁示者隨時可收回，也可對個案說先不要合；不改變 A5 列的其餘條件（影響本支的待裁未結、裁示者叫停）與錢的絕對邊界。。預授權不取代 A5 列的其餘條件。
 
 ## 十二、機器啟用狀態（逐支登記；「已啟用」以外的一律當靠自覺）
 
@@ -147,7 +147,7 @@
 | 禁區攔截器（判斷一份，兩家 AI 的鉤子都呼叫它） | B1 | 已安裝未啟用 |  |
 | 忽略清單一致考題（登記的每一份忽略檔跟生效的樣式一字不差） | B4、E7 | 已啟用 | 2026\-09\-13 |
 | 推送前鉤子範本＋三關執行器（讀設定的三關、前後驗工作樹） | E2 | 已安裝未啟用 |  |
-| 雲端三關與協作欄位閘的範本 | E3 | 已啟用 |  |
+| 雲端三關與協作欄位閘的範本 | E3 | 已安裝未啟用 |  |
 | 清版本控制環境變數的共用實作（GIT\_ 前綴整族清） | E4 | 已啟用 | 2026\-09\-13 |
 | 閘的退出路徑與進入點行為題（每一道閘的考題各有「真的跑一遍指令」與「問不到＝退 2」） | E5 | 已啟用 | 2026\-09\-13 |
 | 檔名考題（已追蹤路徑只用可見 ASCII；例外名單寫死、只出不進） | E6 | 已啟用 | 2026\-09\-13 |

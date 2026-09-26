@@ -231,6 +231,21 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
   for (const p of u.participants) assert.equal(p.id, UNSET, `身分「${p.role}」要沒填`);
 });
 
+test('⑨b 空白設定跟 settings.json 在套件共用的欄位逐字相同（只准專案自己的值不同）', () => {
+  // 為什麼（2026-09-26 套件倉庫填了自己的設定之後）：根目錄那份從此是套件倉庫自己的值、空白範本是給新專案的正本，
+  // 變成兩份。⑨ 只比形狀、陣列只看「是陣列」，所以套件共用的東西（機器表的名字與條號、閘的名字／條號／指令、
+  // 位置表的項目與條號、貼文帳號資格）在其中一份改了、另一份沒跟上，⑨ 不會紅——新專案會拿到少一列機器或指錯條號的範本。
+  // 刻意不比的：識別值值域（使用專案可以放寬）、參與者、來源字串、位置的值、機器與閘的狀態——那些本來就是專案自己的值。
+  // 閘的順序各專案可以不同（合併指令照登記順序跑），所以排序後比。
+  const a = read();
+  const u = unfilled();
+  assert.deepEqual(u.machines.map((m) => [m.name, m.rules]), a.machines.map((m) => [m.name, m.rules]), '機器表的名字或條號兩份不一樣：改了一份要一起改另一份');
+  const gateKey = (g) => JSON.stringify([g.name, g.rules, g.command, g.args]);
+  assert.deepEqual(u.gates.map(gateKey).sort(), a.gates.map(gateKey).sort(), '閘的名字、條號或指令兩份不一樣');
+  assert.deepEqual(u.locations.map((l) => [l.item, l.rules]), a.locations.map((l) => [l.item, l.rules]), '位置表的項目或條號兩份不一樣');
+  assert.equal(u.accountRule, a.accountRule, '貼文帳號資格兩份不一樣');
+});
+
 test('照 GitHub 範本填完平台動作與合併指令，設定說明書照樣產得出來；合併訊息的換行留在指令裡（搬家修正 r1 B1）', () => {
   const tpl = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', 'platform-github.json'), 'utf8'));
   const filled = JSON.parse(JSON.stringify(read()));
