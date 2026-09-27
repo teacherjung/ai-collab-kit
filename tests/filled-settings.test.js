@@ -95,7 +95,9 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     for (const { file, patterns } of settings.ignoreLists) fs.writeFileSync(path.join(copy, file), `${patterns.join('\n')}\n`);
     fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "gh $*" >> ${JSON.stringify(log)}\nexit 97\n`, { mode: 0o755 });
 
-    const env = { ...gitEnv(), HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KIT_NESTED_SUITE: '1' };
+    // KIT_FILLED_SUITE＝「這一輪的設定是 fakeFilled」：誘餌倉庫那題也會整卷重跑、也帶 KIT_NESTED_SUITE，但它用的是根目錄的真設定；
+    // tests/forbidden-defaults.test.js ②b 只在這一輪檢查（① 在套件倉庫只有這一輪真的比對）
+    const env = { ...gitEnv(), HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, KIT_NESTED_SUITE: '1', KIT_FILLED_SUITE: '1' };
     delete env.NODE_TEST_CONTEXT;   // 不拿掉的話子行程的 node --test 不管紅不紅都退 0
     const sh = (args) => spawnSync(args[0], args.slice(1), { cwd: copy, env, encoding: 'utf8' });
     assert.ok(!fs.existsSync(path.join(copy, 'cases')), '前提：複本不帶案例簿');

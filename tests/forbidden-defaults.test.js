@@ -8,28 +8,34 @@
 //
 // 守得到的：
 //   ①專案「擋的方向」那六個清單少了範本同名清單的任何一項（逐一比、逐字）＝紅，訊息說出是哪一欄的哪一項；
-//   ②跳過的判準是一支純函式（只有 forbidden.name 還是「未設定」才跳＝沒接攔截器的專案、套件倉庫自己），另有一題釘它
-//     「名字填了就不跳」——把它改成永遠跳過，那題會紅；
+//   ②判準自己：跳過只認「未設定」（改成永遠跳過會紅）；九欄每一欄的方向逐欄釘（擋的方向少一項＝抓到、大小寫不同也算少；
+//     放行方向少一項＝不算）——比對換回九欄、拿掉六欄的任何一欄、改成不分大小寫，這一題都紅；
+//   ②b tests/filled-settings.test.js 那一輪（KIT_FILLED_SUITE）① 不可以跳過（它的假設定要填名字）——① 在套件倉庫只在那一輪真的比對；
 //   ③範本自己要站得住：拒絕清單裡有測試鈕（驗收靠它）、碰錢與不碰錢兩欄都不是空的、換上假名餵 decide() 判得出
 //     四種結果（測試鈕擋、碰錢連接器上不在白名單的擋、沒登記的擋、不碰錢的放行）、白名單上的工具一個都不被家族網誤擋、
 //     範本的每一個不碰錢登記名都**不能當鑰匙**（出現在沒登記或變形過的碰錢連接器名字的尾段＝擋、理由是登記制「分不清」；
-//     #16 r1 高：預設名單就是鑰匙的來源，鑰匙不能開門這件事由帶鑰匙的這一題釘；⚠️ 前提＝tools/forbidden-tools.js ≥ 84b19ba
-//     只認標準形狀 mcp__<登記名>__<工具名>，在 cf43681 上這一段 52/52 紅——那正是它要釘的洞）；
-//   ④範本跟正本逐字對（⑨b 式，settings.test.js）：九欄的筆數釘在題裡、碰錢連接器與拒絕清單逐字釘、不碰錢那一欄的組成
-//     （6 個帳號編號＋20 個名字）釘；⑤正本 docs/money-guard-two-pattern-tables.md「預設字彙表」表格列的每一個字都要在範本裡、
+//     #16 r1 高：預設名單就是鑰匙的來源，鑰匙不能開門這件事由帶鑰匙的這一題釘；⚠️ 前提＝攔截器含 #16 合併版（32bca59）的
+//     「放行只認標準形狀 mcp__<登記名>__<工具名>」，拿 #16 第一版（PR #16 歷史裡的 cf43681）跑這一段 52/52 紅——那正是它要釘的洞）；
+//   ④範本自己不縮水（⑨b 式，settings.test.js）：九欄的筆數釘在題裡、碰錢連接器與拒絕清單逐字釘、不碰錢那一欄的組成
+//     （6 個帳號編號＋20 個名字）釘；⑤範本跟正本逐字對：正本 docs/money-guard-two-pattern-tables.md「預設字彙表」那一節（只在那一節找、
+//     整份檔同形的列只准一列）表格列的每一個字都要在範本裡、
 //     「25→38」「19→30」要等於範本的長度、加的字要接在舊字後面逐字相同——範本掉一個字、正本改了範本沒跟上、範本加了字
 //     正本沒改，都紅（改預設＝範本、這裡、正本三處一起改，看得見）。③④⑤合起來才是「範本壞掉＝每一個抄它的專案都壞」
 //     那句的證據；④⑤之前 ③ 只釘到測試鈕、第一個連接器與 8 個自造名字碰到的 12 個字（2026-09-27 反駁抓到）。
-// ⚠️ 守不到的：只比「至少包含」，專案多加的字不比（那是專案自己的值）；放行方向三欄（safeServers／allowlist／readPrefixes）
-//   不比＝專案可以自己拿掉（更嚴），多加（更鬆，例如多登記一個不碰錢的連接器）考題也守不到（裁示者 2026-09-26：會對外送東西
-//   但不碰錢那一級靠自覺）；擋的方向那六欄裡也有兩種「更嚴」的改法會被擋：把碰錢連接器從 servers 整個拿掉（沒改登記到別欄＝
-//   那個連接器全擋）、把 patterns 的一條搬去 patternsReadSafe（乙案）——兩種都是看得見的紅、要先改套件範本；
-//   連接器登記名是**這個 claude.ai 帳號**的連接器編號
-//   （換帳號＝把新編號補進去，碰錢那一欄的舊編號留著、不碰錢那一欄的可以拿掉；正本＝README「搬進一個專案」第 1 步），編號對不對、有沒有漏掉某個連接器，機器看不到；
-//   ④⑤釘的是筆數與正本表格：把一個 0562e422 的舊字換成別的字（筆數不變、又不在正本表格裡）抓不到——那是看得見的 JSON diff，
+// ⚠️ 守不到的：只比「有沒有少」，專案多加的項一律不比——放行三欄（safeServers／allowlist／readPrefixes）多加一項＝更鬆，
+//   servers 多登記一個連接器也可能更鬆（白名單是所有碰錢連接器共用的一份，同名的工具會放行）；多加是改禁區清單本身，
+//   照 README 第 3 步的手續（改 forbidden 那一塊＝重印指紋、補複本、重按信任），這一題看不到（不碰錢連接器那一級靠自覺＝
+//   裁示者 2026-09-26；allowlist、readPrefixes 多加不在那條裁示裡）；擋的方向那六欄裡也有兩種「更嚴」的改法會被擋：
+//   把碰錢連接器從 servers 整個拿掉（沒改登記到別欄＝那個連接器全擋）、把 patterns 的一條搬去 patternsReadSafe（乙案）
+//   ——兩種都是看得見的紅、要先改套件範本；連接器登記名是**這個 claude.ai 帳號**的連接器編號
+//   （換帳號＝把新編號補進去，碰錢那一欄的舊編號留著、不碰錢那一欄的可以拿掉；拒絕清單那兩支下單工具的名字也綁著舊編號，
+//   要照新編號補一份——沒補，新編號上的下單工具仍由白名單制擋，但 deny 那一道就沒了；正本＝README「搬進一個專案」第 1 步），
+//   編號對不對、有沒有漏掉某個連接器，機器看不到；
+//   ④⑤釘的是筆數與正本表格：範本換掉一個字或一個登記名（筆數不變、又不在正本表格裡——例如把一個 safeServers 名字換成別的）
+//   抓不到——那是看得見的 JSON diff，
 //   由審查的人看；跳過判準那一題只釘函式，繞過函式直接在題身裡跳過抓不到（那是看得見的改動，由審查的人看）；
 //   套件倉庫自己沒接攔截器（forbidden.name 是「未設定」）＝①在套件倉庫永遠跳過，只在使用專案裡守
-//   （tests/filled-settings.test.js 巢狀那一輪填了名字，所以①在那一輪真的跑過一次）；⑤在巢狀複本裡跳過（複本不帶 docs/）。
+//   （tests/filled-settings.test.js 巢狀那一輪填了名字，①在那一輪真的比對；②b 釘著那一輪不可以跳過）；⑤在巢狀複本裡跳過（複本不帶 docs/）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,9 +48,10 @@ const { unfilled, UNFILLED_FILE } = require('./helpers/kit-copy.js');
 const UNSET = '未設定';
 const LISTS = ['servers', 'safeServers', 'allowlist', 'deny', 'verbs', 'nouns', 'readPrefixes', 'patterns', 'patternsReadSafe'];
 /**
- * 專案要「至少包含範本」的只有擋的方向那六欄：拿掉一項＝變鬆（碰錢連接器改走別欄、拒絕清單少一支、詞表少一個字、樣式表少一條）。
- * 放行方向那三欄（safeServers 不碰錢的連接器、allowlist 碰錢連接器上准用的工具、readPrefixes 唯讀開頭字）拿掉一項＝變嚴，
- * 所以不比——專案可以比預設更嚴、不可以更鬆（裁示者 2026-09-27「全照建議」，原 ❓＝套件 #17 留言 5853012705）。
+ * 專案要「至少包含範本」的只有擋的方向那六欄：拿掉一項多半是變鬆（拒絕清單少一支、詞表少一個字、樣式表少一條；碰錢連接器從
+ * servers 拿掉再登記到不碰錢那一欄最危險——只拿掉不改登記＝那個連接器全擋，是更嚴，也照樣會紅）。放行方向那三欄（safeServers
+ * 不碰錢的連接器、allowlist 碰錢連接器上准用的工具、readPrefixes 唯讀開頭字）拿掉一項＝變嚴，所以不比（裁示者 2026-09-27
+ * 「全照建議」，原 ❓＝套件 #17 留言 5853012705）。多加一項不管哪一欄都不比——這一題不擋「更鬆」，見檔頭「守不到的」。
  */
 const RESTRICTIVE = ['servers', 'deny', 'verbs', 'nouns', 'patterns', 'patternsReadSafe'];
 /** 驗收用的測試鈕（templates/canary-install.md；裁示者 2026-09-15 裁「8a」永久放進 deny）。 */
@@ -75,7 +82,7 @@ test('專案 settings.json 的 forbidden 擋的方向那六個清單都至少包
   if (reason) { t.skip(reason); return; }
   const missing = missingDefaults(project, unfilled().forbidden);
   assert.deepEqual(missing, [],
-    `專案的禁區清單少了套件預設的這幾項（預設的正本＝${path.basename(UNFILLED_FILE)}；只比擋的方向那六欄——拿掉一項＝變鬆，要拿掉先改套件範本並裁示；放行方向那三欄不比，專案可以自己拿掉；同步時把套件新加的預設補進來）：\n${missing.join('\n')}`);
+    `專案的禁區清單少了套件預設的這幾項（預設的正本＝${path.basename(UNFILLED_FILE)}；只比擋的方向那六欄——拿掉一項多半是變鬆，要拿掉先改套件範本並裁示；放行方向那三欄不比，專案可以自己拿掉；同步時把套件新加的預設補進來）：\n${missing.join('\n')}`);
 });
 
 test('判準自己：跳過只認「未設定」；少一項要抓到並說是哪一項；多加的不算（對照組）', () => {
@@ -83,16 +90,32 @@ test('判準自己：跳過只認「未設定」；少一項要抓到並說是�
   for (const f of [{ name: UNSET }, {}, undefined, { name: '' }]) assert.match(skipReason(f) || '', /未設定/u, `${JSON.stringify(f)}：名字沒填才跳，而且要說出原因`);
   const defaults = unfilled().forbidden;
   assert.deepEqual(missingDefaults(defaults, defaults), [], '範本跟自己比：一項都不少');
-  assert.deepEqual(missingDefaults({ ...defaults, verbs: defaults.verbs.slice(1) }, defaults), [`verbs: ${defaults.verbs[0]}`], '少一個動詞要抓到、要說是哪一個');
   assert.deepEqual(missingDefaults({ ...defaults, servers: [] }, defaults), defaults.servers.map((s) => `servers: ${s}`), '碰錢的連接器被拿掉要抓到（改登記到不碰錢那一欄＝最危險的放鬆）');
-  // 放行方向那三欄拿掉＝更嚴，不算少（裁示者 2026-09-27）；對照組：三欄整欄清空也是 []
-  for (const key of ['safeServers', 'allowlist', 'readPrefixes']) {
-    assert.deepEqual(missingDefaults({ ...defaults, [key]: [] }, defaults), [], `${key} 是放行方向的欄：專案拿掉＝更嚴，不算少`);
+  // 每一欄的方向逐欄釘在這裡（寫死的表，不從 RESTRICTIVE 推——拿自己驗自己等於沒驗）：擋的方向少一項要抓到、說出是哪一項，
+  // 大小寫不同也算少（逐字）；放行方向少一項、整欄清空都不算（裁示者 2026-09-27）
+  const DIRECTION = { servers: '擋', deny: '擋', verbs: '擋', nouns: '擋', patterns: '擋', patternsReadSafe: '擋', safeServers: '放行', allowlist: '放行', readPrefixes: '放行' };
+  assert.deepEqual(Object.keys(DIRECTION).sort(), [...LISTS].sort(), '九欄每一欄都要寫明方向');
+  for (const key of LISTS) {
+    const first = defaults[key][0];
+    const dropped = missingDefaults({ ...defaults, [key]: defaults[key].slice(1) }, defaults);
+    const cased = missingDefaults({ ...defaults, [key]: [first.toUpperCase() === first ? `${first}_X` : first.toUpperCase(), ...defaults[key].slice(1)] }, defaults);
+    if (DIRECTION[key] === '擋') {
+      assert.deepEqual(dropped, [`${key}: ${first}`], `${key} 是擋的方向：少一項要抓到、要說是哪一項`);
+      assert.deepEqual(cased, [`${key}: ${first}`], `${key} 是擋的方向：逐字比，大小寫不同也算少`);
+    } else {
+      assert.deepEqual(dropped, [], `${key} 是放行方向：少一項＝更嚴，不算少`);
+      assert.deepEqual(missingDefaults({ ...defaults, [key]: [] }, defaults), [], `${key} 是放行方向：整欄清空也不算少`);
+    }
   }
   assert.deepEqual(missingDefaults({ ...defaults, deny: defaults.deny.filter((d) => d !== CANARY) }, defaults), [`deny: ${CANARY}`], '少了測試鈕要抓到');
-  const total = RESTRICTIVE.reduce((n, k) => n + defaults[k].length, 0);
+  const total = Object.keys(DIRECTION).filter((k) => DIRECTION[k] === '擋').reduce((n, k) => n + defaults[k].length, 0);
   assert.equal(missingDefaults({ name: '錢' }, defaults).length, total, '擋的方向的清單整欄不在＝那一欄的每一項都算少（放行方向三欄不算）');
   assert.deepEqual(missingDefaults({ ...defaults, verbs: [...defaults.verbs, 'zzz_extra'] }, defaults), [], '專案多加的字不算少');
+});
+
+test('②b 巢狀那一輪 ① 不可以跳過：tests/filled-settings.test.js 的假設定要填 forbidden.name（① 在套件倉庫只在那一輪真的比對）',
+  { skip: process.env.KIT_FILLED_SUITE === '1' ? false : '只在 tests/filled-settings.test.js 那一輪檢查（KIT_FILLED_SUITE；別的整卷重跑用的是根目錄的真設定，forbidden.name 是「未設定」、① 照設計跳過）' }, () => {
+  assert.equal(skipReason(read().forbidden), null, '巢狀那一輪的專案設定沒填 forbidden.name：① 會靜靜跳過，比對方向反了也不會紅');
 });
 
 test('空白範本的預設自己站得住：測試鈕在拒絕清單、兩欄都有登記、換上假名餵攔截器判得出四種結果、白名單上的工具不被誤擋、不碰錢的登記名不能當鑰匙', () => {
@@ -113,11 +136,11 @@ test('空白範本的預設自己站得住：測試鈕在拒絕清單、兩欄�
   assert.deepEqual(misblocked, [], '白名單上的工具走雙保險時不可以被家族網誤擋（詞表加字之後要重量這一條）');
   // 預設名單就是「鑰匙」的來源（#16 r1 高：登記名出現在尾段就放行）：範本每一個不碰錢登記名 k，沒登記的連接器與
   // 變形過的碰錢連接器都不准借 k 放行；擋的理由是登記制（分不清）、不是碰到禁區。
-  // ⚠️ 前提：tools/forbidden-tools.js ≥ 84b19ba（safeConnectorOf 只認標準形狀）；在 cf43681 上這一段 52/52 紅——那正是它要釘的洞。
+  // ⚠️ 前提：攔截器含 #16 合併版（32bca59）的 safeConnectorOf（只認標準形狀）；拿 #16 第一版（PR #16 歷史裡的 cf43681）跑這一段 52/52 紅——那正是它要釘的洞。
   for (const k of defaults.safeServers) {
     for (const t of [`mcp__zz_unregistered__transfer_funds__${k}`, `mcp__x${money}__create_order_instruction__${k}`]) {
       const d = decide(t, f);
-      assert.equal(d.deny, true, `${t}：不碰錢的登記名「${k}」出現在尾段不可以當鑰匙（前提：攔截器 ≥ 84b19ba，放行只認標準形狀 mcp__<登記名>__<工具名>）`);
+      assert.equal(d.deny, true, `${t}：不碰錢的登記名「${k}」出現在尾段不可以當鑰匙（前提：攔截器含 #16 合併版 32bca59，放行只認標準形狀 mcp__<登記名>__<工具名>）`);
       assert.equal(d.kind, 'registry', `${t}：擋的理由要是登記制（分不清）、不是碰到禁區（拿到的是「${d.why}」）`);
     }
   }
@@ -151,9 +174,15 @@ test('⑤範本跟正本逐字對：正本「預設字彙表」表格列的每�
   { skip: process.env.KIT_NESTED_SUITE === '1' ? '巢狀複本不帶 docs/，沒有正本可以對' : false }, () => {
   const defaults = unfilled().forbidden;
   const doc = fs.readFileSync(DOC_FILE, 'utf8');
-  assert.ok(doc.includes('### 預設字彙表'), `正本 ${path.basename(DOC_FILE)} 裡找不到「### 預設字彙表」這一節`);
+  const start = doc.indexOf('\n### 預設字彙表');
+  assert.ok(start >= 0, `正本 ${path.basename(DOC_FILE)} 裡找不到「### 預設字彙表」這一節（要是一行標題）`);
+  const rest = doc.slice(start + 1);
+  const next = rest.indexOf('\n### ');
+  const section = next < 0 ? rest : rest.slice(0, next);
   for (const col of ['verbs', 'nouns']) {
-    const m = doc.match(new RegExp(`^\\| ${col} \\| (.+?) \\| (\\d+)→(\\d+) \\|$`, 'mu'));
+    const all = doc.match(new RegExp(`^\\| ${col} \\| .+? \\| \\d+→\\d+ \\|$`, 'gmu')) || [];
+    assert.equal(all.length, 1, `整份正本「| ${col} | 字、… | N→M |」這種列要剛好一列（現在 ${all.length} 列）：多一列會讓這一題比錯列`);
+    const m = section.match(new RegExp(`^\\| ${col} \\| (.+?) \\| (\\d+)→(\\d+) \\|$`, 'mu'));
     assert.ok(m, `正本「預設字彙表」那一節找不到「| ${col} | 字、字、… | N→M |」這一列`);
     const words = m[1].split('、').map((w) => w.trim());
     const from = Number(m[2]);
