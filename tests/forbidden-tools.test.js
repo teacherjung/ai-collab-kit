@@ -569,7 +569,7 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.match(d.why, /「Other」同時登記在 servers[\s\S]*safeServers/u, `${t}：${d.why}`);
   }
 
-  // ⑨登記名的形狀（兩欄同一把尺）：填成名字裡的別段不是打錯——分段比對對每一個名字都命中、結果跟填的人想的完全不同（safeServers 填 mcp ＝每一個 mcp__ 名字的
+  // ⑨登記名的形狀（兩欄同一把尺）：填成名字裡的別段不是打錯（三種各有各的下場＝badRegistryName 上方的註解；safeServers 填 mcp ＝每一個 mcp__ 名字的
   //    位置 0 都是它，而測試鈕與碰錢白名單照擋、按測試鈕驗收看不出來；主幹對同一份設定會擋
   //    mcp__unregistered_zz__create_order）。所以 mcp 本身、mcp__ 開頭、全是底線／點／連字號＝設定壞掉、全擋、訊息說登記名是哪一段
   for (const bad of ['mcp', 'mcp__', 'mcp__other', '_', '__', '.', '-', '_.-']) {
