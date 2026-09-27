@@ -456,14 +456,14 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   }
   assert.equal(unreg.kind, 'registry', '登記制的拒絕要帶 kind（指令入口靠它換尾句）');
 
-  // ②safeServers 登記的＝放行，但只認標準形狀 mcp__<登記名>__<工具名>（工具名不含 __）或只有登記名——連家族網會擋的名字也放行（那一級靠自覺）。
+  // ②safeServers 登記的＝放行，但只認標準形狀 mcp__<登記名>__<工具名>（工具名非空、不以 _ 開頭、不含 __）或只有登記名——連家族網會擋的名字也放行（那一級靠自覺）。
   //    登記名含 __（term__nal）也照這個規則。
   for (const t of ['mcp__other__get_thing', 'mcp__other__create_order', 'mcp__term__nal__run_thing', 'mcp__other']) {
     assert.equal(decide(t, REG).deny, false, `${t}：不碰錢的連接器整個放行`);
   }
-  // ②b 放行只認標準形狀（#16 r1 高）：登記名出現在尾段、中段、多一層前綴、或工具名裡還有 __ ＝分不清是哪個連接器＝擋。
+  // ②b 放行只認標準形狀（#16 r1 高）：登記名出現在尾段、中段、多一層前綴、工具名裡還有 __、工具名空的或以 _ 開頭（mcp__other___x 也讀得成連接器 other_ 的 x）＝分不清是哪個連接器＝擋。
   //    主幹用「任何分段位置命中」擋碰錢連接器是保守的；同一把尺拿來放行，mcp__<沒登記>__create_order__other 就會被當成 other 放行。
-  for (const t of ['mcp__r1unknown__r1_create_order__other', 'mcp__prefix__other__create_order', 'mcp__other__part__create_order', 'mcp__a__term__nal__withdraw', 'mcp__term__nal__x__y']) {
+  for (const t of ['mcp__r1unknown__r1_create_order__other', 'mcp__prefix__other__create_order', 'mcp__other__part__create_order', 'mcp__a__term__nal__withdraw', 'mcp__term__nal__x__y', 'mcp__other___x', 'mcp__other__', 'mcp__term__nal___y']) {
     const d = decide(t, REG);
     assert.equal(d.deny, true, `${t}：登記名不在標準位置＝分不清＝擋`);
     assert.equal(d.kind, 'registry', `${t}：是登記制那一族的拒絕`);

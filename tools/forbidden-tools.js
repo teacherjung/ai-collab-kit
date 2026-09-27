@@ -105,7 +105,7 @@ function boundaryHits(toolName, server) {
 }
 
 /**
- * 不碰錢連接器的放行只認標準形狀 mcp__<登記名>__<工具名>（工具名裡不含 __）、或只有登記名。
+ * 不碰錢連接器的放行只認標準形狀 mcp__<登記名>__<工具名>（工具名非空、不以 _ 開頭、裡面不含 __）、或只有登記名。
  * 為什麼不沿用碰錢那一欄的「任何分段位置命中都算」：那把尺拿來擋是保守的，拿來放行就是洞——
  * #16 r1 抓到 mcp__<沒登記>__create_order__<safe 登記名>：safe 名出現在尾段就被當成不碰錢的連接器放行。
  * 放行必須確認得了「這個名字的連接器就是它」；多一層前綴、工具名裡還有 __＝分不清是哪個連接器＝當沒登記擋（看得見）。
@@ -115,7 +115,9 @@ function safeConnectorOf(toolName, safeServers) {
   for (const server of safeServers) {
     if (toolName === `mcp__${server}`) return server;
     const head = `mcp__${server}__`;
-    if (toolName.startsWith(head) && !toolName.slice(head.length).includes('__')) return server;
+    const rest = toolName.slice(head.length);
+    // 工具名要非空、不以 _ 開頭（mcp__x___y 也讀得成連接器 x_ 的工具 y）、裡面沒有 __
+    if (toolName.startsWith(head) && rest && !rest.startsWith('_') && !rest.includes('__')) return server;
   }
   return null;
 }
@@ -197,7 +199,7 @@ function decide(toolName, forbidden) {
     if (safeConnectorOf(toolName, safeServers)) return { deny: false };
     const ambiguous = safeServers.find((server) => toolName.startsWith(`mcp__${server}__`) || boundaryHits(toolName, server).length);
     if (ambiguous) {
-      return { deny: true, kind: 'registry', why: `連接器工具「${toolName}」分不清是哪個連接器：登記名「${ambiguous}」在名字裡，但不是「mcp__${ambiguous}__<工具名>」這個標準形狀（多一層前綴、或工具名裡還有 __、或登記名只出現在後段）——不碰${f.name}的放行只認標準形狀，分不清＝當沒登記拒絕。要放行它，把這個名字實際的連接器名（mcp__ 後面、到工具名之前那一整段，含它自己的 __）登記進 forbidden.safeServers；${AFTER_EDIT}（這不是碰到${f.name}，是分不清連接器）` };
+      return { deny: true, kind: 'registry', why: `連接器工具「${toolName}」分不清是哪個連接器：登記名「${ambiguous}」在名字裡，但不是「mcp__${ambiguous}__<工具名>」這個標準形狀（多一層前綴、或工具名是空的／以 _ 開頭／裡面還有 __、或登記名只出現在後段）——不碰${f.name}的放行只認標準形狀，分不清＝當沒登記拒絕。要放行它，把這個名字實際的連接器名（mcp__ 後面、到工具名之前那一整段，含它自己的 __）登記進 forbidden.safeServers；${AFTER_EDIT}（這不是碰到${f.name}，是分不清連接器）` };
     }
     return { deny: true, kind: 'registry', why: `連接器工具「${toolName}」沒有登記：它的連接器（${REGISTRY_NAME_HINT}；這個名字的是「${toolName.slice(5).split('__')[0]}」）不在 settings.json 的 forbidden.servers（會動到${f.name}的連接器，白名單制）也不在 forbidden.safeServers（不會動到${f.name}的連接器，整個放行）——沒登記的連接器一律拒絕（裁示者 2026-09-26）。要用它，先把連接器的登記名填進其中一欄；${AFTER_EDIT}（這不是碰到${f.name}，是還沒登記）` };
   }
