@@ -135,13 +135,15 @@ test('空白範本的預設自己站得住：測試鈕在拒絕清單、兩欄�
   const misblocked = defaults.allowlist.filter((tool) => decide(`mcp__${money}__${tool}`, f).deny);
   assert.deepEqual(misblocked, [], '白名單上的工具走雙保險時不可以被家族網誤擋（詞表加字之後要重量這一條）');
   // 預設名單就是「鑰匙」的來源（#16 r1 高：登記名出現在尾段就放行）：範本每一個不碰錢登記名 k，沒登記的連接器與
-  // 變形過的碰錢連接器都不准借 k 放行；擋的理由是登記制（分不清）、不是碰到禁區。
+  // 變形過的碰錢連接器都不准借 k 放行；擋的理由是登記制（分不清）、不是碰到禁區；兩個探針名都像錢（transfer_funds、create_order_instruction）
+  // ＝kind registry-money、尾句照接冒名那一句（tests/forbidden-tools.test.js ⑮②g；裁示者 2026-09-27）。
   // ⚠️ 前提：攔截器含 #16 合併版（32bca59）的 safeConnectorOf（只認標準形狀）；拿 #16 第一版（PR #16 歷史裡的 cf43681）跑這一段 52/52 紅——那正是它要釘的洞。
   for (const k of defaults.safeServers) {
     for (const t of [`mcp__zz_unregistered__transfer_funds__${k}`, `mcp__x${money}__create_order_instruction__${k}`]) {
       const d = decide(t, f);
       assert.equal(d.deny, true, `${t}：不碰錢的登記名「${k}」出現在尾段不可以當鑰匙（前提：攔截器含 #16 合併版 32bca59，放行只認標準形狀 mcp__<登記名>__<工具名>）`);
-      assert.equal(d.kind, 'registry', `${t}：擋的理由要是登記制（分不清）、不是碰到禁區（拿到的是「${d.why}」）`);
+      assert.equal(d.kind, 'registry-money', `${t}：擋的理由要是登記制、名字像錢那一種（拿到的是「${d.why}」）`);
+      assert.match(d.why, /^連接器工具「[^」]+」分不清是哪個連接器/u, `${t}：擋的理由要是登記制（分不清）、不是碰到禁區（拿到的是「${d.why}」）`);
     }
   }
   // 字彙表補的那一族（裁示者 2026-09-27 裁「趕緊補進字彙表」）：這幾個自造名字補之前放行、補之後要擋——只釘量到的，

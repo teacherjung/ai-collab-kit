@@ -19,7 +19,8 @@
 //     不是 mcp__ 開頭的名字走舊路徑（對照組）；safeServers 算進「有效規則」——但只對 mcp__ 名字（舊路徑上它永遠比不到，只填它＝零規則＝擋）；
 //     只登記碰錢連接器、safeServers 空著時沒登記的理由是「沒有登記」不是「名單空」；登記名不是連接器的名字（mcp 本身、mcp__ 開頭、
 //     全是底線／點／連字號）＝設定壞掉、全擋、訊息說登記名是哪一段；同名兩欄大小寫不分；沒登記的訊息說出登記名是名字裡的哪一段；
-//     指令入口：登記制的拒絕不接「視為誤觸或冒名、回報裁示者」那句尾巴（碰禁區的仍接）。
+//     指令入口：登記制的拒絕、名字不像禁區的不接「視為誤觸或冒名、回報裁示者」那句尾巴（碰禁區的仍接）；
+//     名字像禁區的照接那句、kind 是 registry-money、訊息寫明登記前先問裁示者（⑮②g，裁示者 2026-09-27；像不像怎麼判＝「兩張樣式表」）。
 //     ⚠️ 登記制帶來的變化：mcp__ 名字只有碰錢連接器白名單上的工具才走到家族網與兩張樣式表，所以本檔測家族網的名字
 //     一律改走那條路（onMoney：放進白名單、看雙保險擋不擋），自造的假連接器 other 登記為不碰錢。
 //     ⚠️ 也因此「擋」的斷言失去辨識力：沒登記也會擋，所以 ⑧⑩ 那幾發「認出這是碰錢連接器才擋得住」的名字要看理由
@@ -464,14 +465,17 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   }
   // ②b 放行只認標準形狀（#16 r1 高）：登記名出現在尾段、中段、多一層前綴、工具名裡還有 __、工具名空的或以 _ 開頭（mcp__other___x 也讀得成連接器 other_ 的 x）＝分不清是哪個連接器＝擋。
   //    主幹用「任何分段位置命中」擋碰錢連接器是保守的；同一把尺拿來放行，mcp__<沒登記>__create_order__other 就會被當成 other 放行。
+  //    名字像錢的四個（create_order、withdraw）是 registry-money（②g），其餘是 registry；兩種的理由都要以登記制那一句開頭
+  const MONEYISH = new Set(['mcp__r1unknown__r1_create_order__other', 'mcp__prefix__other__create_order', 'mcp__other__part__create_order', 'mcp__a__term__nal__withdraw']);
   for (const t of ['mcp__r1unknown__r1_create_order__other', 'mcp__prefix__other__create_order', 'mcp__other__part__create_order', 'mcp__a__term__nal__withdraw', 'mcp__term__nal__x__y', 'mcp__other___x', 'mcp__other__', 'mcp__term__nal___y']) {
     const d = decide(t, REG);
     assert.equal(d.deny, true, `${t}：登記名不在標準位置＝分不清＝擋`);
-    assert.equal(d.kind, 'registry', `${t}：是登記制那一族的拒絕`);
-    assert.match(d.why, /分不清是哪個連接器|沒有登記/u, `${t}：${d.why}`);
-    assert.doesNotMatch(d.why, /白名單制|家族網|額外樣式/u, `${t}：不可以被碰錢那幾道的理由冒充`);
+    assert.equal(d.kind, MONEYISH.has(t) ? 'registry-money' : 'registry', `${t}：是登記制那一族的拒絕（名字像錢＝registry-money）`);
+    assert.match(d.why, /^連接器工具「[^」]+」(分不清是哪個連接器|沒有登記)/u, `${t}：理由的開頭要是登記制那一句，不可以被碰錢那幾道的理由冒充（${d.why}）`);
+    assert.doesNotMatch(d.why, /白名單制/u, `${t}：不可以被白名單制的理由冒充`);
+    if (!MONEYISH.has(t)) assert.doesNotMatch(d.why, /家族網|額外樣式/u, `${t}：名字不像錢，理由裡不可以出現家族網或樣式表`);
   }
-  assert.match(decide('mcp__other__part__create_order', REG).why, /標準形狀[\s\S]*登記進 forbidden\.safeServers/u, '分不清的訊息要教人把實際的連接器名登記進去');
+  assert.match(decide('mcp__other__part__get_thing', REG).why, /標準形狀[\s\S]*要放行它[\s\S]*登記進 forbidden\.safeServers/u, '分不清、名字不像錢：訊息要教人把實際的連接器名登記進去');
   // ②c 碰錢那一欄的「每一次出現都比」要釘住（#16 r1 低）：第一處只是子字串、第二處才是邊界——只查第一次出現的話會漏掉碰錢連接器、
   //    再被登記制當「分不清」擋，看 deny 分不出，所以看理由
   const twice = decide('mcp__other__xbroker-x__broker-x__noop', REG);
@@ -499,6 +503,32 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     const d = decide(t, REG);
     assert.equal(d.deny, true, `${t}：登記名逐字比，大小寫不同不是同一個連接器`);
     assert.equal(d.kind, 'registry', `${t}：登記制那一族`);
+  }
+  // ②g 名字像錢的「沒登記／分不清／名單空」（裁示者 2026-09-27「全照建議」①a；⑧ 盤點抓到：#16 讓登記制的拒絕一律說「不是碰到錢、
+  //    不必上報」，券商重新連線、編號換了之後，它的下單工具也被這樣說——跟規矩 B2 衝突）：照樣擋、kind 'registry-money'、
+  //    理由不說「不是碰到」、寫明登記前先問裁示者、絕不登記進 safeServers、不教人把它登記成不碰錢；像不像怎麼判＝「兩張樣式表」（寧可多報）。
+  //    對照組：名字不像錢的照舊 'registry'、說「不是碰到錢」。
+  const NEWID = '00000000-aaaa-bbbb-cccc-dddddddddddd';
+  const emptyReg = { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] };
+  for (const [t, cfg, lead] of [
+    [`mcp__${NEWID}__create_order_instruction`, REG, /沒有登記/u],   // 券商重新連線、編號換了之後的下單工具
+    ['mcp__unknownbroker__place_order', REG, /沒有登記/u],
+    ['mcp__newbank__get_withdraw_status', REG, /沒有登記/u],       // ⑥ 會放過的形狀，這裡照樣算像錢（差別＝「兩張樣式表」）
+    ['mcp__newbank__convert_cash', REG, /沒有登記/u],              // patternsReadSafe
+    ['mcp__prefix__other__create_order', REG, /分不清是哪個連接器/u],
+    ['mcp__any__create_order', emptyReg, /連接器名單還沒填/u],
+  ]) {
+    const d = decide(t, cfg);
+    assert.equal(d.deny, true, `${t}：照樣擋`);
+    assert.equal(d.kind, 'registry-money', `${t}：名字像錢＝registry-money（${d.why}）`);
+    assert.match(d.why, lead, `${t}：還是登記制那一種拒絕`);
+    for (const re of [/名字長得像會動到錢的工具/u, /當成可能的誤觸或冒名/u, /先問裁示者/u, /絕不登記進 forbidden\.safeServers/u, /forbidden\.deny/u]) assert.match(d.why, re, `${t}：訊息要含 ${re}`);
+    assert.doesNotMatch(d.why, /不是碰到錢|要放行它|不會動到錢的填 safeServers/u, `${t}：名字像錢，不可以說不是碰到錢、不可以教人登記成不碰錢（${d.why}）`);
+  }
+  for (const [t, cfg] of [['mcp__unknownbroker__get_thing', REG], ['mcp__prefix__other__get_thing', REG], ['mcp__any__get_thing', emptyReg]]) {
+    const d = decide(t, cfg);
+    assert.equal(d.kind, 'registry', `${t}：名字不像錢＝照舊 registry`);
+    assert.match(d.why, /不是碰到錢/u, `${t}：名字不像錢，照舊說不是碰到錢`);
   }
   // hasRule 要算 safeServers：只登記了不碰錢的連接器、其餘全空的專案也算有規則。
   // ⚠️ 對照組（同一份設定下沒登記的要照登記制擋、理由是「沒有登記」）：不然 hasRule 不算它時走 fail-closed，
@@ -723,7 +753,7 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
   }
 });
 
-test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是鉤子認得的形狀；登記制的拒絕不接冒名那句尾巴', () => {
+test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是鉤子認得的形狀；登記制的拒絕、名字不像錢的不接冒名那句尾巴、像錢的照接', () => {
   const settings = { forbidden: FORBIDDEN };
   // 碰禁區的拒絕（白名單制）：接規矩 B2 那一句尾巴（裁示者 2026-08-03 原句）
   const denied = cli(JSON.stringify({ tool_name: 'mcp__broker-x__create_order_instruction' }), settings);
@@ -732,7 +762,7 @@ test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是�
   assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /錢的絕對邊界[\s\S]*採白名單制[\s\S]*視為誤觸或冒名，拒絕執行並立即回報裁示者/u, '碰禁區的拒絕仍接 B2 那句尾巴');
   // 登記制的拒絕（沒登記、名單空）：why 說了「這不是碰到錢」，尾巴再叫 AI 當冒名上報＝同一句自相矛盾——名單還沒填時每一次
   // 工具呼叫都會被上報成冒名。尾巴改說照訊息登記；hookSpecificOutput 三個鍵不動（Codex 全域層與 Claude 釘指紋那一行只看形狀）
-  for (const [tool, s] of [['mcp__any__create_order', settings], ['mcp__other__get_thing', { forbidden: { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] } }]]) {
+  for (const [tool, s] of [['mcp__any__get_thing', settings], ['mcp__other__get_thing', { forbidden: { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] } }]]) {
     const out = JSON.parse(cli(JSON.stringify({ tool_name: tool }), s).output);
     assert.deepEqual(Object.keys(out.hookSpecificOutput).sort(), ['hookEventName', 'permissionDecision', 'permissionDecisionReason'], `${tool}：形狀不變`);
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', tool);
@@ -740,6 +770,15 @@ test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是�
     assert.match(reason, /錢的絕對邊界[\s\S]*不是碰到錢/u, tool);
     assert.doesNotMatch(reason, /冒名|誤觸|絕對禁止呼叫|回報裁示者/u, `${tool}：登記制的拒絕不可以接冒名那句尾巴（${reason}）`);
     assert.match(reason, /把連接器登記好再用/u, tool);
+  }
+  // 名字像錢的登記制拒絕（⑮②g）：尾句照接 B2 那一句；理由不說「不是碰到錢」、不叫人自己登記好再用；三個鍵照舊
+  for (const [tool, s] of [['mcp__any__create_order', settings], ['mcp__00000000-aaaa-bbbb-cccc-dddddddddddd__create_order_instruction', settings], ['mcp__other__create_order', { forbidden: { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] } }]]) {
+    const out = JSON.parse(cli(JSON.stringify({ tool_name: tool }), s).output);
+    assert.deepEqual(Object.keys(out.hookSpecificOutput).sort(), ['hookEventName', 'permissionDecision', 'permissionDecisionReason'], `${tool}：形狀不變`);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', tool);
+    const reason = out.hookSpecificOutput.permissionDecisionReason;
+    assert.match(reason, /錢的絕對邊界[\s\S]*先問裁示者[\s\S]*視為誤觸或冒名，拒絕執行並立即回報裁示者/u, `${tool}：名字像錢＝照接 B2 那句尾巴（${reason}）`);
+    assert.doesNotMatch(reason, /不是碰到錢|不必上報|把連接器登記好再用/u, `${tool}：名字像錢，不可以說不必上報（${reason}）`);
   }
   assert.equal(cli(JSON.stringify({ tool_name: 'mcp__other__get_order' }), settings).output, '', '放行不印（other 登記為不碰錢）');
   assert.equal(JSON.parse(cli('not json', settings).output).hookSpecificOutput.permissionDecision, 'deny');
