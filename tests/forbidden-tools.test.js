@@ -25,8 +25,9 @@
 //     ⚠️ 也因此「擋」的斷言失去辨識力：沒登記也會擋，所以 ⑧⑩ 那幾發「認出這是碰錢連接器才擋得住」的名字要看理由
 //     （白名單那句獨有的「採白名單制」；「沒有登記」那句括號裡也有「白名單制」四個字，不能只比那四個字）。
 // ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有；
-//   登記為不碰錢的連接器整個放行（會對外送東西但不碰錢的那一級靠自覺）；登記名對不對、漏登記某個連接器機器看不到
-//   （填成工具名那一段＝那一支靜靜放行，那是合法形狀、機器分不出；mcp 本身／mcp__ 開頭／全是符號才由文法擋）；
+//   登記為不碰錢的連接器（標準形狀的名字）整個放行（會對外送東西但不碰錢的那一級靠自覺）；登記名對不對、漏登記某個連接器機器看不到
+//   （填成工具名那一段是合法形狀、文法擋不了，但它不會靜靜放行：不碰錢那一欄當「分不清」擋、碰錢那一欄讓同連接器其餘工具當沒登記擋，⑮②e；
+//   mcp 本身／mcp__ 開頭／全是符號才由文法擋）；
 //   ⑫是用 /bin/sh 模擬鉤子，**這裡不證明真的 Claude Code／Codex session 有載入、有照做**（要由使用專案用測試鈕驗；
 //     第一個使用專案 2026-09-16／17 兩家都驗過擋得住，放行面在 Codex 真對話還沒直接量）；鉤子逾時兩家都不擋。
 'use strict';
@@ -476,6 +477,29 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   const twice = decide('mcp__other__xbroker-x__broker-x__noop', REG);
   assert.equal(twice.deny, true);
   assert.match(twice.why, /白名單制/u, '第二處才是碰錢連接器的邊界：理由要是白名單制，不是登記制');
+  // ②d 登記名互為前綴（other 與 other__part）：兩種登記順序結果都一樣（#16 r2 低：「第一個開頭相符的登記名不合就停」會讓結果隨登記順序變）
+  for (const order of [['other', 'other__part'], ['other__part', 'other']]) {
+    const cfg = { ...REG, safeServers: ['term__nal', ...order] };
+    assert.equal(decide('mcp__other__part__get_thing', cfg).deny, false, `登記順序 ${order.join('>')}：other__part 的工具放行`);
+    assert.equal(decide('mcp__other__get_thing', cfg).deny, false, `登記順序 ${order.join('>')}：other 的工具放行`);
+    assert.equal(decide('mcp__other__part__x__y', cfg).deny, true, `登記順序 ${order.join('>')}：工具名裡還有 __ 照擋`);
+  }
+  // ②e 登記名填成工具名那一段（合法形狀、文法擋不了）不會靜靜放行：不碰錢那一欄含那一段的名字＝分不清、碰錢那一欄那一段被當成碰錢連接器擋；
+  //    同連接器其餘工具兩欄都當沒登記擋——都看得見（檔頭「誠實劃界」那句靠這裡撐）
+  const segSafe = { ...REG, safeServers: [...REG.safeServers, 'get_thing'] };
+  assert.equal(decide('mcp__vendor__get_thing', segSafe).deny, true, '不碰錢那一欄填了工具名那一段：含那一段的名字要擋');
+  assert.match(decide('mcp__vendor__get_thing', segSafe).why, /分不清是哪個連接器/u, '不碰錢那一欄填了工具名那一段：含那一段的名字是分不清');
+  assert.match(decide('mcp__vendor__other_tool', segSafe).why, /沒有登記/u, '不碰錢那一欄填了工具名那一段：同連接器其餘工具是沒登記');
+  const segMoney = { ...REG, servers: [...REG.servers, 'get_thing'] };
+  assert.equal(decide('mcp__vendor__get_thing', segMoney).deny, true, '碰錢那一欄填了工具名那一段：含那一段的名字要擋');
+  assert.match(decide('mcp__vendor__get_thing', segMoney).why, /會動到錢/u, '碰錢那一欄填了工具名那一段：那一段被當成碰錢連接器擋（尾段命中＝沒有指定工具名）');
+  assert.match(decide('mcp__vendor__other_tool', segMoney).why, /沒有登記/u, '碰錢那一欄填了工具名那一段：同連接器其餘工具是沒登記');
+  // ②f 同一欄的大小寫逐字比（#16 r2 低：safe 比對轉小寫再比，考卷曾靜靜通過）：登記 other，OTHER／Other 都不是它＝沒登記擋
+  for (const t of ['mcp__OTHER__get_thing', 'mcp__Other__get_thing']) {
+    const d = decide(t, REG);
+    assert.equal(d.deny, true, `${t}：登記名逐字比，大小寫不同不是同一個連接器`);
+    assert.equal(d.kind, 'registry', `${t}：登記制那一族`);
+  }
   // hasRule 要算 safeServers：只登記了不碰錢的連接器、其餘全空的專案也算有規則。
   // ⚠️ 對照組（同一份設定下沒登記的要照登記制擋、理由是「沒有登記」）：不然 hasRule 不算它時走 fail-closed，
   //    登記的被擋、沒登記的也被擋，分不出「有規則」與「當成沒規則所以全擋」。
@@ -545,8 +569,8 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.match(d.why, /「Other」同時登記在 servers[\s\S]*safeServers/u, `${t}：${d.why}`);
   }
 
-  // ⑨登記名的形狀（兩欄同一把尺）：填成名字裡的別段不是打錯——分段比對照樣命中＝靜靜放行（safeServers 填 mcp ＝每一個 mcp__ 名字的
-  //    位置 0 都是它＝萬用放行，把「沒登記一律禁」整個關掉，而測試鈕與碰錢白名單照擋、按測試鈕驗收看不出來；主幹對同一份設定會擋
+  // ⑨登記名的形狀（兩欄同一把尺）：填成名字裡的別段不是打錯——分段比對對每一個名字都命中、結果跟填的人想的完全不同（safeServers 填 mcp ＝每一個 mcp__ 名字的
+  //    位置 0 都是它，而測試鈕與碰錢白名單照擋、按測試鈕驗收看不出來；主幹對同一份設定會擋
   //    mcp__unregistered_zz__create_order）。所以 mcp 本身、mcp__ 開頭、全是底線／點／連字號＝設定壞掉、全擋、訊息說登記名是哪一段
   for (const bad of ['mcp', 'mcp__', 'mcp__other', '_', '__', '.', '-', '_.-']) {
     for (const key of ['servers', 'safeServers']) {

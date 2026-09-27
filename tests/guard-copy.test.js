@@ -461,7 +461,8 @@ test('⑨自我試跑真的抓得到：什麼都放、什麼都擋、指紋檢�
   failsWith(editFile('tools/forbidden-tools.js', (c) => c.replace('function decide(toolName, forbidden) {', 'function decide() { return { deny: false };\n}\nfunction decideOriginal(toolName, forbidden) {')),
     /沒有一個被擋成退 2/u, '判斷層被改成什麼都放');
   failsWith({ forbidden: { name: '測試禁區', servers: ['fake broker with space'], safeServers: ['other'] } }, /沒有被乾淨地放行[\s\S]*設定壞掉/u, '清單壞到什麼都擋');
-  // 登記制（2026-09-26）：沒登記任何不碰禁區的連接器＝那一行本來就全擋，試跑找不到能放行的假名＝不落地、照實說要先登記
+  // 登記制（2026-09-26）：沒登記任何不碰禁區的連接器＝試跑找不到能放行的假名＝自我試跑失敗、照實說要先登記
+  //（兩側各留下什麼、碰禁區白名單上的工具仍放行＝guard-copy.js 檔頭；這一題只驗訊息）
   failsWith({ forbidden: { ...FAKE, safeServers: [] } }, /safeServers 是空的[\s\S]*先把不碰禁區的連接器登記進 safeServers/u, 'safeServers 空');
   failsWith(editFile('templates/hook-codex-global.json', (c) => c.replace("指紋對不上）：一律當成拒絕' >&2; exit 2; }", "指紋對不上）：一律當成拒絕' >&2; exit 0; }")),
     /指紋檢查沒有作用/u, '範本的指紋檢查被拿掉（提交進版本）');
