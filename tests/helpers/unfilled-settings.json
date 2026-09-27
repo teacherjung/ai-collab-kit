@@ -263,7 +263,8 @@
    "wallet",
    "cheque",
    "payee",
-   "loan"
+   "loan",
+   "settlement"
   ],
   "readPrefixes": [
    "get",

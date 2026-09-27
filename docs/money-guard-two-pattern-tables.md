@@ -95,14 +95,15 @@
 （碰錢連接器 1 個與它的白名單 32 個＝唯讀查詢 24＋提醒／觀察清單 7＋回饋 1（程式訊息裡叫它「唯讀名單」是沿用的舊稱；
 裁示者的分類是「唯讀查詢」與「到價提醒與觀察清單不涉資金，可用」兩類）、3 筆拒絕清單＝兩支下單工具＋測試鈕、
 25 動詞、19 名詞、14 唯讀前綴、兩張表 2＋4 條）、不碰錢的連接器 26 個（**這個 claude.ai 帳號**的 6 個連接器編號＋
-17 個桌面內建＋3 個 Codex；換帳號＝編號不同，把新帳號的編號**補進去、舊的留著**（考題要求至少包含範本；舊編號在新帳號
-永遠比不到、留著無害；要拿掉先改套件範本）——手續在套件 README「搬進一個專案」第 1 步；測試鈕的連接器刻意不登記，
-靠拒絕清單擋），再加下面的字。`tests/forbidden-defaults.test.js` 要求每個使用專案的清單至少包含這一份
-（可以多、不可以少——**九欄一律**，含 `safeServers`／`allowlist`／`readPrefixes` 這三個**放行方向**的欄：專案想比範本嚴
-（把某個不碰錢連接器改成白名單制、拿掉一個唯讀前綴）也會紅、也先裁；放鬆方向（多登記一個連接器）考題守不到，
-靠自覺）；範本自己的九欄筆數、碰錢連接器與拒絕清單、不碰錢那一欄的組成、以及下面表格列的每一個字，由同一支考題
+17 個桌面內建＋3 個 Codex；換帳號＝編號不同，把新帳號的編號**補進去**；碰錢那一欄的舊編號留著（考題要求至少包含範本；
+舊編號在新帳號永遠比不到、留著無害；要拿掉先改套件範本），不碰錢那一欄的舊編號可以拿掉——手續在套件 README「搬進一個專案」第 1 步；測試鈕的連接器刻意不登記，
+靠拒絕清單擋），再加下面的字。`tests/forbidden-defaults.test.js` 要求每個使用專案**擋的方向那六欄**
+（`servers`、`deny`、`verbs`、`nouns`、`patterns`、`patternsReadSafe`）至少包含這一份（可以多、不可以少）；**放行方向那三欄**
+（`safeServers`、`allowlist`、`readPrefixes`）不比——專案可以自己拿掉（更嚴），多加（更鬆）考題守不到、靠自覺
+（裁示者 2026-09-27「全照建議」）；範本自己的九欄筆數、碰錢連接器與拒絕清單、不碰錢那一欄的組成、以及下面表格列的每一個字，由同一支考題
 逐字對（範本掉字、正本改了範本沒跟上都紅；改預設＝範本、考題、這一節三處一起改）。
-第一個使用專案（0562e422）同步這一版：對範本缺 49 項（`safeServers` 整欄 26＋verbs 13＋nouns 10）、多 0 項；
+第一個使用專案（0562e422）同步這一版：對範本缺 50 項（`safeServers` 整欄 26＋verbs 13＋nouns 11）、多 0 項；考題會紅的是
+verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器連內建工具都叫不了，所以一起補；
 逐字補進它的 settings.json 後重跑 `node tools/build-settings.js`、重印釘指紋那一行、每台機器補複本、重按信任
 ——跟登記制同一次同步做，只重印一次。
 
@@ -111,9 +112,10 @@
 | 欄 | 加了 | 數 |
 |---|---|---|
 | verbs | withdraw、withdrawal、transfer、xfer、deposit、remit、wire、disburse、cash_out、cashout、encash、sweep、repay | 25→38 |
-| nouns | cash、money、transfer、withdrawal、payment、payout、wallet、cheque、payee、loan | 19→29 |
+| nouns | cash、money、transfer、withdrawal、payment、payout、wallet、cheque、payee、loan、settlement | 19→30 |
 
-`transfer`、`withdrawal` 兩欄都收（動詞接名詞、名詞接動詞兩個方向都要比得到）。
+`transfer`、`withdrawal` 兩欄都收（動詞接名詞、名詞接動詞兩個方向都要比得到）。`settlement` 是字彙表調查要收、草稿漏了的
+（見下面「刻意不加的字」settle／clear 那一條），裁示者 2026-09-27 裁補。
 
 **量到的代價＝0**：本對話看得到的 276 個 `mcp__` 真工具名（25 個連接器）加字前後判定逐一相同（擋的只有測試鈕；
 兩支下單工具本對話看不到，另外餵＝擋）；範本的 32 個白名單工具走雙保險一個都不被家族網誤擋。
@@ -140,12 +142,14 @@
   `get_wire_instructions`、`list_wire_instructions`、`get_deposit_options`、`get_coin_deposit_address`、`get_deposited_cash`
   （`get_transfer_instructions` 仍擋，transfer 還在）；代價＝`view_wire_money`、`download_deposit_funds` 這種「唯讀前綴＋錢名詞」
   的動錢形狀回到放行（`wire_funds`、`deposit_cash`、`wire_transfer`、`deposit_to_wallet` 仍由 `patterns` 擋）。
-  調查的判斷是不削（電匯最不可逆），本支照收；削不削只有裁示者能拍。
+  調查的判斷是不削（電匯最不可逆）；裁示者 2026-09-27 裁不削（「全照建議」）。
 
 **刻意不加的字**（各有實測代價撐著，不是憑感覺）：
 - `exchange` 當動詞 ⇒ 擋掉整族 `get_exchange_traded_funds`／`list_exchange_traded_funds`（ETF 拼全稱）——投資專案不值得。
 - `settle`／`clear` 當動詞 ⇒ `get_settled_balance`／`get_cleared_trades` 被擋：過去分詞同時是狀態字，
-  跟 `open`／`close` 害死 `list_open_positions` 是同一個病；改收名詞（本批只收到 `payment`／`payout` 這一族，`settlement` 沒收）。
+  跟 `open`／`close` 害死 `list_open_positions` 是同一個病；改收名詞 `settlement`（裁示者 2026-09-27 裁補；它多擋的是 `create_settlement`、`execute_settlement`、`cancel_settlement`、
+  `close_settlement_period` 這種動詞＋結算的自造名，`get_settlement_status`、`list_settlements` 照放行；`confirm_settlement` 也照放行＝
+  `confirm` 不在動詞表——這一族靠補字擋不完，見下面誠實劃界）。
 - 單字 `cash` 當動詞 ⇒ 擋 `get_cash_balance`；改收 `cash_out`／`cashout`（名詞 `cash` 有收）。
 - 單字 `account`／`card`／美式 `check` ⇒ 分別擋 `update_account_settings`／`edit_scorecard`／`update_health_check`。
 - `credit`／`fund`／`load`／`pull`／`take` 當動詞 ⇒ 各有實測誤擋（信用卡、基金查詢、負載平衡、停利單）。
