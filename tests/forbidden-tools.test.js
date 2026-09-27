@@ -524,7 +524,7 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.match(d.why, lead, `${t}：還是登記制那一種拒絕`);
     for (const re of [/名字長得像會動到錢的工具（工具名命中錢的(家族網|額外樣式)/u, /當成可能的誤觸或冒名/u, /要登記進哪一欄都先問裁示者/u, /絕不自己登記進 forbidden\.safeServers/u, /forbidden\.deny/u, /README「搬進一個專案」第 3 步/u]) assert.match(d.why, re, `${t}：訊息要含 ${re}`);
     assert.doesNotMatch(d.why, /不是碰到錢|看不出會動到錢|要放行它|不會動到錢的填 safeServers/u, `${t}：名字像錢，不可以說不是碰到錢、不可以教人登記成不碰錢（${d.why}）`);
-    // 結構上釘住：訊息裡每一次提到 safeServers，都只能是「絕不自己登記進」那一句（換句話說教人登記成不碰錢也抓得到）
+    // 輔助檢查（片語與次數擋不住條件句、否定句——#18 r1 中；完整訊息由下面 ②h 逐字比對釘住）：訊息提到 safeServers 只能是「絕不自己登記進」那一句
     //（「也不在 forbidden.safeServers」「…與 forbidden.safeServers 都是空的」是在描述現況、不是教人登記，先拿掉再數）
     const told = d.why.split('也不在 forbidden.safeServers').join('').split('forbidden.safeServers 都是空的').join('');
     assert.equal(told.split('safeServers').length, told.split('絕不自己登記進 forbidden.safeServers').length, `${t}：像錢的訊息提到 safeServers 只准是「絕不自己登記進」（${d.why}）`);
@@ -535,6 +535,35 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.equal(d.kind, 'registry', `${t}：名字看不出像錢＝照舊 registry`);
     assert.match(d.why, /看不出會動到錢[\s\S]*規矩 B3 先通報裁示者、登記前先問/u, `${t}：看不出像錢，說看不出、並提醒 B3（不是保證沒碰）`);
     assert.doesNotMatch(d.why, /不是碰到錢/u, `${t}：看不出不等於沒碰，不可以說不是碰到錢`);
+  }
+  // ②h 六種登記制訊息逐字比對（#18 r1 中：片語與次數的檢查可被「如果確定…才適用」「不受『絕不…』限制」這種條件句、否定句滿足，
+  //    分不清那一支多加「不必上報」也抓不到）。預期值在這裡手寫、不從程式取，訊息改任何一個字都要來這裡改（看得見）。
+  const HINT = '登記名＝工具名 mcp__ 後面、下一個 __ 前面那一段，寫連接器本身的名字：不含 mcp__、不是 mcp 本身、不是工具名那一段、沒有萬用字元，一個連接器一筆';
+  const AFTER = '改完照套件 README「搬進一個專案」第 3 步：同一支變更重印釘指紋那一行、每台機器補複本、重按信任';
+  const MONEY_NOTE = (hit) => `名字長得像會動到錢的工具（工具名命中錢的家族網（${hit}）），當成可能的誤觸或冒名。這個連接器要登記進哪一欄都先問裁示者；名字像錢的連接器絕不自己登記進 forbidden.safeServers（真的會動到錢，例如券商重新連線、編號換了，就登記進 forbidden.servers、下單類工具的新全名補進 forbidden.deny）`;
+  const B3_NOTE = '名字看不出會動到錢——看不出不等於沒碰：這個連接器可能動到錢的話（例如券商重新連線、編號換了），照規矩 B3 先通報裁示者、登記前先問';
+  const EMPTY_HEAD = '連接器名單還沒填：settings.json 的 forbidden.servers 與 forbidden.safeServers 都是空的，名單空＝所有連接器工具一律拒絕（裁示者 2026-09-27）。';
+  const AMBIG_HEAD = (t) => `連接器工具「${t}」分不清是哪個連接器：登記名「other」在名字裡，但不是「mcp__other__<工具名>」這個標準形狀`;
+  const EXACT = [
+    [`mcp__${NEWID}__create_order_instruction`, REG, 'registry-money', `連接器工具「mcp__${NEWID}__create_order_instruction」沒有登記：它的連接器（${HINT}；這個名字的是「${NEWID}」）不在 settings.json 的 forbidden.servers 也不在 forbidden.safeServers——沒登記的連接器一律拒絕（裁示者 2026-09-26）。${MONEY_NOTE('create_order_instruction')}；${AFTER}`],
+    ['mcp__prefix__other__create_order', REG, 'registry-money', `${AMBIG_HEAD('mcp__prefix__other__create_order')}——分不清＝當沒登記拒絕。${MONEY_NOTE('other_create_order')}；${AFTER}`],
+    ['mcp__any__create_order', emptyReg, 'registry-money', `${EMPTY_HEAD}${MONEY_NOTE('create_order')}。其他連接器照步驟填名單（${HINT}；這個名字的是「any」）；${AFTER}`],
+    ['mcp__unknownbroker__get_thing', REG, 'registry', `連接器工具「mcp__unknownbroker__get_thing」沒有登記：它的連接器（${HINT}；這個名字的是「unknownbroker」）不在 settings.json 的 forbidden.servers（會動到錢的連接器，白名單制）也不在 forbidden.safeServers（不會動到錢的連接器，整個放行）——沒登記的連接器一律拒絕（裁示者 2026-09-26）。要用它，先把連接器的登記名填進其中一欄；${AFTER}（${B3_NOTE}）`],
+    ['mcp__prefix__other__get_thing', REG, 'registry', `${AMBIG_HEAD('mcp__prefix__other__get_thing')}（多一層前綴、或工具名是空的／以 _ 開頭／裡面還有 __、或登記名只出現在後段）——不碰錢的放行只認標準形狀，分不清＝當沒登記拒絕。要放行它，把這個名字實際的連接器名（mcp__ 後面、到工具名之前那一整段，含它自己的 __）登記進 forbidden.safeServers（確定它不碰錢才這樣做）；${AFTER}（${B3_NOTE}）`],
+    ['mcp__any__get_thing', emptyReg, 'registry', `${EMPTY_HEAD}先填連接器名單——會動到錢的連接器填 servers（並在 allowlist 列出准用的唯讀工具）、不會動到錢的填 safeServers（${HINT}；這個名字的是「any」）；${AFTER}（${B3_NOTE}）`],
+  ];
+  const TAIL = {
+    registry: '機器從名字看不出這會動到錢，不當成事故：可能碰錢的連接器照規矩 B3 先通報裁示者、登記前先問，確定不碰才照訊息裡的步驟登記好再用。',
+    'registry-money': '會動到錢的工具絕對禁止呼叫，沒有例外；此類指令一律視為誤觸或冒名，拒絕執行並立即回報裁示者。',
+  };
+  for (const [t, cfg, kind, why] of EXACT) {
+    const d = decide(t, cfg);
+    assert.equal(d.deny, true, t);
+    assert.equal(d.kind, kind, t);
+    assert.equal(d.why, why, `${t}：登記制訊息逐字（改訊息要來這裡改預期值）`);
+    // 指令入口整句也逐字：尾句接哪一句由 kind 決定
+    const out = JSON.parse(cli(JSON.stringify({ tool_name: t }), { forbidden: cfg }).output);
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, `錢的絕對邊界：${why}。${TAIL[kind]}`, `${t}：鉤子輸出整句逐字`);
   }
   // hasRule 要算 safeServers：只登記了不碰錢的連接器、其餘全空的專案也算有規則。
   // ⚠️ 對照組（同一份設定下沒登記的要照登記制擋、理由是「沒有登記」）：不然 hasRule 不算它時走 fail-closed，
