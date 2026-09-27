@@ -128,8 +128,9 @@ verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器
 `sweep_cash`、`repay_loan`。順帶：`update_payee`（自造）也是補之前放行、補之後擋；`send_payment_reminder`（自造）
 0562e422 下**本來就**由 `patterns` 第 1 條的 `payment` 擋（`send` 不是唯讀前綴）、預設下改由家族網擋——歸因換了、判定沒變，不算新擋的。
 
-**預設字彙表下新增的誤擋類**（自造的合理唯讀名；2026-09-27 字彙表調查 135 個自造唯讀名裡 14 個＝10.4%，本支逐一重量，
-現行放行→預設由家族網擋、理由帶「唯讀前綴不替它脫罪」；歸因＝拿掉哪一邊的新字就回放行）：
+**預設字彙表下新增的誤擋類**（自造的合理唯讀／無害維護名；2026-09-27 字彙表調查 135 個自造唯讀名裡 14 個＝10.4%，本支逐一重量：
+14 個都從現行放行→預設由家族網擋；其中 12 個唯讀前綴開頭的，理由帶「唯讀前綴不替它脫罪」，`update_cash_forecast`、`update_payee_label`
+兩個是無害的更新（`update` 不是唯讀前綴），理由沒有那一句；歸因＝拿掉哪一邊的新字就回放行）：
   ・拿掉**新動詞**就回放行：`get_transfer_instructions`、`get_deposit_instructions`、`get_wire_instructions`、
     `list_wire_instructions`（新動詞 × 既有名詞 instruction——券商真有「入金／匯款指示」這種唯讀概念）；
     `get_transferred_funds`、`get_withdrawn_funds`、`get_transferable_funds`、`get_withdrawable_funds`、`list_withdrawn_orders`
@@ -160,9 +161,14 @@ verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器
 - 單字 `cash` 當動詞 ⇒ 擋 `get_cash_positions`（`get_cash_balance` 不會，balance 不在名詞表——2026-09-27 實測，更正第一版的例子）；
   改收 `cash_out`／`cashout`（名詞 `cash` 有收）。
 - 單字 `account`／`card`／美式 `check` ⇒ 分別擋 `update_account_settings`／`edit_scorecard`／`update_health_check`。
-- `credit`／`fund`／`load`／`pull`／`take` 當動詞 ⇒ 各有實測誤擋（信用卡、基金查詢、負載平衡、停利單）。
+- `credit`／`fund`／`load`／`pull`／`take` 當動詞 ⇒ 本版預設下逐一實測會誤擋：`get_credit_payments`、`get_fund_positions`、
+  `load_order_history`、`pull_trade_history`、`get_take_profit_orders`（2026-09-27 重量；調查當時舉的 `get_load_balance`、`pull_transactions`
+  在本版預設下不會被擋——balance、transactions 不在名詞表——所以換掉）。
 
-**誠實劃界：這一族靠補字彙表補不完。** 調查做了 3170 個機械變形，**2470 個（78%）仍逃得掉**，其中三類 100% 逃脫
+**誠實劃界：這一族靠補字彙表補不完。** 調查做了 3170 個機械變形（五組）：調查當時（0562e422 的攔截器與詞表＋這批新字，
+登記制之前）**2470 個（78%）仍逃得掉**、三組 100% 逃脫；本版（#16 登記制＋範本預設，2026-09-27 用同一批造名重量）
+**2340 個（74%）**、兩組 100%——五組依序 780／780、1040／480、910／770、260／130、180／180，少掉的 130 個全是
+`mcp__<動作_名詞>__run` 這種形狀，被登記制當沒登記的連接器擋下，不是字表變強（`<動作_名詞>__confirm` 那一半照樣放行）
 ——判準要「動詞在表上＋名詞在表上＋相對位置＋詞界」四件同時成立，破一件就過，而動作的同義字與名詞後綴是開放集合。
 **任何地方都不准寫「提款轉帳那一族已經擋住了」。** 真正關得起來的門是**登記制**：登記過的碰錢連接器上，
 不在白名單的工具一律當場擋、跟名字長怎樣無關；名字裡**任何分段位置**都沒有登記名的連接器一支工具都不准叫
@@ -173,8 +179,9 @@ verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器
 它們打得開券商網頁、跑得了程式，機器對它們整個放行、看不到它們在做什麼——「不碰錢」這個標籤機器撐不住，這一層的錢的邊界
 靠 AI 自覺與規矩 B 節（登記它們是為了連內建工具都叫不了的那個代價，裁示者 2026-09-26 的「不做全域逐支白名單」）。
 
-沒收的可選收緊（代理稱「乙案」：把 `patterns` 第 1 條搬進 `patternsReadSafe`）：可再關 420 個變形、真工具仍 0 被擋，
-代價是自造的唯讀名被擋從 16 升到 30（`list_transfers`、`get_transfer_history`、`list_withdrawals`）——削不削要裁示者拍，本支不動。
+沒收的可選收緊（代理稱「乙案」：把 `patterns` 第 1 條搬進 `patternsReadSafe`）：同一批 3170 個造名可再關 1024 個
+（調查當時報的「420」只是第一組 780 個裡再關的數；調查當時與本版量到的都一樣）、本對話 276 個真工具新增誤擋 0、
+32 個白名單誤擋 0，代價是 135 個自造唯讀名裡被擋的從 16 升到 30（`list_transfers`、`get_transfer_history`、`list_withdrawals`）——削不削要裁示者拍，本支不動。
 
 ### 為什麼只留一份（方法，不是感想）
 
