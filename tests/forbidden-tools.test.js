@@ -21,7 +21,7 @@
 //     全是底線／點／連字號）＝設定壞掉、全擋、訊息說登記名是哪一段；同名兩欄大小寫不分；沒登記的訊息說出登記名是名字裡的哪一段；
 //     指令入口：登記制的拒絕、名字不像禁區的不接「視為誤觸或冒名、回報裁示者」那句尾巴（碰禁區的仍接）；
 //     名字像禁區的照接那句、kind 是 registry-money、訊息寫明登記前先問裁示者（⑮②g，裁示者 2026-09-27；像不像怎麼判＝「兩張樣式表」）。
-//     ⚠️ 登記制帶來的變化：mcp__ 名字只有碰錢連接器白名單上的工具才走到家族網與兩張樣式表，所以本檔測家族網的名字
+//     ⚠️ 登記制帶來的變化：mcp__ 名字只有碰錢連接器白名單上的工具靠家族網與兩張樣式表決定擋不擋，所以本檔測家族網的名字
 //     一律改走那條路（onMoney：放進白名單、看雙保險擋不擋），自造的假連接器 other 登記為不碰錢。
 //     ⚠️ 也因此「擋」的斷言失去辨識力：沒登記也會擋，所以 ⑧⑩ 那幾發「認出這是碰錢連接器才擋得住」的名字要看理由
 //     （白名單那句獨有的「採白名單制」；「沒有登記」那句括號裡也有「白名單制」四個字，不能只比那四個字）。
@@ -448,10 +448,10 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   // 下面每一段各釘一種退化（E8 六發突變各中一段）；REG 多登記一個含 __ 的不碰錢連接器，證明兩欄用同一把尺。
   const REG = { ...FORBIDDEN, safeServers: ['other', 'term__nal'] };
 
-  // ①沒登記＝擋，訊息要說出是哪個名字、兩欄的名稱、改完的手續，而且要說清楚這不是碰到禁區（免得被當成冒名回報）
+  // ①沒登記＝擋，訊息要說出是哪個名字、兩欄的名稱、改完的手續，而且要說清楚機器看不出它碰錢、可能碰錢就照規矩 B3 先通報（名字看不出像錢，不接冒名那句）
   const unreg = decide('mcp__unregistered_zz__get_thing', REG);
   assert.equal(unreg.deny, true);
-  for (const re of [/沒有登記/u, /mcp__unregistered_zz__get_thing/u, /forbidden\.servers/u, /forbidden\.safeServers/u, /README/u, /指紋/u, /補複本/u, /重按信任/u, /不是碰到錢/u,
+  for (const re of [/沒有登記/u, /mcp__unregistered_zz__get_thing/u, /forbidden\.servers/u, /forbidden\.safeServers/u, /README/u, /指紋/u, /補複本/u, /重按信任/u, /看不出會動到錢/u, /規矩 B3 先通報裁示者/u,
     // 登記名是名字裡的哪一段也要說（填錯的真正種子＝沒人說過登記名長什麼樣：填 mcp、填工具名那一段都是想得到的錯法）
     /登記名＝工具名 mcp__ 後面、下一個 __ 前面那一段/u, /這個名字的是「unregistered_zz」/u, /不含 mcp__/u, /沒有萬用字元/u]) {
     assert.match(unreg.why, re, `沒登記的訊息要含 ${re}`);
@@ -475,7 +475,7 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.doesNotMatch(d.why, /白名單制/u, `${t}：不可以被白名單制的理由冒充`);
     if (!MONEYISH.has(t)) assert.doesNotMatch(d.why, /家族網|額外樣式/u, `${t}：名字不像錢，理由裡不可以出現家族網或樣式表`);
   }
-  assert.match(decide('mcp__other__part__get_thing', REG).why, /標準形狀[\s\S]*要放行它[\s\S]*登記進 forbidden\.safeServers/u, '分不清、名字不像錢：訊息要教人把實際的連接器名登記進去');
+  assert.match(decide('mcp__other__part__get_thing', REG).why, /標準形狀[\s\S]*要放行它[\s\S]*登記進 forbidden\.safeServers（確定它不碰錢才這樣做）[\s\S]*規矩 B3/u, '分不清、名字看不出像錢：訊息教人把實際的連接器名登記進去、但只在確定不碰錢時，並提醒 B3');
   // ②c 碰錢那一欄的「每一次出現都比」要釘住（#16 r1 低）：第一處只是子字串、第二處才是邊界——只查第一次出現的話會漏掉碰錢連接器、
   //    再被登記制當「分不清」擋，看 deny 分不出，所以看理由
   const twice = decide('mcp__other__xbroker-x__broker-x__noop', REG);
@@ -507,7 +507,7 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   // ②g 名字像錢的「沒登記／分不清／名單空」（裁示者 2026-09-27「全照建議」①a；⑧ 盤點抓到：#16 讓登記制的拒絕一律說「不是碰到錢、
   //    不必上報」，券商重新連線、編號換了之後，它的下單工具也被這樣說——跟規矩 B2 衝突）：照樣擋、kind 'registry-money'、
   //    理由不說「不是碰到」、寫明登記前先問裁示者、絕不登記進 safeServers、不教人把它登記成不碰錢；像不像怎麼判＝「兩張樣式表」（寧可多報）。
-  //    對照組：名字不像錢的照舊 'registry'、說「不是碰到錢」。
+  //    對照組：名字看不出像錢的照舊 'registry'、說「看不出會動到錢」並提醒規矩 B3（看不出不等於沒碰，不說「不是碰到錢」）。
   const NEWID = '00000000-aaaa-bbbb-cccc-dddddddddddd';
   const emptyReg = { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] };
   for (const [t, cfg, lead] of [
@@ -522,13 +522,19 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.equal(d.deny, true, `${t}：照樣擋`);
     assert.equal(d.kind, 'registry-money', `${t}：名字像錢＝registry-money（${d.why}）`);
     assert.match(d.why, lead, `${t}：還是登記制那一種拒絕`);
-    for (const re of [/名字長得像會動到錢的工具/u, /當成可能的誤觸或冒名/u, /先問裁示者/u, /絕不登記進 forbidden\.safeServers/u, /forbidden\.deny/u]) assert.match(d.why, re, `${t}：訊息要含 ${re}`);
-    assert.doesNotMatch(d.why, /不是碰到錢|要放行它|不會動到錢的填 safeServers/u, `${t}：名字像錢，不可以說不是碰到錢、不可以教人登記成不碰錢（${d.why}）`);
+    for (const re of [/名字長得像會動到錢的工具（工具名命中錢的(家族網|額外樣式)/u, /當成可能的誤觸或冒名/u, /要登記進哪一欄都先問裁示者/u, /絕不自己登記進 forbidden\.safeServers/u, /forbidden\.deny/u, /README「搬進一個專案」第 3 步/u]) assert.match(d.why, re, `${t}：訊息要含 ${re}`);
+    assert.doesNotMatch(d.why, /不是碰到錢|看不出會動到錢|要放行它|不會動到錢的填 safeServers/u, `${t}：名字像錢，不可以說不是碰到錢、不可以教人登記成不碰錢（${d.why}）`);
+    // 結構上釘住：訊息裡每一次提到 safeServers，都只能是「絕不自己登記進」那一句（換句話說教人登記成不碰錢也抓得到）
+    //（「也不在 forbidden.safeServers」「…與 forbidden.safeServers 都是空的」是在描述現況、不是教人登記，先拿掉再數）
+    const told = d.why.split('也不在 forbidden.safeServers').join('').split('forbidden.safeServers 都是空的').join('');
+    assert.equal(told.split('safeServers').length, told.split('絕不自己登記進 forbidden.safeServers').length, `${t}：像錢的訊息提到 safeServers 只准是「絕不自己登記進」（${d.why}）`);
+    if (!/分不清/u.test(d.why)) assert.match(d.why, /這個名字的是「[^」]+」/u, `${t}：要說出登記名是名字裡的哪一段`);
   }
   for (const [t, cfg] of [['mcp__unknownbroker__get_thing', REG], ['mcp__prefix__other__get_thing', REG], ['mcp__any__get_thing', emptyReg]]) {
     const d = decide(t, cfg);
-    assert.equal(d.kind, 'registry', `${t}：名字不像錢＝照舊 registry`);
-    assert.match(d.why, /不是碰到錢/u, `${t}：名字不像錢，照舊說不是碰到錢`);
+    assert.equal(d.kind, 'registry', `${t}：名字看不出像錢＝照舊 registry`);
+    assert.match(d.why, /看不出會動到錢[\s\S]*規矩 B3 先通報裁示者、登記前先問/u, `${t}：看不出像錢，說看不出、並提醒 B3（不是保證沒碰）`);
+    assert.doesNotMatch(d.why, /不是碰到錢/u, `${t}：看不出不等於沒碰，不可以說不是碰到錢`);
   }
   // hasRule 要算 safeServers：只登記了不碰錢的連接器、其餘全空的專案也算有規則。
   // ⚠️ 對照組（同一份設定下沒登記的要照登記制擋、理由是「沒有登記」）：不然 hasRule 不算它時走 fail-closed，
@@ -575,7 +581,7 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   for (const t of ['mcp__other__get_thing', 'mcp__anything__at_all', 'mcp__broker-x__get_account_balances']) {
     const d = decide(t, empty);
     assert.equal(d.deny, true, `${t}：名單空＝擋`);
-    for (const re of [/先填連接器名單/u, /forbidden\.servers/u, /forbidden\.safeServers/u, /README/u, /不是碰到錢/u]) assert.match(d.why, re, `${t}：名單空的訊息要含 ${re}`);
+    for (const re of [/先填連接器名單/u, /forbidden\.servers/u, /forbidden\.safeServers/u, /README/u, /看不出會動到錢/u]) assert.match(d.why, re, `${t}：名單空的訊息要含 ${re}`);
     assert.doesNotMatch(d.why, /沒有任何一條有效規則/u, `${t}：這份設定有規則，擋的理由要是名單空`);
   }
   assert.match(decide('mcp__other__place_order_now', empty).why, /在拒絕清單上/u, '名單空時測試鈕還是「在拒絕清單上」（逐字拒絕排在登記制之前）');
@@ -760,16 +766,16 @@ test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是�
   const parsed = JSON.parse(denied.output);
   assert.equal(parsed.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /錢的絕對邊界[\s\S]*採白名單制[\s\S]*視為誤觸或冒名，拒絕執行並立即回報裁示者/u, '碰禁區的拒絕仍接 B2 那句尾巴');
-  // 登記制的拒絕（沒登記、名單空）：why 說了「這不是碰到錢」，尾巴再叫 AI 當冒名上報＝同一句自相矛盾——名單還沒填時每一次
+  // 登記制的拒絕、名字看不出像錢的（沒登記、名單空）：尾巴要是叫 AI 當冒名上報——名單還沒填時每一次
   // 工具呼叫都會被上報成冒名。尾巴改說照訊息登記；hookSpecificOutput 三個鍵不動（Codex 全域層與 Claude 釘指紋那一行只看形狀）
   for (const [tool, s] of [['mcp__any__get_thing', settings], ['mcp__other__get_thing', { forbidden: { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] } }]]) {
     const out = JSON.parse(cli(JSON.stringify({ tool_name: tool }), s).output);
     assert.deepEqual(Object.keys(out.hookSpecificOutput).sort(), ['hookEventName', 'permissionDecision', 'permissionDecisionReason'], `${tool}：形狀不變`);
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', tool);
     const reason = out.hookSpecificOutput.permissionDecisionReason;
-    assert.match(reason, /錢的絕對邊界[\s\S]*不是碰到錢/u, tool);
-    assert.doesNotMatch(reason, /冒名|誤觸|絕對禁止呼叫|回報裁示者/u, `${tool}：登記制的拒絕不可以接冒名那句尾巴（${reason}）`);
-    assert.match(reason, /把連接器登記好再用/u, tool);
+    assert.match(reason, /錢的絕對邊界[\s\S]*看不出會動到錢/u, tool);
+    assert.doesNotMatch(reason, /冒名|誤觸|絕對禁止呼叫|回報裁示者|不是碰到錢|不必上報/u, `${tool}：看不出像錢的登記制拒絕不接冒名那句尾巴、也不說不必上報（${reason}）`);
+    assert.match(reason, /規矩 B3 先通報裁示者、登記前先問，確定不碰才照訊息裡的步驟登記好再用/u, tool);
   }
   // 名字像錢的登記制拒絕（⑮②g）：尾句照接 B2 那一句；理由不說「不是碰到錢」、不叫人自己登記好再用；三個鍵照舊
   for (const [tool, s] of [['mcp__any__create_order', settings], ['mcp__00000000-aaaa-bbbb-cccc-dddddddddddd__create_order_instruction', settings], ['mcp__other__create_order', { forbidden: { ...FORBIDDEN, servers: [], safeServers: [], allowlist: [] } }]]) {
@@ -778,7 +784,7 @@ test('指令入口：壞輸入也拒絕；放行不印任何東西；輸出是�
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', tool);
     const reason = out.hookSpecificOutput.permissionDecisionReason;
     assert.match(reason, /錢的絕對邊界[\s\S]*先問裁示者[\s\S]*視為誤觸或冒名，拒絕執行並立即回報裁示者/u, `${tool}：名字像錢＝照接 B2 那句尾巴（${reason}）`);
-    assert.doesNotMatch(reason, /不是碰到錢|不必上報|把連接器登記好再用/u, `${tool}：名字像錢，不可以說不必上報（${reason}）`);
+    assert.doesNotMatch(reason, /不是碰到錢|不必上報|看不出會動到錢|登記好再用/u, `${tool}：名字像錢，不可以說不必上報或看不出（${reason}）`);
   }
   assert.equal(cli(JSON.stringify({ tool_name: 'mcp__other__get_order' }), settings).output, '', '放行不印（other 登記為不碰錢）');
   assert.equal(JSON.parse(cli('not json', settings).output).hookSpecificOutput.permissionDecision, 'deny');
