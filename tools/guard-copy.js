@@ -162,8 +162,18 @@ const CONFIG_CHANGE_MATCHER = 'project_settings';
 /** Claude 側複本的目錄名＝指紋：64 碼十六進位小寫。Codex 全域層那種人取的短名字不符合＝--retire 碰不到。 */
 const FP_NAME = /^[0-9a-f]{64}$/u;
 const UNSET = '未設定';
-/** 自我試跑用的無害假名：依序試，有一個被乾淨地放行就算過（專案清單剛好擋到其中一個也不會誤判安裝失敗）。 */
-const ALLOW_PROBES = ['mcp__guard_copy_selftest__noop', 'mcp__guard_copy_selftest__ping', 'mcp__kit_selftest_zz__hello'];
+/** 自我試跑用的無害假工具名（接在登記為不碰禁區的連接器後面）：依序試，有一個被乾淨地放行就算過（專案清單剛好擋到其中一個也不會誤判安裝失敗）。 */
+const ALLOW_PROBE_TOOLS = ['guard_copy_selftest_noop', 'guard_copy_selftest_ping', 'kit_selftest_zz_hello'];
+/**
+ * 從清單產生「照清單該放行」的試跑名字：每一個登記為不碰禁區的連接器（safeServers）各配上面那幾個假工具名。
+ * 為什麼不再用固定的假連接器名：登記制（2026-09-26）之後沒登記的連接器一律擋，固定假名永遠放不了行；
+ * 清單沒登記任何不碰禁區的連接器＝名單空或只有碰禁區的＝那一行本來就該全擋，試跑找不到能放行的名字（selfTest 照實說、不落地）。
+ */
+function allowProbes(forbidden) {
+  const f = forbidden && typeof forbidden === 'object' ? forbidden : {};
+  const safe = Array.isArray(f.safeServers) ? f.safeServers.filter((s) => typeof s === 'string' && s !== UNSET) : [];
+  return safe.flatMap((srv) => ALLOW_PROBE_TOOLS.map((t) => `mcp__${srv}__${t}`)).filter((n) => PROBE_NAME.test(n));
+}
 /** 暫存區：作業系統會清，複本放那裡哪天被清掉＝所有 mcp__ 工具突然全擋。 */
 const TEMP_ROOTS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', '/var/folders', '/private/var/folders'];
 /** 放不進單引號的字元：單引號本身與控制字元（會把指令切壞）。 */
@@ -461,7 +471,9 @@ function selfTest({ copyDir, fp, template, forbidden, denyProbe = null, rig = co
 
     let allowName = null;
     let lastAllow = null;
-    for (const name of ALLOW_PROBES) {
+    const allowCandidates = allowProbes(forbidden);
+    if (!allowCandidates.length) return `${tag}清單沒有登記任何不碰禁區的連接器（settings.json 的 forbidden.safeServers 是空的）：登記制下這一行會把所有連接器工具全擋，試跑找不到任何該放行的假名——先把不碰禁區的連接器登記進 safeServers（碰禁區的登記進 servers 並配 allowlist），合併之後再抽`;
+    for (const name of allowCandidates) {
       lastAllow = runHook(command, name, { flag, env });
       if (lastAllow.status === 0 && lastAllow.stdout === '' && lastAllow.stderr === '') { allowName = name; break; }
     }
@@ -841,7 +853,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
 if (require.main === module) process.exit(main());
 
 module.exports = {
-  COPY_FILES, PLACEHOLDERS, ALLOW_PROBES, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal,
+  COPY_FILES, PLACEHOLDERS, ALLOW_PROBE_TOOLS, allowProbes, TEMP_ROOTS, autoDenyProbes, fingerprint, fingerprintDir, checkTarget, extract, hookGroup, selfTest, build, main, Refusal,
   CLAUDE_TEMPLATE_REL, CLAUDE_PLACEHOLDERS, CLAUDE_BASE, CLAUDE_MAX_FILE_BYTES, CONFIG_CHANGE_MATCHER, CLAUDE_GROUP_KEYS, CLAUDE_HOOK_KEYS, groupExtraKeys,
   treeFingerprint, claudeGroups, claudeLine, copyProblem, buildClaude, retire, parseArgs,
 };
