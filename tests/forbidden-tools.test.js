@@ -110,8 +110,9 @@ test('⑨不合文法的規則不算規則：空白項、含空白的連接器�
 });
 
 test('⑧連接器名含 __ 也比得到；分隔符的等價寫法一起擋', () => {
-  // 登記制之後：brokerx 這個「只是名字像」的假連接器要登記成不碰錢才放行（沒登記照登記制擋、證明不了「不套白名單」）
-  const f = { name: '錢', servers: ['broker__paper'], safeServers: ['brokerx'], allowlist: ['get_balance'] };
+  // 登記制之後：brokerx__paper 這個「只是名字像」的假連接器要登記成不碰錢才放行（沒登記照登記制擋、證明不了「不套白名單」）。
+  // 放行只認標準形狀（#16 r1）：登記名要是這個名字實際的連接器段 brokerx__paper，登記 brokerx 會被判「分不清」而擋。
+  const f = { name: '錢', servers: ['broker__paper'], safeServers: ['brokerx__paper'], allowlist: ['get_balance'] };
   assert.equal(decide('mcp__broker__paper__get_balance', f).deny, false);
   // 登記制之後沒登記也會擋（理由「沒有登記」），只看 deny 分不出「比到了含 __ 的登記名」與「比不到、退成沒登記」：要看理由
   for (const [t, why] of [['mcp__broker__paper__market_order', '登記名含 __ 時原本永遠比不到（r1 High④）'], ['mcp__broker__paper', '只有連接器沒有工具名也拒絕']]) {
@@ -158,7 +159,8 @@ test('⑩連接器不在開頭那一段也要認得：多一層前綴照樣白�
   // 邊界要真的是邊界：名字只是「包含」連接器名，不算那個連接器。
   // 登記制之後這幾個假連接器沒登記會照登記制擋（訊息是「沒有登記」、不是白名單那一句）；登記成不碰錢就放行
   //（放行才證明它們沒被當成 broker-x——被當成的話白名單那一步就擋了）
-  const lookalikes = { ...FORBIDDEN, safeServers: [...FORBIDDEN.safeServers, 'xbroker-x', 'broker-xy', 'broker-x_v2'] };
+  //（放行只認標準形狀（#16 r1）：mcp__a__broker-x_v2__… 這個名字實際的連接器段是 a__broker-x_v2，登記成那樣才放行）
+  const lookalikes = { ...FORBIDDEN, safeServers: [...FORBIDDEN.safeServers, 'xbroker-x', 'broker-xy', 'a__broker-x_v2'] };
   for (const t of ['mcp__xbroker-x__market_order', 'mcp__broker-xy__market_order', 'mcp__a__broker-x_v2__market_order']) {
     assert.equal(decide(t, lookalikes).deny, false, `${t}：不是那個連接器（登記成不碰錢就放行）`);
     const d = decide(t, FORBIDDEN);
@@ -454,10 +456,26 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
   }
   assert.equal(unreg.kind, 'registry', '登記制的拒絕要帶 kind（指令入口靠它換尾句）');
 
-  // ②safeServers 登記的＝放行：開頭那一段、多一層前綴、登記名含 __、只有連接器沒有工具名——連家族網會擋的名字也放行（那一級靠自覺）
-  for (const t of ['mcp__other__get_thing', 'mcp__other__create_order', 'mcp__prefix__other__create_order', 'mcp__term__nal__run_thing', 'mcp__a__term__nal__withdraw', 'mcp__other']) {
+  // ②safeServers 登記的＝放行，但只認標準形狀 mcp__<登記名>__<工具名>（工具名不含 __）或只有登記名——連家族網會擋的名字也放行（那一級靠自覺）。
+  //    登記名含 __（term__nal）也照這個規則。
+  for (const t of ['mcp__other__get_thing', 'mcp__other__create_order', 'mcp__term__nal__run_thing', 'mcp__other']) {
     assert.equal(decide(t, REG).deny, false, `${t}：不碰錢的連接器整個放行`);
   }
+  // ②b 放行只認標準形狀（#16 r1 高）：登記名出現在尾段、中段、多一層前綴、或工具名裡還有 __ ＝分不清是哪個連接器＝擋。
+  //    主幹用「任何分段位置命中」擋碰錢連接器是保守的；同一把尺拿來放行，mcp__<沒登記>__create_order__other 就會被當成 other 放行。
+  for (const t of ['mcp__r1unknown__r1_create_order__other', 'mcp__prefix__other__create_order', 'mcp__other__part__create_order', 'mcp__a__term__nal__withdraw', 'mcp__term__nal__x__y']) {
+    const d = decide(t, REG);
+    assert.equal(d.deny, true, `${t}：登記名不在標準位置＝分不清＝擋`);
+    assert.equal(d.kind, 'registry', `${t}：是登記制那一族的拒絕`);
+    assert.match(d.why, /分不清是哪個連接器|沒有登記/u, `${t}：${d.why}`);
+    assert.doesNotMatch(d.why, /白名單制|家族網|額外樣式/u, `${t}：不可以被碰錢那幾道的理由冒充`);
+  }
+  assert.match(decide('mcp__other__part__create_order', REG).why, /標準形狀[\s\S]*登記進 forbidden\.safeServers/u, '分不清的訊息要教人把實際的連接器名登記進去');
+  // ②c 碰錢那一欄的「每一次出現都比」要釘住（#16 r1 低）：第一處只是子字串、第二處才是邊界——只查第一次出現的話會漏掉碰錢連接器、
+  //    再被登記制當「分不清」擋，看 deny 分不出，所以看理由
+  const twice = decide('mcp__other__xbroker-x__broker-x__noop', REG);
+  assert.equal(twice.deny, true);
+  assert.match(twice.why, /白名單制/u, '第二處才是碰錢連接器的邊界：理由要是白名單制，不是登記制');
   // hasRule 要算 safeServers：只登記了不碰錢的連接器、其餘全空的專案也算有規則。
   // ⚠️ 對照組（同一份設定下沒登記的要照登記制擋、理由是「沒有登記」）：不然 hasRule 不算它時走 fail-closed，
   //    登記的被擋、沒登記的也被擋，分不出「有規則」與「當成沒規則所以全擋」。
@@ -560,8 +578,10 @@ test('⑮登記制：沒登記＝擋（訊息含登記方法）、不碰錢的�
     assert.equal(d.deny, true, `${t}：只是包含登記名，不算那個連接器`);
     assert.match(d.why, /沒有登記/u, `${t}：擋的理由要是沒登記`);
   }
-  // 三個底線：邊界照樣認得（跟碰錢那一欄 ⑩ 同一個判法；對不碰錢這一欄這一格是放寬方向，照實記、不另造第二把尺）
-  assert.equal(decide('mcp__x___other__get_thing', REG).deny, false);
+  // 三個底線：碰錢那一欄（⑩）當邊界認得、照擋；不碰錢這一欄的放行只認標準形狀，這種形狀＝分不清＝擋（#16 r1 之後兩欄不再共用那把寬尺）
+  const triple = decide('mcp__x___other__get_thing', REG);
+  assert.equal(triple.deny, true, '三個底線對不碰錢那一欄不是放行的依據');
+  assert.match(triple.why, /分不清是哪個連接器/u);
 });
 
 test('⑥四份接線範本都只呼叫同一支判斷，範本裡不抄判斷；起不來的尾巴一致', () => {
@@ -623,7 +643,8 @@ test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一�
     const loose = path.join(scratch, 'loose');
     fs.cpSync(path.join(__dirname, '..', 'tools'), path.join(loose, 'tools'), { recursive: true });
     // 登記制之後「鬆的清單」要把 broker-x 登記成不碰錢才真的鬆（沒登記照樣擋、對照組就證明不了讀到它）
-    fs.writeFileSync(path.join(loose, 'settings.json'), JSON.stringify({ forbidden: { name: '錢', deny: ['mcp__z__only'], safeServers: ['broker-x'] } }));
+    // 鬆清單：碰錢連接器沒登記、反而把 mcp__prefix__broker-x__… 這個名字實際的連接器段 prefix__broker-x 登記成不碰錢（放行只認標準形狀）
+    fs.writeFileSync(path.join(loose, 'settings.json'), JSON.stringify({ forbidden: { name: '錢', deny: ['mcp__z__only'], safeServers: ['prefix__broker-x'] } }));
     assert.equal(spawnSync('git', ['init', '-q'], { cwd: loose, env: gitEnv(), encoding: 'utf8' }).status, 0);
     const looseEnv = { GIT_DIR: path.join(loose, '.git'), GIT_WORK_TREE: loose };
     const withoutClearing = (command) => command.replace(/^root="\$\(.*?git rev-parse/u, 'root="$(git rev-parse');

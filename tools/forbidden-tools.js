@@ -104,6 +104,22 @@ function boundaryHits(toolName, server) {
   return hits;
 }
 
+/**
+ * 不碰錢連接器的放行只認標準形狀 mcp__<登記名>__<工具名>（工具名裡不含 __）、或只有登記名。
+ * 為什麼不沿用碰錢那一欄的「任何分段位置命中都算」：那把尺拿來擋是保守的，拿來放行就是洞——
+ * #16 r1 抓到 mcp__<沒登記>__create_order__<safe 登記名>：safe 名出現在尾段就被當成不碰錢的連接器放行。
+ * 放行必須確認得了「這個名字的連接器就是它」；多一層前綴、工具名裡還有 __＝分不清是哪個連接器＝當沒登記擋（看得見）。
+ * 回登記名；不是就回 null。有 __ 的登記名（term__nal）也照這個規則：登記名之後的那一段不含 __ 才算。
+ */
+function safeConnectorOf(toolName, safeServers) {
+  for (const server of safeServers) {
+    if (toolName === `mcp__${server}`) return server;
+    const head = `mcp__${server}__`;
+    if (toolName.startsWith(head) && !toolName.slice(head.length).includes('__')) return server;
+  }
+  return null;
+}
+
 /** 登記制的訊息尾巴：改了 forbidden 那一塊之後的手續（正本＝套件 README「搬進一個專案」第 3 步）。 */
 const AFTER_EDIT = '改完照套件 README「搬進一個專案」第 3 步：同一支變更重印釘指紋那一行、每台機器補複本、重按信任';
 
@@ -176,8 +192,13 @@ function decide(toolName, forbidden) {
     if (!servers.length && !safeServers.length) {
       return { deny: true, kind: 'registry', why: `連接器名單還沒填：settings.json 的 forbidden.servers 與 forbidden.safeServers 都是空的，名單空＝所有連接器工具一律拒絕（裁示者 2026-09-27）。先填連接器名單——會動到${f.name}的連接器填 servers（並在 allowlist 列出准用的唯讀工具）、不會動到${f.name}的填 safeServers（${REGISTRY_NAME_HINT}；這個名字的是「${toolName.slice(5).split('__')[0]}」）；${AFTER_EDIT}（這不是碰到${f.name}，是名單還沒填）` };
     }
-    // 不碰錢＝整個放行、不再判：家族網對它只會誤擋；會對外送東西但不碰錢的那一級靠 AI 自覺、不是機器守著
-    if (safeServers.some((server) => boundaryHits(toolName, server).length)) return { deny: false };
+    // 不碰錢＝整個放行、不再判：家族網對它只會誤擋；會對外送東西但不碰錢的那一級靠 AI 自覺、不是機器守著。
+    // 只認標準形狀（safeConnectorOf）：登記名出現在別的位置不是放行的依據。
+    if (safeConnectorOf(toolName, safeServers)) return { deny: false };
+    const ambiguous = safeServers.find((server) => toolName.startsWith(`mcp__${server}__`) || boundaryHits(toolName, server).length);
+    if (ambiguous) {
+      return { deny: true, kind: 'registry', why: `連接器工具「${toolName}」分不清是哪個連接器：登記名「${ambiguous}」在名字裡，但不是「mcp__${ambiguous}__<工具名>」這個標準形狀（多一層前綴、或工具名裡還有 __、或登記名只出現在後段）——不碰${f.name}的放行只認標準形狀，分不清＝當沒登記拒絕。要放行它，把這個名字實際的連接器名（mcp__ 後面、到工具名之前那一整段，含它自己的 __）登記進 forbidden.safeServers；${AFTER_EDIT}（這不是碰到${f.name}，是分不清連接器）` };
+    }
     return { deny: true, kind: 'registry', why: `連接器工具「${toolName}」沒有登記：它的連接器（${REGISTRY_NAME_HINT}；這個名字的是「${toolName.slice(5).split('__')[0]}」）不在 settings.json 的 forbidden.servers（會動到${f.name}的連接器，白名單制）也不在 forbidden.safeServers（不會動到${f.name}的連接器，整個放行）——沒登記的連接器一律拒絕（裁示者 2026-09-26）。要用它，先把連接器的登記名填進其中一欄；${AFTER_EDIT}（這不是碰到${f.name}，是還沒登記）` };
   }
   // 家族網：工具名的每一個「__」之後的尾段都試一次（連接器前綴不同、工具名相同的要一起擋）

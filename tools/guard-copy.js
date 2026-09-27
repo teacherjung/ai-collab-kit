@@ -167,7 +167,9 @@ const ALLOW_PROBE_TOOLS = ['guard_copy_selftest_noop', 'guard_copy_selftest_ping
 /**
  * 從清單產生「照清單該放行」的試跑名字：每一個登記為不碰禁區的連接器（safeServers）各配上面那幾個假工具名。
  * 為什麼不再用固定的假連接器名：登記制（2026-09-26）之後沒登記的連接器一律擋，固定假名永遠放不了行；
- * 清單沒登記任何不碰禁區的連接器＝名單空或只有碰禁區的＝那一行本來就該全擋，試跑找不到能放行的名字（selfTest 照實說、不落地）。
+ * 清單沒登記任何不碰禁區的連接器（safeServers 空）＝試跑找不到能放行的名字＝拒絕完成安裝：--claude 什麼都不落地；
+ * --to 已經把四個檔寫進目的目錄（先寫再試跑）、留著給人檢查、不印接線。這時碰禁區連接器白名單上的工具仍放行、其餘 mcp__ 名字全擋，
+ * 所以訊息不寫成「全擋」。放行的假名接在 safeServers 之後、形狀是標準的 mcp__<登記名>__<假工具名>。
  */
 function allowProbes(forbidden) {
   const f = forbidden && typeof forbidden === 'object' ? forbidden : {};
@@ -472,7 +474,7 @@ function selfTest({ copyDir, fp, template, forbidden, denyProbe = null, rig = co
     let allowName = null;
     let lastAllow = null;
     const allowCandidates = allowProbes(forbidden);
-    if (!allowCandidates.length) return `${tag}清單沒有登記任何不碰禁區的連接器（settings.json 的 forbidden.safeServers 是空的）：登記制下這一行會把所有連接器工具全擋，試跑找不到任何該放行的假名——先把不碰禁區的連接器登記進 safeServers（碰禁區的登記進 servers 並配 allowlist），合併之後再抽`;
+    if (!allowCandidates.length) return `${tag}清單沒有登記任何不碰禁區的連接器（settings.json 的 forbidden.safeServers 是空的）：試跑找不到任何該放行的假名、拒絕完成安裝（--claude 不落地；--to 已寫進目的目錄的四個檔留著給人看、不印接線）。此時碰禁區連接器白名單上的工具仍放行、其餘 mcp__ 名字全擋——先把不碰禁區的連接器登記進 safeServers（碰禁區的登記進 servers 並配 allowlist），合併之後再抽`;
     for (const name of allowCandidates) {
       lastAllow = runHook(command, name, { flag, env });
       if (lastAllow.status === 0 && lastAllow.stdout === '' && lastAllow.stderr === '') { allowName = name; break; }
