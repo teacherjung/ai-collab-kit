@@ -192,6 +192,7 @@
  "forbidden": {
   "name": "未設定",
   "servers": [],
+  "safeServers": [],
   "allowlist": [],
   "deny": [],
   "verbs": [],
