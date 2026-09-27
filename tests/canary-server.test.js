@@ -217,11 +217,11 @@ test('④這個名字只有逐字拒絕清單擋得住（不在清單上＝放�
   assert.equal(withIt.deny, true);
   assert.match(withIt.why, /在拒絕清單上/u);
   // 這份夾具不是全放行：同一份清單擋得住家族網裡的（不靠逐字清單那一條）。
-  // 登記制之後 mcp__ 名字只有碰禁區連接器白名單上的工具會走到家族網，所以把它放上白名單、看雙保險擋不擋
+  // 登記制之後 mcp__ 名字只有碰禁區連接器白名單上的工具靠家族網決定擋不擋，所以把它放上白名單、看雙保險擋不擋
   const viaAllowlist = { ...MONEY, allowlist: [...MONEY.allowlist, 'submit_order'] };
   const d = decide('mcp__broker-x__submit_order', viaAllowlist);
   assert.equal(d.deny, true);
-  assert.match(d.why, /家族網/u, '要是家族網擋的，不是白名單或登記制');
+  assert.match(d.why, /^工具名命中[^（]*的家族網/u, '要是家族網擋的，不是白名單或登記制（登記制的拒絕訊息也可能引用家族網，所以看理由的開頭）');
   assert.equal(decide('mcp__unregistered_zz__submit_order', MONEY).deny, true, '沒登記的連接器照登記制擋（不是家族網）');
 });
 
