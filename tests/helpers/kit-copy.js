@@ -15,7 +15,7 @@
 //   正本與手續＝套件 README「搬進一個專案」第 1 步。name 保持「未設定」（settings.test.js ⑨ 釘著，新專案填名字才算接上攔截器）；
 //   每個專案擋的方向那六個清單至少要包含這一份（放行方向三欄不比）、範本自己的筆數與正本「預設字彙表」表格也釘著＝tests/forbidden-defaults.test.js。
 // ⚠️ 守不到的：新寫的考題不經過這裡、又直接跑本倉庫的工具（或呼叫純函式時不給設定、吃到預設讀真設定）——
-//   這一條由 tests/filled-settings.test.js 在「每一欄都填了假值」的複本裡整卷重跑來抓（照設定叫外面＝錄音機記到＝紅）；考題沒走到的分支仍靠審查。
+//   這一條由 tests/filled-settings.test.js 在「每一欄都填了假值」的複本裡整卷重跑來抓（照設定叫外面＝錄音機記到＝紅）；考題沒走到的分支仍靠複審。
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
