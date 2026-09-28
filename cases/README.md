@@ -1,9 +1,9 @@
 # 案例簿索引
 
-一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：裁示者／實作者／獨立審查者／掃描器，不寫人名。
-來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支變更。
+一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
+來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
-共 137 則。
+共 138 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -11,7 +11,7 @@
 | 2026-07-18 | [瀏覽器驗證誤套用到真實資料](verify-mutations-on-real-data.md) | B4 |
 | 2026-07-24 | [管線吃掉退出碼，四條錯漏網](piped-exit-code-hid-lint-errors.md) | E2、E5 |
 | 2026-07-28 | [堆疊變更合進中間分支](stacked-pr-merged-into-base.md) | H2、K1 |
-| 2026-07-30 | [加規則與刪規則混在一份提案](add-and-delete-rules-in-one-change.md) | C3 |
+| 2026-07-30 | [加規則與刪規則混在一份提案](add-and-delete-rules-in-one-change.md) | C2 |
 | 2026-07-30 | [實作者不按自己的合併鍵](implementer-never-presses-merge.md) | A4 |
 | 2026-07-30 | [審查方切走主幹、主目錄卡住](reviewer-worktree-took-over-main.md) | A3 |
 | 2026-08-02 | [考題被「文字出現過」滿足而假綠](assert-behavior-not-text.md) | E8 |
@@ -21,7 +21,7 @@
 | 2026-08-02 | [審查樹清理清空主目錄](review-tree-symlink-wipe.md) | F1 |
 | 2026-08-02 | [兩份審查各看一半](two-half-reviews-same-name.md) | F2、F4、F5 |
 | 2026-08-03 | [註解裡「兩邊都要」的保證沒有考題撐](claims-must-be-earned.md) | K3、K4 |
-| 2026-08-03 | [死程式搬到退役夾反而混進別支](delete-dead-code.md) | E9 |
+| 2026-08-03 | [死程式搬到退役夾反而混進別支](delete-dead-code.md) | E10 |
 | 2026-08-03 | [檔名一律用英文](english-only-filenames.md) | E6 |
 | 2026-08-03 | [忽略清單把藏身處做得比刪除更順手](ignore-rule-made-a-hiding-place.md) | E7 |
 | 2026-08-03 | [連接器能備妥真委託單](money-absolute-boundary.md) | B1、B2、B3 |
@@ -31,7 +31,7 @@
 | 2026-08-05 | [「做不到」被寫成誠實劃界，審查者當場做出來](cannot-do-claimed-reviewer-did-it.md) | K4 |
 | 2026-08-05 | [只看退出碼就回報三關全綠，錯誤就印在自己導出的檔案裡](exit-code-only-missed-error-log.md) | E2、K4 |
 | 2026-08-05 | [夾具少一個欄位，要測的那一行根本沒被走到](fixture-missing-field-never-reached.md) | E8 |
-| 2026-08-05 | [突變探針用版本控制還原，當批成果被洗掉](mutation-probe-restore-wiped-work.md) | E9 |
+| 2026-08-05 | [突變探針用版本控制還原，當批成果被洗掉](mutation-probe-restore-wiped-work.md) | E10 |
 | 2026-08-05 | [六條備份考題全綠，其中三條弄壞了也不會紅](my-own-guards-lied.md) | E8 |
 | 2026-08-05 | [六支並行讓裁示者讀不完](one-thing-at-a-time.md) | C1、J2 |
 | 2026-08-05 | [審查回饋無條件全改的跑步機](review-feedback-treadmill.md) | F6 |
@@ -80,27 +80,27 @@
 | 2026-09-01 | [夾具在新環境靜靜變空包彈](fixture-control-assertion.md) | E8、K4 |
 | 2026-09-01 | [原話含個人狀況抄進公開倉庫](personal-details-not-public.md) | B5 |
 | 2026-09-01 | [沒按信任的攔截鉤子一聲不吭跳過](untrusted-hook-silently-skipped.md) | B1 |
-| 2026-09-02 | [代理在我的樹上突變被提交進去](agent-mutation-in-live-worktree.md) | D2、E9 |
+| 2026-09-02 | [代理在我的樹上突變被提交進去](agent-mutation-in-live-worktree.md) | D2、E10 |
 | 2026-09-02 | [改了行為，舊句子連八輪變假話](behavior-change-stale-prose.md) | K5、K3、K4 |
 | 2026-09-02 | [在主目錄施工提交落到別人分支](dont-work-in-main-worktree.md) | D2 |
 | 2026-09-02 | [豁免清單連三輪中刀、工具整支撤下](exemption-list-is-attack-surface.md) | E7、F10 |
 | 2026-09-02 | [考題餵自己假名字永遠綠](external-identifier-validity.md) | E8 |
 | 2026-09-02 | [機器負載把計時考題弄紅](machine-load-breaks-timing-tests.md) | H1、H4 |
-| 2026-09-02 | [用版本控制還原突變，沒提交的成果一起被洗掉](restore-by-checkout-wiped-edits.md) | E9 |
+| 2026-09-02 | [用版本控制還原突變，沒提交的成果一起被洗掉](restore-by-checkout-wiped-edits.md) | E10 |
 | 2026-09-03 | [跨變更試合併閘量到的是負載](cross-pr-gate-measures-load.md) | H1、H4 |
-| 2026-09-03 | [編輯沒寫入、提交照跑](edit-failure-must-block-commit.md) | E9 |
+| 2026-09-03 | [編輯沒寫入、提交照跑](edit-failure-must-block-commit.md) | E10 |
 | 2026-09-03 | [看輸出最後一行判乾淨，兩個錯誤被看成綠](lint-output-tail-misread.md) | E5 |
-| 2026-09-03 | [並開變更上限定為兩支](max-two-open-prs.md) | C2 |
+| 2026-09-03 | [並開變更上限定為兩支](max-two-open-prs.md) | C1 |
 | 2026-09-03 | [同族第三刀改請審查者分類](same-family-third-strike-classify.md) | F10、F6 |
-| 2026-09-04 | [行尾註解吞掉同行後面的程式](comment-swallowed-rest-of-line.md) | E9 |
+| 2026-09-04 | [行尾註解吞掉同行後面的程式](comment-swallowed-rest-of-line.md) | E10 |
 | 2026-09-04 | [雲端檢查還沒綠就發射代合併](merge-launched-before-cloud-green.md) | E3 |
 | 2026-09-04 | [提示詞裡的「之後會怎樣」被當成指令](next-step-read-as-instruction.md) | F3 |
 | 2026-09-04 | [回報標籤三套字混用被抓](report-format.md) | J1、J2 |
 | 2026-09-04 | [純考題變更也把別檔的劃界句弄成假話](stale-header-in-tests-only-change.md) | K5、K3 |
 | 2026-09-04 | [正規式護欄同時假綠假紅](structural-guard-use-parser.md) | E8 |
 | 2026-09-05 | [「紅了重跑一次」擴為常設](gate-rerun-once-standing.md) | H4 |
-| 2026-09-05 | [改說明的斷言失敗、上傳照跑](pr-body-edit-chain-did-not-stop.md) | E9 |
-| 2026-09-05 | [重整時整檔換邊丟掉對方的考題](rebase-checkout-theirs-loses-hunks.md) | K4、E9 |
+| 2026-09-05 | [改說明的斷言失敗、上傳照跑](pr-body-edit-chain-did-not-stop.md) | E10 |
+| 2026-09-05 | [重整時整檔換邊丟掉對方的考題](rebase-checkout-theirs-loses-hunks.md) | K4、E10 |
 | 2026-09-06 | [問裁示者的固定形狀](ask-shape-three-options.md) | I1 |
 | 2026-09-06 | [用日誌字樣當閘、語法錯被判綠](log-grep-gate-judged-syntax-error-green.md) | E5 |
 | 2026-09-06 | [代理自報全綠約百分之四是誤報](night-audit-3-findings.md) | K4 |
@@ -108,7 +108,7 @@
 | 2026-09-06 | [待裁清單工具不是閘](pending-rulings-list-tool.md) | D1 |
 | 2026-09-06 | [合併後驗收分級由腳本算、不是閘](post-merge-acceptance-tier-not-a-gate.md) | H6 |
 | 2026-09-06 | [解析器連四輪被戳後劃界封頂](remote-url-parser-scope-cap.md) | F10 |
-| 2026-09-06 | [審查附件改摘要加連結](review-attachment-summary-and-link.md) | J2、F7 |
+| 2026-09-06 | [審查附件改摘要加連結](review-attachment-summary-and-link.md) | J1 |
 | 2026-09-06 | [版本往前走了閘照樣放行](stale-pass-on-moved-head.md) | F5 |
 | 2026-09-07 | [檔頭一句絕對保證審了二十九輪](absolute-guarantee-invites-blockers.md) | F10、K3、K4 |
 | 2026-09-07 | [夾具自己同時帶兩個變因](fixture-carries-two-variables.md) | E8 |
@@ -122,10 +122,10 @@
 | 2026-09-08 | [判準簡化後，考題註解還在講已刪的機制](stale-comments-after-parser-simplified.md) | K5、K3 |
 | 2026-09-08 | [撤回只限三種客觀理由，而且一定印出來](withdrawal-three-objective-reasons.md) | D1 |
 | 2026-09-09 | [護欄的宣稱一直超出證據](guard-claims-vs-evidence.md) | K4、K3、F10 |
-| 2026-09-09 | [寫提示詞的步驟被管線吃掉、審查空跑](heredoc-eaten-empty-prompt.md) | E9 |
+| 2026-09-09 | [寫提示詞的步驟被管線吃掉、審查空跑](heredoc-eaten-empty-prompt.md) | E10 |
 | 2026-09-09 | [發射理由少了中間那一環，兩件事實被說成足以證明結論](launch-reason-skipped-measured-premise.md) | K4 |
 | 2026-09-09 | [超過七輪要留公開自評](over-seven-rounds-public-self-review.md) | F9 |
-| 2026-09-09 | [探針備份被掃進提交上了變更](probe-files-in-worktree.md) | E9 |
+| 2026-09-09 | [探針備份被掃進提交上了變更](probe-files-in-worktree.md) | E10 |
 | 2026-09-09 | [把常態講成規矩被裁示者問住](quote-rules-verbatim.md) | J3 |
 | 2026-09-09 | [掃描結果抄進考題註解時抄反了](scan-finding-transcribed-backwards.md) | K3、K4 |
 | 2026-09-09 | [掃描紀錄從上一支抄過來](scan-record-copied-from-previous-change.md) | G3 |
@@ -144,6 +144,7 @@
 | 2026-09-10 | [誰在磨誰拍板](whoever-is-grinding-decides.md) | A1、F6 |
 | 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | A1、G4 |
 | 2026-09-13 | [九個動作的形狀全是我自己想的，碰真平台第一分鐘就破](designed-shapes-never-touched-a-real-platform.md) | E5、H1 |
+| 2026-09-24 | [給裁示者的「誤擋 0」是推論不是量測](unmeasured-zero-given-to-decider.md) | J4 |
 
 ## 不是事故、但值得記的方法
 

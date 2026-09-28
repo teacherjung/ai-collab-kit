@@ -240,7 +240,7 @@ test('字面編碼與解碼互為反函式，而且每一個 ASCII 標點都真�
 /** 一份最小的合格設定；改一格就拿去當壞資料。 */
 function goodSettings() {
   return {
-    identityDomain: '值域', accountRule: '資格', mainBranch: 'main', mergeAuthorization: '預授權',
+    identityDomain: '值域', accountRule: '資格', mainBranch: 'main', defaultDivision: { implementer: 'A', reviewer: 'B' },
     participants: [{ role: '裁示者', id: 'W', account: 'w' }],
     sources: [{ tool: '工具', string: '來源' }],
     locations: [{ item: '項目', rules: 'A1', where: '位置' }],
@@ -262,6 +262,8 @@ test('設定資料的每一條契約，各有一發壞資料釘著', () => {
     ['隔離提供者不在值域裡', mutateS((d) => { d.scanner.isolation.provider = '隨便寫的'; })],
     ['閘的狀態不在三種裡', mutateS((d) => { d.gates[0].state = '大概好了'; })],
     ['機器的狀態不在三種裡', mutateS((d) => { d.machines[0].state = '應該可以'; })],
+    ['預設分工整欄不見（產生器要明寫這一欄：不認得的欄位它不會自己排出來）', mutateS((d) => { delete d.defaultDivision; })],
+    ['預設分工的複審者是空的', mutateS((d) => { d.defaultDivision.reviewer = ''; })],
   ];
   for (const [name, data] of cases) {
     assert.throws(() => settings.build(data), undefined, `「${name}」應該被契約擋下來`);
