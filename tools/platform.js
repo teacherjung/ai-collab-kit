@@ -48,33 +48,33 @@ const OPERATIONS = {
   change: {
     kind: 'object',
     params: ['change'],
-    what: '讀一支變更的基本資料',
+    what: '讀一支PR的基本資料',
     // changedFileCount：平台自報這支動了幾個檔（數字寫成字串），沒有就 null——驗收分級拿它對帳清單有沒有少給
     shape: { id: LINE, title: LINE, body: TEXT, baseBranch: LINE, headBranch: LINE, headSha: LINE, state: LINE, isDraft: BOOL, isCrossRepo: BOOL, autoMergeOn: BOOL, changedFileCount: MAYBE, author: LINE },
   },
   openChanges: {
     kind: 'list',
     params: [],
-    what: '列出目前開著的每一支變更（⚠️ 必須是全部，分頁要在這條指令裡處理完；套件驗不到少給了幾支）',
+    what: '列出目前開著的每一支PR（⚠️ 必須是全部，分頁要在這條指令裡處理完；套件驗不到少給了幾支）',
     shape: { id: LINE, baseBranch: LINE, headBranch: LINE, headSha: LINE, isDraft: BOOL, author: LINE },
   },
   comments: {
     kind: 'list',
     params: ['change'],
-    what: '讀一支變更底下的留言（結論、裁示、撤回都靠它）',
+    what: '讀一支PR底下的留言（結論、裁示、撤回都靠它）',
     shape: { id: LINE, author: LINE, body: TEXT, createdAt: LINE },
   },
   allComments: {
     kind: 'list',
     params: [],
-    what: '讀整個專案的每一則一般留言，各帶它所屬的變更編號（⚠️ 必須是全部、含已關的變更，分頁要在這條指令裡處理完）',
+    what: '讀整個專案的每一則一般留言，各帶它所屬的PR編號（⚠️ 必須是全部、含已關的PR，分頁要在這條指令裡處理完）',
     // change：這則留言掛在哪一支PR底下。待裁清單靠它把「問」與「裁」配起來，不管那一支還開不開著。
     shape: { id: LINE, author: LINE, body: TEXT, createdAt: LINE, change: LINE },
   },
   changedFiles: {
     kind: 'list',
     params: ['change'],
-    what: '讀一支變更動了哪些檔',
+    what: '讀一支PR動了哪些檔',
     // previousPath：改名或複製前的舊路徑，沒有就是 null——分級要連舊路徑一起看
     shape: { path: LINE, status: LINE, previousPath: MAYBE },
   },
@@ -99,7 +99,7 @@ const OPERATIONS = {
     what: '讀一個分支現在指到哪一顆',
     shape: { sha: LINE },
   },
-  markReady: { kind: 'action', params: ['change'], what: '把一支變更從草稿轉成正式' },
+  markReady: { kind: 'action', params: ['change'], what: '把一支PR從草稿轉成正式' },
   merge: { kind: 'action', params: ['change'], what: '按下合併鍵' },
 };
 

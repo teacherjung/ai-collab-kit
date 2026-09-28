@@ -131,7 +131,7 @@ test('規矩正文不超過 7,000 字（數法見 MACHINES.md 的 K2 那一列�
   const count = countRules(data);
   assert.ok(
     count <= LIMIT,
-    `規矩正文現在 ${count} 字（${rules.length} 條），上限 ${LIMIT}（本文 K2）：先瘦身；新條要過進門五問（問法在 README.md）`,
+    `規矩正文現在 ${count} 字（${rules.length} 條），上限 ${LIMIT}（本文 K2）：先瘦身；新條要過進門五問（問法在協作套件倉庫 README.md 的「進門規則」）`,
   );
 });
 

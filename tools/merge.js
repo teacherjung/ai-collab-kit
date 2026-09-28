@@ -84,7 +84,7 @@ function mergeRun(changeId, { settings = readSettings(), run = runCommand, platf
   const enabled = gates.filter((gate) => gate.state === ENABLED);
   if (enabled.length === 0) {
     say(`專案設定裡沒有任何一道閘登記成「${ENABLED}」：一支什麼都沒檢查就按合併鍵的指令比沒有更危險，不放行。`);
-    say('要嘛把閘搬進來並登記啟用，要嘛照規矩本文 H1 用人工逐道跑完再自己按鍵。');
+    say('先把閘搬進來並登記啟用再合併：規矩本文 H1 合併一律經合併指令、A4 不直接按平台的合併鍵。');
     return { code: 2, lines };
   }
 

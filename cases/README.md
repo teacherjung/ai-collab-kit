@@ -1,7 +1,7 @@
 # 案例簿索引
 
-一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：裁示者／實作者／獨立審查者／掃描器，不寫人名。
-來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支變更。
+一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
+來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
 共 138 則。
 
@@ -108,7 +108,7 @@
 | 2026-09-06 | [待裁清單工具不是閘](pending-rulings-list-tool.md) | D1 |
 | 2026-09-06 | [合併後驗收分級由腳本算、不是閘](post-merge-acceptance-tier-not-a-gate.md) | H6 |
 | 2026-09-06 | [解析器連四輪被戳後劃界封頂](remote-url-parser-scope-cap.md) | F10 |
-| 2026-09-06 | [審查附件改摘要加連結](review-attachment-summary-and-link.md) | J2、F7 |
+| 2026-09-06 | [審查附件改摘要加連結](review-attachment-summary-and-link.md) | J1 |
 | 2026-09-06 | [版本往前走了閘照樣放行](stale-pass-on-moved-head.md) | F5 |
 | 2026-09-07 | [檔頭一句絕對保證審了二十九輪](absolute-guarantee-invites-blockers.md) | F10、K3、K4 |
 | 2026-09-07 | [夾具自己同時帶兩個變因](fixture-carries-two-variables.md) | E8 |

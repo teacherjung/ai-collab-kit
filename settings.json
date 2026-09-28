@@ -73,7 +73,7 @@
   {
    "item": "必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單）",
    "rules": "E3、H3",
-   "where": "正本在 GitHub：main 分支保護的 required_status_checks（唯讀重讀：gh api repos/teacherjung/ai-collab-kit/branches/main/protection/required_status_checks）；檢查名逐字對應 .github/workflows/ci.yml 與 .github/workflows/collab-fields.yml 的 job 名（「三關」、「協作欄位（實作者 ≠ 複審者）」）；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集）"
+   "where": "正本在 GitHub：main 分支保護的 required_status_checks（唯讀重讀：gh api repos/teacherjung/ai-collab-kit/branches/main/protection/required_status_checks）；檢查名逐字對應 .github/workflows/ci.yml 與 .github/workflows/collab-fields.yml 的 job 名；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集）"
   },
   {
    "item": "合併步驟登記正本（閘登記對帳題讀它）",
@@ -83,7 +83,7 @@
   {
    "item": "「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭）",
    "rules": "A5",
-   "where": "靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；本支還沒回的待裁＝node tools/pending-rulings.js 列出、掛在本支的那幾題；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己的禁區清單見 B1 那一列）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列）"
+   "where": "靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；本支還沒回的待裁＝node tools/pending-rulings.js 列出、掛在本支的那幾題；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests/helpers/unfilled-settings.json 的 forbidden 那一塊與禁區攔截器 tools/forbidden-tools.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列）"
   },
   {
    "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）",
