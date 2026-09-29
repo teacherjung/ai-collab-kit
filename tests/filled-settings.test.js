@@ -22,7 +22,8 @@
 //   所以巢狀那一輪固定走「不帶」那條路，而且這一題核對它真的走了（四題跳過、原因寫出來）。帶案例簿時的完整檢查由外層那一輪做
 //   （套件自己的倉庫）；在不帶案例簿的專案裡，外層同樣是跳過。
 // 共用檔清單：反過來，複本**照使用專案的樣子帶一份**（空白範本那一列是已安裝未啟用，假設定把它翻成已啟用；複本 git init 之後
-//   先跑 kit-lock.js --write 寫清單），所以巢狀那一輪真的走「工作樹對清單」那一題；套件倉庫自己是上游、外層那一輪是跳過。
+//   先跑 kit-lock.js --write 寫清單；--write 要讀套件倉庫，所以在旁邊另建一個只放共用檔的假套件倉庫、提交一次當那一版），
+//   所以巢狀那一輪真的走「工作樹對清單」那一題；套件倉庫自己是上游、外層那一輪是跳過。
 // ⚠️ 守不到的：考題沒走到的分支；考題自己寫死、既不讀設定也不叫 gh 的外部呼叫；
 //   假 gh 只攔「保留測試環境 PATH 的 gh 呼叫」——用絕對路徑叫 gh、或經過會重建 PATH 的 shell（例如 sh -lc）就攔不到，
 //   這不是程序層級的禁止連網（r1 T2）；禁區與家目錄以外的地方被寫，這一題看不到。
@@ -37,7 +38,7 @@ const { gitEnv } = require('../tools/git-env.js');
 const { OPERATIONS } = require('../tools/platform.js');
 const { unfilled } = require('./helpers/kit-copy.js');
 const { MACHINE: CASEBOOK, NOT_CARRIED_REASON } = require('../tools/build-casebook-index.js');
-const { MACHINE: KIT_LOCK, LOCK_FILE } = require('../tools/kit-lock.js');
+const { MACHINE: KIT_LOCK, LOCK_FILE, SHARED_PATHS } = require('../tools/kit-lock.js');
 
 const ROOT = path.join(__dirname, '..');
 const NESTED = process.env.KIT_NESTED_SUITE === '1';
@@ -109,7 +110,13 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     assert.equal(build.status, 0, `前提：假設定產得出設定說明（${build.stderr}）`);
     for (const step of [['git', 'init', '-q'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
     assert.deepEqual(settings.machines.filter((m) => m.name === KIT_LOCK).map((m) => m.state), ['已啟用'], '前提：複本把共用檔清單登記成帶（使用專案的樣子）');
-    const lockRun = sh([process.execPath, 'tools/kit-lock.js', '--write', '--version', '0123456789abcdef0123456789abcdef01234567', '--repo', 'acct/kit', '--date', '2026-09-29']);
+    const kitSrc = path.join(scratch, 'kit-src');
+    fs.mkdirSync(kitSrc);
+    for (const p of SHARED_PATHS) if (fs.existsSync(path.join(copy, p))) fs.cpSync(path.join(copy, p), path.join(kitSrc, p), { recursive: true });
+    const inKit = (args) => spawnSync('git', args, { cwd: kitSrc, env: { ...env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' }, encoding: 'utf8' });
+    for (const step of [['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'kit']]) assert.equal(inKit(step).status, 0, `前提：假套件倉庫 git ${step[0]}`);
+    const kitVersion = inKit(['rev-parse', 'HEAD']).stdout.trim();
+    const lockRun = sh([process.execPath, 'tools/kit-lock.js', '--write', '--kit', kitSrc, '--version', kitVersion, '--repo', 'acct/kit', '--date', '2026-09-29']);
     assert.equal(lockRun.status, 0, `前提：複本寫得出共用檔清單（${lockRun.stdout}${lockRun.stderr}）`);
     assert.ok(fs.existsSync(path.join(copy, LOCK_FILE)), '前提：複本有共用檔清單');
 
