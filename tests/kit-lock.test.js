@@ -7,7 +7,7 @@
 //   --write 在本機跑、從本機套件倉庫的那一版取清單內容。
 // 守得到的：清單每一筆的權限＋blob 跟工作樹一致；多出來、少掉、改內容、改權限各自紅並指名路徑；例外路徑一字不差（大小寫也算）才綠；
 //   例外過期、打錯路徑也紅；清單壞掉、形狀不對、git 失敗＝退 2 不猜；--write 的內容等於套件那一版、工作樹對不上又沒例外＝拒寫、
-//   印出差在哪、指紋檔與 Codex 接線範本（三種情境各自一題）、保留與清掉的例外；帶不帶只看設定的登記，登記跟清單在不在對不上就紅。
+//   印出差在哪、保留與清掉的例外、這支 PR 對主幹有沒有動到攔截器相關的檔（直接量，每個檔各種情境各一題）；帶不帶只看設定的登記，登記跟清單在不在對不上就紅。
 // ⚠️ 守不到的：同一支 PR 連清單、工具、這一題一起改（絆線不是鎖）；--check 不驗清單內容真的出自套件；套件有沒有新的；
 //   被 .gitignore 忽略的檔（下面有一題照實驗它看不到）；共用路徑以外的檔；settings.json；分不出方向（專案多改 vs 套件有新的）。
 'use strict';
@@ -77,16 +77,19 @@ function makeRepos(t) {
   };
   git('init', '-q');
   syncFrom(v1);
-  put(root, 'settings.json', '{"x":1}\n');
+  put(root, 'settings.json', `${JSON.stringify({ x: 1, mainBranch: 'main', forbidden: { deny: ['mcp__x__y'] } }, null, 2)}\n`);
   put(root, 'lib/own.js', '// 專案自己的\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'init');
+  /** 當作這支 PR 合併了：全部提交、把 origin/main 指到這裡（--write 拿它量「這支 PR 對主幹動了什麼」）。 */
+  const merge = (msg = 'merge') => { git('add', '-A'); git('commit', '-q', '--allow-empty', '-m', msg); git('update-ref', 'refs/remotes/origin/main', 'HEAD'); };
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
   const lockJson = () => JSON.parse(fs.readFileSync(path.join(root, lock.LOCK_FILE), 'utf8'));
   const saveLock = (obj) => fs.writeFileSync(path.join(root, lock.LOCK_FILE), `${JSON.stringify(obj, null, 2)}\n`);
   const except = (list) => { const j = lockJson(); j.exceptions = list; saveLock(j); };
   const cli = (...args) => spawnSync(process.execPath, [TOOL, '--root', root, ...args], { cwd: os.tmpdir(), env, encoding: 'utf8' });
   const write = (extra = {}) => lock.write(root, { kit, version: v1, repo: 'acct/kit', date: '2026-09-29', ...extra });
-  return { scratch, kit, root, env, kgit, git, put: (rel, body, mode) => put(root, rel, body, mode), putKit: (rel, body, mode) => put(kit, rel, body, mode), v1, syncFrom, lockJson, saveLock, except, cli, write };
+  return { scratch, kit, root, env, kgit, git, put: (rel, body, mode) => put(root, rel, body, mode), putKit: (rel, body, mode) => put(kit, rel, body, mode), v1, syncFrom, merge, lockJson, saveLock, except, cli, write };
 }
 const ex = (p, extra = {}) => ({ path: p, why: '先在專案修', who: 'agent-a', since: '2026-09-29', ...extra });
 
@@ -101,8 +104,8 @@ test('--write：清單內容＝套件那一版的 ls-tree（權限＋blob＋路�
   assert.ok(written.entries.some((e) => e.path === 'tools/run.sh' && e.mode === '100755'), '可執行位元要記到');
   assert.ok(!written.entries.some((e) => /^(settings\.json|lib\/|README\.md)/u.test(e.path)), '專案自己的檔、套件自己的 README 都不在清單');
   assert.deepEqual(r.lockJson(), { repo: 'acct/kit', version: r.v1, syncedAt: '2026-09-29', entries: tree, exceptions: [] });
-  assert.match(lines[0], /^第一次寫清單：套件 [0-9a-f]{7} 有 11 個共用檔；沒有上一份可比——.*templates\/hook-codex-global\.json，看這支 PR 的 git diff；有的話照 README/u);
-  assert.ok(lines.some((l) => l.startsWith('settings.json（含 forbidden 那一塊）不在清單')), lines.join('\n'));
+  assert.match(lines[0], /^第一次寫清單：套件 [0-9a-f]{7} 有 11 個共用檔$/u);
+  assert.equal(lines[1], '這支 PR 對 origin/main 沒動到進指紋的檔、settings.json 的 forbidden 那一塊、Codex 全域層的接線範本——不用換複本、重按信任', '主幹名從 settings.json 的 mainBranch 讀');
   assert.equal(lock.check(r.root).ok, true, '剛寫完的清單對自己一定是綠的');
   // 權限跟 git 一樣只看擁有者的執行位元：0o654 在 git 眼裡是 100644
   fs.chmodSync(path.join(r.root, 'RULES.md'), 0o654);
@@ -289,81 +292,114 @@ test('--write 第二次：列出套件這一版改了什麼、指紋檔與 Codex
     '  ・templates/c.md：套件這一版刪掉', '  ・templates/hook-codex-global.json：內容不同', '  ・templates/new.md：套件這一版新加',
     '  ・tools/a.js：內容不同', '  ・tools/forbidden-tools.js：內容不同',
   ]);
-  assert.match(lines[6], /^⚠️ 這次動到進錢的攔截器指紋的檔：tools\/forbidden-tools\.js——.*Claude 側＝④.*Codex 全域層＝⓪〜⑥/u, '只點名指紋清單上的那一個');
-  assert.match(lines[7], /^⚠️ 這次動到 Codex 全域層的接線範本（templates\/hook-codex-global\.json）/u);
-  assert.match(lines[8], /^settings\.json（含 forbidden 那一塊）不在清單/u);
-  assert.equal(lines[9], '例外保留 1 筆（工作樹仍跟套件這一版不同）：RULES.md（agent-b）');
-  assert.match(lines[10], /^例外清掉 1 筆（工作樹已跟套件這一版相同）：tools\/a\.js——/u);
-  assert.equal(lines[11], `寫好 ${lock.LOCK_FILE}：套件 acct/kit2 ${v2}（2026-10-01），11 筆、例外 1 筆`);
+  assert.match(lines[6], /^⚠️ 這支 PR 對 origin\/main 動到進錢的攔截器指紋的：tools\/forbidden-tools\.js——.*Claude 側＝④.*Codex 全域層＝⓪〜⑥/u, '只點名指紋清單上的那一個');
+  assert.match(lines[7], /^⚠️ 這支 PR 對 origin\/main 動到 Codex 全域層的接線範本（templates\/hook-codex-global\.json）/u);
+  assert.equal(lines[8], '例外保留 1 筆（工作樹仍跟套件這一版不同）：RULES.md（agent-b）');
+  assert.match(lines[9], /^例外清掉 1 筆（工作樹已跟套件這一版相同）：tools\/a\.js——/u);
+  assert.equal(lines[10], `寫好 ${lock.LOCK_FILE}：套件 acct/kit2 ${v2}（2026-10-01），11 筆、例外 1 筆`);
   assert.equal(lock.check(r.root).ok, true);
-  // 對照：只動到一般共用檔＝說兩樣都沒動到
+  // 對照：這支合併之後，下一次只動到一般共用檔＝說沒動到
+  r.merge('v2 合併');
   r.putKit('templates/new.md', '# 改了\n');
   r.kgit('commit', '-q', '-am', 'v3');
   const v3 = r.kgit('rev-parse', 'HEAD').trim();
   r.syncFrom(v3);
   r.put('RULES.md', keep);
   const again = lock.write(r.root, { kit: r.kit, version: v3, date: '2026-10-02' });
-  assert.ok(again.lines.includes('這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本'), again.lines.join('\n'));
+  assert.ok(again.lines.includes('這支 PR 對 origin/main 沒動到進指紋的檔、settings.json 的 forbidden 那一塊、Codex 全域層的接線範本——不用換複本、重按信任'), again.lines.join('\n'));
 });
 
-test('--write 提醒各自獨立：只改 Codex 範本、只改指紋檔、例外在同步時被換回套件版（複審 r1 M1、M2）', (t) => {
+// 提醒是直接量「這支 PR 對主幹動了什麼」，不從套件差異或舊例外推（複審 r1〜r3 連三輪抓到推算的分支漏洞，照 F10 換做法）。
+// 每一種情境都先 merge()＝把主幹移到上一步的結果，所以量的只有這一步的同步。
+test('--write 提醒＝這支 PR 對主幹實際動到的：套件改、例外換回、例外保留、套件也改了但專案保留原版、禁區那一塊、量不到', (t) => {
   const r = makeRepos(t);
   r.write();
+  r.merge('建清單');
   const nextVersion = (edit, msg) => { edit(); r.kgit('add', '-A'); r.kgit('commit', '-q', '-m', msg); return r.kgit('rev-parse', 'HEAD').trim(); };
-  const FP = /^⚠️ 這次動到進錢的攔截器指紋的檔：/u;
-  const CODEX = /^⚠️ 這次動到 Codex 全域層的接線範本/u;
-  const NONE = '這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本';
-  // ① 只改 Codex 範本：要有 Codex 那一行、沒有指紋那一行、沒有「兩者都沒動」
-  const v2 = nextVersion(() => r.putKit('templates/hook-codex-global.json', '{"v":2}\n'), 'v2 只改 codex 範本');
-  r.syncFrom(v2);
-  let out = r.write({ version: v2, date: '2026-10-01' }).lines;
-  assert.ok(out.some((l) => CODEX.test(l)), out.join('\n'));
-  assert.ok(!out.some((l) => FP.test(l)) && !out.includes(NONE), out.join('\n'));
-  // ② 只改指紋檔：要有指紋那一行、沒有 Codex 那一行
-  const v3 = nextVersion(() => r.putKit('tools/forbidden-tools.js', '// v3\n'), 'v3 只改指紋檔');
-  r.syncFrom(v3);
-  out = r.write({ version: v3, date: '2026-10-02' }).lines;
-  assert.ok(out.some((l) => FP.test(l)) && !out.some((l) => CODEX.test(l)) && !out.includes(NONE), out.join('\n'));
-  // ②b 指紋名單上的另外兩個檔也要點名（不是只認 forbidden-tools.js）
-  const v3b = nextVersion(() => { r.putKit('tools/package.json', '{"type":"commonjs"}\n'); r.putKit('tools/settings-data.js', '// v3b\n'); }, 'v3b 加另外兩個指紋檔');
-  r.syncFrom(v3b);
-  out = r.write({ version: v3b, date: '2026-10-02' }).lines;
-  assert.ok(out.some((l) => FP.test(l) && l.includes('tools/package.json、tools/settings-data.js')), out.join('\n'));
-  // ③ 專案先改 Codex 範本記例外；套件下一版只改一般檔、沒搬回；照 README 整批同步把範本換回套件版＝工作樹的範本變了，要提醒重抽
-  r.put('templates/hook-codex-global.json', '{"local":"fix"}\n');
-  r.except([ex('templates/hook-codex-global.json')]);
-  assert.equal(lock.check(r.root).ok, true);
-  const v4 = nextVersion(() => r.putKit('tools/a.js', '// v4\n'), 'v4 只改一般檔');
-  r.syncFrom(v4);
-  out = r.write({ version: v4, date: '2026-10-03' }).lines;
-  assert.ok(out.some((l) => CODEX.test(l)), '例外被換回套件版＝工作樹的範本變了，要提醒：\n' + out.join('\n'));
-  assert.ok(!out.includes(NONE), out.join('\n'));
-  assert.ok(out.some((l) => l.startsWith('例外清掉 1 筆')), out.join('\n'));
-  // ④ 同一件事套到指紋名單上的每一個檔：專案先改、記例外；套件下一版只改一般檔；整批同步換回套件版＝要點名那個檔（複審 r2 M3）
-  const MAYBE = /^⚠️ 上一份清單有例外、這次仍保留/u;
-  let n = 5;
-  for (const p of lock.FINGERPRINT_SHARED) {
+  const FP = /^⚠️ 這支 PR 對 origin\/main 動到進錢的攔截器指紋的：/u;
+  const CODEX = /^⚠️ 這支 PR 對 origin\/main 動到 Codex 全域層的接線範本/u;
+  const NONE = '這支 PR 對 origin/main 沒動到進指紋的檔、settings.json 的 forbidden 那一塊、Codex 全域層的接線範本——不用換複本、重按信任';
+  const SENSITIVE = [...lock.FINGERPRINT_SHARED, lock.CODEX_TEMPLATE];
+  const named = (out, p) => out.some((l) => (p === lock.CODEX_TEMPLATE ? CODEX : FP).test(l) && l.includes(p));
+  let n = 2;
+  const bump = (edit) => { const v = nextVersion(edit, `v${n}`); n += 1; return v; };
+  for (const p of SENSITIVE) {
+    // ① 套件這一版改了它、整批同步＝點名它，別的都不點名
+    const v = bump(() => r.putKit(p, `// 套件改的 ${p} v${n}\n`));
+    r.syncFrom(v);
+    let out = r.write({ version: v }).lines;
+    assert.ok(named(out, p), `套件改了 ${p}：\n${out.join('\n')}`);
+    assert.ok(!out.includes(NONE) && SENSITIVE.filter((q) => q !== p).every((q) => !named(out, q)), out.join('\n'));
+    r.merge();
+    // ② 專案先改它、記例外（合併進主幹）；套件下一版只改一般檔；整批同步把它換回套件版＝點名它（r1 M1、r2 M3）
     r.put(p, `// 專案先改的 ${p}\n`);
     r.except([ex(p)]);
     assert.equal(lock.check(r.root).ok, true, p);
-    const v = nextVersion(() => r.putKit('tools/a.js', `// v${n}\n`), `v${n} 只改一般檔`);
-    n += 1;
-    r.syncFrom(v);
-    out = r.write({ version: v, date: '2026-10-04' }).lines;
-    assert.ok(out.some((l) => FP.test(l) && l.includes(p)), `${p} 的例外被換回套件版，要點名它：\n${out.join('\n')}`);
-    assert.ok(!out.includes(NONE) && !out.some((l) => MAYBE.test(l)), out.join('\n'));
+    r.merge();
+    const w = bump(() => r.putKit('tools/a.js', `// v${n}\n`));
+    r.syncFrom(w);
+    out = r.write({ version: w }).lines;
+    assert.ok(named(out, p) && out.some((l) => l.startsWith('例外清掉 1 筆')), `例外被換回套件版：\n${out.join('\n')}`);
+    r.merge();
+    // ③ 同樣先改、記例外、合併；這次同步後把專案的版本原封留著＝主幹上就是這一份＝沒動到（r2 L2、r3 M4）
+    r.put(p, `// 專案又改的 ${p}\n`);
+    r.except([ex(p)]);
+    r.merge();
+    const kept = fs.readFileSync(path.join(r.root, p), 'utf8');
+    const x = bump(() => r.putKit('tools/a.js', `// v${n}\n`));
+    r.syncFrom(x);
+    r.put(p, kept);
+    out = r.write({ version: x }).lines;
+    assert.ok(out.includes(NONE) && out.some((l) => l.startsWith('例外保留 1 筆')), `例外保留、內容沒變：\n${out.join('\n')}`);
+    // ④ 套件這一版也改了同一個檔，專案仍保留原版＝工作樹對主幹沒變＝沒動到（r3 L2）
+    const y = bump(() => r.putKit(p, `// 套件又改的 ${p} v${n}\n`));
+    r.syncFrom(y);
+    r.put(p, kept);
+    out = r.write({ version: y }).lines;
+    assert.ok(out.includes(NONE), `套件也改了、專案保留原版：\n${out.join('\n')}`);
+    // ⑤ 保留中的例外，這次專案又把它改了＝點名它（r3 M4 的那一種：保留的例外確實變了）
+    r.put(p, `// 專案這次又改 ${p}\n`);
+    out = r.write({ version: y }).lines;
+    assert.ok(named(out, p), `保留中的例外這次又改了：\n${out.join('\n')}`);
+    // 收尾：換回套件這一版、清掉例外、合併，下一個檔從乾淨的狀態開始
+    r.syncFrom(y);
+    r.write({ version: y });
+    assert.deepEqual(r.lockJson().exceptions, []);
+    r.merge();
   }
-  // ⑤ 例外仍保留（同步後把專案的版本留著）：不能說「這次動到」，要說「看 diff」；也不能說「兩樣都沒動」（複審 r2 L2）
-  r.put('templates/hook-codex-global.json', '{"local":"keep"}\n');
-  r.except([ex('templates/hook-codex-global.json')]);
-  const keepBody = fs.readFileSync(path.join(r.root, 'templates', 'hook-codex-global.json'), 'utf8');
-  const vk = nextVersion(() => r.putKit('tools/a.js', '// vk\n'), 'vk 只改一般檔');
-  r.syncFrom(vk);
-  r.put('templates/hook-codex-global.json', keepBody);
-  out = r.write({ version: vk, date: '2026-10-05' }).lines;
-  assert.ok(out.some((l) => MAYBE.test(l) && l.includes('templates/hook-codex-global.json') && l.includes('看這支 PR 的 git diff')), out.join('\n'));
-  assert.ok(!out.some((l) => CODEX.test(l) || FP.test(l)) && !out.includes(NONE), out.join('\n'));
-  assert.ok(out.some((l) => l.startsWith('例外保留 1 筆')), out.join('\n'));
+  // ⑥ settings.json 的 forbidden 那一塊改了（不在清單、但進指紋）＝點名它
+  const s = JSON.parse(fs.readFileSync(path.join(r.root, 'settings.json'), 'utf8'));
+  s.forbidden.deny.push('mcp__x__z');
+  r.put('settings.json', `${JSON.stringify(s, null, 2)}\n`);
+  let out = r.write({ version: r.lockJson().version }).lines;
+  assert.ok(out.some((l) => FP.test(l) && l.includes('settings.json 的 forbidden 那一塊')), out.join('\n'));
+  // 對照：只改 settings.json 別的欄位＝不點名
+  r.git('checkout', '--', 'settings.json');
+  s.forbidden.deny.pop();
+  s.x = 2;
+  r.put('settings.json', `${JSON.stringify(s, null, 2)}\n`);
+  out = r.write({ version: r.lockJson().version }).lines;
+  assert.ok(out.includes(NONE), out.join('\n'));
+  // ⑧ 同步那一支已經提交了（還沒合併）：量的是對主幹，不是對剛提交的那一顆
+  r.git('checkout', '--', 'settings.json');
+  const z = bump(() => r.putKit('tools/forbidden-tools.js', '// 已提交的同步\n'));
+  r.syncFrom(z);
+  r.git('add', '-A');
+  r.git('commit', '-q', '-m', '同步（還沒合併）');
+  out = r.write({ version: z }).lines;
+  assert.ok(out.some((l) => FP.test(l) && l.includes('tools/forbidden-tools.js')), out.join('\n'));
+  // ⑨ 套件這一版刪掉一個指紋檔＝工作樹沒了、主幹還有＝點名它
+  r.merge();
+  const d = bump(() => r.kgit('rm', '-q', 'tools/package.json'));
+  r.syncFrom(d);
+  out = r.write({ version: d }).lines;
+  assert.ok(out.some((l) => FP.test(l) && l.includes('tools/package.json')), out.join('\n'));
+  // ⑦ 量不到：--base 指到不存在的參照、或設定沒有主幹名又沒給 --base＝說量不到，不說沒動到
+  for (const extra of [{ base: 'origin/nope' }, {}]) {
+    if (!extra.base) { const t2 = JSON.parse(fs.readFileSync(path.join(r.root, 'settings.json'), 'utf8')); delete t2.mainBranch; r.put('settings.json', `${JSON.stringify(t2, null, 2)}\n`); }
+    out = r.write({ version: r.lockJson().version, ...extra }).lines;
+    assert.ok(out.some((l) => l.startsWith('⚠️ 量不到這支 PR 對主幹動了哪些攔截器相關的檔')) && !out.includes(NONE), out.join('\n'));
+  }
 });
 
 test('名單對得上：指紋清單＝guard-copy 的 COPY_FILES 扣掉 settings.json；Codex 接線範本＝guard-copy 的 TEMPLATE_REL', () => {
