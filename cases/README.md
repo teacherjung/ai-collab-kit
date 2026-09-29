@@ -3,7 +3,7 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
 來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
-共 138 則。
+共 162 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -14,6 +14,7 @@
 | 2026-07-30 | [加規則與刪規則混在一份提案](add-and-delete-rules-in-one-change.md) | C2 |
 | 2026-07-30 | [實作者不按自己的合併鍵](implementer-never-presses-merge.md) | A4 |
 | 2026-07-30 | [審查方切走主幹、主目錄卡住](reviewer-worktree-took-over-main.md) | A3 |
+| 2026-07-31 | [人工預約表會過期，改成開工先開草稿PR](reservation-table-retired.md) | D3、E1 |
 | 2026-08-02 | [考題被「文字出現過」滿足而假綠](assert-behavior-not-text.md) | E8 |
 | 2026-08-02 | [不變量寫在沒人讀的檔、平台上也看不出分工](collab-invariant.md) | A2、E1、K1、H5 |
 | 2026-08-02 | [列舉繞法三輪補不完，關門才收](enumerate-bypasses-close-the-door.md) | F10 |
@@ -144,7 +145,30 @@
 | 2026-09-10 | [誰在磨誰拍板](whoever-is-grinding-decides.md) | A1、F6 |
 | 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | A1、G4 |
 | 2026-09-13 | [九個動作的形狀全是我自己想的，碰真平台第一分鐘就破](designed-shapes-never-touched-a-real-platform.md) | E5、H1 |
+| 2026-09-20 | [合併指令改由實作者自己跑](implementer-runs-merge-command.md) | A4、A2 |
+| 2026-09-20 | [從裁示者分出一個只有人能坐的擁有者座位](owner-seat.md) | A1、A3、B1、B2、B3、B5 |
+| 2026-09-21 | [刪掉「加一條先說砍哪一條」，改用進門五問](k2-drop-cut-one-first.md) | K2 |
+| 2026-09-21 | [一次一支與最多兩支併成一條](one-thing-merge-c1-c2.md) | C1 |
+| 2026-09-23 | [對裁示者說的話要分開量到的與推論的](j4-facts-vs-inference-rule.md) | J4、I1、J3 |
+| 2026-09-23 | [合併前不再回頭問裁示者](merge-without-asking-decider.md) | A5 |
+| 2026-09-24 | [框框從強調定成本規則的關鍵詞，框了就查得到](brackets-mark-keywords.md) | J2 |
+| 2026-09-24 | [要照抄的字句改用灰底框，不跟關鍵詞共用「」](grey-box-copy-verbatim.md) | F3、J1 |
+| 2026-09-24 | [規則裡的「變更」全書改叫 PR](rename-change-to-pr.md) | K2、J2 |
+| 2026-09-24 | [「審查」拆成自審與複審，規則裡寫清楚是哪一種](split-self-review-and-review.md) | A2、E9 |
 | 2026-09-24 | [給裁示者的「誤擋 0」是推論不是量測](unmeasured-zero-given-to-decider.md) | J4 |
+| 2026-09-25 | [回頭改的清單從三種補到六種](f6-six-kinds.md) | F6 |
+| 2026-09-25 | [規矩寫清楚後撐破三千字，上限先放寬到四千](k2-limit-raised.md) | K2 |
+| 2026-09-25 | [審查那一方改名叫複審者，名字跟著它做的事走](rename-reviewer.md) | A1、A2 |
+| 2026-09-25 | [複審必驗清單改名、一格拆成兩格，並加「挑一句宣稱去跑」，九項變十二項](review-checklist-twelve-items.md) | F2 |
+| 2026-09-25 | [掃描五步包成一支指令，舊裁示「丙」只改字面不改理由](scan-command-literal-ruling.md) | G2、G3 |
+| 2026-09-25 | [兩方都起得了掃描時，預設由實作者起](scan-launcher-defaults-to-implementer.md) | A1 |
+| 2026-09-25 | [連三輪自問表改版補「在防誰」，名字不帶題數](three-round-self-check-revised.md) | F10 |
+| 2026-09-26 | [註解漂移稽核提了兩次，被問「有必要做嗎」後撤回](comment-drift-audit-dropped.md) | K3、K5、I4 |
+| 2026-09-26 | [被問有沒有必要寫註解，量完只留三種](comments-only-three-kinds.md) | K3 |
+| 2026-09-26 | [環境紅寫進合併規則：不是跳過閘的理由](environment-red-no-excuse.md) | H1 |
+| 2026-09-26 | [J4 的對象從擁有者改成裁示者](j4-audience-decider.md) | J4 |
+| 2026-09-26 | [K2 上限放寬到七千，數法搬去機器表](k2-seven-thousand-count-in-machines.md) | K2、K1 |
+| 2026-09-26 | [轉正式留給起掃描的那一方，沒人起得了掃描時預設實作者](ready-for-review-by-scan-launcher.md) | G4 |
 
 ## 不是事故、但值得記的方法
 
