@@ -17,6 +17,7 @@
   "guard-copy-claude.test.js",
   "guard-copy.test.js",
   "ignore-lists.test.js",
+  "kit-lock.test.js",
   "manifest.test.js",
   "markdown-effective.test.js",
   "merge.test.js",
