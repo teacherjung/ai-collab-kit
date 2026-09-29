@@ -7,7 +7,7 @@
 //   --write 在本機跑、從本機套件倉庫的那一版取清單內容。
 // 守得到的：清單每一筆的權限＋blob 跟工作樹一致；多出來、少掉、改內容、改權限各自紅並指名路徑；例外路徑一字不差（大小寫也算）才綠；
 //   例外過期、打錯路徑也紅；清單壞掉、形狀不對、git 失敗＝退 2 不猜；--write 的內容等於套件那一版、工作樹對不上又沒例外＝拒寫、
-//   印出差在哪、指紋檔與 Codex 接線範本、保留與清掉的例外；帶不帶只看設定的登記，登記跟清單在不在對不上就紅。
+//   印出差在哪、指紋檔與 Codex 接線範本（三種情境各自一題）、保留與清掉的例外；帶不帶只看設定的登記，登記跟清單在不在對不上就紅。
 // ⚠️ 守不到的：同一支 PR 連清單、工具、這一題一起改（絆線不是鎖）；--check 不驗清單內容真的出自套件；套件有沒有新的；
 //   被 .gitignore 忽略的檔（下面有一題照實驗它看不到）；共用路徑以外的檔；settings.json；分不出方向（專案多改 vs 套件有新的）。
 'use strict';
@@ -304,6 +304,41 @@ test('--write 第二次：列出套件這一版改了什麼、指紋檔與 Codex
   r.put('RULES.md', keep);
   const again = lock.write(r.root, { kit: r.kit, version: v3, date: '2026-10-02' });
   assert.ok(again.lines.includes('這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本'), again.lines.join('\n'));
+});
+
+test('--write 提醒各自獨立：只改 Codex 範本、只改指紋檔、例外在同步時被換回套件版（複審 r1 M1、M2）', (t) => {
+  const r = makeRepos(t);
+  r.write();
+  const nextVersion = (edit, msg) => { edit(); r.kgit('add', '-A'); r.kgit('commit', '-q', '-m', msg); return r.kgit('rev-parse', 'HEAD').trim(); };
+  const FP = /^⚠️ 這次動到進錢的攔截器指紋的檔：/u;
+  const CODEX = /^⚠️ 這次動到 Codex 全域層的接線範本/u;
+  const NONE = '這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本';
+  // ① 只改 Codex 範本：要有 Codex 那一行、沒有指紋那一行、沒有「兩者都沒動」
+  const v2 = nextVersion(() => r.putKit('templates/hook-codex-global.json', '{"v":2}\n'), 'v2 只改 codex 範本');
+  r.syncFrom(v2);
+  let out = r.write({ version: v2, date: '2026-10-01' }).lines;
+  assert.ok(out.some((l) => CODEX.test(l)), out.join('\n'));
+  assert.ok(!out.some((l) => FP.test(l)) && !out.includes(NONE), out.join('\n'));
+  // ② 只改指紋檔：要有指紋那一行、沒有 Codex 那一行
+  const v3 = nextVersion(() => r.putKit('tools/forbidden-tools.js', '// v3\n'), 'v3 只改指紋檔');
+  r.syncFrom(v3);
+  out = r.write({ version: v3, date: '2026-10-02' }).lines;
+  assert.ok(out.some((l) => FP.test(l)) && !out.some((l) => CODEX.test(l)) && !out.includes(NONE), out.join('\n'));
+  // ②b 指紋名單上的另外兩個檔也要點名（不是只認 forbidden-tools.js）
+  const v3b = nextVersion(() => { r.putKit('tools/package.json', '{"type":"commonjs"}\n'); r.putKit('tools/settings-data.js', '// v3b\n'); }, 'v3b 加另外兩個指紋檔');
+  r.syncFrom(v3b);
+  out = r.write({ version: v3b, date: '2026-10-02' }).lines;
+  assert.ok(out.some((l) => FP.test(l) && l.includes('tools/package.json、tools/settings-data.js')), out.join('\n'));
+  // ③ 專案先改 Codex 範本記例外；套件下一版只改一般檔、沒搬回；照 README 整批同步把範本換回套件版＝工作樹的範本變了，要提醒重抽
+  r.put('templates/hook-codex-global.json', '{"local":"fix"}\n');
+  r.except([ex('templates/hook-codex-global.json')]);
+  assert.equal(lock.check(r.root).ok, true);
+  const v4 = nextVersion(() => r.putKit('tools/a.js', '// v4\n'), 'v4 只改一般檔');
+  r.syncFrom(v4);
+  out = r.write({ version: v4, date: '2026-10-03' }).lines;
+  assert.ok(out.some((l) => CODEX.test(l)), '例外被換回套件版＝工作樹的範本變了，要提醒：\n' + out.join('\n'));
+  assert.ok(!out.includes(NONE), out.join('\n'));
+  assert.ok(out.some((l) => l.startsWith('例外清掉 1 筆')), out.join('\n'));
 });
 
 test('名單對得上：指紋清單＝guard-copy 的 COPY_FILES 扣掉 settings.json；Codex 接線範本＝guard-copy 的 TEMPLATE_REL', () => {
