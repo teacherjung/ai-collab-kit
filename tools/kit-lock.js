@@ -10,8 +10,9 @@
 // 守到哪裡（tests/kit-lock.test.js 釘）：--check 拿清單每一筆跟工作樹比權限＋blob；多出來、少掉、改內容、改權限的檔，每一個都要有一筆
 //   例外對上（路徑一字不差，大小寫也算）；例外指的檔已經跟清單一樣、或根本不存在＝紅；清單不在、壞掉或形狀不對、git 失敗＝退 2（不猜）。
 //   --write 從本機套件倉庫的那一版取清單內容（版本不在＝退 2），工作樹跟它不一樣的每個檔都要在上一份清單裡有例外，沒有＝拒寫；
-//   印出跟上一份差在哪、保留與清掉了哪些例外；另外直接量這支 PR 對主幹（settings.json 的 mainBranch 或 --base）有沒有動到進指紋的共用檔、
-//   settings.json 的 forbidden 那一塊、Codex 全域層的接線範本——量不到（沒有主幹名、這棵樹沒 fetch）就說量不到，不說沒動到。
+//   印出跟上一份差在哪、保留與清掉了哪些例外，外加一行固定提醒：列出攔截器相關的 5 樣，動到任一樣合併後要換複本、重按信任。
+// 為什麼提醒是固定的一行、不判斷這次動到沒有（擁有者 2026-09-29 裁 a）：複審 r1〜r4 連四輪在「自動判斷動到沒有」這一族抓到問題
+//   （推算與直接量各有漏的情境）；原專案的釘指紋等式題在指紋變了卻沒重印那一行時本來就會紅。這次要不要換，由實作者看這支 PR 對主幹的差異告訴擁有者。
 // ⚠️ 擋不住的：同一支 PR 連清單、這支工具或考題一起改（絆線不是鎖；改動留在 diff 裡給複審者看）；
 //   --check 不驗清單裡的版本碼與 blob 真的出自套件（使用專案的雲端讀不到私有的套件；--write 那一刻有驗，之後手改清單就只剩複審）；
 //   套件那邊有沒有新的（要讀得到套件）；被 .gitignore 忽略的檔；SHARED_PATHS 以外的檔（例如從範本抄出來的 .github/workflows）；
@@ -41,7 +42,7 @@ const REPO = /^[^\s/]+\/[^\s/]+$/u;
 const MODES = new Set(['100644', '100755', '120000']);
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const USAGE = `用法：node tools/kit-lock.js --check
-      node tools/kit-lock.js --write --kit <本機套件倉庫的路徑> --version <套件版本碼> [--repo <帳號/倉庫名>] [--date YYYY-MM-DD] [--base <主幹的參照，預設 origin/<mainBranch>>]
+      node tools/kit-lock.js --write --kit <本機套件倉庫的路徑> --version <套件版本碼> [--repo <帳號/倉庫名>] [--date YYYY-MM-DD]
 （--root <目錄>：考題用，指定哪一棵樹；預設是這支工具所在的那棵樹）`;
 
 /** 清單或環境的問題（不在、壞掉、形狀不對、git 起不來、版本找不到、工作樹跟套件對不上又沒例外）：一律不猜、退 2。 */
@@ -222,31 +223,10 @@ function check(root = ROOT) {
 }
 
 const WRITE_KIND = { 多出來: '套件這一版新加', 少掉: '套件這一版刪掉', 內容不同: '內容不同', 權限不同: '權限不同' };
-/** 攔截器相關的檔（進指紋的共用檔＋Codex 全域層接線範本）＋settings.json 的 forbidden 那一塊：這支 PR 對主幹實際動了哪些。
- *  直接量（工作樹對 base 逐檔比），不從套件的差異或舊例外推（複審 r1〜r3 連三輪抓到推算的分支漏洞，照 F10 換做法）。
- *  base 量不到＝回 unmeasured，由呼叫方照實說「量不到」，不說「沒動到」。 */
-function guardChanges(root, base) {
-  if (!base) return { unmeasured: '設定裡沒有主幹名（mainBranch），也沒給 --base' };
-  const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { cwd: root, env: gitEnv(), encoding: 'utf8' });
-  if (r.error || r.status !== 0) return { unmeasured: `這棵樹裡找不到 ${base}（還沒 fetch？）` };
-  const sha = r.stdout.trim();
-  const blobAt = (rel) => { const b = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${sha}:${rel}`], { cwd: root, env: gitEnv(), encoding: 'utf8' }); return b.status === 0 ? b.stdout.trim() : null; };
-  const blobNow = (rel) => (fs.existsSync(path.join(root, rel)) ? git(root, ['hash-object', '--', rel]).trim() : null);
-  const changed = (rel) => blobAt(rel) !== blobNow(rel);
-  const fp = FINGERPRINT_SHARED.filter(changed);
-  const forbiddenOf = (text) => { try { return JSON.stringify(JSON.parse(text).forbidden); } catch { return undefined; } };
-  const baseSettings = spawnSync('git', ['show', `${sha}:settings.json`], { cwd: root, env: gitEnv(), encoding: 'utf8' });
-  const nowSettings = fs.existsSync(path.join(root, 'settings.json')) ? fs.readFileSync(path.join(root, 'settings.json'), 'utf8') : null;
-  const before = baseSettings.status === 0 ? forbiddenOf(baseSettings.stdout) : undefined;
-  const after = nowSettings === null ? undefined : forbiddenOf(nowSettings);
-  if (before !== after) fp.push('settings.json 的 forbidden 那一塊');
-  return { base, fp, codex: changed(CODEX_TEMPLATE) };
-}
-
 const STEP3 = '照 README「搬進一個專案」第 3 步：Claude 側＝④（同一支PR重印釘指紋那一行，合併後每台機器補複本、按測試鈕）；Codex 全域層＝⓪〜⑥（先關掉所有 Codex、重抽、按信任、按測試鈕）';
 
 /** 同步完跑：清單內容從本機套件倉庫的那一版取；工作樹跟它不一樣又沒有例外＝拒寫。 */
-function write(root = ROOT, { version, repo, date, kit, base } = {}) {
+function write(root = ROOT, { version, repo, date, kit } = {}) {
   const { sha, list } = kitEntries(kit, version);
   const file = path.join(root, LOCK_FILE);
   const previous = fs.existsSync(file) ? readLock(root) : null;
@@ -275,16 +255,7 @@ function write(root = ROOT, { version, repo, date, kit, base } = {}) {
   } else {
     lines.push(`第一次寫清單：套件 ${sha.slice(0, 7)} 有 ${list.length} 個共用檔`);
   }
-  const mainBranch = (() => { try { const m = JSON.parse(fs.readFileSync(path.join(root, 'settings.json'), 'utf8')).mainBranch; return typeof m === 'string' && m && m !== '未設定' ? m : null; } catch { return null; } })();
-  const g = guardChanges(root, base || (mainBranch && `origin/${mainBranch}`));
-  const watched = [...FINGERPRINT_SHARED, CODEX_TEMPLATE, 'settings.json 的 forbidden 那一塊'].join('、');
-  if (g.unmeasured) {
-    lines.push(`⚠️ 量不到這支 PR 對主幹動了哪些攔截器相關的檔（${g.unmeasured}）：自己看這支 PR 對主幹的 git diff（${watched}）；有改動就${STEP3}`);
-  } else {
-    if (g.fp.length) lines.push(`⚠️ 這支 PR 對 ${g.base} 動到進錢的攔截器指紋的：${g.fp.join('、')}——${STEP3}`);
-    if (g.codex) lines.push(`⚠️ 這支 PR 對 ${g.base} 動到 Codex 全域層的接線範本（${CODEX_TEMPLATE}）——Codex 全域層照 README 第 3 步⓪〜⑥重抽、按信任、按測試鈕`);
-    if (!g.fp.length && !g.codex) lines.push(`這支 PR 對 ${g.base} 沒動到進指紋的檔、settings.json 的 forbidden 那一塊、Codex 全域層的接線範本——不用換複本、重按信任`);
-  }
+  lines.push(`提醒（固定）：這支同步若動到 ${[...FINGERPRINT_SHARED, 'settings.json 的 forbidden 那一塊', CODEX_TEMPLATE].join('、')} 任一樣，合併後要換複本、重按信任——${STEP3}；這次有沒有動到，看這支 PR 對主幹的 git diff`);
   if (kept.length) lines.push(`例外保留 ${kept.length} 筆（工作樹仍跟套件這一版不同）：${kept.map((x) => `${x.path}（${x.who}）`).join('、')}`);
   if (cleared.length) lines.push(`例外清掉 ${cleared.length} 筆（工作樹已跟套件這一版相同）：${cleared.map((x) => x.path).join('、')}——改動若還沒搬回套件，就是在這次同步被換掉了，看 git diff 確認`);
   const lock = validateLock({ repo: repoName, version: sha, syncedAt, entries: list, exceptions: kept });
@@ -314,7 +285,7 @@ function declaration(machines, lockPresent) {
 }
 
 function parseArgs(argv) {
-  const out = { mode: null, version: null, repo: null, date: null, kit: null, base: null, root: null };
+  const out = { mode: null, version: null, repo: null, date: null, kit: null, root: null };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => { i += 1; if (i >= argv.length) throw new LockError(`${a} 後面要接值`); return argv[i]; };
@@ -323,13 +294,12 @@ function parseArgs(argv) {
     else if (a === '--repo') out.repo = next();
     else if (a === '--date') out.date = next();
     else if (a === '--kit') out.kit = next();
-    else if (a === '--base') out.base = next();
     else if (a === '--root') out.root = next();
     else throw new LockError(`看不懂的參數：${a}`);
   }
   if (!out.mode) throw new LockError('要給 --check 或 --write');
   if (out.mode === 'check') {
-    const extra = ['version', 'repo', 'date', 'kit', 'base'].filter((k) => out[k] !== null);
+    const extra = ['version', 'repo', 'date', 'kit'].filter((k) => out[k] !== null);
     if (extra.length) throw new LockError(`--check 不收 ${extra.map((k) => `--${k}`).join('、')}（那是 --write 用的）`);
   }
   return out;
