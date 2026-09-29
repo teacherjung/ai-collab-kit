@@ -339,6 +339,31 @@ test('--write 提醒各自獨立：只改 Codex 範本、只改指紋檔、例�
   assert.ok(out.some((l) => CODEX.test(l)), '例外被換回套件版＝工作樹的範本變了，要提醒：\n' + out.join('\n'));
   assert.ok(!out.includes(NONE), out.join('\n'));
   assert.ok(out.some((l) => l.startsWith('例外清掉 1 筆')), out.join('\n'));
+  // ④ 同一件事套到指紋名單上的每一個檔：專案先改、記例外；套件下一版只改一般檔；整批同步換回套件版＝要點名那個檔（複審 r2 M3）
+  const MAYBE = /^⚠️ 上一份清單有例外、這次仍保留/u;
+  let n = 5;
+  for (const p of lock.FINGERPRINT_SHARED) {
+    r.put(p, `// 專案先改的 ${p}\n`);
+    r.except([ex(p)]);
+    assert.equal(lock.check(r.root).ok, true, p);
+    const v = nextVersion(() => r.putKit('tools/a.js', `// v${n}\n`), `v${n} 只改一般檔`);
+    n += 1;
+    r.syncFrom(v);
+    out = r.write({ version: v, date: '2026-10-04' }).lines;
+    assert.ok(out.some((l) => FP.test(l) && l.includes(p)), `${p} 的例外被換回套件版，要點名它：\n${out.join('\n')}`);
+    assert.ok(!out.includes(NONE) && !out.some((l) => MAYBE.test(l)), out.join('\n'));
+  }
+  // ⑤ 例外仍保留（同步後把專案的版本留著）：不能說「這次動到」，要說「看 diff」；也不能說「兩樣都沒動」（複審 r2 L2）
+  r.put('templates/hook-codex-global.json', '{"local":"keep"}\n');
+  r.except([ex('templates/hook-codex-global.json')]);
+  const keepBody = fs.readFileSync(path.join(r.root, 'templates', 'hook-codex-global.json'), 'utf8');
+  const vk = nextVersion(() => r.putKit('tools/a.js', '// vk\n'), 'vk 只改一般檔');
+  r.syncFrom(vk);
+  r.put('templates/hook-codex-global.json', keepBody);
+  out = r.write({ version: vk, date: '2026-10-05' }).lines;
+  assert.ok(out.some((l) => MAYBE.test(l) && l.includes('templates/hook-codex-global.json') && l.includes('看這支 PR 的 git diff')), out.join('\n'));
+  assert.ok(!out.some((l) => CODEX.test(l) || FP.test(l)) && !out.includes(NONE), out.join('\n'));
+  assert.ok(out.some((l) => l.startsWith('例外保留 1 筆')), out.join('\n'));
 });
 
 test('名單對得上：指紋清單＝guard-copy 的 COPY_FILES 扣掉 settings.json；Codex 接線範本＝guard-copy 的 TEMPLATE_REL', () => {

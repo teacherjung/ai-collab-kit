@@ -10,7 +10,7 @@
 // 守到哪裡（tests/kit-lock.test.js 釘）：--check 拿清單每一筆跟工作樹比權限＋blob；多出來、少掉、改內容、改權限的檔，每一個都要有一筆
 //   例外對上（路徑一字不差，大小寫也算）；例外指的檔已經跟清單一樣、或根本不存在＝紅；清單不在、壞掉或形狀不對、git 失敗＝退 2（不猜）。
 //   --write 從本機套件倉庫的那一版取清單內容（版本不在＝退 2），工作樹跟它不一樣的每個檔都要在上一份清單裡有例外，沒有＝拒寫；
-//   印出跟上一份差在哪、有沒有動到錢的攔截器那幾個檔與 Codex 全域層的接線範本（套件改到的、或上一份清單有例外的都算）、保留與清掉了哪些例外。
+//   印出跟上一份差在哪、有沒有動到錢的攔截器那幾個檔與 Codex 全域層的接線範本（套件改到的、例外被換回套件版的＝確定；例外仍保留的＝要看 diff）、保留與清掉了哪些例外。
 // ⚠️ 擋不住的：同一支 PR 連清單、這支工具或考題一起改（絆線不是鎖；改動留在 diff 裡給複審者看）；
 //   --check 不驗清單裡的版本碼與 blob 真的出自套件（使用專案的雲端讀不到私有的套件；--write 那一刻有驗，之後手改清單就只剩複審）；
 //   套件那邊有沒有新的（要讀得到套件）；被 .gitignore 忽略的檔；SHARED_PATHS 以外的檔（例如從範本抄出來的 .github/workflows）；
@@ -250,13 +250,16 @@ function write(root = ROOT, { version, repo, date, kit } = {}) {
     const changes = compare(list, previous.entries);
     lines.push(`跟上一份清單（${previous.version.slice(0, 7)}，${previous.syncedAt}）比：套件這一版有 ${changes.length} 個共用檔不一樣`);
     for (const d of changes) lines.push(`  ・${d.path}：${WRITE_KIND[d.kind]}`);
-    // 工作樹這次可能變了的檔＝套件這一版改到的＋上一份清單有例外的（同步前工作樹是專案的版本，同步後可能換成套件的；2026-09-29 複審 r1 M1）
-    const touched = new Set([...changes.map((d) => d.path), ...previous.exceptions.map((x) => x.path)]);
-    const fp = FINGERPRINT_SHARED.filter((p) => touched.has(p));
-    const codex = touched.has(CODEX_TEMPLATE);
+    // 確定動到＝套件這一版改到的＋上一份有例外、這次被換回套件版的（同步前工作樹是專案的版本；複審 r1 M1）。
+    // 可能動到＝上一份有例外、這次仍保留的：清單不存專案版本的內容，同步前後有沒有改只有這支 PR 的 diff 知道（複審 r2 L2）。
+    const definite = new Set([...changes.map((d) => d.path), ...cleared.map((x) => x.path)]);
+    const maybe = kept.map((x) => x.path).filter((p) => !definite.has(p) && (FINGERPRINT_SHARED.includes(p) || p === CODEX_TEMPLATE));
+    const fp = FINGERPRINT_SHARED.filter((p) => definite.has(p));
+    const codex = definite.has(CODEX_TEMPLATE);
     if (fp.length) lines.push(`⚠️ 這次動到進錢的攔截器指紋的檔：${fp.join('、')}——${STEP3}`);
     if (codex) lines.push(`⚠️ 這次動到 Codex 全域層的接線範本（${CODEX_TEMPLATE}）——Codex 全域層照 README 第 3 步⓪〜⑥重抽、按信任、按測試鈕`);
-    if (!fp.length && !codex) lines.push('這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本');
+    if (maybe.length) lines.push(`⚠️ 上一份清單有例外、這次仍保留（工作樹是專案的版本）：${maybe.join('、')}——看這支 PR 的 git diff：這幾個檔同步前後有改動才照第 3 步重做（Claude 側④、Codex 全域層⓪〜⑥），沒改動就不用`);
+    if (!fp.length && !codex && !maybe.length) lines.push('這次沒動到進指紋的共用檔，也沒動到 Codex 全域層的接線範本');
   } else {
     lines.push(`第一次寫清單：套件 ${sha.slice(0, 7)} 有 ${list.length} 個共用檔；沒有上一份可比——這次同步有沒有動到 ${[...FINGERPRINT_SHARED, CODEX_TEMPLATE].join('、')}，看這支 PR 的 git diff；有的話${STEP3}`);
   }
