@@ -2,10 +2,11 @@
 // 套件說明書網頁的產生器。擁有者 2026-09-27 裁：內容從套件本身自動產生，只有「白話說明」與「優缺點」手寫；
 // 2026-09-30 裁：做成九頁、可以有跳窗、發成私人網頁連結（留痕在套件 #24）。
 // 只給套件倉庫自己用：不在共用路徑裡（tools/kit-lock.js 的 SHARED_PATHS），不會被搬進使用專案。
-// 產出的網頁不進版控：輸出檔要放在套件倉庫外；合併後由實作者跑一次、發到同一個私人連結。
-// 下面檢查到的來源形狀不對就丟例外、不寫檔：半套的說明書比沒有更糟（讀的人以為那就是全部）。
+// 產生器不自己存檔（擁有者 2026-09-30 裁 a）：網頁印到標準輸出、摘要印到標準錯誤，存到哪裡由跑的人指定；
+// 產出不進版控＝跑的人要存到套件倉庫外（沒有機器擋，靠自覺）；合併後由實作者跑一次、發到同一個私人連結。
+// 下面檢查到的來源形狀不對就丟例外、標準輸出什麼都不印：半套的說明書比沒有更糟（讀的人以為那就是全部）。
 //
-//   node manual/build.js --out <倉庫外的輸出檔> [--stamp <頁尾註記，例如版本碼與日期>]
+//   node manual/build.js [--stamp <頁尾註記，例如版本碼與日期>] > <套件倉庫外的檔>
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -490,71 +491,31 @@ ${others.join('\n')}
   return { html, counts: rules.counts, pages: PAGES.length, labels: labels.length };
 }
 
-function parseArgs(argv, root = ROOT) {
+function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
-    if (flag !== '--out' && flag !== '--stamp') throw new Error(`不認得的參數：${flag}（只有 --out、--stamp）`);
+    if (flag === '--out') throw new Error('產生器不自己存檔：把輸出導到套件倉庫外的檔，例如 node manual/build.js > <倉庫外的檔>');
+    if (flag !== '--stamp') throw new Error(`不認得的參數：${flag}（只有 --stamp）`);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} 後面要接值`);
-    out[flag.slice(2)] = value;
+    out.stamp = value;
     i += 1;
   }
-  if (!out.out) throw new Error('要給 --out <輸出檔>（放在套件倉庫外：產出的網頁不進版控）');
-  checkOutput(out.out, root);
   return out;
-}
-
-/**
- * 輸出檔要落在套件倉庫外：比的是資料夾解開符號連結之後的實際位置。
- * 輸出檔本身是哪一種連結（符號、硬連結）不在這裡一種一種擋——寫檔一律先寫同資料夾的新暫存檔再換名
- * （writeOutput），換名只換掉那個路徑、不寫進任何既有的檔案實體，所以連到倉庫裡的檔也不會被改到。
- * 這裡拒絕符號連結與非一般檔案，是為了訊息清楚、不默默換掉使用者自己的連結。
- */
-function checkOutput(outPath, root = ROOT) {
-  const refuse = (why) => new Error(`輸出檔要放在套件倉庫外（產出的網頁不進版控）：${outPath}（${why}）`);
-  const realRoot = fs.realpathSync(root);
-  const inside = (p) => p === realRoot || p.startsWith(`${realRoot}${path.sep}`);
-  const abs = path.resolve(outPath);
-  if (inside(abs)) throw refuse('路徑在倉庫裡');
-  const parent = path.dirname(abs);
-  if (!fs.existsSync(parent)) throw new Error(`輸出檔的資料夾不存在：${outPath}`);
-  if (inside(fs.realpathSync(parent))) throw refuse('資料夾解開連結後在倉庫裡');
-  let st = null;
-  try {
-    st = fs.lstatSync(abs);
-  } catch {
-    st = null;
-  }
-  if (st && st.isSymbolicLink()) throw refuse('輸出檔是符號連結');
-  if (st && !st.isFile()) throw refuse('輸出檔已經存在、而且不是一般檔案');
-}
-
-/** 先寫同資料夾的新暫存檔（已存在就失敗，不跟著任何連結），再換名成輸出檔；失敗就把暫存檔收掉。 */
-function writeOutput(outPath, html, root = ROOT) {
-  checkOutput(outPath, root);
-  const abs = path.resolve(outPath);
-  const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.tmp`);
-  try {
-    fs.writeFileSync(tmp, html, { encoding: 'utf8', flag: 'wx' });
-    fs.renameSync(tmp, abs);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
 }
 
 if (require.main === module) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const result = build(readSources(ROOT), { stamp: args.stamp });
-    writeOutput(args.out, result.html);
+    process.stdout.write(result.html);
     const c = result.counts;
-    process.stdout.write(`寫好說明書：${result.pages} 頁（規矩頁 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}）→ ${args.out}\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩頁 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, parseArgs, checkOutput, writeOutput, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
+module.exports = { build, readSources, parseArgs, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };

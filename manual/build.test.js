@@ -162,7 +162,7 @@ test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片�
   }
 });
 
-test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；「用到它的規矩」＝每一條規矩的每個標籤（同一條只記一次）', () => {
+test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；「用到它的規矩」＝每一條規矩的每個標籤（同一條只記一次），寫的條數＝列出的條號數', () => {
   const src = sources();
   const labels = manual.parseLabels(src.machines);
   const { html } = manual.build(src);
@@ -187,7 +187,11 @@ test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；�
   assert.ok(want.has('合併閘:A2') && want.has('雲端:A2'), '對照裡 A2 要同時有雲端與合併閘');
   const got = [];
   for (const [name, entry] of Object.entries(data)) {
-    for (const m of entry.html.matchAll(/data-goto="rule-([A-K]\d+)"/gu)) got.push(`${name}:${m[1]}`);
+    const links = [...entry.html.matchAll(/data-goto="rule-([A-K]\d+)"/gu)].map((m) => m[1]);
+    for (const id of links) got.push(`${name}:${id}`);
+    const shown = entry.html.match(/用到它的規矩（(\d+) 條）/u);
+    if (links.length) assert.equal(Number(shown && shown[1]), links.length, `「${name}」跳窗寫的條數跟列出來的條號數不一樣`);
+    else assert.ok(entry.html.includes('目前沒有規矩用到它。'), `「${name}」沒有條號時要寫沒有`);
   }
   assert.deepEqual(got.sort(), [...want].sort());
   const dup = JSON.parse(JSON.stringify(src.rules));
@@ -265,6 +269,7 @@ test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、
   const darkMedia = tokens(css.match(/:root:not\(\[data-theme="light"\]\)\{([\s\S]*?)\}/u)[1]);
   const darkAttr = tokens(css.match(/:root\[data-theme="dark"\]\{([\s\S]*?)\}/u)[1]);
   assert.ok(light.length >= 10, '淺色的顏色變數讀到太少：正規式可能沒對到');
+  assert.match(css, /(^|\n)body\{background:var\(--bg\);/u, 'body 要有明確的背景色（外面那層會畫它自己的底色）');
   for (const t of light) assert.ok(darkMedia.has(t) && darkAttr.has(t), `顏色 ${t} 沒有深色版`);
   assert.doesNotMatch(css.replace(/:root[^{]*\{[^}]*\}/gu, ''), /#[0-9a-f]{3,8}\b|rgba?\(/iu, '元件的顏色要用變數，不寫死');
   const routes = [...html.matchAll(/data-route="([a-z]+)"/gu)].map((x) => x[1]);
@@ -275,68 +280,32 @@ test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、
   assert.ok(manual.build(sources(), { stamp: '<b>x</b>' }).html.includes('產生自套件 &lt;b&gt;x&lt;/b&gt;'), '頁尾註記要跳脫');
 });
 
-test('⑧ 命令列：要 --out、要在套件倉庫外；不認得的參數、缺值都退 1；來源壞掉退 1 且不留檔', () => {
+test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不自己存檔（--out 退 1）；不認得的參數、缺值都退 1；來源壞掉退 1 且標準輸出什麼都不印', () => {
   const script = path.join(__dirname, 'build.js');
   const run = (args, s = script) => spawnSync(process.execPath, [s, ...args], { encoding: 'utf8' });
-  assert.equal(run([]).status, 1);
-  assert.match(run([]).stderr, /要給 --out/u);
-  assert.equal(run(['--out']).status, 1);
-  assert.match(run(['--nope', 'x', '--out', 'y']).stderr, /不認得的參數：--nope/u);
-  assert.throws(() => manual.parseArgs(['--out', path.join(manual.ROOT, 'x.html')]), /要放在套件倉庫外.*路徑在倉庫裡/u);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-out-'));
+  const ok = run(['--stamp', '測試']);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
+  assert.match(ok.stderr, /產好說明書：9 頁/u);
+  const out = run(['--out', 'x.html']);
+  assert.equal(out.status, 1);
+  assert.match(out.stderr, /產生器不自己存檔/u);
+  assert.equal(out.stdout, '');
+  assert.equal(run(['--stamp']).status, 1);
+  assert.match(run(['--nope', 'x']).stderr, /不認得的參數：--nope/u);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-cli-'));
   try {
-    const out = path.join(dir, 'index.html');
-    const stdout = execFileSync(process.execPath, [script, '--out', out], { encoding: 'utf8' });
-    assert.match(stdout, /寫好說明書：9 頁/u);
-    assert.equal(fs.readFileSync(out, 'utf8'), manual.build(sources()).html);
     // 來源壞掉：在複本裡把版面約定拿掉再跑
     const kit = path.join(dir, 'kit');
     for (const rel of ['manual/build.js', 'tools/build-rules.js', 'rules.json', 'MACHINES.md', 'GLOSSARY.md']) {
       fs.mkdirSync(path.dirname(path.join(kit, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(kit, rel));
     }
-    // 捷徑（符號連結）不能讓產出寫回倉庫：檔案連結、資料夾連結兩種
-    const before = fs.readFileSync(path.join(kit, 'rules.json'), 'utf8');
-    const fileLink = path.join(dir, 'link-to-rules.html');
-    fs.symlinkSync(path.join(kit, 'rules.json'), fileLink);
-    const r1 = run(['--out', fileLink], path.join(kit, 'manual/build.js'));
-    assert.equal(r1.status, 1);
-    assert.match(r1.stderr, /輸出檔是符號連結/u);
-    assert.equal(fs.readFileSync(path.join(kit, 'rules.json'), 'utf8'), before, '規則檔被產出蓋掉了');
-    const dirLink = path.join(dir, 'link-to-kit');
-    fs.symlinkSync(kit, dirLink);
-    const r2 = run(['--out', path.join(dirLink, 'x.html')], path.join(kit, 'manual/build.js'));
-    assert.equal(r2.status, 1);
-    assert.match(r2.stderr, /資料夾解開連結後在倉庫裡/u);
-    assert.ok(!fs.existsSync(path.join(kit, 'x.html')), '產出透過資料夾連結寫進了倉庫');
-    // 硬連結：輸出路徑跟規則檔是同一個檔案實體。先寫暫存檔再換名，所以規則檔一字不變、輸出變成獨立的新檔
-    const hard = path.join(dir, 'hard-to-rules.html');
-    fs.linkSync(path.join(kit, 'rules.json'), hard);
-    const r3 = run(['--out', hard], path.join(kit, 'manual/build.js'));
-    assert.equal(r3.status, 0, r3.stderr);
-    assert.equal(fs.readFileSync(path.join(kit, 'rules.json'), 'utf8'), before, '規則檔透過硬連結被產出蓋掉了');
-    assert.equal(fs.statSync(hard).nlink, 1, '輸出應該是換名換上的新檔，不再跟規則檔共用實體');
-    assert.ok(fs.readFileSync(hard, 'utf8').startsWith('<title>'));
-    assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], '暫存檔沒有收掉');
-    // 輸出路徑已經是一個資料夾：拒絕、訊息講清楚
-    const asDir = path.join(dir, 'a-folder');
-    fs.mkdirSync(asDir);
-    const r4 = run(['--out', asDir]);
-    assert.equal(r4.status, 1);
-    assert.match(r4.stderr, /不是一般檔案/u);
-    // 暫存檔名已經被佔用（例如有人先放了一個連結）：寫入失敗、不產生輸出、佔用的那個名字收掉
-    const w = path.join(dir, 'w.html');
-    const tmp = path.join(dir, `.w.html.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, '先放的');
-    assert.throws(() => manual.writeOutput(w, '<title>x</title>'), /EEXIST/u);
-    assert.ok(!fs.existsSync(w), '暫存檔寫不進去時不可以產生輸出');
-    assert.ok(!fs.existsSync(tmp), '失敗時暫存檔名要收掉');
     fs.writeFileSync(path.join(kit, 'GLOSSARY.md'), '# 空的\n');
-    const bad = path.join(dir, 'bad.html');
-    const r = run(['--out', bad], path.join(kit, 'manual/build.js'));
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /找不到「## 版面約定」/u);
-    assert.ok(!fs.existsSync(bad), '來源壞掉時不可以留下輸出檔');
+    const bad = run([], path.join(kit, 'manual/build.js'));
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /找不到「## 版面約定」/u);
+    assert.equal(bad.stdout, '', '來源壞掉時標準輸出不可以印出任何網頁內容');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
