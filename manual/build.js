@@ -81,8 +81,11 @@ function parseLabels(text) {
   if (!TABLE_RULE.test(lines[at + 1] || '')) throw new Error(`MACHINES.md 標籤表第 ${at + 2} 行應該是分隔列（|---|---|---|）`);
   const labels = [];
   for (let i = at + 2; i < lines.length && lines[i].startsWith('|'); i += 1) {
-    const cells = lines[i].split('|').slice(1, -1).map((cell) => cell.trim());
-    if (cells.length !== 3 || cells.some((cell) => !cell)) throw new Error(`MACHINES.md 標籤表第 ${i + 1} 行要剛好三格、每格都有字：${lines[i]}`);
+    const raw = lines[i].split('|');
+    const cells = raw.slice(1, -1).map((cell) => cell.trim());
+    if (!lines[i].trimEnd().endsWith('|') || raw.length !== 5 || cells.some((cell) => !cell)) {
+      throw new Error(`MACHINES.md 標籤表第 ${i + 1} 行要剛好三格（頭尾都有「|」）、每格都有字：${lines[i]}`);
+    }
     if (labels.some((label) => label.name === cells[0])) throw new Error(`MACHINES.md 標籤表第 ${i + 1} 行：「${cells[0]}」登記了兩次`);
     labels.push({ name: cells[0], meaning: cells[1], limits: cells[2] });
   }
@@ -110,6 +113,7 @@ function parseLegend(text) {
     else if (bullets.length) throw new Error(`${where}：條列後面又有段落，說明書不知道它該放哪裡`);
     else lead.push(line.trim());
   }
+  if (!lead.length) throw new Error('GLOSSARY.md「## 版面約定」底下沒有開頭那一段');
   if (!bullets.length) throw new Error('GLOSSARY.md「## 版面約定」底下沒有條列');
   return { lead: lead.join(' '), bullets };
 }
@@ -497,9 +501,31 @@ function parseArgs(argv, root = ROOT) {
     i += 1;
   }
   if (!out.out) throw new Error('要給 --out <輸出檔>（放在套件倉庫外：產出的網頁不進版控）');
-  const target = path.resolve(out.out);
-  if (target === root || target.startsWith(`${root}${path.sep}`)) throw new Error(`輸出檔要放在套件倉庫外（產出的網頁不進版控）：${out.out}`);
+  checkOutput(out.out, root);
   return out;
+}
+
+/**
+ * 輸出檔要落在套件倉庫外。比的是解開符號連結之後的實際位置：資料夾是連結、或輸出檔本身是連結，
+ * 都可能讓產出寫回倉庫、甚至蓋掉規則檔。輸出檔本身是連結一律拒絕（不去猜它指到哪裡）。
+ */
+function checkOutput(outPath, root = ROOT) {
+  const refuse = (why) => new Error(`輸出檔要放在套件倉庫外（產出的網頁不進版控）：${outPath}（${why}）`);
+  const realRoot = fs.realpathSync(root);
+  const inside = (p) => p === realRoot || p.startsWith(`${realRoot}${path.sep}`);
+  const abs = path.resolve(outPath);
+  if (inside(abs)) throw refuse('路徑在倉庫裡');
+  const parent = path.dirname(abs);
+  if (!fs.existsSync(parent)) throw new Error(`輸出檔的資料夾不存在：${outPath}`);
+  if (inside(fs.realpathSync(parent))) throw refuse('資料夾解開連結後在倉庫裡');
+  let st = null;
+  try {
+    st = fs.lstatSync(abs);
+  } catch {
+    st = null;
+  }
+  if (st && st.isSymbolicLink()) throw refuse('輸出檔是符號連結');
+  if (st && !st.isFile()) throw refuse('輸出檔已經存在、而且不是一般檔案');
 }
 
 if (require.main === module) {
@@ -515,4 +541,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, readSources, parseArgs, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
+module.exports = { build, readSources, parseArgs, checkOutput, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
