@@ -74,29 +74,36 @@ function rich(value, roles, what) {
   return segHtml(segments(value, roles, what));
 }
 
-/** MACHINES.md 最上面那張「標籤｜意思｜守不到的」表：表頭、分隔列、每列三格都非空、名字不重複。 */
+/**
+ * MACHINES.md 最上面那張「標籤｜意思｜守不到的」表。表格這一塊＝表頭之後到第一個空行為止，
+ * 這一塊裡每一行都要是「|」開頭、「|」結尾、剛好三格都有字的一列（名字不重複）；空行之後接的下一個東西
+ * 要是下一節的標題（「## 」）或檔案結尾——表格後面冒出來的東西不知道算不算表格，就停下。
+ */
 function parseLabels(text) {
   const lines = text.split('\n');
   const at = lines.findIndex((line) => LABEL_HEADER.test(line));
   if (at < 0) throw new Error('MACHINES.md 找不到「| 標籤 | 意思 | 守不到的 |」那張表');
   if (!TABLE_RULE.test(lines[at + 1] || '')) throw new Error(`MACHINES.md 標籤表第 ${at + 2} 行應該是分隔列（|---|---|---|）`);
   const labels = [];
-  for (let i = at + 2; i < lines.length && lines[i].startsWith('|'); i += 1) {
+  let i = at + 2;
+  for (; i < lines.length && lines[i].trim(); i += 1) {
     const raw = lines[i].split('|');
     const cells = raw.slice(1, -1).map((cell) => cell.trim());
-    if (!lines[i].trimEnd().endsWith('|') || raw.length !== 5 || cells.some((cell) => !cell)) {
+    if (!lines[i].startsWith('|') || !lines[i].trimEnd().endsWith('|') || raw.length !== 5 || cells.some((cell) => !cell)) {
       throw new Error(`MACHINES.md 標籤表第 ${i + 1} 行要剛好三格（頭尾都有「|」）、每格都有字：${lines[i]}`);
     }
     if (labels.some((label) => label.name === cells[0])) throw new Error(`MACHINES.md 標籤表第 ${i + 1} 行：「${cells[0]}」登記了兩次`);
     labels.push({ name: cells[0], meaning: cells[1], limits: cells[2] });
   }
+  while (i < lines.length && !lines[i].trim()) i += 1;
+  if (i < lines.length && !lines[i].startsWith('## ')) throw new Error(`MACHINES.md 第 ${i + 1} 行：標籤表之後接的不是下一節的標題（「## 」），說明書不知道它算不算表格`);
   if (!labels.some((label) => label.name === SELF)) throw new Error(`MACHINES.md 標籤表裡沒有「${SELF}」`);
   return labels;
 }
 
 /**
- * GLOSSARY.md 的「## 版面約定」：只收「開頭一段＋一串連續的頂層『- 』條列」這個形狀。
- * 縮排行、條列後面又冒出的段落、別種條列記號、小標都丟例外——收進來會被靜靜搬位置或攤平。
+ * GLOSSARY.md 的「## 版面約定」：只收「開頭一段＋頂層『- 』條列」這個形狀（開頭那一段可以換行、不可以空行分成兩段）。
+ * 縮排行、開頭第二段、條列後面又冒出的段落、別種條列記號、小標都丟例外——收進來會被靜靜搬位置、併段或攤平。
  */
 function parseLegend(text) {
   const lines = text.split('\n');
@@ -104,14 +111,19 @@ function parseLegend(text) {
   if (at < 0) throw new Error('GLOSSARY.md 找不到「## 版面約定」');
   const lead = [];
   const bullets = [];
+  let leadClosed = false;
   for (let i = at + 1; i < lines.length && !lines[i].startsWith('## '); i += 1) {
     const line = lines[i];
-    if (!line.trim()) continue;
+    if (!line.trim()) {
+      if (lead.length) leadClosed = true;
+      continue;
+    }
     const where = `GLOSSARY.md 第 ${i + 1} 行`;
     if (/^\s/u.test(line)) throw new Error(`${where}：「## 版面約定」底下有縮排行，說明書只收頂層條列`);
     if (/^(#|\* |\+ |\d+[.)] |>)/u.test(line)) throw new Error(`${where}：「## 版面約定」底下只收開頭一段與「- 」條列`);
     if (line.startsWith('- ')) bullets.push(line.slice(2));
     else if (bullets.length) throw new Error(`${where}：條列後面又有段落，說明書不知道它該放哪裡`);
+    else if (leadClosed) throw new Error(`${where}：開頭有第二段，說明書只收開頭一段`);
     else lead.push(line.trim());
   }
   if (!lead.length) throw new Error('GLOSSARY.md「## 版面約定」底下沒有開頭那一段');

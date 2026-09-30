@@ -37,7 +37,7 @@ function ownLabels(text) {
   const lines = text.split('\n');
   const at = lines.indexOf('| 標籤 | 意思 | 守不到的 |');
   const rows = [];
-  for (let i = at + 2; lines[i] && lines[i].startsWith('|'); i += 1) {
+  for (let i = at + 2; lines[i] && lines[i].trim(); i += 1) {
     const [name, meaning, limits] = lines[i].split('|').slice(1, 4).map((c) => c.trim());
     rows.push({ name, meaning, limits });
   }
@@ -149,6 +149,7 @@ test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片�
   const nums = [...html.matchAll(/data-filter="(\w+)"[^>]*>[\s\S]*?<span class="num">(\d+)<\/span>/gu)].map((m) => [m[1], Number(m[2])]);
   assert.deepEqual(nums, [['all', total], ['machine', tally.machine], ['mixed', tally.mixed], ['self', tally.self]]);
   assert.ok(html.includes(`<p class="page-sum">${total} 條，分 ${src.rules.sections.length} 節`), '頁首的總條數或節數不對');
+  assert.equal(html.match(/<section class="page" id="rules" data-page>[\s\S]*?<h1>([^<]*)<\/h1>/u)[1], escT(src.rules.title), '規矩頁的大標題要是規則資料的標題');
   assert.deepEqual(manual.KIND_TEXT, KIND, '分類的字改了：要連這一題與 PR 說明一起改');
   assert.ok(html.includes('這三類只照每一條「把關」那一行列了哪些名字來分，不代表整條都有人守住'), '頁上講分類的那句不見了');
   for (const s of src.rules.sections) {
@@ -187,7 +188,9 @@ test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；�
   assert.ok(want.has('合併閘:A2') && want.has('雲端:A2'), '對照裡 A2 要同時有雲端與合併閘');
   const got = [];
   for (const [name, entry] of Object.entries(data)) {
-    const links = [...entry.html.matchAll(/data-goto="rule-([A-K]\d+)"/gu)].map((m) => m[1]);
+    const pairs = [...entry.html.matchAll(/data-goto="rule-([A-K]\d+)">([^<]*)<\/button>/gu)];
+    for (const [, target, text] of pairs) assert.equal(text, target, `「${name}」跳窗裡按鈕上寫 ${text}、卻跳到 ${target}`);
+    const links = pairs.map((x) => x[1]);
     for (const id of links) got.push(`${name}:${id}`);
     const shown = entry.html.match(/用到它的規矩（(\d+) 條）/u);
     if (links.length) assert.equal(Number(shown && shown[1]), links.length, `「${name}」跳窗寫的條數跟列出來的條號數不一樣`);
@@ -216,6 +219,7 @@ test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤�
   const m = src.machines;
   const g = src.glossary;
   const legendBody = g.match(/## 版面約定\n([\s\S]*?)\n## /u)[1];
+  const SELF_ROW = m.match(/^\| 靠自覺 \|.*\|$/mu)[0];
   const withLegend = (body) => g.split(legendBody).join(body);
   const firstBullet = legendBody.match(/^- .*$/mu)[0];
   const cases = [
@@ -231,12 +235,24 @@ test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤�
     ['條列後段落', { glossary: withLegend(`${legendBody}\n條列後面的一段`) }, /條列後面又有段落/u],
     ['別種條列', { glossary: withLegend(legendBody.replace(firstBullet, `* ${firstBullet.slice(2)}`)) }, /只收開頭一段與「- 」條列/u],
     ['沒有條列', { glossary: withLegend(legendBody.replace(/^- .*$/gmu, '')) }, /沒有條列/u],
+    ['表格後緊接缺開頭豎線的列', { machines: m.replace(SELF_ROW, `${SELF_ROW}\n 新增標籤 | 新的意思 | 新的守不到 |`) }, /要剛好三格/u],
+    ['表格後緊接多一個前導空白的列', { machines: m.replace(SELF_ROW, `${SELF_ROW}\n | 新增標籤 | 新的意思 | 新的守不到 |`) }, /要剛好三格/u],
+    ['空一行後又冒出一列', { machines: m.replace(SELF_ROW, `${SELF_ROW}\n\n| 新增標籤 | 新的意思 | 新的守不到 |`) }, /接的不是下一節的標題/u],
+    ['開頭第二段', { glossary: withLegend(legendBody.replace(firstBullet, `第二段開頭\n\n${firstBullet}`)) }, /開頭有第二段/u],
   ];
   for (const [name, patch, pattern] of cases) {
     const key = Object.keys(patch)[0];
     assert.notEqual(patch[key], src[key], `「${name}」這一發沒有改到來源`);
     assert.throws(() => manual.build({ ...src, ...patch }), pattern, `「${name}」應該停下`);
   }
+  // 對照組：表格尾端多一列格式正確的新標籤，照收（多一筆、跳窗寫沒有規矩用到它）；開頭那一段換行不算兩段
+  const ok = manual.build({ ...src, machines: m.replace(SELF_ROW, `${SELF_ROW}\n| 新增標籤 | 新的意思 | 新的守不到 |`) });
+  const okData = JSON.parse(ok.html.match(/id="label-data">([\s\S]*?)<\/script>/u)[1]);
+  assert.equal(Object.keys(okData).length, ownLabels(m).length + 1);
+  assert.ok(okData['新增標籤'].html.includes('目前沒有規矩用到它。'));
+  const leadLine = legendBody.split('\n').find((l) => l.trim());
+  const cont = manual.build({ ...src, glossary: withLegend(legendBody.replace(leadLine, `${leadLine}\n開頭的續行`)) });
+  assert.ok(cont.html.includes('開頭的續行'), '開頭那一段裡換行不是第二段，要照收');
 });
 
 test('⑥ 跳脫與原文：尖括號以文字出現；版面約定逐條與開頭那句、規則書檔頭都照原文出現', () => {
@@ -292,7 +308,10 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   assert.match(out.stderr, /產生器不自己存檔/u);
   assert.equal(out.stdout, '');
   assert.equal(run(['--stamp']).status, 1);
-  assert.match(run(['--nope', 'x']).stderr, /不認得的參數：--nope/u);
+  const nope = run(['--nope', 'x']);
+  assert.equal(nope.status, 1);
+  assert.equal(nope.stdout, '');
+  assert.match(nope.stderr, /不認得的參數：--nope/u);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-cli-'));
   try {
     // 來源壞掉：在複本裡把版面約定拿掉再跑
