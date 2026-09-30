@@ -1,6 +1,10 @@
 'use strict';
 // 說明書網頁產生器的考題（manual/build.js；只在套件倉庫、不在共用路徑裡）。
-// 守的是「規矩頁有沒有忠實排出規則資料」與「抽不到就停」；網頁長得好不好看不在這裡。
+// 守的：規矩頁的每一條（主句、子點的順序與層級與編號、把關那一行整行）、節標題、頁面上的數字、
+// 跳窗資料、版面約定逐條、檔頭原文，以及來源形狀不對時停下不產生。
+// 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
+// 實作者每一支用無畫面瀏覽器量一次、寫在 PR 說明。tests/filled-settings.test.js 與 git-env 的巢狀那兩輪
+// 不帶 manual/：這一支只在根目錄那一輪跑；它若開始讀 settings.json 或叫 git，要先把 manual/ 加進那兩輪。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,15 +17,33 @@ const rulesBook = require('../tools/build-rules.js');
 
 const sources = () => manual.readSources(manual.ROOT);
 const plainOf = (value, roles) => rulesBook.tokenize(value, roles, '', []).map((seg) => seg.value).join('');
+const strip = (html) => html.replace(/<[^>]+>/gu, '');
 
-/** 一張規則卡的 HTML（從 id 開始到下一個 </article>）。 */
+/** 一張規則卡的 HTML（從 id 開始到它的 </article>）。 */
 function card(html, id) {
   const at = html.indexOf(`<article class="rule" id="rule-${id}"`);
   assert.ok(at >= 0, `找不到 ${id} 那張卡`);
   return html.slice(at, html.indexOf('</article>', at));
 }
 
-test('① 規矩頁：每一條都有一張卡，主句與每個子點的文字都在它自己那張卡裡', () => {
+/** 位置 p 之前還沒關的清單標籤（由外到內）。 */
+function openLists(html, p) {
+  const stack = [];
+  for (const m of html.slice(0, p).matchAll(/<(\/?)(ol|ul)\b/gu)) {
+    if (m[1]) stack.pop();
+    else stack.push(m[2]);
+  }
+  return stack;
+}
+
+function kindOfTag(tag, labels, roles) {
+  const parts = manual.splitTag(tag, labels, roles);
+  const m = parts.some((p) => p.name !== '靠自覺');
+  const s = parts.some((p) => p.name === '靠自覺');
+  return m && s ? 'mixed' : m ? 'machine' : 'self';
+}
+
+test('① 規矩頁逐條：主句、子點（順序、第幾層、編號或圓點）、把關那一行整行，都照規則資料', () => {
   const src = sources();
   const { html, counts } = manual.build(src);
   const roles = src.rules.roles;
@@ -32,48 +54,63 @@ test('① 規矩頁：每一條都有一張卡，主句與每個子點的文字�
   for (const section of src.rules.sections) {
     for (const rule of section.rules) {
       const id = `${section.letter}${rule.n}`;
-      const text = card(html, id).replace(/<[^>]+>/gu, '');
-      for (const field of [rule.text, ...(rule.items || []).map((it) => it.text)]) {
-        assert.ok(text.includes(manual.esc(plainOf(field, roles))), `${id} 那張卡少了這段字：${plainOf(field, roles).slice(0, 40)}`);
-      }
+      const c = card(html, id);
+      const text = c.match(/<p class="rule-text">([\s\S]*?)<\/p>/u);
+      assert.equal(strip(text[1]), manual.esc(plainOf(rule.text, roles)), `${id} 的主句不一樣`);
+      const lis = [...c.matchAll(/<li>/gu)].map((m) => m.index);
+      assert.equal(lis.length, (rule.items || []).length, `${id} 的子點個數不一樣`);
+      (rule.items || []).forEach((item, i) => {
+        const p = lis[i];
+        assert.ok(strip(c.slice(p + 4)).startsWith(manual.esc(plainOf(item.text, roles))), `${id} 第 ${i + 1} 個子點的字或順序不對`);
+        const lists = openLists(c, p);
+        assert.equal(lists.length, item.level || 1, `${id} 第 ${i + 1} 個子點的層級不對`);
+        assert.equal(lists[lists.length - 1], item.numbered ? 'ol' : 'ul', `${id} 第 ${i + 1} 個子點的編號／圓點不對`);
+      });
+      const tag = c.match(/<p class="rule-tag">([\s\S]*?)<\/p>/u);
+      assert.equal(strip(tag[1]), `把關${manual.esc(plainOf(rule.tag, roles))}`, `${id} 的把關那一行不一樣`);
+      assert.ok(/data-label="/u.test(tag[1]), `${id} 沒有任何標籤鈕`);
     }
   }
 });
 
-test('② 標籤：以登記名開頭才算新的一段；續句接回上一段；第一段對不到登記名＝丟例外', () => {
+test('② 標籤切段：剛好是登記名或「登記名：」開頭才算新的一段；續句接回上一段；對不到或半形分號＝丟例外', () => {
   const labels = manual.parseLabels(sources().machines);
   const names = labels.map((l) => l.name);
-  assert.deepEqual(manual.splitTag('雲端：只驗四欄有填；角色那兩欄要填登記過的名字', labels), [{ name: '雲端', rest: '：只驗四欄有填；角色那兩欄要填登記過的名字' }]);
-  assert.deepEqual(manual.splitTag('考題：只守忽略清單；靠自覺：其餘', labels).map((p) => p.name), ['考題', '靠自覺']);
+  const pick = (parts) => parts.map((p) => ({ name: p.name, rest: p.rest }));
+  assert.deepEqual(pick(manual.splitTag('雲端：只驗四欄有填；角色那兩欄要填登記過的名字', labels)), [{ name: '雲端', rest: '：只驗四欄有填；角色那兩欄要填登記過的名字' }]);
+  assert.deepEqual(pick(manual.splitTag('靠自覺；考題卷由人出、機器不看', labels)), [{ name: '靠自覺', rest: '；考題卷由人出、機器不看' }], '以登記名的字開頭、後面沒有冒號的續句要接回上一段');
+  assert.deepEqual(pick(manual.splitTag('考題：只守忽略清單；靠自覺：其餘', labels)).map((p) => p.name), ['考題', '靠自覺']);
+  assert.deepEqual(pick(manual.splitTag('靠自覺；經「合併指令」合併會自動寫', labels)), [{ name: '靠自覺', rest: '；經「合併指令」合併會自動寫' }]);
   assert.throws(() => manual.splitTag('沒登記的名字：隨便', labels), /不是以登記的名字開頭/u);
-  // 真資料：每一條的標籤都切得開，每個標籤鈕都是登記名，每一條至少一顆
+  assert.throws(() => manual.splitTag('雲端：只驗這一欄有填;靠自覺：其餘', labels), /半形「;」/u);
   const { html } = manual.build(sources());
-  const chips = [...html.matchAll(/data-label="([^"]+)"/gu)].map((m) => m[1]);
-  assert.ok(chips.length >= (html.match(/<article class="rule" /gu) || []).length);
-  for (const chip of chips) assert.ok(names.includes(chip), `標籤鈕「${chip}」不在 MACHINES.md 的標籤表`);
+  for (const m of html.matchAll(/data-label="([^"]+)"/gu)) assert.ok(names.includes(m[1]), `標籤鈕「${m[1]}」不在 MACHINES.md 的標籤表`);
 });
 
-test('③ 篩選的三個數字：機器、一部分、全靠自覺加起來等於總條數，且跟逐條重算的一樣', () => {
+test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片徽章，都跟逐條重算的一樣', () => {
   const src = sources();
   const labels = manual.parseLabels(src.machines);
+  const roles = src.rules.roles;
   const tally = { machine: 0, mixed: 0, self: 0 };
-  for (const s of src.rules.sections) {
-    for (const r of s.rules) {
-      const parts = manual.splitTag(r.tag, labels);
-      const m = parts.some((p) => p.name !== '靠自覺');
-      const self = parts.some((p) => p.name === '靠自覺');
-      tally[m && self ? 'mixed' : m ? 'machine' : 'self'] += 1;
-    }
-  }
+  for (const s of src.rules.sections) for (const r of s.rules) tally[kindOfTag(r.tag, labels, roles)] += 1;
+  const total = tally.machine + tally.mixed + tally.self;
   const { counts, html } = manual.build(src);
-  assert.deepEqual({ machine: counts.machine, mixed: counts.mixed, self: counts.self }, tally);
-  assert.equal(tally.machine + tally.mixed + tally.self, counts.total);
-  for (const [k, n] of Object.entries(tally)) {
-    assert.equal((html.match(new RegExp(`data-kind="${k}"`, 'gu')) || []).length, n, `${k} 的卡數跟篩選數字對不上`);
+  assert.deepEqual(counts, { total, ...tally });
+  const nums = [...html.matchAll(/data-filter="(\w+)"[^>]*>[\s\S]*?<span class="num">(\d+)<\/span>/gu)].map((m) => [m[1], Number(m[2])]);
+  assert.deepEqual(nums, [['all', total], ['machine', tally.machine], ['mixed', tally.mixed], ['self', tally.self]]);
+  assert.ok(html.includes(`<p class="page-sum">${total} 條，分 ${src.rules.sections.length} 節`), '頁首的總條數或節數不對');
+  for (const s of src.rules.sections) {
+    assert.ok(html.includes(`<span class="sec-letter">${s.letter}</span>${manual.esc(s.title)}<span class="sec-count">${s.rules.length} 條</span>`), `${s.letter} 節的標題或條數不對`);
+    for (const r of s.rules) {
+      const want = kindOfTag(r.tag, labels, roles);
+      const c = card(html, `${s.letter}${r.n}`);
+      assert.ok(c.includes(`data-kind="${want}"`), `${s.letter}${r.n} 的分類不對`);
+      assert.ok(c.includes(`<span class="rule-kind kind-${want}">${manual.KIND_TEXT[want]}</span>`), `${s.letter}${r.n} 的徽章跟分類對不上`);
+    }
   }
 });
 
-test('④ 跳窗資料：每個標籤一筆；「用到它的規矩」合起來就是每一條規矩的每個標籤', () => {
+test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；「用到它的規矩」＝每一條規矩的每個標籤（同一條只記一次）', () => {
   const src = sources();
   const labels = manual.parseLabels(src.machines);
   const { html } = manual.build(src);
@@ -82,18 +119,26 @@ test('④ 跳窗資料：每個標籤一筆；「用到它的規矩」合起來�
   assert.ok(!json[1].includes('<'), '跳窗資料放在 <script> 裡，不能有原始的「<」（要寫成 \\u003c），否則內容裡的 </script> 會提早結束那一段');
   const data = JSON.parse(json[1]);
   assert.deepEqual(Object.keys(data).sort(), labels.map((l) => l.name).sort());
-  const want = [];
+  for (const l of labels) {
+    assert.ok(data[l.name].html.includes(`<dt>意思</dt><dd>${manual.mdInline(l.meaning)}</dd>`), `「${l.name}」的意思不是原文`);
+    assert.ok(data[l.name].html.includes(`<dt>守不到的</dt><dd>${manual.mdInline(l.limits)}</dd>`), `「${l.name}」的守不到的不是原文`);
+  }
+  const want = new Set();
   for (const s of src.rules.sections) {
-    for (const r of s.rules) for (const p of manual.splitTag(r.tag, labels)) want.push(`${p.name}:${s.letter}${r.n}`);
+    for (const r of s.rules) for (const p of manual.splitTag(r.tag, labels, src.rules.roles)) want.add(`${p.name}:${s.letter}${r.n}`);
   }
   const got = [];
   for (const [name, entry] of Object.entries(data)) {
     for (const m of entry.html.matchAll(/data-goto="rule-([A-K]\d+)"/gu)) got.push(`${name}:${m[1]}`);
   }
-  assert.deepEqual(got.sort(), want.sort());
+  assert.deepEqual(got.sort(), [...want].sort());
+  const dup = JSON.parse(JSON.stringify(src.rules));
+  dup.sections[0].rules[0].tag = '靠自覺：一；靠自覺：二';
+  const dupData = JSON.parse(manual.build({ ...src, rules: dup }).html.match(/id="label-data">([\s\S]*?)<\/script>/u)[1]);
+  assert.equal((dupData['靠自覺'].html.match(/data-goto="rule-A1"/gu) || []).length, 1, '同一條規矩的標籤裡同一個名字出現兩次，只記一次');
 });
 
-test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤表或版面約定不見，都丟例外', () => {
+test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤表或版面約定的形狀不對，都丟例外', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-src-'));
   try {
     fs.copyFileSync(path.join(manual.ROOT, 'rules.json'), path.join(dir, 'rules.json'));
@@ -106,44 +151,89 @@ test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤�
   const broken = JSON.parse(JSON.stringify(src.rules));
   broken.sections[0].rules[0].text = '落單的*星號';
   assert.throws(() => manual.build({ ...src, rules: broken }), /不合資料契約/u);
-  assert.throws(() => manual.build({ ...src, machines: src.machines.replace('| 標籤 | 意思 | 守不到的 |', '| 名字 | 意思 | 守不到的 |') }), /找不到「\| 標籤/u);
-  assert.throws(() => manual.build({ ...src, glossary: src.glossary.replace('## 版面約定', '## 別的') }), /找不到「## 版面約定」/u);
-  assert.throws(() => manual.build({ ...src, machines: src.machines.replace(/^\| 靠自覺 \|.*$/mu, '') }), /標籤表裡沒有「靠自覺」/u);
+  const m = src.machines;
+  const g = src.glossary;
+  const legendBody = g.match(/## 版面約定\n([\s\S]*?)\n## /u)[1];
+  const withLegend = (body) => g.split(legendBody).join(body);
+  const firstBullet = legendBody.match(/^- .*$/mu)[0];
+  const cases = [
+    ['表頭改名', { machines: m.replace('| 標籤 | 意思 | 守不到的 |', '| 名字 | 意思 | 守不到的 |') }, /找不到「\| 標籤/u],
+    ['少分隔列', { machines: m.replace('| 標籤 | 意思 | 守不到的 |\n|---|---|---|', '| 標籤 | 意思 | 守不到的 |') }, /應該是分隔列/u],
+    ['空格', { machines: m.replace(/^(\| 考題 \| )[^|]+\|/mu, '$1 |') }, /每格都有字/u],
+    ['重複登記', { machines: m.replace(/^(\| 考題 \|.*)$/mu, '$1\n$1') }, /登記了兩次/u],
+    ['沒有靠自覺', { machines: m.replace(/^\| 靠自覺 \|.*$/mu, '') }, /標籤表裡沒有「靠自覺」/u],
+    ['版面約定不見', { glossary: g.replace('## 版面約定', '## 別的') }, /找不到「## 版面約定」/u],
+    ['縮排續行', { glossary: withLegend(legendBody.replace(firstBullet, `${firstBullet}\n  續行`)) }, /縮排行/u],
+    ['條列後段落', { glossary: withLegend(`${legendBody}\n條列後面的一段`) }, /條列後面又有段落/u],
+    ['別種條列', { glossary: withLegend(legendBody.replace(firstBullet, `* ${firstBullet.slice(2)}`)) }, /只收開頭一段與「- 」條列/u],
+    ['沒有條列', { glossary: withLegend(legendBody.replace(/^- .*$/gmu, '')) }, /沒有條列/u],
+  ];
+  for (const [name, patch, pattern] of cases) {
+    const key = Object.keys(patch)[0];
+    assert.notEqual(patch[key], src[key], `「${name}」這一發沒有改到來源`);
+    assert.throws(() => manual.build({ ...src, ...patch }), pattern, `「${name}」應該停下`);
+  }
 });
 
-test('⑥ 跳脫：來源裡的尖括號以文字出現、不變成標籤（真資料：版面約定的 `未執行：<原因>`）', () => {
-  const { html } = manual.build(sources());
+test('⑥ 跳脫與原文：尖括號以文字出現；版面約定逐條與開頭那句、規則書檔頭都照原文出現', () => {
+  const src = sources();
+  const { html } = manual.build(src);
   assert.ok(html.includes('<code>未執行：&lt;原因&gt;</code>'), '版面約定那個灰底框沒有照字面出現');
+  const legend = manual.parseLegend(src.glossary);
+  assert.ok(html.includes(`<p>${manual.mdInline(legend.lead)}</p>`), '版面約定開頭那句不見了');
+  for (const b of legend.bullets) assert.ok(html.includes(`<li>${manual.mdInline(b)}</li>`), `版面約定少了一條：${b.slice(0, 30)}`);
+  assert.ok(html.includes(`規則書檔頭原文：${manual.esc(src.rules.preamble)}`), '規則書檔頭原文不見了');
   assert.equal(manual.mdInline('a <b> **粗** `<c>`'), 'a &lt;b&gt; <strong>粗</strong> <code>&lt;c&gt;</code>');
   assert.equal(manual.esc('"&<>'), '&quot;&amp;&lt;&gt;');
 });
 
-test('⑦ 網頁格式：<title> 在開頭 8KB 內、不自帶 doctype／html／body、九頁照擁有者列的順序、沒有這台機器的絕對路徑', () => {
+test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、[hidden] 一定藏得住、顏色都有深色版、九頁照擁有者列的順序', () => {
   const { html } = manual.build(sources(), { stamp: '測試' });
   assert.match(html.slice(0, 8192), /<title>[^<]+<\/title>/u);
   assert.doesNotMatch(html, /<!doctype|<html[\s>]|<body[\s>]/iu);
-  const routes = [...html.matchAll(/data-route="([a-z]+)"/gu)].map((m) => m[1]);
+  assert.ok(html.includes('[hidden]{display:none!important}'), '跳窗與各頁用 hidden 開關，自己的 display 會蓋過瀏覽器預設，要有這一條');
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  const tokens = (block) => new Set([...block.matchAll(/(--[a-z-]+):/gu)].map((x) => x[1]));
+  const light = [...tokens(css.match(/:root\{([\s\S]*?)\}/u)[1])].filter((t) => !['--display', '--body', '--mono'].includes(t));
+  const darkMedia = tokens(css.match(/:root:not\(\[data-theme="light"\]\)\{([\s\S]*?)\}/u)[1]);
+  const darkAttr = tokens(css.match(/:root\[data-theme="dark"\]\{([\s\S]*?)\}/u)[1]);
+  assert.ok(light.length >= 10, '淺色的顏色變數讀到太少：正規式可能沒對到');
+  for (const t of light) assert.ok(darkMedia.has(t) && darkAttr.has(t), `顏色 ${t} 沒有深色版`);
+  assert.doesNotMatch(css.replace(/:root[^{]*\{[^}]*\}/gu, ''), /#[0-9a-f]{3,8}\b|rgba?\(/iu, '元件的顏色要用變數，不寫死');
+  const routes = [...html.matchAll(/data-route="([a-z]+)"/gu)].map((x) => x[1]);
   assert.deepEqual(routes, ['rules', 'machines', 'tools', 'tests', 'templates', 'settings', 'adopt', 'glossary', 'cases']);
   assert.deepEqual(manual.PAGES.map((p) => p.name), ['規矩', '機器', '工具', '考題', '範本', '設定', '套用', '名詞', '案例']);
-  assert.doesNotMatch(html, /\/Users\/|\/private\/|\/home\//u);
+  for (const p of [manual.ROOT, os.homedir(), os.tmpdir(), '/Users/', '/private/', '/home/']) assert.ok(!html.includes(p), `產出裡有這台機器的路徑：${p}`);
   assert.ok(html.includes('產生自套件 測試'));
   assert.ok(manual.build(sources(), { stamp: '<b>x</b>' }).html.includes('產生自套件 &lt;b&gt;x&lt;/b&gt;'), '頁尾註記要跳脫');
 });
 
-test('⑧ 命令列：要 --out；不認得的參數、缺值都退 1；給了 --out 才寫檔', () => {
+test('⑧ 命令列：要 --out、要在套件倉庫外；不認得的參數、缺值都退 1；來源壞掉退 1 且不留檔', () => {
   const script = path.join(__dirname, 'build.js');
-  const run = (args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
+  const run = (args, s = script) => spawnSync(process.execPath, [s, ...args], { encoding: 'utf8' });
   assert.equal(run([]).status, 1);
   assert.match(run([]).stderr, /要給 --out/u);
   assert.equal(run(['--out']).status, 1);
-  assert.equal(run(['--nope', 'x']).status, 1);
   assert.match(run(['--nope', 'x', '--out', 'y']).stderr, /不認得的參數：--nope/u);
+  assert.throws(() => manual.parseArgs(['--out', path.join(manual.ROOT, 'x.html')]), /要放在套件倉庫外/u);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-out-'));
   try {
     const out = path.join(dir, 'index.html');
     const stdout = execFileSync(process.execPath, [script, '--out', out], { encoding: 'utf8' });
     assert.match(stdout, /寫好說明書：9 頁/u);
     assert.equal(fs.readFileSync(out, 'utf8'), manual.build(sources()).html);
+    // 來源壞掉：在複本裡把版面約定拿掉再跑
+    const kit = path.join(dir, 'kit');
+    for (const rel of ['manual/build.js', 'tools/build-rules.js', 'rules.json', 'MACHINES.md', 'GLOSSARY.md']) {
+      fs.mkdirSync(path.dirname(path.join(kit, rel)), { recursive: true });
+      fs.copyFileSync(path.join(manual.ROOT, rel), path.join(kit, rel));
+    }
+    fs.writeFileSync(path.join(kit, 'GLOSSARY.md'), '# 空的\n');
+    const bad = path.join(dir, 'bad.html');
+    const r = run(['--out', bad], path.join(kit, 'manual/build.js'));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /找不到「## 版面約定」/u);
+    assert.ok(!fs.existsSync(bad), '來源壞掉時不可以留下輸出檔');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
