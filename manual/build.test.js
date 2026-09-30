@@ -67,10 +67,20 @@ function openLists(html, p) {
   return stack;
 }
 
-function kindOfTag(tag, labels, roles) {
-  const parts = manual.splitTag(tag, labels, roles);
-  const m = parts.some((p) => p.name !== '靠自覺');
-  const s = parts.some((p) => p.name === '靠自覺');
+/**
+ * 考題自己算每一條標籤列了哪些名字（不用產生器的 splitTag）：先把灰底框整段換掉、拿掉粗體記號，
+ * 再在全形「；」切，一段剛好是登記名或以「登記名：」開頭才算。另有一張寫死的樣本（TAG_SAMPLES）對照。
+ */
+function ownTagNames(tag, names) {
+  const text = tag.replace(/`[^`]*`/gu, '框').replace(/\*\*/gu, '');
+  return text.split('；').map((seg) => names.find((n) => seg === n || seg.startsWith(`${n}：`))).filter(Boolean);
+}
+const TAG_SAMPLES = { A2: ['雲端', '合併閘'], B1: ['攔截', '靠自覺'], D1: ['清單腳本', '靠自覺'], E1: ['雲端'], F4: ['合併閘'], G2: ['掃描自檢', '靠自覺'], H5: ['靠自覺'], H6: ['分級腳本', '靠自覺'] };
+
+function kindOfTag(tag, names) {
+  const got = ownTagNames(tag, names);
+  const m = got.some((n) => n !== '靠自覺');
+  const s = got.some((n) => n === '靠自覺');
   return m && s ? 'mixed' : m ? 'machine' : 'self';
 }
 
@@ -78,8 +88,10 @@ test('① 規矩頁逐條：主句、子點（順序、第幾層、編號或圓�
   const src = sources();
   const { html, counts } = manual.build(src);
   const roles = src.rules.roles;
+  const names = ownLabels(src.machines).map((l) => l.name);
   const ids = src.rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
   assert.equal(counts.total, ids.length);
+  for (const id of Object.keys(TAG_SAMPLES)) assert.ok(ids.includes(id), `寫死的樣本 ${id} 已經不在規則裡：樣本要跟著規則改`);
   assert.equal((html.match(/<article class="rule" /gu) || []).length, ids.length, '卡的張數要等於規則條數');
   assert.ok(ids.length >= rulesBook.MIN_RULES, '規則條數少於規則書產生器的下限：來源可能讀錯了');
   for (const section of src.rules.sections) {
@@ -103,7 +115,10 @@ test('① 規矩頁逐條：主句、子點（順序、第幾層、編號或圓�
       const segs = rulesBook.tokenize(rule.tag, roles, '', []);
       assert.equal((tag[1].match(/<strong class="role">/gu) || []).length, segs.filter((x) => x.kind === 'role').length, `${id} 把關那一行的角色粗體數不對`);
       assert.equal((tag[1].match(/<code>/gu) || []).length, segs.filter((x) => x.kind === 'code').length, `${id} 把關那一行的灰底框數不對`);
-      assert.ok(/data-label="/u.test(tag[1]), `${id} 沒有任何標籤鈕`);
+      const chips = [...tag[1].matchAll(/<button type="button" class="chip [^"]+" data-label="([^"]+)">([^<]+)<\/button>/gu)];
+      for (const [, target, label] of chips) assert.equal(target, label, `${id} 標籤鈕上的字「${label}」跟它打開的「${target}」不一樣`);
+      assert.deepEqual(chips.map((x) => x[1]), ownTagNames(rule.tag, names), `${id} 的標籤鈕跟標籤列的名字不一樣`);
+      if (TAG_SAMPLES[id]) assert.deepEqual(chips.map((x) => x[1]), TAG_SAMPLES[id], `${id} 的標籤鈕跟寫死的樣本不一樣`);
     }
   }
 });
@@ -125,10 +140,9 @@ test('② 標籤切段：剛好是登記名或「登記名：」開頭才算新�
 
 test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片徽章，都跟逐條重算的一樣', () => {
   const src = sources();
-  const labels = manual.parseLabels(src.machines);
-  const roles = src.rules.roles;
+  const names = ownLabels(src.machines).map((l) => l.name);
   const tally = { machine: 0, mixed: 0, self: 0 };
-  for (const s of src.rules.sections) for (const r of s.rules) tally[kindOfTag(r.tag, labels, roles)] += 1;
+  for (const s of src.rules.sections) for (const r of s.rules) tally[kindOfTag(r.tag, names)] += 1;
   const total = tally.machine + tally.mixed + tally.self;
   const { counts, html } = manual.build(src);
   assert.deepEqual(counts, { total, ...tally });
@@ -140,7 +154,7 @@ test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片�
   for (const s of src.rules.sections) {
     assert.ok(html.includes(`<span class="sec-letter">${s.letter}</span>${manual.esc(s.title)}<span class="sec-count">${s.rules.length} 條</span>`), `${s.letter} 節的標題或條數不對`);
     for (const r of s.rules) {
-      const want = kindOfTag(r.tag, labels, roles);
+      const want = kindOfTag(r.tag, names);
       const c = card(html, `${s.letter}${r.n}`);
       assert.ok(c.includes(`data-kind="${want}"`), `${s.letter}${r.n} 的分類不對`);
       assert.ok(c.includes(`<span class="rule-kind kind-${want}">${KIND[want]}</span>`), `${s.letter}${r.n} 的徽章跟分類對不上`);
@@ -168,8 +182,9 @@ test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；�
     [{ name: '甲', meaning: '甲的意思', limits: '甲守不到' }, { name: '靠自覺', meaning: '沒有機器', limits: '全部' }]);
   const want = new Set();
   for (const s of src.rules.sections) {
-    for (const r of s.rules) for (const p of manual.splitTag(r.tag, labels, src.rules.roles)) want.add(`${p.name}:${s.letter}${r.n}`);
+    for (const r of s.rules) for (const n of ownTagNames(r.tag, own.map((l) => l.name))) want.add(`${n}:${s.letter}${r.n}`);
   }
+  assert.ok(want.has('合併閘:A2') && want.has('雲端:A2'), '對照裡 A2 要同時有雲端與合併閘');
   const got = [];
   for (const [name, entry] of Object.entries(data)) {
     for (const m of entry.html.matchAll(/data-goto="rule-([A-K]\d+)"/gu)) got.push(`${name}:${m[1]}`);
@@ -294,6 +309,28 @@ test('⑧ 命令列：要 --out、要在套件倉庫外；不認得的參數、�
     assert.equal(r2.status, 1);
     assert.match(r2.stderr, /資料夾解開連結後在倉庫裡/u);
     assert.ok(!fs.existsSync(path.join(kit, 'x.html')), '產出透過資料夾連結寫進了倉庫');
+    // 硬連結：輸出路徑跟規則檔是同一個檔案實體。先寫暫存檔再換名，所以規則檔一字不變、輸出變成獨立的新檔
+    const hard = path.join(dir, 'hard-to-rules.html');
+    fs.linkSync(path.join(kit, 'rules.json'), hard);
+    const r3 = run(['--out', hard], path.join(kit, 'manual/build.js'));
+    assert.equal(r3.status, 0, r3.stderr);
+    assert.equal(fs.readFileSync(path.join(kit, 'rules.json'), 'utf8'), before, '規則檔透過硬連結被產出蓋掉了');
+    assert.equal(fs.statSync(hard).nlink, 1, '輸出應該是換名換上的新檔，不再跟規則檔共用實體');
+    assert.ok(fs.readFileSync(hard, 'utf8').startsWith('<title>'));
+    assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], '暫存檔沒有收掉');
+    // 輸出路徑已經是一個資料夾：拒絕、訊息講清楚
+    const asDir = path.join(dir, 'a-folder');
+    fs.mkdirSync(asDir);
+    const r4 = run(['--out', asDir]);
+    assert.equal(r4.status, 1);
+    assert.match(r4.stderr, /不是一般檔案/u);
+    // 暫存檔名已經被佔用（例如有人先放了一個連結）：寫入失敗、不產生輸出、佔用的那個名字收掉
+    const w = path.join(dir, 'w.html');
+    const tmp = path.join(dir, `.w.html.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, '先放的');
+    assert.throws(() => manual.writeOutput(w, '<title>x</title>'), /EEXIST/u);
+    assert.ok(!fs.existsSync(w), '暫存檔寫不進去時不可以產生輸出');
+    assert.ok(!fs.existsSync(tmp), '失敗時暫存檔名要收掉');
     fs.writeFileSync(path.join(kit, 'GLOSSARY.md'), '# 空的\n');
     const bad = path.join(dir, 'bad.html');
     const r = run(['--out', bad], path.join(kit, 'manual/build.js'));

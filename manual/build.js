@@ -506,8 +506,10 @@ function parseArgs(argv, root = ROOT) {
 }
 
 /**
- * 輸出檔要落在套件倉庫外。比的是解開符號連結之後的實際位置：資料夾是連結、或輸出檔本身是連結，
- * 都可能讓產出寫回倉庫、甚至蓋掉規則檔。輸出檔本身是連結一律拒絕（不去猜它指到哪裡）。
+ * 輸出檔要落在套件倉庫外：比的是資料夾解開符號連結之後的實際位置。
+ * 輸出檔本身是哪一種連結（符號、硬連結）不在這裡一種一種擋——寫檔一律先寫同資料夾的新暫存檔再換名
+ * （writeOutput），換名只換掉那個路徑、不寫進任何既有的檔案實體，所以連到倉庫裡的檔也不會被改到。
+ * 這裡拒絕符號連結與非一般檔案，是為了訊息清楚、不默默換掉使用者自己的連結。
  */
 function checkOutput(outPath, root = ROOT) {
   const refuse = (why) => new Error(`輸出檔要放在套件倉庫外（產出的網頁不進版控）：${outPath}（${why}）`);
@@ -528,11 +530,25 @@ function checkOutput(outPath, root = ROOT) {
   if (st && !st.isFile()) throw refuse('輸出檔已經存在、而且不是一般檔案');
 }
 
+/** 先寫同資料夾的新暫存檔（已存在就失敗，不跟著任何連結），再換名成輸出檔；失敗就把暫存檔收掉。 */
+function writeOutput(outPath, html, root = ROOT) {
+  checkOutput(outPath, root);
+  const abs = path.resolve(outPath);
+  const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, html, { encoding: 'utf8', flag: 'wx' });
+    fs.renameSync(tmp, abs);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 if (require.main === module) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const result = build(readSources(ROOT), { stamp: args.stamp });
-    fs.writeFileSync(args.out, result.html, 'utf8');
+    writeOutput(args.out, result.html);
     const c = result.counts;
     process.stdout.write(`寫好說明書：${result.pages} 頁（規矩頁 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}）→ ${args.out}\n`);
   } catch (err) {
@@ -541,4 +557,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, readSources, parseArgs, checkOutput, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
+module.exports = { build, readSources, parseArgs, checkOutput, writeOutput, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
