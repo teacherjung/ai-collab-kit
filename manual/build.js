@@ -40,7 +40,11 @@ const NON_RULE_KEYS = ['案例簿'];
 const TOOLS_OTHER = ['package.json', '.gitkeep'];
 // tests/ 底下認得的東西：清單上的 .test.js、helpers/ 子資料夾（裡面的檔不列）、manifest.json、package.json
 const TESTS_OTHER = ['manifest.json', 'package.json'];
-const RANGE = /(?<![A-Za-z0-9])[A-K]\d+\s*(?:[〜～~\-－–—]|到|至)\s*[A-K]\d+(?![A-Za-z0-9])/u;
+// 範本說明裡相鄰兩個條號之間要有的分隔；沒有就停（G1〜G3、**G1**〜**G3**、G1 到 G3、G1 與 G3 都停），說明書不猜那是兩條還是一個範圍
+const RULE_SEPARATOR = /[、，,；;。]/u;
+// tests/helpers/ 底下會停的程式檔：副檔名是這幾種、檔名含 test（不分大小寫）。Node 文件列的預設找考題寫法都要檔名或資料夾名含 test
+// （2026-10-01 在 Node 26 實測：test-a.js、b.test.cjs、c_test.mjs、e.test.ts、test/ 底下的檔都會被當考題跑，latest.js、data-test.json 不會）；這一條比它寬，寧可多停
+const HELPER_TEST_LIKE = /^(?=.*test).*\.(?:js|cjs|mjs|ts|cts|mts)$/iu;
 const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
 const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
 // 分類只說「標籤裡列了哪種把關」，不說守到多少：機器守到哪裡寫在標籤冒號後面，守不到的寫在 MACHINES.md。
@@ -281,9 +285,11 @@ function readTests(root) {
   const onDisk = [];
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
     if (entry.isDirectory() && entry.name === 'helpers') {
-      // helpers/ 底下的檔不列；但考卷會跑任何一層的 .test.js，那裡冒出考題檔或子資料夾就停（不知道它算不算考題）
+      // helpers/ 底下的檔不列；但考卷也會跑子資料夾裡的考題，那裡冒出子資料夾或像考題的程式檔就停（不知道它算不算考題）
       for (const h of fs.readdirSync(path.join(abs, 'helpers'), { withFileTypes: true })) {
-        if (h.isDirectory() || h.name.endsWith('.test.js')) throw new Error(`tests/helpers/${h.name}：考題頁不知道它算不算考題（helpers/ 底下只認不是考題檔的一層檔案）`);
+        if (h.isDirectory() || HELPER_TEST_LIKE.test(h.name)) {
+          throw new Error(`tests/helpers/${h.name}：考題頁不知道它算不算考題（helpers/ 底下只收一層的檔，程式檔的檔名不可以含 test）`);
+        }
       }
       continue;
     }
@@ -312,7 +318,7 @@ function readTemplates(root) {
  * MACHINES.md「## 範本（本文指到「範本」的地方）」那一節：標題之後到下一節標題（或檔案結尾）為止，
  * 每一行要是空行、或「- `templates/…`（多份用「、」接）：說明」這個形狀；別的東西（段落、縮排續行、別種條列）就停。
  * 同一份列兩次、列了卻不在 templates/、templates/ 裡有卻沒列，都停——範本頁的內容只有這一節，沒列的範本沒有說明可放。
- * 說明裡的條號（灰底框外、A〜K 加數字）要是規則裡有的，打錯就停；說明是空白、或兩個條號用範圍記號（〜、~、- 等）或「到」「至」接起來也停。
+ * 說明裡的條號（灰底框外、A〜K 加數字）要是規則裡有的，打錯就停；說明是空白、或相鄰兩個條號之間沒有「、」「，」「；」「。」也停。
  */
 function parseTemplates(text, files, ruleIds) {
   const lines = text.split('\n');
@@ -332,12 +338,16 @@ function parseTemplates(text, files, ruleIds) {
     }
     if (!m[2].trim()) throw new Error(`MACHINES.md 第 ${i + 1} 行：「範本」那一節的這一則沒有說明`);
     const bare = m[2].replace(/`[^`]*`/gu, ' ');
-    if (RANGE.test(bare)) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號用了範圍寫法（${bare.match(RANGE)[0]}），說明書不知道中間那幾條算不算——請逐條寫出`);
+    const hits = [...bare.matchAll(/(?<![A-Za-z0-9])([A-K]\d+)(?![A-Za-z0-9])/gu)];
     const rules = [];
-    for (const r of bare.matchAll(/(?<![A-Za-z0-9])([A-K]\d+)(?![A-Za-z0-9])/gu)) {
+    hits.forEach((r, k) => {
       if (!ruleIds.includes(r[1])) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號 ${r[1]} 不在規則裡`);
+      if (k > 0) {
+        const gap = bare.slice(hits[k - 1].index + hits[k - 1][0].length, r.index);
+        if (!RULE_SEPARATOR.test(gap)) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號 ${hits[k - 1][1]} 與 ${r[1]} 之間沒有「、」「，」「；」「。」（中間是「${gap}」），說明書不知道那是兩條還是一個範圍——請逐條用「、」分開`);
+      }
       if (!rules.includes(r[1])) rules.push(r[1]);
-    }
+    });
     items.push({ paths, desc: m[2], rules });
   }
   for (const f of files) if (!seen.includes(f)) throw new Error(`${f} 不在 MACHINES.md「範本」那一節：範本頁沒有它的說明（要先在那一節補一行）`);
@@ -581,7 +591,7 @@ function testsPage(tests, rows) {
 <section class="block"><h2>考題檔（tests/）<span class="sec-count">${items.length} 支</span></h2>
 ${items.join('\n')}
 </section>
-<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下的檔不列（不是考題檔）。</p>
+<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下的檔不列。</p>
 </section>`;
 }
 
