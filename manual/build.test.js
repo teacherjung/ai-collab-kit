@@ -696,10 +696,17 @@ test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照�
     assert.notDeepEqual(patch[key], src[key], `「${name}」這一發沒有改到來源`);
     assert.throws(() => manual.build({ ...src, ...patch }), pattern, `「${name}」應該停下`);
   }
-  // 對照組：templates/ 多一份、那一節也補一行＝照收（灰底框裡像條號的字不算條號）
-  const extra = manual.build({ ...src, templates: [...src.templates, 'templates/extra.md'].sort(), machines: m.replace(first, `${first}\n- \`templates/extra.md\`：新範本，看 \`K99\` 那一格`) }).html;
+  // 對照組：templates/ 多一份、那一節也補一行＝照收（灰底框裡像條號的字、前後黏著英數字的不算條號）
+  const extra = manual.build({ ...src, templates: [...src.templates, 'templates/extra.md'].sort(), machines: m.replace(first, `${first}\n- \`templates/extra.md\`：新範本，看 \`K99\` 那一格；AB1、B1x 不是條號`) }).html;
   const card = extra.match(/<article class="tool"><h3><code>templates\/extra\.md<\/code><\/h3>([\s\S]*?)<\/article>/u);
   assert.ok(card && card[1].includes('說明裡沒有寫到條號') && card[1].includes('沒有直接寫到它'), '新補的那一則要照收、沒有條號也沒有機器表列');
+  // 一則講兩份：都沒有機器表列＝寫「這幾份」；只有第二份被機器表第一列寫到＝也要列出那一列（不能只看第一份）
+  const pair = (machines) => manual.build({ ...src, templates: [...src.templates, 'templates/extra.md', 'templates/extra2.md'].sort(), machines: machines.replace(first, `${first}\n- \`templates/extra.md\`、\`templates/extra2.md\`：一則兩份`) }).html
+    .match(/<article class="tool"><h3><code>templates\/extra\.md<\/code>、<code>templates\/extra2\.md<\/code><\/h3>([\s\S]*?)<\/article>/u)[1];
+  assert.ok(pair(m).includes('沒有直接寫到這幾份'), '一則兩份、都沒有機器表列時要寫「這幾份」');
+  const firstRow = m.split('\n')[m.split('\n').indexOf('| 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |') + 2];
+  const cited = pair(m.replace(firstRow, firstRow.replace(/^(\| [^|]+ \| )/u, '$1`templates/extra2.md`＋')));
+  assert.deepEqual([...cited.matchAll(/data-machine="(m\d+)"/gu)].map((x) => x[1]), ['m1'], '只有第二份被寫到時，那一列也要列出來');
   assert.ok(lines.slice(lines.indexOf(HEAD) + 1).every((l) => !l.startsWith('## ')), '前提：「範本」那一節現在是 MACHINES.md 的最後一節（最上面那次產生就是「接到檔案結尾也照收」的對照）');
   // templates/ 裡有資料夾就停
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-tpl-'));
