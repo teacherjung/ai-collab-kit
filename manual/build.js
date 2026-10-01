@@ -17,8 +17,8 @@ const ROOT = path.join(__dirname, '..');
 // 擁有者列的九頁與順序（2026-09-30）；built＝這一支起有內容，其餘先放「準備中」。
 const PAGES = [
   { id: 'rules', name: '規矩', built: true },
-  { id: 'machines', name: '機器', next: '每一條規矩由哪台機器把關、把關不到什麼（機器登記表）' },
-  { id: 'tools', name: '工具', next: '套件裡每一支程式，一句話說它做什麼' },
+  { id: 'machines', name: '機器', built: true },
+  { id: 'tools', name: '工具', built: true },
   { id: 'tests', name: '考題', next: '考題清單：每一支考題檔守什麼' },
   { id: 'templates', name: '範本', next: '每一份範本是什麼、什麼時候用' },
   { id: 'settings', name: '設定', next: '空白設定的每一欄是什麼意思、怎麼填' },
@@ -30,6 +30,14 @@ const PAGES = [
 const LABEL_HEADER = /^\| 標籤 \| 意思 \| 守不到的 \|$/u;
 const TABLE_RULE = /^\|(\s*:?-+:?\s*\|){3}$/u;
 const SELF = '靠自覺';
+const MACHINE_HEADER = '| 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |';
+const MACHINE_RULE = /^\|(\s*:?-+:?\s*\|){6}$/u;
+const MACHINE_FIELDS = ['原專案的實作', '違反時會紅的條件', '守不到的', '啟用前提'];
+const RULE_ID = /^[A-K]\d+$/u;
+// 機器表第一格不是條號、但合法的字面值（照字面顯示、不連結）；其餘不在規則裡的一律停下，免得打錯字靜靜少掉連結
+const NON_RULE_KEYS = ['案例簿'];
+// tools/ 底下認得的東西：.js 程式、gates/ 子資料夾、package.json、.gitkeep；其他的要人先決定歸到哪一組
+const TOOLS_OTHER = ['package.json', '.gitkeep'];
 // 分類只說「標籤裡列了哪種把關」，不說守到多少：機器守到哪裡寫在標籤冒號後面，守不到的寫在 MACHINES.md。
 const KIND_TEXT = { machine: '只列機器', mixed: '機器＋靠自覺', self: '只有靠自覺' };
 
@@ -41,15 +49,21 @@ function esc(value) {
     .replace(/"/gu, '&quot;');
 }
 
-/** MACHINES.md、GLOSSARY.md 那種散文的行內記號：`框` 與 **粗體**，其餘一律跳脫。 */
+/**
+ * MACHINES.md、GLOSSARY.md 那種散文的行內記號：`框` 與 **粗體**，其餘一律跳脫。
+ * 先把灰底框換成記號再找粗體：粗體可以把灰底框包在裡面（B1 那一列就是），先切框的話星號會原樣印出來。
+ */
 function mdInline(value) {
-  return String(value)
-    .split(/(`[^`]+`)/u)
-    .map((part) => {
-      if (/^`[^`]+`$/u.test(part)) return `<code>${esc(part.slice(1, -1))}</code>`;
-      return esc(part).replace(/\*\*([^*]+)\*\*/gu, '<strong>$1</strong>');
-    })
-    .join('');
+  const text = String(value);
+  if (text.includes('\u0000')) throw new Error('散文裡有 NUL 字元，說明書不產生');
+  const codes = [];
+  const marked = text.replace(/`([^`]+)`/gu, (all, code) => {
+    codes.push(code);
+    return `\u0000${codes.length - 1}\u0000`;
+  });
+  return esc(marked)
+    .replace(/\*\*([^*]+)\*\*/gu, '<strong>$1</strong>')
+    .replace(/\u0000(\d+)\u0000/gu, (all, i) => `<code>${esc(codes[Number(i)])}</code>`);
 }
 
 function segments(value, roles, what) {
@@ -131,6 +145,106 @@ function parseLegend(text) {
   return { lead: lead.join(' '), bullets };
 }
 
+/** MACHINES.md 第一行的大標題（「# 」開頭）。 */
+function parseMachinesTitle(text) {
+  const first = text.split('\n')[0];
+  if (!first.startsWith('# ') || !first.slice(2).trim()) throw new Error('MACHINES.md 第一行應該是「# 」開頭的大標題');
+  return first.slice(2).trim();
+}
+
+/**
+ * MACHINES.md「## 本文條目 → 機器」：標題與表頭之間的說明段落，加上那張六欄表。
+ * 表格這一塊的定法跟標籤表一樣（表頭之後到第一個空行；塊內每一行都要是「|」開頭結尾、剛好六格都有字；
+ * 空行之後要接下一節標題）；第一格的條號用「、」分開，像條號的（A〜K 加數字）一定要是規則裡有的條號，
+ * 不像條號的（例如「案例簿」）照字面顯示。
+ */
+function parseMachineRows(text, ruleIds) {
+  const lines = text.split('\n');
+  const head = lines.findIndex((line) => line.trim() === '## 本文條目 → 機器');
+  if (head < 0) throw new Error('MACHINES.md 找不到「## 本文條目 → 機器」');
+  const at = lines.findIndex((line, i) => i > head && line === MACHINE_HEADER);
+  if (at < 0) throw new Error('MACHINES.md「## 本文條目 → 機器」底下找不到「| 本文 | 原專案的實作 | …| 移植狀態 |」那張表');
+  const intro = [];
+  let introClosed = false;
+  for (let k = head + 1; k < at; k += 1) {
+    const line = lines[k];
+    if (!line.trim()) {
+      if (intro.length) introClosed = true;
+      continue;
+    }
+    const where = `MACHINES.md 第 ${k + 1} 行`;
+    if (/^\s/u.test(line) || /^(#|\||- |\* |\+ |\d+[.)] |>|<)/u.test(line)) throw new Error(`${where}：「## 本文條目 → 機器」標題與表格之間只收一段說明`);
+    if (introClosed) throw new Error(`${where}：「## 本文條目 → 機器」的說明有第二段，說明書只收一段`);
+    intro.push(line.trim());
+  }
+  if (!intro.length) throw new Error('MACHINES.md「## 本文條目 → 機器」標題與表格之間沒有說明段落');
+  if (!MACHINE_RULE.test(lines[at + 1] || '')) throw new Error(`MACHINES.md 第 ${at + 2} 行應該是六欄的分隔列`);
+  const rows = [];
+  let i = at + 2;
+  for (; i < lines.length && lines[i].trim(); i += 1) {
+    const raw = lines[i].split('|');
+    const cells = raw.slice(1, -1).map((cell) => cell.trim());
+    if (!lines[i].startsWith('|') || !lines[i].trimEnd().endsWith('|') || raw.length !== 8 || cells.some((cell) => !cell)) {
+      throw new Error(`MACHINES.md 第 ${i + 1} 行要剛好六格（頭尾都有「|」）、每格都有字`);
+    }
+    const keys = cells[0].split('、').map((k) => k.trim());
+    if (keys.some((k) => !k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：第一格有空的條號`);
+    for (const k of keys) {
+      if (RULE_ID.test(k) && !ruleIds.includes(k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：條號 ${k} 不在規則裡`);
+      if (!RULE_ID.test(k) && !NON_RULE_KEYS.includes(k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：第一格的「${k}」不是規則裡的條號、也不是登記過的字面值（${NON_RULE_KEYS.join('、')}）`);
+    }
+    rows.push({ id: `m${rows.length + 1}`, keys, fields: cells.slice(1, 5), status: cells[5] });
+  }
+  // 第一格一樣的列（例如兩列都只寫 H1）在鈕與跳窗標題上要分得出來：補上「原專案的實作」裡第一個灰底框
+  for (const row of rows) {
+    const base = row.keys.join('、');
+    const first = (row.fields[0].match(/`([^`]+)`/u) || [])[1];
+    row.sub = first || '';
+    row.label = rows.filter((r) => r.keys.join('、') === base).length > 1 ? `${base}：${first || row.id}` : base;
+  }
+  if (!rows.length) throw new Error('MACHINES.md「本文條目 → 機器」那張表沒有任何一列');
+  while (i < lines.length && !lines[i].trim()) i += 1;
+  if (i < lines.length && !lines[i].startsWith('## ')) throw new Error(`MACHINES.md 第 ${i + 1} 行：那張表之後接的不是下一節的標題（「## 」）`);
+  return { intro: intro.join(' '), rows };
+}
+
+/** tools/ 與 tools/gates/ 底下每一支 .js 的檔頭第一句（前三行裡第一個「// 」開頭的那一行）；沒有就停。 */
+function readTools(root) {
+  const out = [];
+  for (const dir of ['tools', 'tools/gates']) {
+    const abs = path.join(root, dir);
+    if (!fs.existsSync(abs)) throw new Error(`讀不到 ${dir}/：說明書不產生`);
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const known = entry.isDirectory() ? dir === 'tools' && entry.name === 'gates' : entry.name.endsWith('.js') || (dir === 'tools' && TOOLS_OTHER.includes(entry.name));
+      if (!known) throw new Error(`${dir}/${entry.name}：工具頁不知道它歸哪一組（認得的只有 .js、tools/gates/、${TOOLS_OTHER.join('、')}）`);
+    }
+    for (const name of fs.readdirSync(abs).filter((f) => f.endsWith('.js')).sort()) {
+      const rel = `${dir}/${name}`;
+      out.push({ path: rel, text: fs.readFileSync(path.join(abs, name), 'utf8') });
+    }
+  }
+  return out;
+}
+
+/**
+ * 工具檔頭的第一句：從前三行裡第一個「// 」行起，把接著的「//」行接起來（遇到空的「//」或不是註解的行就停），
+ * 取到第一個「。」為止。說明第一行沒寫完那一句的工具，接起來才是整句；讀不到「。」就停。
+ */
+function toolLine(tool) {
+  const lines = tool.text.split('\n');
+  const start = lines.slice(0, 3).findIndex((l) => l.startsWith('// '));
+  if (start < 0) throw new Error(`${tool.path} 的前三行沒有「// 」開頭的說明，工具頁不知道它做什麼`);
+  const para = [];
+  for (let k = start; k < lines.length && lines[k].startsWith('//'); k += 1) {
+    const text = lines[k].replace(/^\/\/ ?/u, '').trim();
+    if (!text) break;
+    para.push(text);
+  }
+  const sentence = para.join('').match(/^[^。]*。/u);
+  if (!sentence) throw new Error(`${tool.path} 檔頭的第一段沒有「。」，工具頁取不到完整的第一句`);
+  return sentence[0];
+}
+
 /**
  * 標籤那一行切成段。先照規則書的切法分出角色粗體與灰底框，只在框外的文字切「；」；
  * 一段要剛好是登記名、或以「登記名：」開頭，才算新的一段，否則接回上一段
@@ -208,7 +322,7 @@ function itemsHtml(items, roles, where) {
     .join('');
 }
 
-function rulesPage(data, labels, legend) {
+function rulesPage(data, labels, legend, machineRows) {
   const roles = data.roles || [];
   const rules = [];
   const usedBy = {};
@@ -225,7 +339,7 @@ function rulesPage(data, labels, legend) {
       return `<article class="rule" id="rule-${id}" data-kind="${kind}" tabindex="-1">
 <div class="rule-head"><span class="rule-no">${id}</span><span class="rule-kind kind-${kind}">${KIND_TEXT[kind]}</span></div>
 <p class="rule-text">${rich(rule.text, roles, `${id} 的主句`)}</p>${itemsHtml(rule.items || [], roles, id)}
-<p class="rule-tag"><span class="tag-lead">把關</span>${tag}</p>
+<p class="rule-tag"><span class="tag-lead">把關</span>${tag}</p>${machineLinks(machineRows, id)}
 </article>`;
     });
     return `<section class="rule-section" id="sec-${esc(section.letter)}">
@@ -244,7 +358,7 @@ ${cards.join('\n')}
   const jumps = data.sections
     .map((s) => `<button type="button" class="jump" data-jump="sec-${esc(s.letter)}"><b>${esc(s.letter)}</b>${esc(s.title.replace(/（.*）$/u, ''))}</button>`)
     .join('');
-  const html = `<section class="page" id="rules" data-page>
+  const html = `<section class="page" id="page-rules" data-page="rules">
 <header class="page-head">
 <p class="eyebrow">規矩本文</p>
 <h1>${esc(data.title)}</h1>
@@ -258,7 +372,7 @@ ${cards.join('\n')}
 <nav class="jumps" aria-label="跳到某一節">${jumps}</nav>
 <details class="legend"><summary>規則書原文（RULES.md）的版面約定</summary><p class="muted">這個網頁上：條號不帶【】、放在每一條的左上角；標籤在「把關」那一行。</p><p>${mdInline(legend.lead)}</p><ul>${legend.bullets.map((b) => `<li>${mdInline(b)}</li>`).join('')}</ul></details>
 ${sections.join('\n')}
-<p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表、GLOSSARY.md 的版面約定。</p>
+<p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表與「本文條目 → 機器」那張表（每條的機器表連結）、GLOSSARY.md 的版面約定。</p>
 </section>`;
   const labelData = {};
   for (const label of labels) {
@@ -271,8 +385,80 @@ ${sections.join('\n')}
   return { html, labelData, counts: { total, machine: count('machine'), mixed: count('mixed'), self: count('self') } };
 }
 
+function machineLinks(rows, id) {
+  const hits = rows.filter((row) => row.keys.includes(id));
+  if (!hits.length) return '';
+  return `\n<p class="rule-mach"><span class="tag-lead">機器表</span>${hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')}</p>`;
+}
+
+function machinesPage(title, labels, table, ruleIds) {
+  const labelDefs = labels
+    .map((l) => `<div class="label-def"><button type="button" class="chip chip-${l.name === SELF ? 'self' : 'machine'}" data-label="${esc(l.name)}">${esc(l.name)}</button><dl class="def"><dt>意思</dt><dd>${mdInline(l.meaning)}</dd><dt>守不到的</dt><dd>${mdInline(l.limits)}</dd></dl></div>`)
+    .join('\n');
+  const cards = table.rows
+    .map((row) => {
+      const keys = row.keys
+        .map((k) => (ruleIds.includes(k) ? `<button type="button" class="rule-link" data-goto="rule-${esc(k)}">${esc(k)}</button>` : `<span class="key-plain">${esc(k)}</span>`))
+        .join('');
+      return `<article class="mrow" id="mach-${row.id}" tabindex="-1">
+<div class="mrow-head">${keys}${row.sub ? `<code class="mrow-sub">${esc(row.sub)}</code>` : ''}</div>
+<p class="mrow-status"><span class="tag-lead">移植狀態</span>${mdInline(row.status)}</p>
+<button type="button" class="more" data-machine="${row.id}" aria-label="看 ${esc(row.label)} 這台機器怎麼守">看這台機器怎麼守</button>
+</article>`;
+    })
+    .join('\n');
+  const machineData = {};
+  for (const row of table.rows) {
+    const linked = row.keys.filter((k) => ruleIds.includes(k));
+    machineData[row.id] = {
+      title: `${row.label} 的機器`,
+      html: `<dl class="def">${MACHINE_FIELDS.map((f, i) => `<dt>${f}</dt><dd>${mdInline(row.fields[i])}</dd>`).join('')}<dt>移植狀態</dt><dd>${mdInline(row.status)}</dd></dl>${linked.length ? `
+<p class="used">這一列對到的規矩：${linked.map((k) => `<button type="button" class="rule-link" data-goto="rule-${esc(k)}">${esc(k)}</button>`).join('')}</p>` : ''}`,
+    };
+  }
+  const html = `<section class="page" id="page-machines" data-page="machines" hidden>
+<header class="page-head">
+<p class="eyebrow">機器索引</p>
+<h1>${esc(title)}</h1>
+<p class="page-sum">標籤 ${labels.length} 種；規矩對到機器的表 ${table.rows.length} 列。點條號跳到那一條規矩，點「看這台機器怎麼守」看它怎麼做到、違反時什麼會紅、守不到什麼、要先備好什麼。</p>
+</header>
+<section class="block"><h2>標籤</h2><p class="muted">規矩每一條最後一行「把關」用的名字，定義在這裡。</p>
+${labelDefs}
+</section>
+<section class="block"><h2>規矩對到哪台機器</h2><p class="muted">${mdInline(table.intro)}</p>
+${cards}
+</section>
+<p class="source-note">來源：MACHINES.md 的大標題、標籤表與「本文條目 → 機器」那張表。</p>
+</section>`;
+  return { html, machineData };
+}
+
+function toolsPage(tools, rows) {
+  const groups = [['tools/', '工具（tools/）'], ['tools/gates/', '合併前的閘（tools/gates/）']].map(([prefix, heading]) => {
+    const items = tools
+      .filter((t) => t.path.startsWith(prefix) && !t.path.slice(prefix.length).includes('/'))
+      .map((t) => {
+        const hits = rows.filter((row) => row.fields[0].includes(`\`${t.path}\``));
+        const refs = hits.length
+          ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')
+          : '<span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到它</span>';
+        return `<article class="tool"><h3><code>${esc(t.path)}</code></h3><p>${mdInline(toolLine(t))}</p><p class="rule-mach"><span class="tag-lead">機器表</span>${refs}</p></article>`;
+      });
+    return `<section class="block"><h2>${esc(heading)}<span class="sec-count">${items.length} 支</span></h2>\n${items.join('\n')}\n</section>`;
+  });
+  return `<section class="page" id="page-tools" data-page="tools" hidden>
+<header class="page-head">
+<p class="eyebrow">tools/ 底下的程式</p>
+<h1>工具</h1>
+<p class="page-sum">${tools.length} 支程式，每支一句話說它做什麼（取自它檔頭的第一句）；後面列出機器表「原專案的實作」那一欄寫到它的列，點了看那台機器怎麼守。</p>
+</header>
+${groups.join('\n')}
+<p class="source-note">來源：tools/ 與 tools/gates/ 底下每一支 .js 的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。</p>
+</section>`;
+}
+
 function placeholderPage(page, index) {
-  return `<section class="page" id="${page.id}" data-page hidden>
+  return `<section class="page" id="page-${page.id}" data-page="${page.id}" hidden>
 <header class="page-head"><p class="eyebrow">第 ${index + 1} 頁</p><h1>${esc(page.name)}</h1></header>
 <div class="pending"><p class="pending-tag">準備中</p><p>這一頁會放：${esc(page.next)}。</p><p class="muted">說明書分幾支做，每支合併後更新這個連結。</p></div>
 </section>`;
@@ -367,15 +553,34 @@ code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:1
 .pending-tag{font-size:13px;letter-spacing:.12em;color:var(--self)}
 .muted{color:var(--muted);font-size:15px}
 .modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:16px;background:var(--scrim)}
-.sheet{width:min(560px,100%);max-height:85vh;overflow:auto;background:var(--surface);color:var(--ink);border-radius:10px;border:1px solid var(--line);padding:18px 20px 22px}
+.sheet{width:min(560px,100%);max-height:85vh;overflow:auto;overscroll-behavior:contain;background:var(--surface);color:var(--ink);border-radius:10px;border:1px solid var(--line);padding:18px 20px 22px}
 .sheet header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .sheet h2{margin:0;font-family:var(--display);font-size:22px}
 .close{border:1px solid var(--line);background:transparent;border-radius:6px;width:36px;height:36px;cursor:pointer;font-size:20px;line-height:1}
 .def{margin:0}
 .def dt{font-size:13px;letter-spacing:.1em;color:var(--muted);margin-top:10px}
-.def dd{margin:2px 0 0}
+.def dd{margin:2px 0 0;overflow-wrap:anywhere}
 .used{margin:16px 0 0;font-size:15px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .rule-link{border:1px solid var(--line);background:var(--bg);border-radius:4px;padding:0 8px;cursor:pointer;font-family:var(--display);font-weight:700}
+.block{margin-top:36px}
+.block>h2{display:flex;align-items:baseline;gap:10px;margin:0 0 6px;padding-bottom:8px;border-bottom:2px solid var(--ink);font-family:var(--display);font-size:24px;text-wrap:balance}
+.label-def{display:grid;grid-template-columns:7em minmax(0,1fr);gap:4px 14px;align-items:start;padding:14px 0;border-bottom:1px solid var(--line)}
+.label-def .chip{justify-self:start}
+.label-def .def dt:first-child{margin-top:0}
+.mrow{padding:16px 0;border-bottom:1px solid var(--line);scroll-margin-top:16px;display:grid;gap:6px}
+.mrow:focus{outline:none}
+.mrow:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.mrow-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mrow-sub{font-size:13px;color:var(--muted)}
+html.modal-open,html.modal-open body{overflow:hidden}
+.key-plain{font-family:var(--display);font-weight:700;padding:0 8px;border:1px dashed var(--line);border-radius:4px}
+.mrow-status{margin:0;font-size:15px;color:var(--muted)}
+.more{justify-self:start;border:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);border-radius:6px;padding:2px 12px;font-size:15px;cursor:pointer}
+.rule-mach{margin:6px 0 0;font-size:15px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mach-link{border:1px solid var(--line);background:var(--surface);border-radius:4px;padding:0 8px;font-size:14px;cursor:pointer;color:var(--ink)}
+.tool{padding:14px 0;border-bottom:1px solid var(--line)}
+.tool h3{margin:0 0 4px;font-size:16px;font-weight:600}
+.tool p{margin:0}
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);background:none}
   .side{z-index:10;max-height:none;padding:10px 0 0;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -385,7 +590,8 @@ code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:1
   .side nav a{flex:0 0 auto;padding:6px 12px}
   .soon,.stamp{display:none}
   main{padding-block:24px 72px}
-  .rule,.rule-section{scroll-margin-top:120px}
+  .rule,.rule-section,.mrow{scroll-margin-top:120px}
+  .label-def{grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 `;
@@ -397,11 +603,13 @@ const JS = `
   var pages = Array.prototype.slice.call(document.querySelectorAll('[data-page]'));
   var links = Array.prototype.slice.call(document.querySelectorAll('[data-route]'));
   var current = null;
+  var pending = null;
+  function pageName(p){ return p.getAttribute('data-page'); }
   function show(id){
-    if (!pages.some(function(p){ return p.id === id; })) id = 'rules';
+    if (!pages.some(function(p){ return pageName(p) === id; })) id = 'rules';
     var changed = id !== current;
     current = id;
-    pages.forEach(function(p){ p.hidden = p.id !== id; });
+    pages.forEach(function(p){ p.hidden = pageName(p) !== id; });
     links.forEach(function(a){
       if (a.getAttribute('data-route') === id) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
@@ -409,24 +617,29 @@ const JS = `
     return changed;
   }
   window.addEventListener('hashchange', function(){
-    if (show((location.hash || '').slice(1) || 'rules')) window.scrollTo(0, 0);
+    if (!modal.hidden) closeModal(false);
+    var changed = show((location.hash || '').slice(1) || 'rules');
+    if (pending) { var target = pending; pending = null; land(target); }
+    else if (changed) window.scrollTo(0, 0);
   });
-  show((location.hash || '').slice(1) || 'rules');
 
+  show((location.hash || '').slice(1) || 'rules');
   var labels = JSON.parse(document.getElementById('label-data').textContent);
+  var machines = JSON.parse(document.getElementById('machine-data').textContent);
   var modal = document.getElementById('modal');
   var mTitle = document.getElementById('modal-title');
   var mBody = document.getElementById('modal-body');
   var closeBtn = modal.querySelector('.close');
   var lastFocus = null;
-  function openLabel(name){
-    var l = labels[name]; if (!l) return;
+  function openModal(title, html){
     lastFocus = document.activeElement;
-    mTitle.textContent = name; mBody.innerHTML = l.html;
-    modal.hidden = false; app.inert = true; closeBtn.focus();
+    mTitle.textContent = title; mBody.innerHTML = html;
+    modal.hidden = false; app.inert = true; document.documentElement.classList.add('modal-open'); closeBtn.focus();
   }
+  function openLabel(name){ var l = labels[name]; if (l) openModal(name, l.html); }
+  function openMachine(id){ var m = machines[id]; if (m) openModal(m.title, m.html); }
   function closeModal(restore){
-    modal.hidden = true; app.inert = false;
+    modal.hidden = true; app.inert = false; document.documentElement.classList.remove('modal-open');
     if (restore && lastFocus) lastFocus.focus();
   }
   var rules = Array.prototype.slice.call(document.querySelectorAll('.rule'));
@@ -441,15 +654,20 @@ const JS = `
     if (el.hidden || (el.closest('.rule-section') || el).hidden) setFilter('all');
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   }
-  function goTo(id){
-    var el = document.getElementById(id); if (!el) return;
-    if (current !== 'rules') { history.replaceState(null, '', '#rules'); show('rules'); }
+  function land(el){
     reveal(el);
     el.focus({ preventScroll: true });
+  }
+  function goTo(id){
+    var el = document.getElementById(id); if (!el) return;
+    var page = el.closest('[data-page]');
+    if (page && current !== pageName(page)) { pending = el; location.hash = pageName(page); return; }
+    land(el);
   }
   document.addEventListener('click', function(e){
     var t = e.target;
     var chip = t.closest('[data-label]'); if (chip) { openLabel(chip.getAttribute('data-label')); return; }
+    var mach = t.closest('[data-machine]'); if (mach) { openMachine(mach.getAttribute('data-machine')); return; }
     var go = t.closest('[data-goto]'); if (go) { closeModal(false); goTo(go.getAttribute('data-goto')); return; }
     var f = t.closest('[data-filter]'); if (f) { setFilter(f.getAttribute('data-filter')); return; }
     var j = t.closest('[data-jump]'); if (j) { var s = document.getElementById(j.getAttribute('data-jump')); if (s) reveal(s); return; }
@@ -465,7 +683,7 @@ function readSources(root) {
     if (!fs.existsSync(file)) throw new Error(`讀不到 ${rel}：說明書不產生`);
     return fs.readFileSync(file, 'utf8');
   };
-  return { rules: JSON.parse(read('rules.json')), machines: read('MACHINES.md'), glossary: read('GLOSSARY.md') };
+  return { rules: JSON.parse(read('rules.json')), machines: read('MACHINES.md'), glossary: read('GLOSSARY.md'), tools: readTools(root) };
 }
 
 /** 回傳網頁內容（照私人網頁連結的格式：不含 doctype／html／body，發布時會自動包上）與幾個數字。 */
@@ -474,10 +692,15 @@ function build(sources, { stamp } = {}) {
   if (problems.length) throw new Error(`規則資料不合資料契約，說明書不產生：\n- ${problems.join('\n- ')}`);
   const labels = parseLabels(sources.machines);
   const legend = parseLegend(sources.glossary);
-  const rules = rulesPage(sources.rules, labels, legend);
+  const ruleIds = sources.rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
+  const table = parseMachineRows(sources.machines, ruleIds);
+  const rules = rulesPage(sources.rules, labels, legend, table.rows);
+  const machines = machinesPage(parseMachinesTitle(sources.machines), labels, table, ruleIds);
+  const tools = toolsPage(sources.tools, table.rows);
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
   const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
+  const machineJson = JSON.stringify(machines.machineData).replace(/</gu, '\\u003c');
   const html = `<title>協作套件說明書</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -491,6 +714,8 @@ ${stamp ? `<p class="stamp">產生自套件 ${esc(stamp)}</p>` : ''}
 </aside>
 <main>
 ${rules.html}
+${machines.html}
+${tools}
 ${others.join('\n')}
 </main>
 </div>
@@ -498,9 +723,10 @@ ${others.join('\n')}
 <div class="sheet"><header><h2 id="modal-title"></h2><button type="button" class="close" aria-label="關閉">×</button></header><div id="modal-body"></div></div>
 </div>
 <script type="application/json" id="label-data">${labelJson}</script>
+<script type="application/json" id="machine-data">${machineJson}</script>
 <script>${JS}</script>
 `;
-  return { html, counts: rules.counts, pages: PAGES.length, labels: labels.length };
+  return { html, counts: rules.counts, pages: PAGES.length, labels: labels.length, machineRows: table.rows.length, tools: sources.tools.length };
 }
 
 function parseArgs(argv) {
@@ -523,11 +749,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩頁 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, parseArgs, parseLabels, parseLegend, splitTag, mdInline, esc, PAGES, KIND_TEXT, ROOT };
+module.exports = { build, readSources, readTools, toolLine, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
