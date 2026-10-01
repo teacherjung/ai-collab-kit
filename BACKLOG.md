@@ -51,8 +51,9 @@
 - 2026-09-25（原專案進度檔同上第 17 條）「額外樣式」那張表要不要再拆細，還沒判（同一段第 16 條舉的 `download_transfer_funds`、`read_withdraw_cash` 當時仍放行，已由 #17 改由家族網擋，原專案進度檔 9/29 重量有記——不是這一件的例子了）／docs/money-guard-two-pattern-tables.md、tests/helpers/unfilled-settings.json 的 forbidden 那一塊／來源沒寫條件；跟「再削一刀」同一族，可一起問擁有者（來源沒寫條件，整理時加的）（動禁區那一族照 A5）。
 - 2026-09-22（原專案進度檔 9/22 回答擁有者的問題）「同步點清單／領域契約」是原專案自己發明、套件沒有的做法；當時建議先不搬進套件（規矩書有字數上限、加一條要先過 K2；原專案拆過一次本體又長回來，還沒證明有效）／RULES.md（要過 K2 進門）／原專案那次拆分觀察一段時間、證明本體不會再長回來之後。
 - 2026-09-19（擁有者在對話裡提議，還沒裁）禁區攔截器擋下時寄 email 警告：當時列了 a 先寫一頁設計給擁有者看、b 先進待辦、c 不做，他還沒回／templates 的攔截器接線旁另一組鉤子＋一支寄信小工具／等擁有者回；照 D1 不自己拍板。
-
 - 2026-10-01（說明書第 2 支 #26 送審前自審）MACHINES.md「本文條目 → 機器」那張表上面的說明段還寫「原專案的實作」欄是原專案某一版的路徑、供搬運時定位，但各格現在多半寫「本倉庫 …」＝那一欄早已改指套件自己的程式與考題，說明段那句過時了（說明書機器頁照原文顯示這一段）／MACHINES.md 第 23 行那一段（欄名「原專案的實作」要不要一起改，連帶 manual/build.js 的表頭比對與考題）／下一支本來就要動 MACHINES.md 時（來源沒寫條件，整理時加的）。
+- 2026-10-01（說明書第 3 支 #27 送審前自審）MACHINES.md「E1、G3」那一列守的是範本（機器索引指到的範本檔要在、倉庫裡的範本要被指到、「PR說明」與掃描紀錄兩份範本要吐得出固定小標），但它的「原專案的實作」那一格只寫「本倉庫 `tests/settings.test.js` 的範本那一題」，沒有用灰底框寫出它看的範本檔，說明書範本頁因此連不到這一列（templates/scan-record.md 那張卡寫「沒有直接寫到它」：字面成立，但讀的人會以為沒有機器看它）／MACHINES.md 那一格補上 `templates/pr-body.md`、`templates/scan-record.md`（範本頁會自動連上，不用改產生器）／下一支本來就要動 MACHINES.md 時（來源沒寫條件，整理時加的）。
+
 ## 排定
 
 擁有者 2026-09-30 裁 a 的順序：①收件處收尾（#22）→ ②套件說明書網頁 → ③盤點現成可換（同日另一題裁 a 插在這裡）→ ④第 2 批機器。待辦那一節不另排時段；各行寫了自己的前提（要擁有者重新點頭、要先問、等別的前提）就照各行。留痕：❓ https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5903612952 、⚖️ https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5903615689 （原話「a）照這個順序」）；盤點那一題：❓ https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5905198100 、⚖️ https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5905198310 （原話「a）」）。

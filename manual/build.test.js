@@ -4,7 +4,7 @@
 // 跳窗資料、版面約定逐條、檔頭原文；機器頁（標籤定義、那張表每一列的條號、移植狀態、跳窗四欄、重名列的完整標題）、
 // 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
-// 預期值一律由考題自己直接讀磁碟上的正本（disk）、自己解析；產生器的 readSources() 讀到的只拿來餵產生器（#26 r1 R1）。
+// 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
 // 實作者每一支用無畫面瀏覽器量一次、寫在 PR 說明。tests/filled-settings.test.js 與 git-env 的巢狀那兩輪
 // 不帶 manual/：這一支只在根目錄那一輪跑；它若開始讀 settings.json 或叫 git，要先把 manual/ 加進那兩輪。
@@ -79,13 +79,23 @@ const ROW_LABEL_SAMPLES = ['H1：tests/settings.test.js', 'H1：tools/merge.js',
 
 /**
  * 考題自己取一支檔的檔頭第一句（不用產生器的 firstSentence）：用正規式抓開頭那一塊註解
- * （前面可以有 #! 那一行與 'use strict'），去掉「//」接起來，到第一個空註解行為止，再取到第一個「。」。
+ * （前面可以有 #! 那一行與 'use strict'），去掉「//」，到第一個空註解行為止，再取到第一個「。」。
+ * 接行：接縫兩邊有一邊是半形英數字、而且兩邊都不在 U+3000〜303F、U+FF00〜FFEF 這兩段才補空格。另有寫死的樣本（HEADER_SAMPLES）。
  */
 function ownHeader(text) {
   const block = text.match(/^(?:#!.*\n)?(?:'use strict';\n)?((?:\/\/.*\n)+)/u)[1];
-  const para = block.split(/\n\/\/\s*\n/u)[0].replace(/^\/\/ ?/gmu, '').split('\n').map((l) => l.trim()).join('');
+  const lines = block.split(/\n\/\/\s*\n/u)[0].replace(/^\/\/ ?/gmu, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const alnum = (c) => { const n = c.charCodeAt(0); return (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122); };
+  const wide = (c) => { const n = c.charCodeAt(0); return (n >= 0x3000 && n <= 0x303f) || (n >= 0xff00 && n <= 0xffef); };
+  let para = lines[0];
+  for (const l of lines.slice(1)) {
+    const a = para[para.length - 1];
+    const b = l[0];
+    para += ((alnum(a) || alnum(b)) && !wide(a) && !wide(b) ? ' ' : '') + l;
+  }
   return { line: para.match(/^[^。]*。/u)[0], para };
 }
+const HEADER_SAMPLES = { 'tests/forbidden-defaults.test.js': '包含空白範本 tests/helpers/unfilled-settings.json 的同名清單', 'tests/kit-lock.test.js': '清單的豁免；K1：每條', 'tools/gates/check-review-verdicts.js': '；放行只認' };
 
 /** 考題自己列 tools/ 與 tools/gates/ 的 .js（不用產生器的 readTools）。 */
 function ownTools() {
@@ -425,7 +435,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
   assert.match(ok.stderr, /產好說明書：9 頁/u);
-  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份`, 'u'));
+  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明）\n$`, 'u'));
   const out = run(['--out', 'x.html']);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /產生器不自己存檔/u);
@@ -526,8 +536,12 @@ test('⑩ 工具頁：tools/ 與 tools/gates/ 每一支一則、照檔名排；�
     const got = [...x[3].matchAll(/data-machine="(m\d+)">([^<]*)<\/button>/gu)];
     assert.deepEqual(got.map((g) => g[1]), want, `${tools[i].path} 列出的機器表列不對（用列的內容比，不用標題比）`);
     for (const [, mid, label] of got) assert.equal(label, `${escT(labels[Number(mid.slice(1)) - 1])} 那一列`, `${tools[i].path} 的鈕上的字不是考題自己算的那一列標題`);
-    if (!want.length) assert.ok(x[3].includes('沒有直接寫到它'), `${tools[i].path} 沒有對應列時要寫明`);
+    if (!want.length) assert.equal(x[3], '<span class="tag-lead">機器表</span><span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到它</span>', `${tools[i].path} 沒有對應列時要寫明（整句照寫死的字）`);
   });
+  for (const [file, piece] of Object.entries(HEADER_SAMPLES)) {
+    const it = items.find((x) => x[1] === file);
+    if (it) assert.ok(strip(it[2]).includes(piece), `${file} 跨行接起來的那一句不對（寫死的樣本：${piece}）`);
+  }
   const checkReview = items.find((x) => x[1] === 'tools/gates/check-review-verdicts.js');
   assert.ok(checkReview && strip(checkReview[2]).includes('放行只認'), '跨兩行的第一句要接起來（check-review-verdicts 的後半「放行只認…」）');
   assert.ok(page.includes(`${tools.length} 支程式`), '工具頁頁首的支數不對');
@@ -594,12 +608,24 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
     const got = [...x[3].matchAll(/data-machine="(m\d+)">([^<]*)<\/button>/gu)];
     assert.deepEqual(got.map((g) => g[1]), want.map((k) => `m${k + 1}`), `${tests[i].path} 列出的機器表列不對（用列的內容比）`);
     got.forEach((g, j) => assert.equal(g[2], `${escT(labels[want[j]])} 那一列`, `${tests[i].path} 的鈕上的字不是考題自己算的那一列標題`));
-    if (!want.length) assert.ok(x[3].includes('沒有直接寫到它'), `${tests[i].path} 沒有對應列時要寫明`);
+    if (!want.length) assert.equal(x[3], '<span class="tag-lead">機器表</span><span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到它</span>', `${tests[i].path} 沒有對應列時要寫明（整句照寫死的字）`);
   });
+  for (const [file, piece] of Object.entries(HEADER_SAMPLES)) {
+    const it = items.find((x) => x[1] === file);
+    if (it) assert.ok(strip(it[2]).includes(piece), `${file} 跨行接起來的那一句不對（寫死的樣本：${piece}）`);
+  }
+  assert.ok(items.some((x) => x[1] === 'tests/forbidden-defaults.test.js') && items.some((x) => x[1] === 'tests/kit-lock.test.js'), '寫死的接行樣本已經不在考題清單上：樣本要跟著改');
   const settings = items.find((x) => x[1] === 'tests/settings.test.js');
   assert.ok(settings && settings[3].includes('>H1：tests/settings.test.js 那一列<'), 'settings 那支考題要連到「H1：tests/settings.test.js」那一列（寫死的樣本）');
-  assert.ok(page.includes(`${tests.length} 支考題檔（照 tests/manifest.json 的清單與順序）`), '考題頁頁首的支數不對');
+  assert.ok(page.includes(`<p class="page-sum">${tests.length} 支考題檔（照 tests/manifest.json 的清單與順序），每支一句話（取自它檔頭的第一句）；後面列出機器表「原專案的實作」那一欄寫到它的列，點了看那台機器怎麼守。</p>`), '考題頁頁首那一句不對（數字或字）');
+  assert.ok(html.includes('<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下的檔不列（不是考題檔）。</p>'), '考題頁的來源註記不對');
   assert.ok(page.includes(`<span class="sec-count">${tests.length} 支</span>`), '考題那一塊的支數不對');
+  // 機器表那一欄用別的寫法提到考題檔（兩個路徑放同一個框、沒有框）＝停，不說「沒有直接寫到它」
+  const mm = src.machines;
+  assert.ok(mm.includes('`tests/scan-probe.test.js`、`tests/scan-postmortem.test.js`') && mm.includes('`tests/file-names.test.js`'), '前提：機器表 G2、E6 兩列照現在的寫法');
+  assert.throws(() => manual.build({ ...src, machines: mm.replace('`tests/scan-probe.test.js`、`tests/scan-postmortem.test.js`', '`tests/scan-probe.test.js、tests/scan-postmortem.test.js`') }), /G2」那一列的「原專案的實作」提到 tests\/scan-(probe|postmortem)\.test\.js，但不是一個灰底框剛好放這一個路徑/u);
+  assert.throws(() => manual.build({ ...src, machines: mm.replace('`tests/file-names.test.js`', 'tests/file-names.test.js') }), /E6」那一列的「原專案的實作」提到 tests\/file-names\.test\.js/u);
+  assert.doesNotThrow(() => manual.build({ ...src, machines: mm.replace('`tests/file-names.test.js`', '`tests/file-names.test.js`（另見 `tests/file-names.test.js.bak` 與 x/tests/file-names.test.js）') }), '對照組：較長的路徑裡含它不算');
   // 檔頭沒有說明就停（用注入的來源，不動真的檔）
   assert.throws(() => manual.build({ ...src, tests: [...src.tests, { path: 'tests/no-header.test.js', text: "'use strict';\nconst x = 1;\n" }] }), /tests\/no-header\.test\.js 的前三行沒有「\/\/ 」開頭的說明，考題頁不知道它做什麼/u);
   assert.throws(() => manual.build({ ...src, tests: [...src.tests, { path: 'tests/noperiod.test.js', text: '// 沒有句號\n' }] }), /tests\/noperiod\.test\.js 檔頭的第一段沒有「。」，考題頁取不到完整的第一句/u);
@@ -615,7 +641,9 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
       fs.writeFileSync(path.join(t, 'a.test.js'), '// 甲。\n');
     };
     reset();
-    assert.deepEqual(manual.readTests(dir), [{ path: 'tests/a.test.js', text: '// 甲。\n' }], '對照組：清單、helpers/、manifest.json、package.json 都在時照收');
+    fs.writeFileSync(path.join(t, 'helpers', 'kit-copy.js'), 'x');
+    fs.writeFileSync(path.join(t, 'helpers', 'blank.json'), '{}');
+    assert.deepEqual(manual.readTests(dir), [{ path: 'tests/a.test.js', text: '// 甲。\n' }], '對照組：清單、helpers/（裡面放不是考題檔的檔）、manifest.json、package.json 都在時照收');
     const cases = [
       ['清單列了沒有的檔', () => fs.writeFileSync(path.join(t, 'manifest.json'), '["a.test.js","b.test.js"]'), /列了 b\.test\.js，但 tests\/ 底下沒有這個檔/u],
       ['資料夾多一支沒列', () => fs.writeFileSync(path.join(t, 'c.test.js'), '// 丙。\n'), /tests\/c\.test\.js 不在 tests\/manifest\.json 的清單上/u],
@@ -629,6 +657,9 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
       ['不認得的資料夾', () => fs.mkdirSync(path.join(t, 'fixtures')), /tests\/fixtures：考題頁不知道它算不算考題/u],
       ['helpers 是檔不是資料夾', () => { fs.rmSync(path.join(t, 'helpers'), { recursive: true }); fs.writeFileSync(path.join(t, 'helpers'), 'x'); }, /tests\/helpers：考題頁不知道它算不算考題/u],
       ['叫 .test.js 的資料夾', () => fs.mkdirSync(path.join(t, 'd.test.js')), /tests\/d\.test\.js：考題頁不知道它算不算考題/u],
+      ['package.json 是資料夾', () => { fs.rmSync(path.join(t, 'package.json')); fs.mkdirSync(path.join(t, 'package.json')); }, /tests\/package\.json：考題頁不知道它算不算考題/u],
+      ['helpers 底下有考題檔', () => fs.writeFileSync(path.join(t, 'helpers', 'e.test.js'), '// 戊。\n'), /tests\/helpers\/e\.test\.js：考題頁不知道它算不算考題/u],
+      ['helpers 底下有資料夾', () => fs.mkdirSync(path.join(t, 'helpers', 'deep')), /tests\/helpers\/deep：考題頁不知道它算不算考題/u],
     ];
     for (const [name, mutate, pattern] of cases) {
       reset();
@@ -670,9 +701,11 @@ test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照�
     const got = [...c[4].matchAll(/data-machine="(m\d+)">([^<]*)<\/button>/gu)];
     assert.deepEqual(got.map((g) => g[1]), want.map((k) => `m${k + 1}`), `${where}：列出的機器表列不對（用列的內容比）`);
     got.forEach((g, j) => assert.equal(g[2], `${escT(labels[want[j]])} 那一列`, `${where}：鈕上的字不是考題自己算的那一列標題`));
-    if (!want.length) assert.match(c[4], item.paths.length > 1 ? /沒有直接寫到這幾份/u : /沒有直接寫到它/u, `${where}：沒有對應列時要寫明`);
+    if (!want.length) assert.equal(c[4], `<span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到${item.paths.length > 1 ? '這幾份' : '它'}</span>`, `${where}：沒有對應列時要寫明（整句照寫死的字）`);
   });
-  assert.ok(page.includes(`${files.length} 份範本、${items.length} 則說明`), '範本頁頁首的數字不對');
+  assert.ok(page.includes(`<p class="page-sum">${files.length} 份範本、${items.length} 則說明（取自 MACHINES.md「範本」那一節，一則可以講好幾份）。每則後面列出說明裡寫到的條號（點了跳到那一條規矩），以及機器表「原專案的實作」那一欄寫到這幾份的列。</p>`), '範本頁頁首那一句不對（數字或字）');
+  assert.ok(html.includes('<p class="source-note">來源：templates/ 底下的檔名、MACHINES.md「範本」那一節（說明與條號；條號只認灰底框以外、A〜K 加數字的寫法）與「本文條目 → 機器」那張表的「原專案的實作」欄。</p>'), '範本頁的來源註記不對');
+  for (const item of items) assert.ok(item.desc.trim() && !/[A-K][0-9]+\s*([〜～~-]|到|至)\s*[A-K][0-9]+/u.test(item.desc.replace(/`[^`]*`/gu, ' ')), `${item.paths.join('、')}：說明是空的或用了條號範圍寫法（考題自己的讀法數不到中間那幾條）`);
   assert.ok(page.includes(`<h2>範本（本文指到「範本」的地方）<span class="sec-count">${items.length} 則</span></h2>`), '範本那一塊的小標或則數不對');
   // 停下：用注入的來源（不動真的檔）
   const m = src.machines;
@@ -690,6 +723,11 @@ test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照�
     ['列了不存在的檔', { machines: m.replace(first, `${first}\n- \`templates/nope.md\`：沒有這個檔`) }, /列了 templates\/nope\.md，但 templates\/ 底下沒有這個檔/u],
     ['templates/ 有卻沒列', { templates: [...src.templates, 'templates/extra.md'].sort() }, /templates\/extra\.md 不在 MACHINES\.md「範本」那一節/u],
     ['說明裡的條號打錯', { machines: m.replace(first, first.replace(/（[^（）]*）/u, '（K99）')) }, /說明裡的條號 K99 不在規則裡/u],
+    ['條號範圍（全形波浪）', { machines: m.replace(first, first.replace(/（[^（）]*）/u, '（G1〜G3）')) }, /範圍寫法（G1〜G3）/u],
+    ['條號範圍（半形）', { machines: m.replace(first, first.replace(/（[^（）]*）/u, '（I1 ~ I3）')) }, /範圍寫法（I1 ~ I3）/u],
+    ['條號範圍（連字號）', { machines: m.replace(first, first.replace(/（[^（）]*）/u, '（G1-G3）')) }, /範圍寫法（G1-G3）/u],
+    ['條號範圍（到）', { machines: m.replace(first, first.replace(/（[^（）]*）/u, '（G1 到 G3）')) }, /範圍寫法（G1 到 G3）/u],
+    ['說明是空白', { machines: m.replace(first, first.replace(/：.*$/u, '：  ')) }, /這一則沒有說明/u],
   ];
   for (const [name, patch, pattern] of cases) {
     const key = Object.keys(patch)[0];

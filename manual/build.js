@@ -38,8 +38,9 @@ const RULE_ID = /^[A-K]\d+$/u;
 const NON_RULE_KEYS = ['案例簿'];
 // tools/ 底下認得的東西：.js 程式、gates/ 子資料夾、package.json、.gitkeep；其他的要人先決定歸到哪一組
 const TOOLS_OTHER = ['package.json', '.gitkeep'];
-// tests/ 底下認得的東西：清單上的 .test.js、helpers/ 子資料夾（考題共用的小工具，不列）、manifest.json、package.json
+// tests/ 底下認得的東西：清單上的 .test.js、helpers/ 子資料夾（裡面的檔不列）、manifest.json、package.json
 const TESTS_OTHER = ['manifest.json', 'package.json'];
+const RANGE = /(?<![A-Za-z0-9])[A-K]\d+\s*(?:[〜～~\-－–—]|到|至)\s*[A-K]\d+(?![A-Za-z0-9])/u;
 const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
 const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
 // 分類只說「標籤裡列了哪種把關」，不說守到多少：機器守到哪裡寫在標籤冒號後面，守不到的寫在 MACHINES.md。
@@ -233,6 +234,8 @@ function readTools(root) {
 /**
  * 工具與考題檔頭的第一句：從前三行裡第一個「// 」行起，把接著的「//」行接起來（遇到空的「//」或不是註解的行就停），
  * 取到第一個「。」為止。說明第一行沒寫完那一句的檔，接起來才是整句；讀不到「。」就停。
+ * 接行時，接縫的任一邊是半形英數字、而且兩邊都不在 U+3000〜303F（中日文標點）與 U+FF00〜FFEF（全形字）這兩段，
+ * 就補一個空格（「範本」接「tests/…」→「範本 tests/…」；「；」接「K1」不補）。
  */
 function firstSentence(tool, page = '工具頁') {
   const lines = tool.text.split('\n');
@@ -244,7 +247,14 @@ function firstSentence(tool, page = '工具頁') {
     if (!text) break;
     para.push(text);
   }
-  const sentence = para.join('').match(/^[^。]*。/u);
+  const joined = para.reduce((acc, line) => {
+    if (!acc) return line;
+    const a = acc.slice(-1);
+    const b = line[0];
+    const space = /[A-Za-z0-9]/u.test(a + b) && !/[\u3000-\u303F\uFF00-\uFFEF]/u.test(a + b);
+    return acc + (space ? ' ' : '') + line;
+  }, '');
+  const sentence = joined.match(/^[^。]*。/u);
   if (!sentence) throw new Error(`${tool.path} 檔頭的第一段沒有「。」，${page}取不到完整的第一句`);
   return sentence[0];
 }
@@ -270,7 +280,14 @@ function readTests(root) {
   if (new Set(list).size !== list.length) throw new Error('tests/manifest.json 有重複的檔名');
   const onDisk = [];
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
-    if (entry.isDirectory() ? entry.name === 'helpers' : TESTS_OTHER.includes(entry.name)) continue;
+    if (entry.isDirectory() && entry.name === 'helpers') {
+      // helpers/ 底下的檔不列；但考卷會跑任何一層的 .test.js，那裡冒出考題檔或子資料夾就停（不知道它算不算考題）
+      for (const h of fs.readdirSync(path.join(abs, 'helpers'), { withFileTypes: true })) {
+        if (h.isDirectory() || h.name.endsWith('.test.js')) throw new Error(`tests/helpers/${h.name}：考題頁不知道它算不算考題（helpers/ 底下只認不是考題檔的一層檔案）`);
+      }
+      continue;
+    }
+    if (!entry.isDirectory() && TESTS_OTHER.includes(entry.name)) continue;
     if (!entry.isDirectory() && entry.name.endsWith('.test.js')) onDisk.push(entry.name);
     else throw new Error(`tests/${entry.name}：考題頁不知道它算不算考題（認得的只有清單上的 .test.js、tests/helpers/、${TESTS_OTHER.join('、')}）`);
   }
@@ -295,7 +312,7 @@ function readTemplates(root) {
  * MACHINES.md「## 範本（本文指到「範本」的地方）」那一節：標題之後到下一節標題（或檔案結尾）為止，
  * 每一行要是空行、或「- `templates/…`（多份用「、」接）：說明」這個形狀；別的東西（段落、縮排續行、別種條列）就停。
  * 同一份列兩次、列了卻不在 templates/、templates/ 裡有卻沒列，都停——範本頁的內容只有這一節，沒列的範本沒有說明可放。
- * 說明裡的條號（灰底框外、A〜K 加數字）要是規則裡有的，打錯就停。
+ * 說明裡的條號（灰底框外、A〜K 加數字）要是規則裡有的，打錯就停；說明是空白、或兩個條號用範圍記號（〜、~、- 等）或「到」「至」接起來也停。
  */
 function parseTemplates(text, files, ruleIds) {
   const lines = text.split('\n');
@@ -313,8 +330,11 @@ function parseTemplates(text, files, ruleIds) {
       if (!files.includes(p)) throw new Error(`MACHINES.md 第 ${i + 1} 行：列了 ${p}，但 templates/ 底下沒有這個檔`);
       seen.push(p);
     }
+    if (!m[2].trim()) throw new Error(`MACHINES.md 第 ${i + 1} 行：「範本」那一節的這一則沒有說明`);
+    const bare = m[2].replace(/`[^`]*`/gu, ' ');
+    if (RANGE.test(bare)) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號用了範圍寫法（${bare.match(RANGE)[0]}），說明書不知道中間那幾條算不算——請逐條寫出`);
     const rules = [];
-    for (const r of m[2].replace(/`[^`]*`/gu, ' ').matchAll(/(?<![A-Za-z0-9])([A-K]\d+)(?![A-Za-z0-9])/gu)) {
+    for (const r of bare.matchAll(/(?<![A-Za-z0-9])([A-K]\d+)(?![A-Za-z0-9])/gu)) {
       if (!ruleIds.includes(r[1])) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號 ${r[1]} 不在規則裡`);
       if (!rules.includes(r[1])) rules.push(r[1]);
     }
@@ -512,8 +532,19 @@ ${cards}
   return { html, machineData };
 }
 
-/** 機器表「原專案的實作」那一欄用灰底框寫到這幾個路徑之一的列（照表的順序），一列一顆鈕；一列都沒有就寫明。 */
+/**
+ * 機器表「原專案的實作」那一欄用灰底框寫到這幾個路徑之一的列（照表的順序），一列一顆鈕；一列都沒有就寫明。
+ * 「寫到」只認一個灰底框剛好放這一個路徑；那一欄用別的寫法提到它（兩個路徑放同一個框、沒有框）就停——
+ * 不然頁上會說「沒有直接寫到它」，其實有。
+ */
 function rowRefs(rows, paths, none = '機器表的「原專案的實作」那一欄沒有直接寫到它') {
+  for (const row of rows) {
+    for (const p of paths) {
+      const rest = row.fields[0].split(`\`${p}\``).join(' ');
+      const loose = new RegExp(`(?<![A-Za-z0-9_./-])${p.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9_.-])`, 'u');
+      if (loose.test(rest)) throw new Error(`MACHINES.md 機器表「${row.label}」那一列的「原專案的實作」提到 ${p}，但不是一個灰底框剛好放這一個路徑：說明書認不出算不算寫到它`);
+    }
+  }
   const hits = rows.filter((row) => paths.some((p) => row.fields[0].includes(`\`${p}\``)));
   const refs = hits.length
     ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')
@@ -550,7 +581,7 @@ function testsPage(tests, rows) {
 <section class="block"><h2>考題檔（tests/）<span class="sec-count">${items.length} 支</span></h2>
 ${items.join('\n')}
 </section>
-<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下是考題共用的小工具，不列。</p>
+<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下的檔不列（不是考題檔）。</p>
 </section>`;
 }
 
