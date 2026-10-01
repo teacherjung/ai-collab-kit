@@ -455,7 +455,7 @@ function parseSettingsDoc(md) {
     if (table) throw new Error(`${where}：表格後面直接接了別的東西，說明書不知道它算不算表格`);
     const sub = line.match(/^ {2}(\d+)\. (\S.*)$/u);
     if (sub) {
-      if (!list || (prev !== 'item' && prev !== 'sub')) throw new Error(`${where}：子項前面要是「- 」清單`);
+      if (!list) throw new Error(`${where}：子項前面要是「- 」清單`);
       list.items[list.items.length - 1].sub.push({ n: Number(sub[1]), text: sub[2] });
       prev = 'sub';
       continue;
