@@ -19,8 +19,8 @@ const PAGES = [
   { id: 'rules', name: '規矩', built: true },
   { id: 'machines', name: '機器', built: true },
   { id: 'tools', name: '工具', built: true },
-  { id: 'tests', name: '考題', next: '考題清單：每一支考題檔守什麼' },
-  { id: 'templates', name: '範本', next: '每一份範本是什麼、什麼時候用' },
+  { id: 'tests', name: '考題', built: true },
+  { id: 'templates', name: '範本', built: true },
   { id: 'settings', name: '設定', next: '空白設定的每一欄是什麼意思、怎麼填' },
   { id: 'adopt', name: '套用', next: '怎麼把套件搬進一個專案；專案裡改到套件的檔要怎麼辦' },
   { id: 'glossary', name: '名詞', next: '用語對照表，名詞白話手冊併進來' },
@@ -38,6 +38,10 @@ const RULE_ID = /^[A-K]\d+$/u;
 const NON_RULE_KEYS = ['案例簿'];
 // tools/ 底下認得的東西：.js 程式、gates/ 子資料夾、package.json、.gitkeep；其他的要人先決定歸到哪一組
 const TOOLS_OTHER = ['package.json', '.gitkeep'];
+// tests/ 底下認得的東西：清單上的 .test.js、helpers/ 子資料夾（考題共用的小工具，不列）、manifest.json、package.json
+const TESTS_OTHER = ['manifest.json', 'package.json'];
+const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
+const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
 // 分類只說「標籤裡列了哪種把關」，不說守到多少：機器守到哪裡寫在標籤冒號後面，守不到的寫在 MACHINES.md。
 const KIND_TEXT = { machine: '只列機器', mixed: '機器＋靠自覺', self: '只有靠自覺' };
 
@@ -227,13 +231,13 @@ function readTools(root) {
 }
 
 /**
- * 工具檔頭的第一句：從前三行裡第一個「// 」行起，把接著的「//」行接起來（遇到空的「//」或不是註解的行就停），
- * 取到第一個「。」為止。說明第一行沒寫完那一句的工具，接起來才是整句；讀不到「。」就停。
+ * 工具與考題檔頭的第一句：從前三行裡第一個「// 」行起，把接著的「//」行接起來（遇到空的「//」或不是註解的行就停），
+ * 取到第一個「。」為止。說明第一行沒寫完那一句的檔，接起來才是整句；讀不到「。」就停。
  */
-function toolLine(tool) {
+function firstSentence(tool, page = '工具頁') {
   const lines = tool.text.split('\n');
   const start = lines.slice(0, 3).findIndex((l) => l.startsWith('// '));
-  if (start < 0) throw new Error(`${tool.path} 的前三行沒有「// 」開頭的說明，工具頁不知道它做什麼`);
+  if (start < 0) throw new Error(`${tool.path} 的前三行沒有「// 」開頭的說明，${page}不知道它做什麼`);
   const para = [];
   for (let k = start; k < lines.length && lines[k].startsWith('//'); k += 1) {
     const text = lines[k].replace(/^\/\/ ?/u, '').trim();
@@ -241,8 +245,83 @@ function toolLine(tool) {
     para.push(text);
   }
   const sentence = para.join('').match(/^[^。]*。/u);
-  if (!sentence) throw new Error(`${tool.path} 檔頭的第一段沒有「。」，工具頁取不到完整的第一句`);
+  if (!sentence) throw new Error(`${tool.path} 檔頭的第一段沒有「。」，${page}取不到完整的第一句`);
   return sentence[0];
+}
+
+/**
+ * tests/manifest.json 的清單（照它的順序）與每一支的原文。清單要是不重複的檔名、跟 tests/ 底下的 .test.js 一模一樣；
+ * tests/ 裡不認得的東西（清單外的檔、helpers/ 以外的資料夾）就停——考題頁不知道它算不算考題。
+ */
+function readTests(root) {
+  const abs = path.join(root, 'tests');
+  if (!fs.existsSync(abs)) throw new Error('讀不到 tests/：說明書不產生');
+  const listFile = path.join(abs, 'manifest.json');
+  if (!fs.existsSync(listFile)) throw new Error('讀不到 tests/manifest.json：說明書不產生');
+  let list;
+  try {
+    list = JSON.parse(fs.readFileSync(listFile, 'utf8'));
+  } catch {
+    throw new Error('tests/manifest.json 不是合法的 JSON');
+  }
+  if (!Array.isArray(list) || !list.length || list.some((f) => typeof f !== 'string' || !/^[a-z0-9-]+\.test\.js$/u.test(f))) {
+    throw new Error('tests/manifest.json 要是一串考題檔名（英文小寫、數字、「-」，以 .test.js 結尾）');
+  }
+  if (new Set(list).size !== list.length) throw new Error('tests/manifest.json 有重複的檔名');
+  const onDisk = [];
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (entry.isDirectory() ? entry.name === 'helpers' : TESTS_OTHER.includes(entry.name)) continue;
+    if (!entry.isDirectory() && entry.name.endsWith('.test.js')) onDisk.push(entry.name);
+    else throw new Error(`tests/${entry.name}：考題頁不知道它算不算考題（認得的只有清單上的 .test.js、tests/helpers/、${TESTS_OTHER.join('、')}）`);
+  }
+  for (const f of onDisk) if (!list.includes(f)) throw new Error(`tests/${f} 不在 tests/manifest.json 的清單上`);
+  for (const f of list) if (!onDisk.includes(f)) throw new Error(`tests/manifest.json 列了 ${f}，但 tests/ 底下沒有這個檔`);
+  return list.map((f) => ({ path: `tests/${f}`, text: fs.readFileSync(path.join(abs, f), 'utf8') }));
+}
+
+/** templates/ 底下的檔名（照字母排）；裡面有資料夾就停——範本頁只認一層的檔。 */
+function readTemplates(root) {
+  const abs = path.join(root, 'templates');
+  if (!fs.existsSync(abs)) throw new Error('讀不到 templates/：說明書不產生');
+  const out = [];
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (!entry.isFile()) throw new Error(`templates/${entry.name}：範本頁只認 templates/ 第一層的檔`);
+    out.push(`templates/${entry.name}`);
+  }
+  return out.sort();
+}
+
+/**
+ * MACHINES.md「## 範本（本文指到「範本」的地方）」那一節：標題之後到下一節標題（或檔案結尾）為止，
+ * 每一行要是空行、或「- `templates/…`（多份用「、」接）：說明」這個形狀；別的東西（段落、縮排續行、別種條列）就停。
+ * 同一份列兩次、列了卻不在 templates/、templates/ 裡有卻沒列，都停——範本頁的內容只有這一節，沒列的範本沒有說明可放。
+ * 說明裡的條號（灰底框外、A〜K 加數字）要是規則裡有的，打錯就停。
+ */
+function parseTemplates(text, files, ruleIds) {
+  const lines = text.split('\n');
+  const at = lines.indexOf(TEMPLATE_HEAD);
+  if (at < 0) throw new Error(`MACHINES.md 找不到「${TEMPLATE_HEAD}」`);
+  const items = [];
+  const seen = [];
+  for (let i = at + 1; i < lines.length && !lines[i].startsWith('## '); i += 1) {
+    if (!lines[i].trim()) continue;
+    const m = lines[i].match(TEMPLATE_ITEM);
+    if (!m) throw new Error(`MACHINES.md 第 ${i + 1} 行：「範本」那一節只收「- \`templates/…\`：說明」這種條列`);
+    const paths = m[1].split('、').map((x) => x.slice(1, -1));
+    for (const p of paths) {
+      if (seen.includes(p)) throw new Error(`MACHINES.md 第 ${i + 1} 行：${p} 在「範本」那一節列了兩次`);
+      if (!files.includes(p)) throw new Error(`MACHINES.md 第 ${i + 1} 行：列了 ${p}，但 templates/ 底下沒有這個檔`);
+      seen.push(p);
+    }
+    const rules = [];
+    for (const r of m[2].replace(/`[^`]*`/gu, ' ').matchAll(/(?<![A-Za-z0-9])([A-K]\d+)(?![A-Za-z0-9])/gu)) {
+      if (!ruleIds.includes(r[1])) throw new Error(`MACHINES.md 第 ${i + 1} 行：說明裡的條號 ${r[1]} 不在規則裡`);
+      if (!rules.includes(r[1])) rules.push(r[1]);
+    }
+    items.push({ paths, desc: m[2], rules });
+  }
+  for (const f of files) if (!seen.includes(f)) throw new Error(`${f} 不在 MACHINES.md「範本」那一節：範本頁沒有它的說明（要先在那一節補一行）`);
+  return { heading: TEMPLATE_HEAD.slice(3), items };
 }
 
 /**
@@ -433,17 +512,20 @@ ${cards}
   return { html, machineData };
 }
 
+/** 機器表「原專案的實作」那一欄用灰底框寫到這幾個路徑之一的列（照表的順序），一列一顆鈕；一列都沒有就寫明。 */
+function rowRefs(rows, paths, none = '機器表的「原專案的實作」那一欄沒有直接寫到它') {
+  const hits = rows.filter((row) => paths.some((p) => row.fields[0].includes(`\`${p}\``)));
+  const refs = hits.length
+    ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')
+    : `<span class="muted">${none}</span>`;
+  return `<p class="rule-mach"><span class="tag-lead">機器表</span>${refs}</p>`;
+}
+
 function toolsPage(tools, rows) {
   const groups = [['tools/', '工具（tools/）'], ['tools/gates/', '合併前的閘（tools/gates/）']].map(([prefix, heading]) => {
     const items = tools
       .filter((t) => t.path.startsWith(prefix) && !t.path.slice(prefix.length).includes('/'))
-      .map((t) => {
-        const hits = rows.filter((row) => row.fields[0].includes(`\`${t.path}\``));
-        const refs = hits.length
-          ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')
-          : '<span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到它</span>';
-        return `<article class="tool"><h3><code>${esc(t.path)}</code></h3><p>${mdInline(toolLine(t))}</p><p class="rule-mach"><span class="tag-lead">機器表</span>${refs}</p></article>`;
-      });
+      .map((t) => `<article class="tool"><h3><code>${esc(t.path)}</code></h3><p>${mdInline(firstSentence(t))}</p>${rowRefs(rows, [t.path])}</article>`);
     return `<section class="block"><h2>${esc(heading)}<span class="sec-count">${items.length} 支</span></h2>\n${items.join('\n')}\n</section>`;
   });
   return `<section class="page" id="page-tools" data-page="tools" hidden>
@@ -454,6 +536,42 @@ function toolsPage(tools, rows) {
 </header>
 ${groups.join('\n')}
 <p class="source-note">來源：tools/ 與 tools/gates/ 底下每一支 .js 的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。</p>
+</section>`;
+}
+
+function testsPage(tests, rows) {
+  const items = tests.map((t) => `<article class="tool"><h3><code>${esc(t.path)}</code></h3><p>${mdInline(firstSentence(t, '考題頁'))}</p>${rowRefs(rows, [t.path])}</article>`);
+  return `<section class="page" id="page-tests" data-page="tests" hidden>
+<header class="page-head">
+<p class="eyebrow">tests/ 底下的考題</p>
+<h1>考題</h1>
+<p class="page-sum">${tests.length} 支考題檔（照 tests/manifest.json 的清單與順序），每支一句話（取自它檔頭的第一句）；後面列出機器表「原專案的實作」那一欄寫到它的列，點了看那台機器怎麼守。</p>
+</header>
+<section class="block"><h2>考題檔（tests/）<span class="sec-count">${items.length} 支</span></h2>
+${items.join('\n')}
+</section>
+<p class="source-note">來源：tests/manifest.json 的清單、每一支考題檔的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。tests/helpers/ 底下是考題共用的小工具，不列。</p>
+</section>`;
+}
+
+function templatesPage(tpl, files, rows) {
+  const cards = tpl.items.map((item) => {
+    const rules = item.rules.length
+      ? item.rules.map((id) => `<button type="button" class="rule-link" data-goto="rule-${esc(id)}">${esc(id)}</button>`).join('')
+      : '<span class="muted">說明裡沒有寫到條號</span>';
+    return `<article class="tool"><h3>${item.paths.map((p) => `<code>${esc(p)}</code>`).join('、')}</h3><p>${mdInline(item.desc)}</p>
+<p class="rule-mach"><span class="tag-lead">規矩</span>${rules}</p>${rowRefs(rows, item.paths, item.paths.length > 1 ? '機器表的「原專案的實作」那一欄沒有直接寫到這幾份' : undefined)}</article>`;
+  });
+  return `<section class="page" id="page-templates" data-page="templates" hidden>
+<header class="page-head">
+<p class="eyebrow">templates/ 底下的範本</p>
+<h1>範本</h1>
+<p class="page-sum">${files.length} 份範本、${tpl.items.length} 則說明（取自 MACHINES.md「範本」那一節，一則可以講好幾份）。每則後面列出說明裡寫到的條號（點了跳到那一條規矩），以及機器表「原專案的實作」那一欄寫到這幾份的列。</p>
+</header>
+<section class="block"><h2>${esc(tpl.heading)}<span class="sec-count">${tpl.items.length} 則</span></h2>
+${cards.join('\n')}
+</section>
+<p class="source-note">來源：templates/ 底下的檔名、MACHINES.md「範本」那一節（說明與條號；條號只認灰底框以外、A〜K 加數字的寫法）與「本文條目 → 機器」那張表的「原專案的實作」欄。</p>
 </section>`;
 }
 
@@ -683,7 +801,14 @@ function readSources(root) {
     if (!fs.existsSync(file)) throw new Error(`讀不到 ${rel}：說明書不產生`);
     return fs.readFileSync(file, 'utf8');
   };
-  return { rules: JSON.parse(read('rules.json')), machines: read('MACHINES.md'), glossary: read('GLOSSARY.md'), tools: readTools(root) };
+  return {
+    rules: JSON.parse(read('rules.json')),
+    machines: read('MACHINES.md'),
+    glossary: read('GLOSSARY.md'),
+    tools: readTools(root),
+    tests: readTests(root),
+    templates: readTemplates(root),
+  };
 }
 
 /** 回傳網頁內容（照私人網頁連結的格式：不含 doctype／html／body，發布時會自動包上）與幾個數字。 */
@@ -697,6 +822,9 @@ function build(sources, { stamp } = {}) {
   const rules = rulesPage(sources.rules, labels, legend, table.rows);
   const machines = machinesPage(parseMachinesTitle(sources.machines), labels, table, ruleIds);
   const tools = toolsPage(sources.tools, table.rows);
+  const tests = testsPage(sources.tests, table.rows);
+  const tpl = parseTemplates(sources.machines, sources.templates, ruleIds);
+  const templates = templatesPage(tpl, sources.templates, table.rows);
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
   const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
@@ -716,6 +844,8 @@ ${stamp ? `<p class="stamp">產生自套件 ${esc(stamp)}</p>` : ''}
 ${rules.html}
 ${machines.html}
 ${tools}
+${tests}
+${templates}
 ${others.join('\n')}
 </main>
 </div>
@@ -726,7 +856,17 @@ ${others.join('\n')}
 <script type="application/json" id="machine-data">${machineJson}</script>
 <script>${JS}</script>
 `;
-  return { html, counts: rules.counts, pages: PAGES.length, labels: labels.length, machineRows: table.rows.length, tools: sources.tools.length };
+  return {
+    html,
+    counts: rules.counts,
+    pages: PAGES.length,
+    labels: labels.length,
+    machineRows: table.rows.length,
+    tools: sources.tools.length,
+    tests: sources.tests.length,
+    templates: sources.templates.length,
+    templateItems: tpl.items.length,
+  };
 }
 
 function parseArgs(argv) {
@@ -749,11 +889,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, readTools, toolLine, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
