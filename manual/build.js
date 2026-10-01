@@ -34,6 +34,10 @@ const MACHINE_HEADER = '| 本文 | 原專案的實作 | 違反時會紅的條件
 const MACHINE_RULE = /^\|(\s*:?-+:?\s*\|){6}$/u;
 const MACHINE_FIELDS = ['原專案的實作', '違反時會紅的條件', '守不到的', '啟用前提'];
 const RULE_ID = /^[A-K]\d+$/u;
+// 機器表第一格不是條號、但合法的字面值（照字面顯示、不連結）；其餘不在規則裡的一律停下，免得打錯字靜靜少掉連結
+const NON_RULE_KEYS = ['案例簿'];
+// tools/ 底下認得的東西：.js 程式、gates/ 子資料夾、package.json、.gitkeep；其他的要人先決定歸到哪一組
+const TOOLS_OTHER = ['package.json', '.gitkeep'];
 // 分類只說「標籤裡列了哪種把關」，不說守到多少：機器守到哪裡寫在標籤冒號後面，守不到的寫在 MACHINES.md。
 const KIND_TEXT = { machine: '只列機器', mixed: '機器＋靠自覺', self: '只有靠自覺' };
 
@@ -160,9 +164,20 @@ function parseMachineRows(text, ruleIds) {
   if (head < 0) throw new Error('MACHINES.md 找不到「## 本文條目 → 機器」');
   const at = lines.findIndex((line, i) => i > head && line === MACHINE_HEADER);
   if (at < 0) throw new Error('MACHINES.md「## 本文條目 → 機器」底下找不到「| 本文 | 原專案的實作 | …| 移植狀態 |」那張表');
-  const intro = lines.slice(head + 1, at).map((line) => line.trim()).filter(Boolean);
+  const intro = [];
+  let introClosed = false;
+  for (let k = head + 1; k < at; k += 1) {
+    const line = lines[k];
+    if (!line.trim()) {
+      if (intro.length) introClosed = true;
+      continue;
+    }
+    const where = `MACHINES.md 第 ${k + 1} 行`;
+    if (/^\s/u.test(line) || /^(#|\||- |\* |\+ |\d+[.)] |>|<)/u.test(line)) throw new Error(`${where}：「## 本文條目 → 機器」標題與表格之間只收一段說明`);
+    if (introClosed) throw new Error(`${where}：「## 本文條目 → 機器」的說明有第二段，說明書只收一段`);
+    intro.push(line.trim());
+  }
   if (!intro.length) throw new Error('MACHINES.md「## 本文條目 → 機器」標題與表格之間沒有說明段落');
-  if (intro.some((line) => line.startsWith('#') || line.startsWith('|'))) throw new Error('MACHINES.md「## 本文條目 → 機器」標題與表格之間只收說明段落');
   if (!MACHINE_RULE.test(lines[at + 1] || '')) throw new Error(`MACHINES.md 第 ${at + 2} 行應該是六欄的分隔列`);
   const rows = [];
   let i = at + 2;
@@ -176,8 +191,16 @@ function parseMachineRows(text, ruleIds) {
     if (keys.some((k) => !k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：第一格有空的條號`);
     for (const k of keys) {
       if (RULE_ID.test(k) && !ruleIds.includes(k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：條號 ${k} 不在規則裡`);
+      if (!RULE_ID.test(k) && !NON_RULE_KEYS.includes(k)) throw new Error(`MACHINES.md 第 ${i + 1} 行：第一格的「${k}」不是規則裡的條號、也不是登記過的字面值（${NON_RULE_KEYS.join('、')}）`);
     }
     rows.push({ id: `m${rows.length + 1}`, keys, fields: cells.slice(1, 5), status: cells[5] });
+  }
+  // 第一格一樣的列（例如兩列都只寫 H1）在鈕與跳窗標題上要分得出來：補上「原專案的實作」裡第一個灰底框
+  for (const row of rows) {
+    const base = row.keys.join('、');
+    const first = (row.fields[0].match(/`([^`]+)`/u) || [])[1];
+    row.sub = first || '';
+    row.label = rows.filter((r) => r.keys.join('、') === base).length > 1 ? `${base}：${first || row.id}` : base;
   }
   if (!rows.length) throw new Error('MACHINES.md「本文條目 → 機器」那張表沒有任何一列');
   while (i < lines.length && !lines[i].trim()) i += 1;
@@ -191,6 +214,10 @@ function readTools(root) {
   for (const dir of ['tools', 'tools/gates']) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) throw new Error(`讀不到 ${dir}/：說明書不產生`);
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const known = entry.isDirectory() ? dir === 'tools' && entry.name === 'gates' : entry.name.endsWith('.js') || (dir === 'tools' && TOOLS_OTHER.includes(entry.name));
+      if (!known) throw new Error(`${dir}/${entry.name}：工具頁不知道它歸哪一組（認得的只有 .js、tools/gates/、${TOOLS_OTHER.join('、')}）`);
+    }
     for (const name of fs.readdirSync(abs).filter((f) => f.endsWith('.js')).sort()) {
       const rel = `${dir}/${name}`;
       out.push({ path: rel, text: fs.readFileSync(path.join(abs, name), 'utf8') });
@@ -199,10 +226,23 @@ function readTools(root) {
   return out;
 }
 
+/**
+ * 工具檔頭的第一句：從前三行裡第一個「// 」行起，把接著的「//」行接起來（遇到空的「//」或不是註解的行就停），
+ * 取到第一個「。」為止。說明第一行沒寫完那一句的工具，接起來才是整句；讀不到「。」就停。
+ */
 function toolLine(tool) {
-  const line = tool.text.split('\n').slice(0, 3).find((l) => l.startsWith('// '));
-  if (!line || !line.slice(3).trim()) throw new Error(`${tool.path} 的前三行沒有「// 」開頭的說明，工具頁不知道它做什麼`);
-  return line.slice(3).trim();
+  const lines = tool.text.split('\n');
+  const start = lines.slice(0, 3).findIndex((l) => l.startsWith('// '));
+  if (start < 0) throw new Error(`${tool.path} 的前三行沒有「// 」開頭的說明，工具頁不知道它做什麼`);
+  const para = [];
+  for (let k = start; k < lines.length && lines[k].startsWith('//'); k += 1) {
+    const text = lines[k].replace(/^\/\/ ?/u, '').trim();
+    if (!text) break;
+    para.push(text);
+  }
+  const sentence = para.join('').match(/^[^。]*。/u);
+  if (!sentence) throw new Error(`${tool.path} 檔頭的第一段沒有「。」，工具頁取不到完整的第一句`);
+  return sentence[0];
 }
 
 /**
@@ -318,7 +358,7 @@ ${cards.join('\n')}
   const jumps = data.sections
     .map((s) => `<button type="button" class="jump" data-jump="sec-${esc(s.letter)}"><b>${esc(s.letter)}</b>${esc(s.title.replace(/（.*）$/u, ''))}</button>`)
     .join('');
-  const html = `<section class="page" id="rules" data-page>
+  const html = `<section class="page" id="page-rules" data-page="rules">
 <header class="page-head">
 <p class="eyebrow">規矩本文</p>
 <h1>${esc(data.title)}</h1>
@@ -332,7 +372,7 @@ ${cards.join('\n')}
 <nav class="jumps" aria-label="跳到某一節">${jumps}</nav>
 <details class="legend"><summary>規則書原文（RULES.md）的版面約定</summary><p class="muted">這個網頁上：條號不帶【】、放在每一條的左上角；標籤在「把關」那一行。</p><p>${mdInline(legend.lead)}</p><ul>${legend.bullets.map((b) => `<li>${mdInline(b)}</li>`).join('')}</ul></details>
 ${sections.join('\n')}
-<p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表、GLOSSARY.md 的版面約定。</p>
+<p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表與「本文條目 → 機器」那張表（每條的機器表連結）、GLOSSARY.md 的版面約定。</p>
 </section>`;
   const labelData = {};
   for (const label of labels) {
@@ -348,7 +388,7 @@ ${sections.join('\n')}
 function machineLinks(rows, id) {
   const hits = rows.filter((row) => row.keys.includes(id));
   if (!hits.length) return '';
-  return `\n<p class="rule-mach"><span class="tag-lead">機器表</span>${hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.keys.join('、'))} 那一列</button>`).join('')}</p>`;
+  return `\n<p class="rule-mach"><span class="tag-lead">機器表</span>${hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')}</p>`;
 }
 
 function machinesPage(title, labels, table, ruleIds) {
@@ -361,21 +401,22 @@ function machinesPage(title, labels, table, ruleIds) {
         .map((k) => (ruleIds.includes(k) ? `<button type="button" class="rule-link" data-goto="rule-${esc(k)}">${esc(k)}</button>` : `<span class="key-plain">${esc(k)}</span>`))
         .join('');
       return `<article class="mrow" id="mach-${row.id}" tabindex="-1">
-<div class="mrow-head">${keys}</div>
+<div class="mrow-head">${keys}${row.sub ? `<code class="mrow-sub">${esc(row.sub)}</code>` : ''}</div>
 <p class="mrow-status"><span class="tag-lead">移植狀態</span>${mdInline(row.status)}</p>
-<button type="button" class="more" data-machine="${row.id}">看這台機器怎麼守</button>
+<button type="button" class="more" data-machine="${row.id}" aria-label="看 ${esc(row.label)} 這台機器怎麼守">看這台機器怎麼守</button>
 </article>`;
     })
     .join('\n');
   const machineData = {};
   for (const row of table.rows) {
+    const linked = row.keys.filter((k) => ruleIds.includes(k));
     machineData[row.id] = {
-      title: `${row.keys.join('、')} 的機器`,
-      html: `<dl class="def">${MACHINE_FIELDS.map((f, i) => `<dt>${f}</dt><dd>${mdInline(row.fields[i])}</dd>`).join('')}<dt>移植狀態</dt><dd>${mdInline(row.status)}</dd></dl>
-<p class="used">${row.keys.filter((k) => ruleIds.includes(k)).map((k) => `<button type="button" class="rule-link" data-goto="rule-${esc(k)}">${esc(k)}</button>`).join('')}</p>`,
+      title: `${row.label} 的機器`,
+      html: `<dl class="def">${MACHINE_FIELDS.map((f, i) => `<dt>${f}</dt><dd>${mdInline(row.fields[i])}</dd>`).join('')}<dt>移植狀態</dt><dd>${mdInline(row.status)}</dd></dl>${linked.length ? `
+<p class="used">這一列對到的規矩：${linked.map((k) => `<button type="button" class="rule-link" data-goto="rule-${esc(k)}">${esc(k)}</button>`).join('')}</p>` : ''}`,
     };
   }
-  const html = `<section class="page" id="machines" data-page hidden>
+  const html = `<section class="page" id="page-machines" data-page="machines" hidden>
 <header class="page-head">
 <p class="eyebrow">機器索引</p>
 <h1>${esc(title)}</h1>
@@ -387,7 +428,7 @@ ${labelDefs}
 <section class="block"><h2>規矩對到哪台機器</h2><p class="muted">${mdInline(table.intro)}</p>
 ${cards}
 </section>
-<p class="source-note">來源：MACHINES.md 的標籤表與「本文條目 → 機器」那張表（「原專案的實作」那一欄寫的是套件裡對應的程式與考題）。</p>
+<p class="source-note">來源：MACHINES.md 的大標題、標籤表與「本文條目 → 機器」那張表。</p>
 </section>`;
   return { html, machineData };
 }
@@ -399,17 +440,17 @@ function toolsPage(tools, rows) {
       .map((t) => {
         const hits = rows.filter((row) => row.fields[0].includes(`\`${t.path}\``));
         const refs = hits.length
-          ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.keys.join('、'))} 那一列</button>`).join('')
+          ? hits.map((row) => `<button type="button" class="mach-link" data-machine="${row.id}">${esc(row.label)} 那一列</button>`).join('')
           : '<span class="muted">機器表的「原專案的實作」那一欄沒有直接寫到它</span>';
         return `<article class="tool"><h3><code>${esc(t.path)}</code></h3><p>${mdInline(toolLine(t))}</p><p class="rule-mach"><span class="tag-lead">機器表</span>${refs}</p></article>`;
       });
     return `<section class="block"><h2>${esc(heading)}<span class="sec-count">${items.length} 支</span></h2>\n${items.join('\n')}\n</section>`;
   });
-  return `<section class="page" id="tools" data-page hidden>
+  return `<section class="page" id="page-tools" data-page="tools" hidden>
 <header class="page-head">
-<p class="eyebrow">套件裡的程式</p>
+<p class="eyebrow">tools/ 底下的程式</p>
 <h1>工具</h1>
-<p class="page-sum">${tools.length} 支程式，每支一句話說它做什麼（取自它檔頭的第一句）；後面列出機器表哪幾列寫到它，點了看那台機器怎麼守。</p>
+<p class="page-sum">${tools.length} 支程式，每支一句話說它做什麼（取自它檔頭的第一句）；後面列出機器表「原專案的實作」那一欄寫到它的列，點了看那台機器怎麼守。</p>
 </header>
 ${groups.join('\n')}
 <p class="source-note">來源：tools/ 與 tools/gates/ 底下每一支 .js 的檔頭，以及 MACHINES.md「本文條目 → 機器」那張表的「原專案的實作」欄。</p>
@@ -417,7 +458,7 @@ ${groups.join('\n')}
 }
 
 function placeholderPage(page, index) {
-  return `<section class="page" id="${page.id}" data-page hidden>
+  return `<section class="page" id="page-${page.id}" data-page="${page.id}" hidden>
 <header class="page-head"><p class="eyebrow">第 ${index + 1} 頁</p><h1>${esc(page.name)}</h1></header>
 <div class="pending"><p class="pending-tag">準備中</p><p>這一頁會放：${esc(page.next)}。</p><p class="muted">說明書分幾支做，每支合併後更新這個連結。</p></div>
 </section>`;
@@ -512,13 +553,13 @@ code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:1
 .pending-tag{font-size:13px;letter-spacing:.12em;color:var(--self)}
 .muted{color:var(--muted);font-size:15px}
 .modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:16px;background:var(--scrim)}
-.sheet{width:min(560px,100%);max-height:85vh;overflow:auto;background:var(--surface);color:var(--ink);border-radius:10px;border:1px solid var(--line);padding:18px 20px 22px}
+.sheet{width:min(560px,100%);max-height:85vh;overflow:auto;overscroll-behavior:contain;background:var(--surface);color:var(--ink);border-radius:10px;border:1px solid var(--line);padding:18px 20px 22px}
 .sheet header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .sheet h2{margin:0;font-family:var(--display);font-size:22px}
 .close{border:1px solid var(--line);background:transparent;border-radius:6px;width:36px;height:36px;cursor:pointer;font-size:20px;line-height:1}
 .def{margin:0}
 .def dt{font-size:13px;letter-spacing:.1em;color:var(--muted);margin-top:10px}
-.def dd{margin:2px 0 0}
+.def dd{margin:2px 0 0;overflow-wrap:anywhere}
 .used{margin:16px 0 0;font-size:15px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .rule-link{border:1px solid var(--line);background:var(--bg);border-radius:4px;padding:0 8px;cursor:pointer;font-family:var(--display);font-weight:700}
 .block{margin-top:36px}
@@ -530,6 +571,8 @@ code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:1
 .mrow:focus{outline:none}
 .mrow:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
 .mrow-head{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mrow-sub{font-size:13px;color:var(--muted)}
+html.modal-open,html.modal-open body{overflow:hidden}
 .key-plain{font-family:var(--display);font-weight:700;padding:0 8px;border:1px dashed var(--line);border-radius:4px}
 .mrow-status{margin:0;font-size:15px;color:var(--muted)}
 .more{justify-self:start;border:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);border-radius:6px;padding:2px 12px;font-size:15px;cursor:pointer}
@@ -560,11 +603,13 @@ const JS = `
   var pages = Array.prototype.slice.call(document.querySelectorAll('[data-page]'));
   var links = Array.prototype.slice.call(document.querySelectorAll('[data-route]'));
   var current = null;
+  var pending = null;
+  function pageName(p){ return p.getAttribute('data-page'); }
   function show(id){
-    if (!pages.some(function(p){ return p.id === id; })) id = 'rules';
+    if (!pages.some(function(p){ return pageName(p) === id; })) id = 'rules';
     var changed = id !== current;
     current = id;
-    pages.forEach(function(p){ p.hidden = p.id !== id; });
+    pages.forEach(function(p){ p.hidden = pageName(p) !== id; });
     links.forEach(function(a){
       if (a.getAttribute('data-route') === id) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
@@ -572,11 +617,13 @@ const JS = `
     return changed;
   }
   window.addEventListener('hashchange', function(){
-    if (show((location.hash || '').slice(1) || 'rules')) window.scrollTo(0, 0);
+    if (!modal.hidden) closeModal(false);
+    var changed = show((location.hash || '').slice(1) || 'rules');
+    if (pending) { var target = pending; pending = null; land(target); }
+    else if (changed) window.scrollTo(0, 0);
   });
-  show((location.hash || '').slice(1) || 'rules');
-  if (location.hash) window.addEventListener('load', function(){ window.scrollTo(0, 0); });
 
+  show((location.hash || '').slice(1) || 'rules');
   var labels = JSON.parse(document.getElementById('label-data').textContent);
   var machines = JSON.parse(document.getElementById('machine-data').textContent);
   var modal = document.getElementById('modal');
@@ -587,12 +634,12 @@ const JS = `
   function openModal(title, html){
     lastFocus = document.activeElement;
     mTitle.textContent = title; mBody.innerHTML = html;
-    modal.hidden = false; app.inert = true; closeBtn.focus();
+    modal.hidden = false; app.inert = true; document.documentElement.classList.add('modal-open'); closeBtn.focus();
   }
   function openLabel(name){ var l = labels[name]; if (l) openModal(name, l.html); }
   function openMachine(id){ var m = machines[id]; if (m) openModal(m.title, m.html); }
   function closeModal(restore){
-    modal.hidden = true; app.inert = false;
+    modal.hidden = true; app.inert = false; document.documentElement.classList.remove('modal-open');
     if (restore && lastFocus) lastFocus.focus();
   }
   var rules = Array.prototype.slice.call(document.querySelectorAll('.rule'));
@@ -607,12 +654,15 @@ const JS = `
     if (el.hidden || (el.closest('.rule-section') || el).hidden) setFilter('all');
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   }
+  function land(el){
+    reveal(el);
+    el.focus({ preventScroll: true });
+  }
   function goTo(id){
     var el = document.getElementById(id); if (!el) return;
     var page = el.closest('[data-page]');
-    if (page && current !== page.id) { history.replaceState(null, '', '#' + page.id); show(page.id); }
-    reveal(el);
-    el.focus({ preventScroll: true });
+    if (page && current !== pageName(page)) { pending = el; location.hash = pageName(page); return; }
+    land(el);
   }
   document.addEventListener('click', function(e){
     var t = e.target;
@@ -706,4 +756,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, readSources, readTools, toolLine, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, toolLine, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };

@@ -1,7 +1,8 @@
 'use strict';
 // 說明書網頁產生器的考題（manual/build.js；只在套件倉庫、不在共用路徑裡）。
-// 守的：規矩頁的每一條（主句、子點的順序與層級與編號、把關那一行整行）、節標題、頁面上的數字、
-// 跳窗資料、版面約定逐條、檔頭原文，以及來源形狀不對時停下不產生。
+// 守的：規矩頁的每一條（主句、子點的順序與層級與編號、把關那一行整行、機器表連結）、節標題、頁面上的數字、
+// 跳窗資料、版面約定逐條、檔頭原文；機器頁（標籤定義、那張表每一列的條號、移植狀態、跳窗四欄）、
+// 工具頁（每一支的檔頭第一句、寫到它的機器表列）；以及來源形狀不對時停下不產生。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
 // 實作者每一支用無畫面瀏覽器量一次、寫在 PR 說明。tests/filled-settings.test.js 與 git-env 的巢狀那兩輪
 // 不帶 manual/：這一支只在根目錄那一輪跑；它若開始讀 settings.json 或叫 git，要先把 manual/ 加進那兩輪。
@@ -56,13 +57,18 @@ function ownMachineRows(text) {
   return rows;
 }
 
-/** 考題自己列 tools/ 與 tools/gates/ 的 .js、自己取檔頭第一句（不用產生器的 readTools、toolLine）。 */
+/**
+ * 考題自己列 tools/ 與 tools/gates/ 的 .js、自己取檔頭第一句（不用產生器的 readTools、toolLine）：
+ * 用正規式抓開頭那一塊註解（前面可以有 #! 那一行與 'use strict'），去掉「//」接起來，到第一個空註解行為止，再取到第一個「。」。
+ */
 function ownTools() {
   const out = [];
   for (const dir of ['tools', 'tools/gates']) {
     for (const f of fs.readdirSync(path.join(manual.ROOT, dir)).filter((x) => x.endsWith('.js')).sort()) {
-      const head = fs.readFileSync(path.join(manual.ROOT, dir, f), 'utf8').split('\n').slice(0, 3).find((l) => l.startsWith('// '));
-      out.push({ path: `${dir}/${f}`, line: head.slice(3).trim() });
+      const text = fs.readFileSync(path.join(manual.ROOT, dir, f), 'utf8');
+      const block = text.match(/^(?:#!.*\n)?(?:'use strict';\n)?((?:\/\/.*\n)+)/u)[1];
+      const para = block.split(/\n\/\/\s*\n/u)[0].replace(/^\/\/ ?/gmu, '').split('\n').map((l) => l.trim()).join('');
+      out.push({ path: `${dir}/${f}`, line: para.match(/^[^。]*。/u)[0], para });
     }
   }
   return out;
@@ -176,7 +182,7 @@ test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片�
   const bar = [...html.matchAll(/class="bar-seg seg-(\w+)" style="flex-grow:(\d+)"/gu)].map((m) => [m[1], Number(m[2])]);
   assert.deepEqual(bar, [['machine', tally.machine], ['mixed', tally.mixed], ['self', tally.self]], '比例條三段的長短要等於三類的條數');
   assert.ok(html.includes(`<p class="page-sum">${total} 條，分 ${src.rules.sections.length} 節`), '頁首的總條數或節數不對');
-  assert.equal(html.match(/<section class="page" id="rules" data-page>[\s\S]*?<h1>([^<]*)<\/h1>/u)[1], escT(src.rules.title), '規矩頁的大標題要是規則資料的標題');
+  assert.equal(html.match(/<section class="page" id="page-rules" data-page="rules">[\s\S]*?<h1>([^<]*)<\/h1>/u)[1], escT(src.rules.title), '規矩頁的大標題要是規則資料的標題');
   assert.deepEqual(manual.KIND_TEXT, KIND, '分類的字改了：要連這一題與 PR 說明一起改');
   assert.ok(html.includes('這三類只照每一條「把關」那一行列了哪些名字來分，不代表整條都有人守住'), '頁上講分類的那句不見了');
   for (const s of src.rules.sections) {
@@ -277,6 +283,18 @@ test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤�
     ['機器大表少一格', { machines: m.replace(MACH_ROW, MACH_ROW.replace(/\| [^|]+ \|$/u, '|')) }, /要剛好六格/u],
     ['機器大表條號不存在', { machines: m.replace(MACH_ROW, MACH_ROW.replace(/^\| [^|]+ \|/u, '| K99 |')) }, /條號 K99 不在規則裡/u],
     ['機器大表後面不是標題', { machines: m.replace(MACH_LAST, `${MACH_LAST}\n\n補一句說明`) }, /那張表之後接的不是下一節的標題/u],
+    ['第一格逗號分隔', { machines: m.replace('| E5、H1 |', '| E5,H1 |') }, /「E5,H1」不是規則裡的條號/u],
+    ['第一格範圍寫法', { machines: m.replace('| D1、I3 |', '| D1、I1〜I3 |') }, /「I1〜I3」不是規則裡的條號/u],
+    ['第一格小寫', { machines: m.replace('| K3 |', '| k3 |') }, /「k3」不是規則裡的條號/u],
+    ['第一格空條號', { machines: m.replace('| A2、D3、E1 |', '| A2、、E1 |') }, /第一格有空的條號/u],
+    ['某一格只有空白', { machines: m.replace(MACH_ROW, MACH_ROW.replace(/\| [^|]+ \|$/u, '|   |')) }, /要剛好六格/u],
+    ['七格沒結尾', { machines: m.replace(MACH_ROW, `${MACH_ROW} 多 |多`) }, /要剛好六格/u],
+    ['分隔列五欄', { machines: m.replace('|---|---|---|---|---|---|', '|---|---|---|---|---|') }, /六欄的分隔列/u],
+    ['說明段第二段', { machines: m.replace(MACH_INTRO, `${MACH_INTRO}\n\n第二段`) }, /說明有第二段/u],
+    ['說明段有條列', { machines: m.replace(MACH_INTRO, `${MACH_INTRO}\n- 條列`) }, /只收一段說明/u],
+    ['說明段有 HTML 註解', { machines: m.replace(MACH_INTRO, `${MACH_INTRO}\n<!-- 註解 -->`) }, /只收一段說明/u],
+    ['說明段夾表格列', { machines: m.replace(MACH_INTRO, `${MACH_INTRO}\n| x |`) }, /只收一段說明/u],
+    ['零列', { machines: m.split('\n').filter((l, k) => !(k >= machAt + 2 && k <= machLines.indexOf(MACH_LAST))).join('\n') }, /沒有任何一列/u],
     ['機器大表尾端緊接缺開頭豎線的列', { machines: m.replace(MACH_LAST, `${MACH_LAST}\n K1 | 甲 | 乙 | 丙 | 丁 | 戊 |`) }, /要剛好六格/u],
     ['機器大表尾端緊接多一個前導空白的列', { machines: m.replace(MACH_LAST, `${MACH_LAST}\n | K1 | 甲 | 乙 | 丙 | 丁 | 戊 |`) }, /要剛好六格/u],
   ];
@@ -287,6 +305,9 @@ test('⑤ 抽不到就停：少一個來源、規則資料不合契約、標籤�
   }
   // 工具檔頭沒有說明就停（用注入的來源，不動真的檔）
   assert.throws(() => manual.build({ ...src, tools: [...src.tools, { path: 'tools/no-header.js', text: "'use strict';\nmodule.exports = {};\n" }] }), /tools\/no-header\.js 的前三行沒有/u);
+  assert.throws(() => manual.build({ ...src, tools: [...src.tools, { path: 'tools/late.js', text: "'use strict';\n\n\n// 第四行才說明。\n" }] }), /tools\/late\.js 的前三行沒有/u);
+  assert.throws(() => manual.build({ ...src, tools: [...src.tools, { path: 'tools/empty.js', text: "// \nmodule.exports = {};\n" }] }), /tools\/empty\.js 檔頭的第一段沒有「。」/u);
+  assert.throws(() => manual.build({ ...src, tools: [...src.tools, { path: 'tools/noperiod.js', text: "// 沒有句號的說明\n//\n// 第二段才有。\n" }] }), /tools\/noperiod\.js 檔頭的第一段沒有「。」/u);
   // 對照組：表格尾端多一列格式正確的新標籤，照收（多一筆、跳窗寫沒有規矩用到它）；開頭那一段換行不算兩段
   const ok = manual.build({ ...src, machines: m.replace(SELF_ROW, `${SELF_ROW}\n| 新增標籤 | 新的意思 | 新的守不到 |`) });
   const okData = JSON.parse(ok.html.match(/id="label-data">([\s\S]*?)<\/script>/u)[1]);
@@ -369,6 +390,15 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
     }
     fs.cpSync(path.join(manual.ROOT, 'tools'), path.join(kit, 'tools'), { recursive: true });
     assert.equal(run([], path.join(kit, 'manual/build.js')).status, 0, '複本本身要先能產生（對照組）');
+    fs.writeFileSync(path.join(kit, 'tools', 'notes.md'), '不認得的檔\n');
+    const odd = run([], path.join(kit, 'manual/build.js'));
+    assert.equal(odd.status, 1);
+    assert.match(odd.stderr, /tools\/notes\.md：工具頁不知道它歸哪一組/u);
+    assert.equal(odd.stdout, '');
+    fs.rmSync(path.join(kit, 'tools', 'notes.md'));
+    fs.mkdirSync(path.join(kit, 'tools', 'extra'));
+    assert.match(run([], path.join(kit, 'manual/build.js')).stderr, /tools\/extra：工具頁不知道它歸哪一組/u);
+    fs.rmSync(path.join(kit, 'tools', 'extra'), { recursive: true });
     fs.writeFileSync(path.join(kit, 'GLOSSARY.md'), '# 空的\n');
     const bad = run([], path.join(kit, 'manual/build.js'));
     assert.equal(bad.status, 1);
@@ -385,7 +415,9 @@ test('⑨ 機器頁：每一列一張卡，條號、移植狀態照原文；跳�
   const rows = ownMachineRows(src.machines);
   const ids = src.rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
   assert.ok(rows.length >= 20, '考題自己讀到的機器表太少：對照讀錯了');
-  const page = html.match(/<section class="page" id="machines" data-page hidden>([\s\S]*?)\n<\/section>\n<section class="page" id="tools"/u)[1];
+  const NON_RULE = ['案例簿'];
+  assert.deepEqual(manual.NON_RULE_KEYS, NON_RULE, '機器表第一格允許的字面值改了：要連這一題一起改');
+  const page = html.match(/<section class="page" id="page-machines" data-page="machines" hidden>([\s\S]*?)\n<\/section>\n<section class="page" id="page-tools"/u)[1];
   assert.equal(page.match(/<h1>([^<]*)<\/h1>/u)[1], escT(src.machines.split('\n')[0].slice(2).trim()), '機器頁大標題要是 MACHINES.md 的大標題');
   const cards = [...page.matchAll(/<article class="mrow" id="mach-(m\d+)"[^>]*>([\s\S]*?)<\/article>/gu)];
   assert.equal(cards.length, rows.length, '卡的張數要等於機器表的列數');
@@ -394,17 +426,25 @@ test('⑨ 機器頁：每一列一張卡，條號、移植狀態照原文；跳�
   rows.forEach((row, i) => {
     const [, mid, body] = cards[i];
     const keys = [...body.matchAll(/<(?:button type="button" class="rule-link" data-goto="rule-([A-K]\d+)"|span class="key-plain")>([^<]*)<\/(?:button|span)>/gu)].map((x) => [x[1] || null, x[2]]);
+    for (const k of row.keys) assert.ok(ids.includes(k) || NON_RULE.includes(k), `第 ${i + 1} 列第一格的「${k}」不是條號、也不是考題登記的字面值`);
     assert.deepEqual(keys, row.keys.map((k) => [ids.includes(k) ? k : null, k]), `第 ${i + 1} 列的條號不對`);
+    const firstCode = (row.fields[0].match(/`([^`]+)`/u) || [])[1];
+    if (firstCode) assert.ok(body.includes(`<code class="mrow-sub">${escT(firstCode)}</code>`), `第 ${i + 1} 列卡上沒有顯示它的第一個實作檔`);
+    const popupRules = [...data[mid].html.matchAll(/data-goto="rule-([A-K]\d+)">([^<]*)<\/button>/gu)].map((x) => [x[1], x[2]]);
+    assert.deepEqual(popupRules, row.keys.filter((k) => ids.includes(k)).map((k) => [k, k]), `第 ${i + 1} 列跳窗裡的條號鈕不對`);
     assert.equal(strip(body.match(/<p class="mrow-status">([\s\S]*?)<\/p>/u)[1]), `移植狀態${proseText(row.status)}`, `第 ${i + 1} 列的移植狀態不對`);
     assert.ok(body.includes(`data-machine="${mid}"`), `第 ${i + 1} 列沒有開跳窗的鈕`);
     const entry = data[mid];
-    assert.equal(entry.title, `${row.keys.join('、')} 的機器`);
+    assert.ok(entry.title.startsWith(`${row.keys.join('、')}`) && entry.title.endsWith(' 的機器'), `第 ${i + 1} 列跳窗標題不對`);
     const dd = [...entry.html.matchAll(/<dt>([^<]+)<\/dt><dd>([\s\S]*?)<\/dd>/gu)].map((x) => [x[1], strip(x[2])]);
     assert.deepEqual(dd, [['原專案的實作', proseText(row.fields[0])], ['違反時會紅的條件', proseText(row.fields[1])], ['守不到的', proseText(row.fields[2])], ['啟用前提', proseText(row.fields[3])], ['移植狀態', proseText(row.status)]], `第 ${i + 1} 列跳窗的內容不是原文`);
   });
-  for (const l of ownLabels(src.machines)) {
-    assert.ok(page.includes(`data-label="${escT(l.name)}">${escT(l.name)}</button><dl class="def"><dt>意思</dt><dd>`), `機器頁少了標籤「${l.name}」`);
-  }
+  const defs = [...page.matchAll(/<div class="label-def"><button type="button" class="chip [^"]+" data-label="([^"]+)">[^<]*<\/button><dl class="def"><dt>意思<\/dt><dd>([\s\S]*?)<\/dd><dt>守不到的<\/dt><dd>([\s\S]*?)<\/dd><\/dl><\/div>/gu)].map((x) => [x[1], strip(x[2]), strip(x[3])]);
+  assert.deepEqual(defs, ownLabels(src.machines).map((l) => [escT(l.name), proseText(l.meaning), proseText(l.limits)]), '機器頁的標籤定義跟標籤表不一樣（少一種、順序或內容不對）');
+  const machLines = src.machines.split('\n');
+  const introLines = machLines.slice(machLines.indexOf('## 本文條目 → 機器') + 1, machLines.indexOf('| 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |')).filter((l) => l.trim());
+  assert.ok(page.includes(`<h2>規矩對到哪台機器</h2><p class="muted">`), '機器頁少了那張表的小標');
+  assert.equal(strip(page.match(/<h2>規矩對到哪台機器<\/h2><p class="muted">([\s\S]*?)<\/p>/u)[1]), proseText(introLines.map((l) => l.trim()).join(' ')), '那張表上面的說明段不是原文');
   assert.ok(page.includes(`標籤 ${ownLabels(src.machines).length} 種；規矩對到機器的表 ${rows.length} 列`), '機器頁頁首的數字不對');
 });
 
@@ -414,18 +454,23 @@ test('⑩ 工具頁：tools/ 與 tools/gates/ 每一支一則、照檔名排；�
   const tools = ownTools();
   const rows = ownMachineRows(src.machines);
   assert.ok(tools.length >= 20, '考題自己列到的工具太少');
-  const page = html.match(/<section class="page" id="tools" data-page hidden>([\s\S]*?)<p class="source-note">來源：tools\//u)[1];
+  const page = html.match(/<section class="page" id="page-tools" data-page="tools" hidden>([\s\S]*?)<p class="source-note">來源：tools\//u)[1];
   const items = [...page.matchAll(/<article class="tool"><h3><code>([^<]*)<\/code><\/h3><p>([\s\S]*?)<\/p><p class="rule-mach">([\s\S]*?)<\/p><\/article>/gu)];
   assert.deepEqual(items.map((x) => x[1]), tools.map((t) => t.path), '工具的清單或順序不對');
   const data = JSON.parse(html.match(/id="machine-data">([\s\S]*?)<\/script>/u)[1]);
   items.forEach((x, i) => {
-    assert.equal(strip(x[2]), proseText(tools[i].line), `${tools[i].path} 的說明不是檔頭第一句`);
-    const want = rows.filter((r) => r.fields[0].includes(`\`${tools[i].path}\``)).map((r) => `${r.keys.join('、')} 那一列`);
+    const shown = strip(x[2]);
+    assert.equal(shown, proseText(tools[i].line), `${tools[i].path} 的說明不是檔頭第一句`);
+    assert.ok(shown.endsWith('。') && shown.indexOf('。') === shown.length - 1, `${tools[i].path} 的說明要剛好一句、以「。」結尾`);
+    assert.ok(tools[i].para.startsWith(tools[i].line), `${tools[i].path} 的第一句要是檔頭第一段的開頭`);
+    const want = rows.map((r, k) => [r, k]).filter(([r]) => r.fields[0].includes(`\`${tools[i].path}\``)).map(([, k]) => `m${k + 1}`);
     const got = [...x[3].matchAll(/data-machine="(m\d+)">([^<]*)<\/button>/gu)];
-    assert.deepEqual(got.map((g) => g[2]), want, `${tools[i].path} 列出的機器表列不對`);
-    for (const [, mid, label] of got) assert.equal(`${data[mid].title.replace(/ 的機器$/u, '')} 那一列`, label, `${tools[i].path} 的鈕打開的不是它寫的那一列`);
+    assert.deepEqual(got.map((g) => g[1]), want, `${tools[i].path} 列出的機器表列不對（用列的內容比，不用標題比）`);
+    for (const [, mid, label] of got) assert.equal(label, `${data[mid].title.replace(/ 的機器$/u, '')} 那一列`, `${tools[i].path} 的鈕上的字跟它打開的那一列標題不一樣`);
     if (!want.length) assert.ok(x[3].includes('沒有直接寫到它'), `${tools[i].path} 沒有對應列時要寫明`);
   });
+  const checkReview = items.find((x) => x[1] === 'tools/gates/check-review-verdicts.js');
+  assert.ok(checkReview && strip(checkReview[2]).includes('放行只認'), '跨兩行的第一句要接起來（check-review-verdicts 的後半「放行只認…」）');
   assert.ok(page.includes(`${tools.length} 支程式`), '工具頁頁首的支數不對');
   const groups = [...page.matchAll(/<span class="sec-count">(\d+) 支<\/span>/gu)].map((g) => Number(g[1]));
   assert.deepEqual(groups, [tools.filter((t) => t.path.split('/').length === 2).length, tools.filter((t) => t.path.startsWith('tools/gates/')).length]);
@@ -441,13 +486,16 @@ test('⑪ 規矩頁的「機器表」連結：每一條列出的列＝機器表�
     for (const r of s.rules) {
       const id = `${s.letter}${r.n}`;
       const c = card(html, id);
-      const want = rows.filter((row) => row.keys.includes(id)).map((row) => `${row.keys.join('、')} 那一列`);
+      const want = rows.map((row, k) => [row, k]).filter(([row]) => row.keys.includes(id)).map(([, k]) => `m${k + 1}`);
       const got = [...c.matchAll(/class="mach-link" data-machine="(m\d+)">([^<]*)<\/button>/gu)];
-      assert.deepEqual(got.map((g) => g[2]), want, `${id} 的機器表連結不對`);
-      for (const [, mid, label] of got) assert.equal(`${data[mid].title.replace(/ 的機器$/u, '')} 那一列`, label);
+      assert.deepEqual(got.map((g) => g[1]), want, `${id} 的機器表連結不對（用列的內容比）`);
+      assert.equal(new Set(got.map((g) => g[2])).size, got.length, `${id} 有兩顆字一樣的機器表鈕，分不出是哪一列`);
+      for (const [, mid, label] of got) assert.equal(label, `${data[mid].title.replace(/ 的機器$/u, '')} 那一列`);
       if (want.length) linked += 1;
       else assert.ok(!c.includes('class="rule-mach"'), `${id} 沒有對應列時不該有機器表那一行`);
     }
   }
   assert.ok(linked >= 20, '有機器表連結的規矩太少：對照讀錯了');
+  const titles = Object.values(data).map((e) => e.title);
+  assert.equal(new Set(titles).size, titles.length, '兩列機器的跳窗標題一樣，分不出是哪一列');
 });
