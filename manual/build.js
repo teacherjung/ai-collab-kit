@@ -49,11 +49,12 @@ const RULE_SEPARATOR = /[、，,；;。]/u;
 const HELPER_TEST_LIKE = /^(?=.*test).*\.(?:js|cjs|mjs|ts|cts|mts)$/iu;
 const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
 const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
-// 範本跳窗不收的字：tab 與換行以外的控制字元——瀏覽器顯示不出它們（NUL 會被丟掉、\r 會變成換行、其餘看不見），跳窗就不是原文了
-const TEMPLATE_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F]/u;
+// 範本跳窗不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
+// （NUL 會被丟掉、\r 會變成換行、其餘看不見），跳窗就不是原文了
+const TEMPLATE_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
-  laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文，不照 GitHub 的畫法。',
+  laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
   md: '這一份用到說明書不排的寫法，照原始檔顯示：字跟檔案裡的一樣，只是沒有排版。',
   other: '這一份不是 .md 文件，照原始檔顯示。',
 };
@@ -450,7 +451,8 @@ function tableCells(line, where) {
       cur += line[i] + line[i + 1];
       i += 1;
     } else if (line[i] === '|') {
-      cells.push(cur.trim());
+      // 格子頭尾只去掉半形空白（GitHub 的表格也只去這種）；全形空白、不換行空白是字，照留
+      cells.push(cur.replace(/^ +| +$/gu, ''));
       cur = '';
     } else {
       cur += line[i];
@@ -699,7 +701,7 @@ ${cards.join('\n')}
 <header class="page-head">
 <p class="eyebrow">規矩本文</p>
 <h1>${esc(data.title)}</h1>
-<p class="page-sum">${total} 條，分 ${data.sections.length} 節（${esc(data.sections[0].letter)}〜${esc(data.sections[data.sections.length - 1].letter)}）。每一條最後一行「把關」寫這條由誰把關；點標籤看它的意思、它守不到什麼。有「範本」那一行的，點檔名看範本全文。</p>
+<p class="page-sum">${total} 條，分 ${data.sections.length} 節（${esc(data.sections[0].letter)}〜${esc(data.sections[data.sections.length - 1].letter)}）。每一條的「把關」那一行寫這條由誰把關；點標籤看它的意思、它守不到什麼。有「範本」那一行的，列的是 MACHINES.md 範本那一節裡說明寫到這一條的範本（一則說明講好幾份的會一起列），點檔名看全文。</p>
 </header>
 <div class="overview">
 <div class="bar" role="img" aria-label="${esc(`${KIND_TEXT.machine} ${count('machine')} 條、${KIND_TEXT.mixed} ${count('mixed')} 條、${KIND_TEXT.self} ${count('self')} 條`)}">${bar}</div>
@@ -771,7 +773,7 @@ function machinesPage(title, labels, table, ruleIds) {
 <h1>${esc(title)}</h1>
 <p class="page-sum">標籤 ${labels.length} 種；規矩對到機器的表 ${table.rows.length} 列。點條號跳到那一條規矩，點「看這台機器怎麼守」看它怎麼做到、違反時什麼會紅、守不到什麼、要先備好什麼。</p>
 </header>
-<section class="block"><h2>標籤</h2><p class="muted">規矩每一條最後一行「把關」用的名字，定義在這裡。</p>
+<section class="block"><h2>標籤</h2><p class="muted">規矩每一條「把關」那一行用的名字，定義在這裡。</p>
 ${labelDefs}
 </section>
 <section class="block"><h2>規矩對到哪台機器</h2><p class="muted">${mdInline(table.intro)}</p>
@@ -900,7 +902,7 @@ ${settingsBlocksHtml(sec.blocks, `設定說明「${sec.title}」那一節`)}
 ${settingsBlocksHtml(doc.intro, '設定說明開頭')}
 ${sections.join('\n')}
 </div>
-<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>
+<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>
 </section>`;
 }
 
@@ -950,19 +952,21 @@ function templateView(file) {
   return { laidOut: false, html: `<pre class="tpl-raw"><code>${esc(file.text)}</code></pre>` };
 }
 
-/** 每一份範本一筆跳窗資料（以路徑為鍵）：MACHINES.md 對它的說明、怎麼顯示的那一句、全文。 */
+/** 每一份範本一筆跳窗資料（以路徑為鍵）：MACHINES.md 對它的說明（一則講好幾份的，寫明一起講哪幾份）、怎麼顯示的那一句、全文。 */
 function templatePopups(files, items) {
-  const descOf = new Map();
-  for (const item of items) for (const p of item.paths) descOf.set(p, item.desc);
+  const itemOf = new Map();
+  for (const item of items) for (const p of item.paths) itemOf.set(p, item);
   const data = {};
   let laidOut = 0;
   for (const file of files) {
     const view = templateView(file);
     if (view.laidOut) laidOut += 1;
     const note = view.laidOut ? TEMPLATE_NOTE.laid : file.path.endsWith('.md') ? TEMPLATE_NOTE.md : TEMPLATE_NOTE.other;
+    const item = itemOf.get(file.path);
+    const shared = item.paths.length > 1 ? `<p class="tpl-shared">這則說明一起講 ${item.paths.length} 份：${item.paths.map((p) => esc(p.slice('templates/'.length))).join('、')}。</p>\n` : '';
     data[file.path] = {
       title: file.path,
-      html: `<p class="tpl-desc"><span class="tag-lead">MACHINES.md 的說明</span>${mdInline(descOf.get(file.path))}</p>\n<p class="tpl-note">${note}</p>\n${view.html}`,
+      html: `<p class="tpl-desc"><span class="tag-lead">MACHINES.md 的說明</span>${mdInline(item.desc)}</p>\n${shared}<p class="tpl-note">${note}</p>\n${view.html}`,
     };
   }
   return { data, laidOut };
@@ -1095,6 +1099,8 @@ html.modal-open,html.modal-open body{overflow:hidden}
 .tool h3{margin:0 0 4px;font-size:16px;font-weight:600}
 .tool p{margin:0}
 .settings-body p,.settings-body li,.tpl-body p,.tpl-body li{overflow-wrap:anywhere}
+/* 排好版的字照原文留空白：連續空白不合併（說明書不照 GitHub 的畫法，其他字照原文） */
+.settings-body :is(p,li,th,td),.tpl-body :is(p,li,th,td){white-space:pre-wrap}
 .settings-body .block{scroll-margin-top:16px}
 .settings-body .block:focus{outline:none}
 .doc-title{font-weight:700;margin:0 0 8px}
@@ -1103,8 +1109,10 @@ table.grid{border-collapse:collapse;font-size:15px;line-height:1.6}
 table.grid th,table.grid td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top;min-width:6em}
 table.grid th{background:var(--bg);font-weight:600}
 .tpl-desc{margin:0 0 6px;font-size:15px;overflow-wrap:anywhere}
+.tpl-shared{margin:0 0 6px;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 .tpl-note{margin:0 0 14px;font-size:13px;color:var(--muted)}
-.tpl-body h3{margin:18px 0 4px;font-size:17px}
+.tpl-body h3{margin:18px 0 4px;font-size:17px;overflow-wrap:anywhere}
+.tpl-body table.grid th,.tpl-body table.grid td{min-width:3em}
 .tpl-raw{margin:0;padding:12px 14px;background:var(--code-bg);border-radius:6px;font-family:var(--mono);font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
 .tpl-raw code{background:none;padding:0;border-radius:0;font-size:inherit}
 @media (max-width:760px){

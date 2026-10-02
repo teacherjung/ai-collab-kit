@@ -425,11 +425,11 @@ test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、
   assert.deepEqual(routes, ['rules', 'machines', 'tools', 'tests', 'templates', 'settings', 'adopt', 'glossary', 'cases']);
   assert.deepEqual(manual.PAGES.map((p) => p.name), ['規矩', '機器', '工具', '考題', '範本', '設定', '套用', '名詞', '案例']);
   for (const p of [manual.ROOT, os.homedir(), os.tmpdir()]) assert.ok(!html.includes(p), `產出裡有這台機器的路徑：${p}`);
-  // 家目錄前綴的形狀：跳窗以外一個都不准有；範本跳窗是範本全文（公開檢查清單本來就拿這幾個前綴當例子），出現的次數要跟範本檔一樣
+  // 家目錄前綴的形狀：範本跳窗資料以外一個都不准有；範本跳窗資料的每一筆（鍵與所有欄位）出現的次數要跟那份範本檔一樣（公開檢查清單本來就拿這幾個前綴當例子）
   const tplJson = html.match(/id="template-data">([\s\S]*?)<\/script>/u)[1];
   for (const p of ['/Users/', '/private/', '/home/']) {
     assert.ok(!html.replace(tplJson, '').includes(p), `跳窗以外的產出裡有家目錄前綴：${p}`);
-    for (const [file, e] of Object.entries(JSON.parse(tplJson))) assert.equal(e.html.split(p).length, disk(file).split(p).length, `${file} 的跳窗裡「${p}」出現的次數跟範本檔不一樣`);
+    for (const [file, e] of Object.entries(JSON.parse(tplJson))) assert.equal(JSON.stringify([file, e]).split(p).length, disk(file).split(p).length, `${file} 的跳窗資料裡「${p}」出現的次數跟範本檔不一樣`);
   }
   assert.ok(html.includes('產生自套件 測試'));
   assert.ok(manual.build(sources(), { stamp: '<b>x</b>' }).html.includes('產生自套件 &lt;b&gt;x&lt;/b&gt;'), '頁尾註記要跳脫');
@@ -527,6 +527,7 @@ test('⑨ 機器頁：每一列一張卡，條號、移植狀態照原文；跳�
   const machLines = o.machines.split('\n');
   const introLines = machLines.slice(machLines.indexOf('## 本文條目 → 機器') + 1, machLines.indexOf('| 本文 | 原專案的實作 | 違反時會紅的條件 | 守不到的 | 啟用前提 | 移植狀態 |')).filter((l) => l.trim());
   assert.ok(page.includes(`<h2>規矩對到哪台機器</h2><p class="muted">`), '機器頁少了那張表的小標');
+  assert.ok(page.includes('<h2>標籤</h2><p class="muted">規矩每一條「把關」那一行用的名字，定義在這裡。</p>'), '機器頁「標籤」那一節的說明不對（「把關」不一定是卡上最後一行）');
   assert.equal(strip(page.match(/<h2>規矩對到哪台機器<\/h2><p class="muted">([\s\S]*?)<\/p>/u)[1]), proseText(introLines.map((l) => l.trim()).join(' ')), '那張表上面的說明段不是原文');
   assert.ok(page.includes(`標籤 ${ownLabels(o.machines).length} 種；規矩對到機器的表 ${rows.length} 列`), '機器頁頁首的數字不對');
 });
@@ -828,7 +829,7 @@ function ownSettingsDoc(md) {
       doc.sections.push(sec);
       blocks = sec.blocks;
     } else if (rows[0].startsWith('|')) {
-      const cellsOf = (r) => r.slice(1, -1).split(/(?<!\\)\|/u).map((c) => c.trim().split('\\|').join('|'));
+      const cellsOf = (r) => r.slice(1, -1).split(/(?<!\\)\|/u).map((c) => c.replace(/^ +| +$/gu, '').split('\\|').join('|'));
       blocks.push({ kind: 'table', head: cellsOf(rows[0]), rows: rows.slice(2).map(cellsOf) });
     } else if (rows[0].startsWith('- ')) {
       const items = [];
@@ -918,7 +919,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   const page = html.match(/<section class="page" id="page-settings" data-page="settings" hidden>([\s\S]*?)<p class="source-note">來源：tests\/helpers\/unfilled-settings\.json/u)[1];
   assert.ok(page.includes('<p class="eyebrow">空白設定範本</p>\n<h1>設定</h1>'), '設定頁的大標題不對');
   assert.ok(page.includes(`<p class="page-sum">新專案的設定從空白範本 tests/helpers/unfilled-settings.json 開始。下面是 tools/build-settings.js 用那份範本產生的設定說明（跟每個專案的 PROJECT-SETTINGS.md 同一個產生器），共 ${doc.sections.length} 節。</p>`), '設定頁頁首那一句不對（數字或字）');
-  assert.ok(html.includes('<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>'), '設定頁的來源註記不對');
+  assert.ok(html.includes('<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>'), '設定頁的來源註記不對');
   const jumps = [...page.matchAll(/<button type="button" class="jump" data-jump="(set-\d+)">([^<]*)<\/button>/gu)];
   assert.deepEqual(jumps.map((j) => j[2]), SETTINGS_JUMPS, '跳到某一節的鈕跟寫死的節名不一樣');
   jumps.forEach((j, i) => assert.equal(j[1], `set-${i + 1}`, `第 ${i + 1} 顆跳節鈕的目標不對`));
@@ -960,6 +961,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   // #28 r2 N1：表頭格也照同一條規則；格子灰底框裡的兩個反斜線照字面留兩個（預期直接寫死）
   assert.ok(manual.renderSettings(OK.replace('| 欄 | 值 |', '| `a\\|b` | 值 |')).includes('<th><code>a|b</code></th><th>值</th>'), '表頭格灰底框裡的「\\|」也要還原成「|」');
   assert.ok(manual.renderSettings(OK.replace('| a \\| b |  |', '| `a\\\\b` | c |')).includes('<td><code>a\\\\b</code></td><td>c</td>'), '資料格灰底框裡的兩個反斜線要照字面留兩個');
+  assert.ok(manual.renderSettings(OK.replace('| a \\| b |  |', '|\u3000a | \u00a0b |')).includes('<td>\u3000a</td><td>\u00a0b</td>'), '格子頭尾只去半形空白：全形空白、不換行空白是字，照留');
   const boldTitle = manual.renderSettings(OK.replace('## 一、甲', '## 一、**甲**（說明）'));
   assert.ok(boldTitle.includes('<button type="button" class="jump" data-jump="set-1">一、甲</button>') && boldTitle.includes('<h2>一、<strong>甲</strong>（說明）</h2>'), '節標題有粗體時，跳節鈕的字要是去掉排版、「（」之前的字');
   const bad = [
@@ -1061,10 +1063,12 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
 
 // 範本跳窗開頭那一句（照寫，不拿產生器的常數當答案）
 const TEMPLATE_NOTES = {
-  laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文，不照 GitHub 的畫法。',
+  laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
   md: '這一份用到說明書不排的寫法，照原始檔顯示：字跟檔案裡的一樣，只是沒有排版。',
   other: '這一份不是 .md 文件，照原始檔顯示。',
 };
+// 說明書排得了的範本：寫死的樣本（考題沒有自己的判準決定哪一份該排，所以釘住今天的結果；範本或排版規則一改就紅，確認是要的改變再跟著改）
+const TEMPLATE_LAID_OUT = ['templates/review-fixed-dimensions.md', 'templates/verdict-header.md'];
 // 規矩卡上的範本鈕：寫死的樣本（照 MACHINES.md 現在的「範本」那一節）
 const TEMPLATE_LINK_SAMPLES = { F2: ['templates/review-fixed-dimensions.md'], G3: ['templates/pr-body.md', 'templates/scan-record.md'], E1: ['templates/pr-body.md', 'templates/ci-github.yml', 'templates/collab-fields-github.yml'] };
 
@@ -1108,22 +1112,30 @@ test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得�
     const text = disk(file);
     const e = data[file];
     assert.equal(e.title, file, `${file}：跳窗標題要是路徑`);
-    const m = e.html.match(/^<p class="tpl-desc"><span class="tag-lead">MACHINES\.md 的說明<\/span>([\s\S]*?)<\/p>\n<p class="tpl-note">([^<]*)<\/p>\n([\s\S]*)$/u);
-    assert.ok(m, `${file}：跳窗的形狀不對（說明、怎麼顯示的那一句、全文）`);
-    assert.equal(strip(m[1]), proseText(items.find((it) => it.paths.includes(file)).desc), `${file}：跳窗裡的說明不是 MACHINES.md 的原文`);
-    const raw = m[3].match(/^<pre class="tpl-raw"><code>([\s\S]*)<\/code><\/pre>$/u);
+    const m = e.html.match(/^<p class="tpl-desc"><span class="tag-lead">MACHINES\.md 的說明<\/span>([\s\S]*?)<\/p>\n(?:<p class="tpl-shared">([^<]*)<\/p>\n)?<p class="tpl-note">([^<]*)<\/p>\n([\s\S]*)$/u);
+    assert.ok(m, `${file}：跳窗的形狀不對（說明、一起講哪幾份、怎麼顯示的那一句、全文）`);
+    const [, descHtml, sharedLine, noteLine, body] = m;
+    const item = items.find((it) => it.paths.includes(file));
+    assert.equal(strip(descHtml), proseText(item.desc), `${file}：跳窗裡的說明不是 MACHINES.md 的原文`);
+    assert.equal(sharedLine, item.paths.length > 1 ? `這則說明一起講 ${item.paths.length} 份：${item.paths.map((p) => escT(p.slice('templates/'.length))).join('、')}。` : undefined, `${file}：一則講好幾份時要寫明一起講哪幾份（只講一份就不寫）`);
+    const raw = body.match(/^<pre class="tpl-raw"><code>([\s\S]*)<\/code><\/pre>$/u);
     if (raw) {
       assert.equal(raw[1], escT(text), `${file}：照原始檔顯示的全文跟檔案不一樣`);
-      assert.equal(m[2], file.endsWith('.md') ? TEMPLATE_NOTES.md : TEMPLATE_NOTES.other, `${file}：怎麼顯示的那一句不對`);
+      assert.equal(noteLine, file.endsWith('.md') ? TEMPLATE_NOTES.md : TEMPLATE_NOTES.other, `${file}：怎麼顯示的那一句不對`);
     } else {
       laid += 1;
       assert.ok(file.endsWith('.md'), `${file}：不是 .md 卻排了版`);
-      assert.equal(m[2], TEMPLATE_NOTES.laid, `${file}：怎麼顯示的那一句不對`);
-      checkLaidOut(m[3], text, file);
-      assert.ok(!strip(m[3].replace(/<code>[\s\S]*?<\/code>/gu, '')).includes('**'), `${file}：排好版的全文裡有沒處理掉的「**」`);
+      assert.equal(noteLine, TEMPLATE_NOTES.laid, `${file}：怎麼顯示的那一句不對`);
+      checkLaidOut(body, text, file);
+      assert.ok(!strip(body.replace(/<code>[\s\S]*?<\/code>/gu, '')).includes('**'), `${file}：排好版的全文裡有沒處理掉的「**」`);
     }
   }
   assert.equal(built.templatesLaidOut, laid, '回傳的「跳窗排版幾份」跟跳窗資料裡排了版的份數不一樣');
+  assert.deepEqual(files.filter((f) => data[f].html.includes('<div class="tpl-body">')), TEMPLATE_LAID_OUT, '排版的範本跟寫死的樣本不一樣：範本或排版規則改了（確認是要的改變，例如那份範本多了說明書不排的寫法，再把樣本一起改）');
+  // 照原文的字靠樣式撐著：原始檔的換行與縮排、排好版的連續空白都不能被瀏覽器合併
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  assert.match(css, /\n\.tpl-raw\{[^}]*white-space:pre-wrap[^}]*\}/u, '照原始檔顯示的那一塊要保留換行與空白（white-space:pre-wrap）');
+  assert.ok(css.includes('\n.settings-body :is(p,li,th,td),.tpl-body :is(p,li,th,td){white-space:pre-wrap}\n'), '排好版的段落、清單、表格格子要保留連續空白（white-space:pre-wrap）');
   for (const x of html.matchAll(/data-template="([^"]*)"/gu)) assert.ok(Object.hasOwn(data, x[1]), `「${x[1]}」那顆鈕打不開任何跳窗`);
   // F2：擁有者 2026-10-02 問的「複審必驗清單」——F2 那張卡的範本鈕打開的就是它，而且排成表格、項目數照考題自己數的
   const checklistFile = 'templates/review-fixed-dimensions.md';
@@ -1163,7 +1175,7 @@ test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得�
     }
   }
   assert.ok(withTpl >= 10, '有範本鈕的規矩太少：對照讀錯了');
-  assert.ok(html.includes('點標籤看它的意思、它守不到什麼。有「範本」那一行的，點檔名看範本全文。</p>'), '規矩頁頁首講範本鈕的那一句不見了');
+  assert.ok(html.includes('。每一條的「把關」那一行寫這條由誰把關；點標籤看它的意思、它守不到什麼。有「範本」那一行的，列的是 MACHINES.md 範本那一節裡說明寫到這一條的範本（一則說明講好幾份的會一起列），點檔名看全文。</p>'), '規矩頁頁首那兩句不對（「把關」不一定是最後一行；範本那一行列的是什麼）');
   assert.ok(html.includes('<p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表與「本文條目 → 機器」那張表（每條的機器表連結）、MACHINES.md「範本」那一節（每條的範本連結＝那一節的說明寫到這一條條號的範本）與 templates/ 底下的檔（範本全文）、GLOSSARY.md 的版面約定。</p>'), '規矩頁的來源註記不對');
   // 排得了的寫法（含「## 」節、沒有開頭段、只有大標題）照排；認不得任何一行或行內記號＝整份照原始檔（不會半份排版）
   const OK = '# 標題\n\n開頭一段 **粗** 與 `框`。\n\n## 一、甲\n\n| 欄 | 值 |\n|---|---|\n| a \\| b | c |\n\n- 一項\n  1. 子項\n\n## 二、乙\n\n一段。\n';
@@ -1173,6 +1185,8 @@ test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得�
     checkLaidOut(v.html, text, `對照組 ${JSON.stringify(text)}`);
   }
   assert.ok(manual.templateView({ path: 'templates/t.md', text: OK }).html.includes('<h3>一、甲</h3>\n<div class="table-wrap"><table class="grid"><thead><tr><th>欄</th><th>值</th></tr></thead><tbody><tr><td>a | b</td><td>c</td></tr></tbody></table></div>'), '對照組：節標題排成 h3、表格照排（寫死的樣本）');
+  const spaced = manual.templateView({ path: 'templates/t.md', text: OK.replace('| a \\| b | c |', '|\u3000a | \u00a0b |') });
+  assert.ok(spaced.laidOut && spaced.html.includes('<td>\u3000a</td><td>\u00a0b</td>'), '格子頭尾的全形空白、不換行空白是字，排版時照留');
   const rawCases = [
     ['沒有大標題', '一段。\n'],
     ['引用', OK.replace('開頭一段', '> 開頭一段')],
@@ -1194,12 +1208,20 @@ test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得�
     assert.deepEqual(v, { laidOut: false, html: `<pre class="tpl-raw"><code>${escT(OK)}</code></pre>` }, `${p} 不是 .md，要照原始檔顯示`);
   }
   // tab 與換行以外的控制字元＝停（照原始檔也顯示不出原文）；不是排版那一種的例外（程式自己的錯）照樣往外丟
-  for (const ch of ['\r', '\u0000', '\u000b', '\u000c', '\u001b', '\u007f']) {
-    assert.throws(() => manual.templateView({ path: 'templates/t.json', text: `a${ch}b` }), /templates\/t\.json 裡有 tab 與換行以外的控制字元/u, `控制字元 U+${ch.charCodeAt(0).toString(16).padStart(4, '0')} 應該停下`);
+  // 逐一試全部 65 個控制字元（U+0000〜U+001F、U+007F〜U+009F），tab 與換行以外都要停；範圍兩邊緊鄰的字照收
+  const hex = (c) => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`;
+  for (let c = 0; c <= 0x9f; c += 1) {
+    if (c > 0x1f && c < 0x7f) continue;
+    const view = () => manual.templateView({ path: 'templates/t.json', text: `a${String.fromCharCode(c)}b` });
+    if (c === 0x09 || c === 0x0a) assert.doesNotThrow(view, `${hex(c)}（tab、換行）照收`);
+    else assert.throws(view, /templates\/t\.json 裡有 tab 與換行以外的控制字元/u, `控制字元 ${hex(c)} 應該停下`);
   }
-  assert.doesNotThrow(() => manual.templateView({ path: 'templates/t.json', text: 'a\tb\nc' }), '對照組：tab 與換行照收');
+  for (const c of [0x20, 0x7e, 0xa0, 0x3000]) assert.doesNotThrow(() => manual.templateView({ path: 'templates/t.json', text: `a${String.fromCharCode(c)}b` }), `${hex(c)} 不是控制字元，照收`);
   assert.throws(() => manual.build({ ...src, templates: src.templates.map((t) => (t.path === 'templates/pr-body.md' ? { ...t, text: `${t.text}\r` } : t)) }), /templates\/pr-body\.md 裡有 tab 與換行以外的控制字元/u, '整份產生時有控制字元的範本也要停');
   assert.throws(() => manual.templateView({ path: 'templates/t.md', text: null }), TypeError, '不是 LayoutError 的例外不可以被當成「排不了」吞掉');
+  // 一般的 Error 也一樣（日後排版程式裡新寫的 throw new Error 最可能是這一種）：用一份切行時會丟一般 Error 的假原文模擬
+  const broken = { toString: () => '# 標題', split: () => { throw new Error('排版程式自己的錯'); } };
+  assert.throws(() => manual.templateView({ path: 'templates/t.md', text: broken }), /排版程式自己的錯/u, '一般的 Error 不可以被當成「排不了」吞掉');
   // 讀範本：開頭的 BOM 照留；不是合法 UTF-8 就停
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-tpl-text-'));
   try {
