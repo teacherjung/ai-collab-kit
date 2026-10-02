@@ -361,8 +361,8 @@ function parseTemplates(text, files, ruleIds) {
  * 沒跳脫的記號只會來自它程式裡寫死的說明句，所以這裡只認那幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
- * 後面緊接著字的 ~（刪除線）、後面接英文字母或 / ! ? 的 <（HTML、連結）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
- * 其他字元照字面顯示。
+ * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
+ * 其他字元照字面顯示——說明書不照 GitHub 的畫法（擁有者 2026-10-02 裁 a，留痕在 #28）：GitHub 另外加工的寫法（表情代碼、網址自動連結等）這裡照字面。
  */
 function settingsInline(text, where) {
   let out = '';
@@ -401,8 +401,8 @@ function settingsInline(text, where) {
       if (mayOpen) throw new Error(`${where}：「${ch}」後面緊接著字，GitHub 可能當成${ch === '_' ? '斜體' : '刪除線'}，說明書不排`);
       out += esc(text.slice(i, k));
       i = k;
-    } else if (ch === '<' && /^[A-Za-z/!?]$/u.test(next)) {
-      throw new Error(`${where}：「<」後面接英文字母或 / ! ?，GitHub 可能當成 HTML 或連結，說明書不排`);
+    } else if (ch === '<' && /^[!-~]$/u.test(next)) {
+      throw new Error(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
     } else if (ch === '&' && /^[A-Za-z#]$/u.test(next)) {
       throw new Error(`${where}：「&」後面接英文字母或 #，GitHub 可能當成字元代碼，說明書不排`);
     } else if (ch === '[') {
@@ -445,6 +445,12 @@ function settingsText(text, where) {
   return text;
 }
 
+/** 標題結尾是沒跳脫的「#」＝GitHub 會當成標題的收尾記號拿掉，說明書不排。 */
+function noClosingHash(title, where) {
+  if (/(^|[^\\])#$/u.test(title)) throw new Error(`${where}：標題結尾是「#」，GitHub 會把它當成標題的收尾記號拿掉，說明書不排`);
+  return title;
+}
+
 /**
  * 設定說明整份讀成一節一節。只認說明產生器今天產的這幾種行，其他一律停（說明產生器的格式變了，要人先決定說明書怎麼排）：
  * 第一行「# 」大標題、「## 」節標題（前面空一行）、空行（真的空）、段落（一行一段）、表格（表頭、只准 |---| 的分隔列、
@@ -456,7 +462,7 @@ function parseSettingsDoc(md) {
   if (/[\t\r]/u.test(md)) throw new Error('設定說明裡有 tab 或 \\r，說明書不排');
   const lines = md.split('\n');
   if (!lines[0].startsWith('# ')) throw new Error('設定說明第一行應該是「# 」開頭的大標題');
-  const doc = { title: settingsText(lines[0].slice(2), '設定說明的大標題'), intro: [], sections: [] };
+  const doc = { title: noClosingHash(settingsText(lines[0].slice(2), '設定說明的大標題'), '設定說明的大標題'), intro: [], sections: [] };
   let blocks = doc.intro;
   let prev = 'heading';
   let lastBlock = null;
@@ -499,8 +505,10 @@ function parseSettingsDoc(md) {
     if (sub) {
       if (!list) throw new Error(`${where}：子項前面要是「- 」清單`);
       const item = list.items[list.items.length - 1];
-      if (Number(sub[1]) !== item.sub.length + 1) throw new Error(`${where}：子項要從 1 起連號（這裡應該是 ${item.sub.length + 1}）`);
-      item.sub.push(settingsText(sub[2], where));
+      if (sub[1] !== String(item.sub.length + 1)) throw new Error(`${where}：子項要從 1 起連號、照寫成 ${item.sub.length + 1}（這裡寫的是 ${sub[1]}）`);
+      const subText = settingsText(sub[2], where);
+      if (/^\d{1,9}[.)](\s|$)/u.test(subText)) throw new Error(`${where}：子項的字像編號清單，GitHub 會讀成更深一層的清單，說明書不排`);
+      item.sub.push(subText);
       prev = 'sub';
       continue;
     }
@@ -523,8 +531,7 @@ function parseSettingsDoc(md) {
     if (list) throw new Error(`${where}：清單後面直接接了別的東西，說明書不知道它算不算清單的一部分`);
     if (line.startsWith('## ')) {
       if (prev !== 'blank') throw new Error(`${where}：節標題前面要空一行`);
-      const title = settingsText(line.slice(3), where);
-      if (/(^|[^\\])#$/u.test(title)) throw new Error(`${where}：節標題結尾是「#」，GitHub 會把它當成標題的收尾記號拿掉，說明書不排`);
+      const title = noClosingHash(settingsText(line.slice(3), where), where);
       const section = { title, blocks: [] };
       doc.sections.push(section);
       blocks = section.blocks;
@@ -812,8 +819,10 @@ function settingsBlocksHtml(blocks, where) {
       const at = `${where}的第 ${k + 1} 塊`;
       if (b.kind === 'p') return `<p>${settingsInline(b.text, at)}</p>`;
       if (b.kind === 'table') {
-        return `<div class="table-wrap"><table class="grid"><thead><tr>${b.head.map((c) => `<th>${settingsInline(c, at)}</th>`).join('')}</tr></thead><tbody>${b.rows
-          .map((r) => `<tr>${r.map((c) => `<td>${settingsInline(c, at)}</td>`).join('')}</tr>`)
+        // GitHub 的表格先把格子裡的「\|」換回「|」再排行內（灰底框裡也是），這裡照做
+        const cell = (c) => settingsInline(c.split('\\|').join('|'), at);
+        return `<div class="table-wrap"><table class="grid"><thead><tr>${b.head.map((c) => `<th>${cell(c)}</th>`).join('')}</tr></thead><tbody>${b.rows
+          .map((r) => `<tr>${r.map((c) => `<td>${cell(c)}</td>`).join('')}</tr>`)
           .join('')}</tbody></table></div>`;
       }
       return `<ul class="items">${b.items
@@ -848,7 +857,7 @@ ${settingsBlocksHtml(sec.blocks, `設定說明「${sec.title}」那一節`)}
 ${settingsBlocksHtml(doc.intro, '設定說明開頭')}
 ${sections.join('\n')}
 </div>
-<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。說明書只排那份說明今天用到的寫法（大標題、節標題、段落、表格、清單與子項、灰底框、粗體、反斜線跳脫）；碰到其他寫法就整份不產生，不會猜。</p>
+<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>
 </section>`;
 }
 

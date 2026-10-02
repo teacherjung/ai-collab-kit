@@ -818,7 +818,7 @@ function ownSettingsDoc(md) {
       doc.sections.push(sec);
       blocks = sec.blocks;
     } else if (rows[0].startsWith('|')) {
-      const cellsOf = (r) => r.slice(1, -1).split(/(?<!\\)\|/u).map((c) => c.trim());
+      const cellsOf = (r) => r.slice(1, -1).split(/(?<!\\)\|/u).map((c) => c.trim().split('\\|').join('|'));
       blocks.push({ kind: 'table', head: cellsOf(rows[0]), rows: rows.slice(2).map(cellsOf) });
     } else if (rows[0].startsWith('- ')) {
       const items = [];
@@ -850,7 +850,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   const page = html.match(/<section class="page" id="page-settings" data-page="settings" hidden>([\s\S]*?)<p class="source-note">來源：tests\/helpers\/unfilled-settings\.json/u)[1];
   assert.ok(page.includes('<p class="eyebrow">空白設定範本</p>\n<h1>設定</h1>'), '設定頁的大標題不對');
   assert.ok(page.includes(`<p class="page-sum">新專案的設定從空白範本 tests/helpers/unfilled-settings.json 開始。下面是 tools/build-settings.js 用那份範本產生的設定說明（跟每個專案的 PROJECT-SETTINGS.md 同一個產生器），共 ${doc.sections.length} 節。</p>`), '設定頁頁首那一句不對（數字或字）');
-  assert.ok(html.includes('<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。說明書只排那份說明今天用到的寫法（大標題、節標題、段落、表格、清單與子項、灰底框、粗體、反斜線跳脫）；碰到其他寫法就整份不產生，不會猜。</p>'), '設定頁的來源註記不對');
+  assert.ok(html.includes('<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>'), '設定頁的來源註記不對');
   const jumps = [...page.matchAll(/<button type="button" class="jump" data-jump="(set-\d+)">([^<]*)<\/button>/gu)];
   assert.deepEqual(jumps.map((j) => j[2]), SETTINGS_JUMPS, '跳到某一節的鈕跟寫死的節名不一樣');
   jumps.forEach((j, i) => assert.equal(j[1], `set-${i + 1}`, `第 ${i + 1} 顆跳節鈕的目標不對`));
@@ -931,6 +931,10 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
     assert.doesNotThrow(() => manual.renderSettings(OK.replace('開頭一段。', ok)), `對照組「${ok}」要照收`);
   }
   assert.ok(manual.renderSettings(OK.replace('開頭一段。', '一段 `灰底框\\_x`。')).includes('<code>灰底框\\_x</code>'), '灰底框裡的反斜線照字面');
+  const literal = manual.renderSettings(OK.replace('開頭一段。', '範例 A \\:smile\\: B、聯絡 123@example.com、網址 https://example.com 照字面。'));
+  assert.ok(literal.includes('<p>範例 A :smile: B、聯絡 123@example.com、網址 https://example.com 照字面。</p>'), '表情代碼、信箱、網址照原文的字顯示（擁有者 2026-10-02 裁 a：不照 GitHub 的畫法）');
+  const pipeInCode = manual.renderSettings(OK.replace('| a \\| b |  |', '| `a\\|b` | c |'));
+  assert.ok(pipeInCode.includes('<td><code>a|b</code></td><td>c</td>'), '表格灰底框裡的「\\|」照 GitHub 表格的規則還原成「|」');
   const boldTitle = manual.renderSettings(OK.replace('## 一、甲', '## 一、**甲**（說明）'));
   assert.ok(boldTitle.includes('<button type="button" class="jump" data-jump="set-1">一、甲</button>') && boldTitle.includes('<h2>一、<strong>甲</strong>（說明）</h2>'), '節標題有粗體時，跳節鈕的字要是去掉排版、「（」之前的字');
   const bad = [
@@ -973,14 +977,18 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
     ['子項記號後兩格空白', OK.replace('  1. 子項', '  1.  子項'), /字是空的、或頭尾有空白/u],
     ['子項用 1)', OK.replace('  1. 子項', '  1) 子項'), /清單後面直接接了別的東西/u],
     ['子項不從 1 起', OK.replace('  1. 子項', '  2. 子項'), /子項要從 1 起連號/u],
-    ['子項跳號', OK.replace('  1. 子項', '  1. 子項\n  3. 子項'), /子項要從 1 起連號（這裡應該是 2）/u],
+    ['子項跳號', OK.replace('  1. 子項', '  1. 子項\n  3. 子項'), /子項要從 1 起連號、照寫成 2（這裡寫的是 3）/u],
+    ['子項號碼前面補零', OK.replace('  1. 子項', '  01. 子項'), /子項要從 1 起連號、照寫成 1（這裡寫的是 01）/u],
+    ['子項號碼超長', OK.replace('  1. 子項', '  0000000001. 子項'), /照寫成 1（這裡寫的是 0000000001）/u],
+    ['子項的字像編號清單', OK.replace('  1. 子項', '  1. 1. 子項'), /子項的字像編號清單/u],
     ['節標題前沒空行', OK.replace('開頭一段。\n\n## 一、甲', '開頭一段。\n## 一、甲'), /節標題前面要空一行/u],
     ['大標題後直接接節標題', OK.replace('# 標題\n\n開頭一段。\n\n', '# 標題\n'), /節標題前面要空一行/u],
     ['節標題連著節標題', OK.replace('## 一、甲', '## 零\n## 一、甲'), /節標題前面要空一行/u],
     ['節標題是空的', OK.replace('## 一、甲', '## '), /結尾有空白/u],
     ['節標題開頭有空白', OK.replace('## 一、甲', '##  一、甲'), /字是空的、或頭尾有空白/u],
     ['節標題開頭是半形標點', OK.replace('## 一、甲', '## -甲'), /開頭是沒跳脫的半形標點（-）/u],
-    ['節標題結尾是 #', OK.replace('## 一、甲', '## 一、甲 #'), /節標題結尾是「#」/u],
+    ['節標題結尾是 #', OK.replace('## 一、甲', '## 一、甲 #'), /第 5 行：標題結尾是「#」/u],
+    ['大標題結尾是 #', OK.replace('# 標題', '# 標題 #'), /大標題：標題結尾是「#」/u],
     ['清單前沒空行', OK.replace('開頭一段。', '開頭一段。\n- 項'), /清單前面要空一行/u],
     ['清單後直接接段落', OK.replace('- 二項', '- 二項\n一段'), /清單後面直接接了別的東西/u],
     ['兩串清單只隔一個空行', OK.replace('- 二項', '- 二項\n\n- 三項'), /兩串清單之間只隔一個空行/u],
@@ -998,7 +1006,10 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
     ['單獨的 *', OK.replace('開頭一段。', '一段 *斜* 完'), /單獨的「\*」/u],
     ['_ 可能是斜體', OK.replace('開頭一段。', '一段 _斜_ 完'), /「_」後面緊接著字/u],
     ['~ 可能是刪除線', OK.replace('開頭一段。', '一段 ~刪~ 完'), /「~」後面緊接著字/u],
-    ['< 接英文字母', OK.replace('開頭一段。', '一段 <b>粗</b>'), /「<」後面接英文字母/u],
+    ['< 接英文字母', OK.replace('開頭一段。', '一段 <b>粗</b>'), /「<」後面緊接著半形字元/u],
+    ['< 接驚嘆號（HTML 註解）', OK.replace('開頭一段。', '一段 <!-- 隱藏字 --> 後文'), /「<」後面緊接著半形字元/u],
+    ['< 接數字（信箱連結）', OK.replace('開頭一段。', '一段 <123@example.com> 後文'), /「<」後面緊接著半形字元/u],
+    ['& 接 #（數字字元碼）', OK.replace('開頭一段。', '一段 &#65; 後文'), /「&」後面接英文字母或 #/u],
     ['& 接英文字母', OK.replace('開頭一段。', '一段 &amp; 完'), /「&」後面接英文字母或 #/u],
     ['[ 可能是連結', OK.replace('開頭一段。', '一段 [連結](x) 完'), /「\[」GitHub 可能當成連結/u],
     ['跳節鈕的字是空的', OK.replace('## 一、甲', '## （甲）'), /取不出跳節鈕的字/u],
