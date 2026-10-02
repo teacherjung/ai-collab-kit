@@ -2,7 +2,8 @@
 // 說明書網頁產生器的考題（manual/build.js；只在套件倉庫、不在共用路徑裡）。
 // 守的：規矩頁的每一條（主句、子點的順序與層級與編號、把關那一行整行、機器表連結）、節標題、頁面上的數字、
 // 跳窗資料、版面約定逐條、檔頭原文；機器頁（標籤定義、那張表每一列的條號、移植狀態、跳窗四欄、重名列的完整標題）、
-// 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）；
+// 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）、
+// 設定頁（設定說明產生器對空白範本的產出：每一節、段落、表格每一格、清單與子項）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
@@ -589,10 +590,11 @@ test('⑪ 規矩頁的「機器表」連結：每一條列出的列＝機器表�
   assert.equal(new Set(titles).size, titles.length, '兩列機器的跳窗標題一樣，分不出是哪一列');
 });
 
-test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本檔名）', () => {
+test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本檔名、空白設定範本）', () => {
   const src = sources();
   const o = own();
-  assert.deepEqual(Object.keys(src).sort(), ['glossary', 'machines', 'rules', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.deepEqual(Object.keys(src).sort(), ['glossary', 'machines', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.equal(src.settingsTemplate, disk('tests/helpers/unfilled-settings.json'), '空白設定範本讀進來跟磁碟上的不一樣');
   assert.deepEqual(src.rules, o.rules, 'rules.json 讀進來跟磁碟上的不一樣');
   assert.equal(src.machines, o.machines, 'MACHINES.md 讀進來跟磁碟上的不一樣（漏列、改字都會在這裡紅）');
   assert.equal(src.glossary, o.glossary, 'GLOSSARY.md 讀進來跟磁碟上的不一樣');
@@ -675,6 +677,8 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
       ['helpers 底下有 .test.js', () => fs.writeFileSync(path.join(t, 'helpers', 'e.test.js'), '// 戊。\n'), /tests\/helpers\/e\.test\.js：考題頁不知道它算不算考題/u],
       ['helpers 底下有 test- 開頭的 .js（Node 會跑）', () => fs.writeFileSync(path.join(t, 'helpers', 'test-extra.js'), 'x'), /tests\/helpers\/test-extra\.js：考題頁不知道它算不算考題/u],
       ['helpers 底下有 .test.cjs（Node 會跑）', () => fs.writeFileSync(path.join(t, 'helpers', 'extra.test.cjs'), 'x'), /tests\/helpers\/extra\.test\.cjs：考題頁不知道它算不算考題/u],
+      ['helpers 底下有 .test.cts', () => fs.writeFileSync(path.join(t, 'helpers', 'x.test.cts'), 'x'), /tests\/helpers\/x\.test\.cts：考題頁不知道它算不算考題/u],
+      ['helpers 底下有 .test.mts', () => fs.writeFileSync(path.join(t, 'helpers', 'x.test.mts'), 'x'), /tests\/helpers\/x\.test\.mts：考題頁不知道它算不算考題/u],
       ['helpers 底下有 _test.mjs', () => fs.writeFileSync(path.join(t, 'helpers', 'x_test.mjs'), 'x'), /tests\/helpers\/x_test\.mjs：考題頁不知道它算不算考題/u],
       ['helpers 底下有大寫 Test 的 .ts', () => fs.writeFileSync(path.join(t, 'helpers', 'Test-y.ts'), 'x'), /tests\/helpers\/Test-y\.ts：考題頁不知道它算不算考題/u],
       ['helpers 底下檔名含 test 的程式檔（寧可多停）', () => fs.writeFileSync(path.join(t, 'helpers', 'latest.js'), 'x'), /tests\/helpers\/latest\.js：考題頁不知道它算不算考題/u],
@@ -765,11 +769,11 @@ test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照�
   const extra = manual.build({ ...src, templates: [...src.templates, 'templates/extra.md'].sort(), machines: m.replace(first, `${first}\n- \`templates/extra.md\`：新範本，看 \`K99\` 那一格；AB1、B1x 不是條號`) }).html;
   const card = extra.match(/<article class="tool"><h3><code>templates\/extra\.md<\/code><\/h3>([\s\S]*?)<\/article>/u);
   assert.ok(card && card[1].includes('說明裡沒有寫到條號') && card[1].includes('沒有直接寫到它'), '新補的那一則要照收、沒有條號也沒有機器表列');
-  // 對照組：條號用粗體或「，」分開＝照收、兩顆鈕
-  for (const text of ['**G1**、**G3**', 'G1，G3']) {
+  // 對照組：六種合法分隔逐一照收成兩顆鈕（鈕的目標與字都核），粗體條號用「、」分開也照收
+  for (const text of ['G1、G3', 'G1，G3', 'G1,G3', 'G1；G3', 'G1;G3', 'G1。G3', '**G1**、**G3**']) {
     const out = manual.build({ ...src, machines: m.replace(first, first.replace(/（[^（）]*）/u, `（${text}）`)) }).html;
     const firstCard = out.match(/<section class="page" id="page-templates"[\s\S]*?<article class="tool">([\s\S]*?)<\/article>/u)[1];
-    assert.deepEqual([...firstCard.matchAll(/data-goto="rule-([A-K]\d+)"/gu)].map((x) => x[1]), ['G1', 'G3'], `「${text}」要照收成兩顆鈕`);
+    assert.deepEqual([...firstCard.matchAll(/data-goto="rule-([A-K]\d+)">([^<]*)<\/button>/gu)].map((x) => [x[1], x[2]]), [['G1', 'G1'], ['G3', 'G3']], `「${text}」要照收成兩顆鈕`);
   }
   // 機器表那一欄用別的寫法提到範本路徑（沒有框、跟別的字放同一個框）＝停；較長路徑裡含它不算
   const b1 = lines.find((l) => l.startsWith('| B1 |'));
@@ -794,6 +798,236 @@ test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照�
     assert.throws(() => manual.readTemplates(dir), /templates\/sub：範本頁只認 templates\/ 第一層的檔/u);
     fs.rmSync(path.join(dir, 'templates', 'sub'), { recursive: true });
     assert.deepEqual(manual.readTemplates(dir), ['templates/a.md'], '對照組：只有一層的檔時照收');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 考題自己讀設定說明（不用產生器的 parseSettingsDoc）：先用空行把整份切成塊，再看每塊的第一行——
+ * 「# 」大標題、「## 」節標題、「|」表格（第二行是分隔列）、「- 」清單（「  N. 」是上一項的子項），其餘是段落。
+ */
+function ownSettingsDoc(md) {
+  const chunks = md.replace(/\n+$/u, '').split(/\n\n+/u);
+  const doc = { title: chunks[0].replace(/^# /u, ''), intro: [], sections: [] };
+  let blocks = doc.intro;
+  for (const chunk of chunks.slice(1)) {
+    const rows = chunk.split('\n');
+    if (rows[0].startsWith('## ')) {
+      const sec = { title: rows[0].slice(3), blocks: [] };
+      doc.sections.push(sec);
+      blocks = sec.blocks;
+    } else if (rows[0].startsWith('|')) {
+      const cellsOf = (r) => r.slice(1, -1).split(/(?<!\\)\|/u).map((c) => c.trim().split('\\|').join('|'));
+      blocks.push({ kind: 'table', head: cellsOf(rows[0]), rows: rows.slice(2).map(cellsOf) });
+    } else if (rows[0].startsWith('- ')) {
+      const items = [];
+      for (const r of rows) {
+        const sub = r.match(/^ {2}(\d+)\. (.*)$/u);
+        if (sub) items[items.length - 1].sub.push([Number(sub[1]), sub[2]]);
+        else items.push({ text: r.slice(2), sub: [] });
+      }
+      blocks.push({ kind: 'list', items });
+    } else {
+      blocks.push({ kind: 'p', text: chunk });
+    }
+  }
+  return doc;
+}
+/**
+ * 設定說明看得到的字（另一種寫法）：先把字串切成「灰底框裡」與「框外」，框裡照字面，
+ * 框外拿掉 **、再把「\」＋半形標點一次換回那個標點（GitHub 也是框裡不解跳脫）。
+ */
+const ownSettingsVisible = (v) => escT(v.split(/(`[^`]*`)/u).map((part, k) => (k % 2 ? part.slice(1, -1) : part.replace(/\*\*/gu, '').replace(/\\([!-/:-@[-`{-~])/gu, '$1'))).join(''));
+const SETTINGS_JUMPS = ['一、參與者識別值', '二、來源字串標準表', '三、清單與正本的位置', '四、掃描發射者', '五、平台介面', '六、三關', '七、禁區', '八、合併後驗收分級', '九、忽略清單登記', '十、合併步驟登記', '十一、機器啟用狀態'];
+
+test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節、每一段、表格每一格、清單與子項都照原文（跳脫的標點還原），整頁不多不少；認不得的形狀就停', () => {
+  const src = sources();
+  const { html } = manual.build(src);
+  const md = require('../tools/build-settings.js').build(JSON.parse(disk('tests/helpers/unfilled-settings.json')));
+  const doc = ownSettingsDoc(md);
+  assert.equal(doc.sections.length, SETTINGS_JUMPS.length, '考題自己讀到的節數跟寫死的樣本不一樣（樣本要跟著設定說明產生器改）');
+  const page = html.match(/<section class="page" id="page-settings" data-page="settings" hidden>([\s\S]*?)<p class="source-note">來源：tests\/helpers\/unfilled-settings\.json/u)[1];
+  assert.ok(page.includes('<p class="eyebrow">空白設定範本</p>\n<h1>設定</h1>'), '設定頁的大標題不對');
+  assert.ok(page.includes(`<p class="page-sum">新專案的設定從空白範本 tests/helpers/unfilled-settings.json 開始。下面是 tools/build-settings.js 用那份範本產生的設定說明（跟每個專案的 PROJECT-SETTINGS.md 同一個產生器），共 ${doc.sections.length} 節。</p>`), '設定頁頁首那一句不對（數字或字）');
+  assert.ok(html.includes('<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>'), '設定頁的來源註記不對');
+  const jumps = [...page.matchAll(/<button type="button" class="jump" data-jump="(set-\d+)">([^<]*)<\/button>/gu)];
+  assert.deepEqual(jumps.map((j) => j[2]), SETTINGS_JUMPS, '跳到某一節的鈕跟寫死的節名不一樣');
+  jumps.forEach((j, i) => assert.equal(j[1], `set-${i + 1}`, `第 ${i + 1} 顆跳節鈕的目標不對`));
+  const body = page.match(/<div class="settings-body">\n([\s\S]*)\n<\/div>\n$/u)[1];
+  assert.equal(strip(body.match(/^<p class="doc-title">([\s\S]*?)<\/p>/u)[1]), ownSettingsVisible(doc.title), '設定說明的大標題不是原文');
+  const blocksOf = (part) => [...part.matchAll(/<p>([\s\S]*?)<\/p>|<div class="table-wrap">([\s\S]*?)<\/div>|<ul class="items">([\s\S]*?)<\/ul>/gu)];
+  const checkBlocks = (got, want, where) => {
+    assert.equal(got.length, want.length, `${where}的塊數不對`);
+    want.forEach((w, k) => {
+      const g = got[k];
+      const at = `${where}第 ${k + 1} 塊`;
+      if (w.kind === 'p') {
+        assert.ok(g[1] !== undefined, `${at}應該是段落`);
+        assert.equal(strip(g[1]), ownSettingsVisible(w.text), `${at}的段落不是原文`);
+      } else if (w.kind === 'table') {
+        assert.ok(g[2] !== undefined, `${at}應該是表格`);
+        assert.match(g[2], /^<table class="grid"><thead><tr>(<th>[\s\S]*?<\/th>)+<\/tr><\/thead><tbody>(<tr>(<td>[\s\S]*?<\/td>)+<\/tr>)*<\/tbody><\/table>$/u, `${at}的表格結構不對（表頭要在 thead、資料列在 tbody）`);
+        const th = [...g[2].matchAll(/<th>([\s\S]*?)<\/th>/gu)].map((x) => strip(x[1]));
+        assert.deepEqual(th, w.head.map(ownSettingsVisible), `${at}的表頭不是原文`);
+        const trs = [...g[2].matchAll(/<tr>([\s\S]*?)<\/tr>/gu)].slice(1).map((x) => [...x[1].matchAll(/<td>([\s\S]*?)<\/td>/gu)].map((y) => strip(y[1])));
+        assert.deepEqual(trs, w.rows.map((r) => r.map(ownSettingsVisible)), `${at}的表格內容不是原文（列數、格數或字）`);
+      } else {
+        assert.ok(g[3] !== undefined, `${at}應該是清單`);
+        const items = [...g[3].matchAll(/<li>((?:(?!<ol>|<\/li>)[\s\S])*)(?:<ol>((?:<li>[\s\S]*?<\/li>)+)<\/ol>)?<\/li>/gu)];
+        assert.deepEqual(items.map((x) => strip(x[1])), w.items.map((it) => ownSettingsVisible(it.text)), `${at}的清單項不是原文`);
+        items.forEach((x, n) => {
+          const sub = x[2] ? [...x[2].matchAll(/<li>([\s\S]*?)<\/li>/gu)].map((y) => strip(y[1])) : [];
+          assert.deepEqual(w.items[n].sub.map(([num]) => num), w.items[n].sub.map((z, q) => q + 1), `${at}第 ${n + 1} 項的子項在原文裡不是從 1 連號（前提）`);
+          assert.deepEqual(sub, w.items[n].sub.map(([, t]) => ownSettingsVisible(t)), `${at}第 ${n + 1} 項的子項不是原文`);
+        });
+      }
+    });
+  };
+  checkBlocks(blocksOf(body.slice(0, body.indexOf('<section class="block"')).replace(/^<p class="doc-title">[\s\S]*?<\/p>/u, '')), doc.intro, '設定說明開頭');
+  const secs = [...body.matchAll(/<section class="block" id="set-(\d+)" tabindex="-1">\n<h2>([\s\S]*?)<\/h2>\n([\s\S]*?)\n<\/section>/gu)];
+  assert.equal(secs.length, doc.sections.length, '設定頁的節數不對');
+  secs.forEach((x, i) => {
+    assert.equal(x[1], String(i + 1), `第 ${i + 1} 節的 id 不對`);
+    assert.equal(strip(x[2]), ownSettingsVisible(doc.sections[i].title), `第 ${i + 1} 節的標題不是原文`);
+    checkBlocks(blocksOf(x[3]), doc.sections[i].blocks, `「${doc.sections[i].title}」那一節`);
+  });
+  // 整頁不多不少：看得到的字（去掉空白）＝大標題＋開頭＋每一節的標題與各塊照順序接起來；每一種標籤的個數也照考題自己數的
+  const textOf = (b) => (b.kind === 'p' ? [b.text] : b.kind === 'table' ? [...b.head, ...b.rows.flat()] : b.items.flatMap((it) => [it.text, ...it.sub.map(([, t]) => t)]));
+  const wantText = [doc.title, ...doc.intro.flatMap(textOf), ...doc.sections.flatMap((sec) => [sec.title, ...sec.blocks.flatMap(textOf)])].map(ownSettingsVisible).join('').replace(/\s+/gu, '');
+  assert.equal(strip(body).replace(/\s+/gu, ''), wantText, '設定頁看得到的字跟原文對不上（多了、少了或順序不對）');
+  const all = [...doc.intro, ...doc.sections.flatMap((sec) => sec.blocks)];
+  const tables = all.filter((b) => b.kind === 'table');
+  const lists = all.filter((b) => b.kind === 'list');
+  const raw = [doc.title, ...doc.sections.map((sec) => sec.title), ...all.flatMap(textOf)].join('\n');
+  const count = (re) => (body.match(re) || []).length;
+  assert.deepEqual(
+    { p: count(/<p[ >]/gu), table: count(/<table /gu), thead: count(/<thead>/gu), tbody: count(/<tbody>/gu), tr: count(/<tr>/gu), th: count(/<th>/gu), td: count(/<td>/gu), ul: count(/<ul /gu), ol: count(/<ol>/gu), li: count(/<li>/gu), section: count(/<section /gu), h2: count(/<h2>/gu), strong: count(/<strong>/gu), code: count(/<code>/gu) },
+    {
+      p: 1 + all.filter((b) => b.kind === 'p').length,
+      table: tables.length, thead: tables.length, tbody: tables.length,
+      tr: tables.reduce((n, t) => n + 1 + t.rows.length, 0),
+      th: tables.reduce((n, t) => n + t.head.length, 0),
+      td: tables.reduce((n, t) => n + t.rows.flat().length, 0),
+      ul: lists.length,
+      ol: lists.reduce((n, l) => n + l.items.filter((it) => it.sub.length).length, 0),
+      li: lists.reduce((n, l) => n + l.items.length + l.items.reduce((m, it) => m + it.sub.length, 0), 0),
+      section: doc.sections.length, h2: doc.sections.length,
+      strong: (raw.match(/(?<!\\)\*\*/gu) || []).length / 2,
+      code: (raw.match(/(?<!\\)`/gu) || []).length / 2,
+    },
+    '設定頁各種標籤的個數跟考題自己數的不一樣（多了空的清單、表頭跑到資料列……）',
+  );
+  // 寫死的樣本：表頭、跳脫還原（含反斜線本身）、粗體與灰底框、空的日期格、子項個數
+  assert.ok(page.includes('<th>參與者</th><th>識別值</th><th>貼文帳號</th>'), '參與者那張表的表頭不對');
+  assert.ok(strip(page).includes('(^|_)(transfer|withdraw(al)?|') && strip(page).includes('_\\w*?('), '跳脫的標點沒有還原（禁區那幾條樣式）');
+  assert.ok(page.includes('<strong>展示</strong>') && page.includes('<code>docs/money-guard-two-pattern-tables.md</code>'), '粗體或灰底框沒排出來');
+  assert.ok(page.includes('<td></td>'), '還沒驗過的日期那一格應該是空的格子');
+  assert.equal(count(/<ol>/gu), 2, '寫死的樣本：子項清單有兩串（掃描那條鏈、三關指令）');
+  // 停下：認不得的形狀與行內記號（直接餵整條排版流程，原因要對；最前面是合法的對照組）
+  const OK = '# 標題\n\n開頭一段。\n\n## 一、甲\n\n| 欄 | 值 |\n|---|---|\n| a \\| b |  |\n\n- 一項\n  1. 子項\n- 二項\n';
+  assert.ok(manual.renderSettings(OK).includes('<td>a | b</td><td></td>'), '對照組要照收：跳脫的「|」不分格、空格照收');
+  for (const ok of ['開頭用 mcp__ 後面接空白、下一個 __ 前面。', '（~ 代表家目錄）、<清單檔>、a\\nb、\\.gitignore、SHARED_PATHS、2026-09-13 改的。', '一段 **粗體** 與 `灰底框\\_x`。']) {
+    assert.doesNotThrow(() => manual.renderSettings(OK.replace('開頭一段。', ok)), `對照組「${ok}」要照收`);
+  }
+  assert.ok(manual.renderSettings(OK.replace('開頭一段。', '一段 `灰底框\\_x`。')).includes('<code>灰底框\\_x</code>'), '灰底框裡的反斜線照字面');
+  const literal = manual.renderSettings(OK.replace('開頭一段。', '範例 A \\:smile\\: B、聯絡 123@example.com、網址 https://example.com 照字面。'));
+  assert.ok(literal.includes('<p>範例 A :smile: B、聯絡 123@example.com、網址 https://example.com 照字面。</p>'), '表情代碼、信箱、網址照原文的字顯示（擁有者 2026-10-02 裁 a：不照 GitHub 的畫法）');
+  const pipeInCode = manual.renderSettings(OK.replace('| a \\| b |  |', '| `a\\|b` | c |'));
+  assert.ok(pipeInCode.includes('<td><code>a|b</code></td><td>c</td>'), '表格灰底框裡的「\\|」照 GitHub 表格的規則還原成「|」');
+  const boldTitle = manual.renderSettings(OK.replace('## 一、甲', '## 一、**甲**（說明）'));
+  assert.ok(boldTitle.includes('<button type="button" class="jump" data-jump="set-1">一、甲</button>') && boldTitle.includes('<h2>一、<strong>甲</strong>（說明）</h2>'), '節標題有粗體時，跳節鈕的字要是去掉排版、「（」之前的字');
+  const bad = [
+    ['沒有大標題', OK.replace('# 標題\n\n', ''), /第一行應該是「# 」開頭的大標題/u],
+    ['大標題是空的', OK.replace('# 標題', '#  '), /大標題：字是空的、或頭尾有空白/u],
+    ['縮排行', OK.replace('開頭一段。', '   縮排'), /字是空的、或頭尾有空白/u],
+    ['引用', OK.replace('開頭一段。', '> 引用'), /開頭是沒跳脫的半形標點（>）/u],
+    ['小標', OK.replace('開頭一段。', '### 小標'), /開頭是沒跳脫的半形標點（#）/u],
+    ['別種清單 *', OK.replace('開頭一段。', '* 別種清單'), /開頭是沒跳脫的半形標點（\*）/u],
+    ['別種清單 +', OK.replace('開頭一段。', '+ 加號清單'), /開頭是沒跳脫的半形標點（\+）/u],
+    ['清單記號後面是 tab', OK.replace('開頭一段。', '-\t項'), /tab 或 \\r/u],
+    ['只有清單記號', OK.replace('開頭一段。', '-'), /開頭是沒跳脫的半形標點（-）/u],
+    ['分隔線 ---', OK.replace('開頭一段。', '---'), /開頭是沒跳脫的半形標點（-）/u],
+    ['分隔線 ***', OK.replace('開頭一段。', '***'), /開頭是沒跳脫的半形標點（\*）/u],
+    ['分隔線 ___', OK.replace('開頭一段。', '___'), /開頭是沒跳脫的半形標點（_）/u],
+    ['分隔線 - - -', OK.replace('開頭一段。', '- - -'), /開頭是沒跳脫的半形標點（-）/u],
+    ['程式碼框 ```', OK.replace('開頭一段。', '```'), /開頭是沒跳脫的半形標點（`）/u],
+    ['程式碼框 ~~~', OK.replace('開頭一段。', '~~~'), /開頭是沒跳脫的半形標點（~）/u],
+    ['HTML 區塊', OK.replace('開頭一段。', '<div>x</div>'), /開頭是沒跳脫的半形標點（<）/u],
+    ['頂層編號 1.', OK.replace('開頭一段。', '1. 頂層編號'), /段落的字像編號清單/u],
+    ['頂層編號 1)', OK.replace('開頭一段。', '1) 頂層編號'), /段落的字像編號清單/u],
+    ['清單項像編號清單', OK.replace('- 二項', '- 1. 二項'), /清單項的字像編號清單/u],
+    ['段落連兩行', OK.replace('開頭一段。', '開頭一段。\n第二行'), /段落前面要空一行/u],
+    ['段落裡有 \\r', OK.replace('開頭一段。', '開頭一段。\r## 節'), /tab 或 \\r/u],
+    ['行尾有空白', OK.replace('開頭一段。', '開頭一段。 '), /結尾有空白/u],
+    ['段落後直接接表格', OK.replace('開頭一段。', '開頭一段。\n| x | y |\n|---|---|'), /表格前面要空一行/u],
+    ['清單後直接接表格', OK.replace('- 二項', '- 二項\n| x | y |\n|---|---|'), /表格前面要空一行/u],
+    ['表格後直接接字', OK.replace('| a \\| b |  |', '| a \\| b |  |\n文字'), /表格後面直接接了別的東西/u],
+    ['格數不對', OK.replace('| a \\| b |  |', '| a | b | c |'), /這一列 3 格、表頭 2 格/u],
+    ['沒有分隔列', OK.replace('|---|---|\n', ''), /表頭底下應該是一樣格數的分隔列/u],
+    ['分隔列格數不對', OK.replace('|---|---|', '|---|'), /表頭底下應該是一樣格數的分隔列/u],
+    ['分隔列夾字', OK.replace('|---|---|', '|---|x|'), /表頭底下應該是一樣格數的分隔列/u],
+    ['分隔列只有冒號', OK.replace('|---|---|', '|:|:|'), /表頭底下應該是一樣格數的分隔列/u],
+    ['分隔列帶冒號', OK.replace('|---|---|', '|:---|---:|'), /表頭底下應該是一樣格數的分隔列/u],
+    ['一列沒有「|」結尾', OK.replace('| a \\| b |  |', '| a \\| b |  | 多'), /要「\|」開頭、「\|」結尾/u],
+    ['結尾的「|」被跳脫', OK.replace('| a \\| b |  |', '| a | b \\|'), /結尾的「\|」被跳脫了/u],
+    ['子項前面不是清單', OK.replace('- 一項\n  1. 子項', '  1. 子項'), /子項前面要是「- 」清單/u],
+    ['子項三格縮排', OK.replace('  1. 子項', '   1. 子項'), /清單後面直接接了別的東西/u],
+    ['子項六格縮排', OK.replace('  1. 子項', '      1. 子項'), /清單後面直接接了別的東西/u],
+    ['子項記號後兩格空白', OK.replace('  1. 子項', '  1.  子項'), /字是空的、或頭尾有空白/u],
+    ['子項用 1)', OK.replace('  1. 子項', '  1) 子項'), /清單後面直接接了別的東西/u],
+    ['子項不從 1 起', OK.replace('  1. 子項', '  2. 子項'), /子項要從 1 起連號/u],
+    ['子項跳號', OK.replace('  1. 子項', '  1. 子項\n  3. 子項'), /子項要從 1 起連號、照寫成 2（這裡寫的是 3）/u],
+    ['子項號碼前面補零', OK.replace('  1. 子項', '  01. 子項'), /子項要從 1 起連號、照寫成 1（這裡寫的是 01）/u],
+    ['子項號碼超長', OK.replace('  1. 子項', '  0000000001. 子項'), /照寫成 1（這裡寫的是 0000000001）/u],
+    ['子項的字像編號清單', OK.replace('  1. 子項', '  1. 1. 子項'), /子項的字像編號清單/u],
+    ['節標題前沒空行', OK.replace('開頭一段。\n\n## 一、甲', '開頭一段。\n## 一、甲'), /節標題前面要空一行/u],
+    ['大標題後直接接節標題', OK.replace('# 標題\n\n開頭一段。\n\n', '# 標題\n'), /節標題前面要空一行/u],
+    ['節標題連著節標題', OK.replace('## 一、甲', '## 零\n## 一、甲'), /節標題前面要空一行/u],
+    ['節標題是空的', OK.replace('## 一、甲', '## '), /結尾有空白/u],
+    ['節標題開頭有空白', OK.replace('## 一、甲', '##  一、甲'), /字是空的、或頭尾有空白/u],
+    ['節標題開頭是半形標點', OK.replace('## 一、甲', '## -甲'), /開頭是沒跳脫的半形標點（-）/u],
+    ['節標題結尾是 #', OK.replace('## 一、甲', '## 一、甲 #'), /第 5 行：標題結尾是「#」/u],
+    ['大標題結尾是 #', OK.replace('# 標題', '# 標題 #'), /大標題：標題結尾是「#」/u],
+    ['清單前沒空行', OK.replace('開頭一段。', '開頭一段。\n- 項'), /清單前面要空一行/u],
+    ['清單後直接接段落', OK.replace('- 二項', '- 二項\n一段'), /清單後面直接接了別的東西/u],
+    ['兩串清單只隔一個空行', OK.replace('- 二項', '- 二項\n\n- 三項'), /兩串清單之間只隔一個空行/u],
+    ['空行裡有空白', OK.replace('開頭一段。\n\n', '開頭一段。\n  \n'), /空行裡有空白字元/u],
+    ['沒有任何一節', '# 標題\n\n開頭一段。\n', /沒有任何一節/u],
+    ['反引號沒成對（節標題）', OK.replace('## 一、甲', '## 一、`甲'), /反引號沒有成對/u],
+    ['反引號沒成對（表頭）', OK.replace('| 欄 | 值 |', '| `欄 | 值 |'), /反引號沒有成對/u],
+    ['反引號沒成對（大標題）', OK.replace('# 標題', '# 標`題'), /反引號沒有成對/u],
+    ['連續反引號', OK.replace('開頭一段。', '一段 `` 兩個'), /連續的反引號/u],
+    ['灰底框頭尾有空白', OK.replace('開頭一段。', '一段 ` x ` 框'), /灰底框是空的、或頭尾有空白/u],
+    ['灰底框收尾連著兩個反引號', OK.replace('開頭一段。', '一段 `x`` 框'), /連續的反引號/u],
+    ['** 沒成對', OK.replace('開頭一段。', '一段 **粗'), /\*\* 沒有成對/u],
+    ['** 旁邊是空白', OK.replace('開頭一段。', '2 ** 3 ** 2'), /粗體的頭尾緊貼空白或標點/u],
+    ['** 旁邊是標點', OK.replace('開頭一段。', '一段**（括號）**完'), /粗體的頭尾緊貼空白或標點/u],
+    ['單獨的 *', OK.replace('開頭一段。', '一段 *斜* 完'), /單獨的「\*」/u],
+    ['_ 可能是斜體', OK.replace('開頭一段。', '一段 _斜_ 完'), /「_」後面緊接著字/u],
+    ['~ 可能是刪除線', OK.replace('開頭一段。', '一段 ~刪~ 完'), /「~」後面緊接著字/u],
+    ['< 接英文字母', OK.replace('開頭一段。', '一段 <b>粗</b>'), /「<」後面緊接著半形字元/u],
+    ['< 接驚嘆號（HTML 註解）', OK.replace('開頭一段。', '一段 <!-- 隱藏字 --> 後文'), /「<」後面緊接著半形字元/u],
+    ['< 接數字（信箱連結）', OK.replace('開頭一段。', '一段 <123@example.com> 後文'), /「<」後面緊接著半形字元/u],
+    ['& 接 #（數字字元碼）', OK.replace('開頭一段。', '一段 &#65; 後文'), /「&」後面接英文字母或 #/u],
+    ['& 接英文字母', OK.replace('開頭一段。', '一段 &amp; 完'), /「&」後面接英文字母或 #/u],
+    ['[ 可能是連結', OK.replace('開頭一段。', '一段 [連結](x) 完'), /「\[」GitHub 可能當成連結/u],
+    ['跳節鈕的字是空的', OK.replace('## 一、甲', '## （甲）'), /取不出跳節鈕的字/u],
+  ];
+  for (const [name, text, why] of bad) {
+    assert.notEqual(text, OK, `「${name}」這一發沒有改到來源`);
+    assert.throws(() => manual.renderSettings(text), why, `「${name}」應該停下、而且原因要對`);
+  }
+  // 範本不是 JSON、產生器產不出來、讀不到範本，都停
+  assert.throws(() => manual.build({ ...src, settingsTemplate: '{' }), /空白設定範本（tests\/helpers\/unfilled-settings\.json）不是合法的 JSON/u);
+  assert.throws(() => manual.build({ ...src, settingsTemplate: '{}' }), /空白設定範本產生不出設定說明/u);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-settings-'));
+  try {
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md']) fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
+    for (const d of ['tools', 'tests', 'templates']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
+    assert.doesNotThrow(() => manual.readSources(dir), '對照組：複本本身要讀得到');
+    fs.rmSync(path.join(dir, 'tests', 'helpers', 'unfilled-settings.json'));
+    assert.throws(() => manual.readSources(dir), /讀不到 tests\/helpers\/unfilled-settings\.json/u);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

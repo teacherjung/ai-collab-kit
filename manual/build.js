@@ -11,6 +11,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const rulesBook = require('../tools/build-rules.js');
+// 設定頁的說明文字住在設定說明產生器裡（每個專案的 PROJECT-SETTINGS.md 也是它產的）；這裡只拿它對空白範本的產出來排版，不另寫一份會漂的說明
+const settingsBook = require('../tools/build-settings.js');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -21,7 +23,7 @@ const PAGES = [
   { id: 'tools', name: '工具', built: true },
   { id: 'tests', name: '考題', built: true },
   { id: 'templates', name: '範本', built: true },
-  { id: 'settings', name: '設定', next: '空白設定的每一欄是什麼意思、怎麼填' },
+  { id: 'settings', name: '設定', built: true },
   { id: 'adopt', name: '套用', next: '怎麼把套件搬進一個專案；專案裡改到套件的檔要怎麼辦' },
   { id: 'glossary', name: '名詞', next: '用語對照表，名詞白話手冊併進來' },
   { id: 'cases', name: '案例', next: '每一則裁示背後發生過的事（案例簿）' },
@@ -355,6 +357,201 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
+ * 設定說明（tools/build-settings.js 對空白範本的產出）的行內排版。說明產生器把值裡的半形標點全寫成「\標點」，
+ * 沒跳脫的記號只會來自它程式裡寫死的說明句，所以這裡只認那幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
+ * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
+ * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
+ * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
+ * 其他字元照字面顯示——說明書不照 GitHub 的畫法（擁有者 2026-10-02 裁 a，留痕在 #28）：GitHub 另外加工的寫法（表情代碼、網址自動連結等）這裡照字面。
+ */
+function settingsInline(text, where) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1] || '';
+    if (ch === '\\' && /^[!-/:-@[-`{-~]$/u.test(next)) {
+      out += esc(next);
+      i += 2;
+    } else if (ch === '`') {
+      if (next === '`') throw new Error(`${where}：連續的反引號，說明書不排`);
+      const j = text.indexOf('`', i + 1);
+      if (j < 0) throw new Error(`${where}：反引號沒有成對，說明書不知道灰底框到哪裡結束`);
+      const code = text.slice(i + 1, j);
+      if (!code || /^\s|\s$/u.test(code)) throw new Error(`${where}：灰底框是空的、或頭尾有空白，說明書不排`);
+      if (text[j + 1] === '`') throw new Error(`${where}：連續的反引號，說明書不排`);
+      out += `<code>${esc(code)}</code>`;
+      i = j + 1;
+    } else if (ch === '*') {
+      if (next !== '*' || text[i + 2] === '*') throw new Error(`${where}：單獨的「*」或連續三個以上，GitHub 可能當成斜體，說明書不排`);
+      const j = text.indexOf('**', i + 2);
+      if (j < 0) throw new Error(`${where}：** 沒有成對，說明書不知道粗體到哪裡結束`);
+      const inner = text.slice(i + 2, j);
+      if (!inner || /^[\s\p{P}\p{S}]|[\s\p{P}\p{S}]$/u.test(inner) || text[j + 2] === '*') {
+        throw new Error(`${where}：粗體的頭尾緊貼空白或標點（或連著三個 *），GitHub 不一定當成粗體，說明書不排`);
+      }
+      out += `<strong>${settingsInline(inner, where)}</strong>`;
+      i = j + 2;
+    } else if (ch === '_' || ch === '~') {
+      let k = i;
+      while (text[k] === ch) k += 1;
+      const before = text[i - 1];
+      const after = text[k];
+      const mayOpen = after !== undefined && !/\s/u.test(after) && (ch === '~' || before === undefined || /[\s\p{P}\p{S}]/u.test(before));
+      if (mayOpen) throw new Error(`${where}：「${ch}」後面緊接著字，GitHub 可能當成${ch === '_' ? '斜體' : '刪除線'}，說明書不排`);
+      out += esc(text.slice(i, k));
+      i = k;
+    } else if (ch === '<' && /^[!-~]$/u.test(next)) {
+      throw new Error(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
+    } else if (ch === '&' && /^[A-Za-z#]$/u.test(next)) {
+      throw new Error(`${where}：「&」後面接英文字母或 #，GitHub 可能當成字元代碼，說明書不排`);
+    } else if (ch === '[') {
+      throw new Error(`${where}：「[」GitHub 可能當成連結，說明書不排`);
+    } else {
+      out += esc(ch);
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/** 表格的一列切成格：沒被反斜線跳脫的「|」才是分格（說明產生器把值裡的「|」寫成「\|」）。 */
+function tableCells(line, where) {
+  if (!line.startsWith('|') || !line.endsWith('|')) throw new Error(`${where}：表格的一列要「|」開頭、「|」結尾`);
+  const cells = [];
+  let cur = '';
+  for (let i = 1; i < line.length; i += 1) {
+    if (line[i] === '\\' && i + 1 < line.length) {
+      cur += line[i] + line[i + 1];
+      i += 1;
+    } else if (line[i] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+    } else {
+      cur += line[i];
+    }
+  }
+  if (cur) throw new Error(`${where}：表格這一列結尾的「|」被跳脫了（\\|），這一列沒有收尾`);
+  return cells;
+}
+
+// 說明產生器今天只產這一種分隔列；別種（冒號、少於三個 -、夾了字）一律停
+const SETTINGS_TABLE_RULE = /^\|(?:---\|)+$/u;
+
+/** 段落、標題、清單項、子項的字：開頭不能是空白或沒跳脫的半形標點（GitHub 會把它讀成別的區塊），結尾不能有空白。 */
+function settingsText(text, where) {
+  if (!text || /^\s|\s$/u.test(text)) throw new Error(`${where}：字是空的、或頭尾有空白，說明書不排`);
+  if (/^[!-/:-@[-`{-~]/u.test(text) && !/^\\[!-/:-@[-`{-~]/u.test(text)) throw new Error(`${where}：開頭是沒跳脫的半形標點（${text[0]}），GitHub 可能讀成別種區塊，說明書不排`);
+  return text;
+}
+
+/** 標題結尾是沒跳脫的「#」＝GitHub 會當成標題的收尾記號拿掉，說明書不排。 */
+function noClosingHash(title, where) {
+  if (/(^|[^\\])#$/u.test(title)) throw new Error(`${where}：標題結尾是「#」，GitHub 會把它當成標題的收尾記號拿掉，說明書不排`);
+  return title;
+}
+
+/**
+ * 設定說明整份讀成一節一節。只認說明產生器今天產的這幾種行，其他一律停（說明產生器的格式變了，要人先決定說明書怎麼排）：
+ * 第一行「# 」大標題、「## 」節標題（前面空一行）、空行（真的空）、段落（一行一段）、表格（表頭、只准 |---| 的分隔列、
+ * 每一列格數一樣；格子可以空，例如還沒驗過的日期）、「- 」清單、清單項底下兩格縮排、從 1 連號的「N. 」子項。
+ * 區塊之間要空一行（清單接清單項、清單項接子項、表格的列除外）；兩串清單只隔一個空行也停（GitHub 會把它們當成同一串）。
+ * 整份有 tab 或 \r、或任何一行結尾有空白，也停。
+ */
+function parseSettingsDoc(md) {
+  if (/[\t\r]/u.test(md)) throw new Error('設定說明裡有 tab 或 \\r，說明書不排');
+  const lines = md.split('\n');
+  if (!lines[0].startsWith('# ')) throw new Error('設定說明第一行應該是「# 」開頭的大標題');
+  const doc = { title: noClosingHash(settingsText(lines[0].slice(2), '設定說明的大標題'), '設定說明的大標題'), intro: [], sections: [] };
+  let blocks = doc.intro;
+  let prev = 'heading';
+  let lastBlock = null;
+  let table = null;
+  let list = null;
+  for (let i = 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    const where = `設定說明第 ${i + 1} 行`;
+    if (!line.trim()) {
+      if (line) throw new Error(`${where}：空行裡有空白字元`);
+      prev = 'blank';
+      table = null;
+      list = null;
+      continue;
+    }
+    if (/\s$/u.test(line)) throw new Error(`${where}：結尾有空白`);
+    if (line.startsWith('|')) {
+      if (table) {
+        const cells = tableCells(line, where);
+        if (cells.length !== table.head.length) throw new Error(`${where}：這一列 ${cells.length} 格、表頭 ${table.head.length} 格`);
+        table.rows.push(cells);
+      } else if (prev === 'blank' || prev === 'heading') {
+        const head = tableCells(line, where);
+        const rule = lines[i + 1] || '';
+        if (!SETTINGS_TABLE_RULE.test(rule) || tableCells(rule, `設定說明第 ${i + 2} 行`).length !== head.length) {
+          throw new Error(`設定說明第 ${i + 2} 行：表頭底下應該是一樣格數的分隔列（|---|）`);
+        }
+        table = { kind: 'table', head, rows: [] };
+        blocks.push(table);
+        lastBlock = table;
+        i += 1;
+      } else {
+        throw new Error(`${where}：表格前面要空一行`);
+      }
+      prev = 'table';
+      continue;
+    }
+    if (table) throw new Error(`${where}：表格後面直接接了別的東西，說明書不知道它算不算表格`);
+    const sub = line.match(/^ {2}(\d+)\. (.*)$/u);
+    if (sub) {
+      if (!list) throw new Error(`${where}：子項前面要是「- 」清單`);
+      const item = list.items[list.items.length - 1];
+      if (sub[1] !== String(item.sub.length + 1)) throw new Error(`${where}：子項要從 1 起連號、照寫成 ${item.sub.length + 1}（這裡寫的是 ${sub[1]}）`);
+      const subText = settingsText(sub[2], where);
+      if (/^\d{1,9}[.)](\s|$)/u.test(subText)) throw new Error(`${where}：子項的字像編號清單，GitHub 會讀成更深一層的清單，說明書不排`);
+      item.sub.push(subText);
+      prev = 'sub';
+      continue;
+    }
+    if (line.startsWith('- ')) {
+      const text = settingsText(line.slice(2), where);
+      if (/^\d{1,9}[.)](\s|$)/u.test(text)) throw new Error(`${where}：清單項的字像編號清單，GitHub 會讀成巢狀清單，說明書不排`);
+      if (list) {
+        list.items.push({ text, sub: [] });
+      } else if (prev === 'blank' || prev === 'heading') {
+        if (prev === 'blank' && lastBlock && lastBlock.kind === 'list') throw new Error(`${where}：兩串清單之間只隔一個空行，GitHub 會把它們當成同一串，說明書不排`);
+        list = { kind: 'list', items: [{ text, sub: [] }] };
+        blocks.push(list);
+        lastBlock = list;
+      } else {
+        throw new Error(`${where}：清單前面要空一行`);
+      }
+      prev = 'item';
+      continue;
+    }
+    if (list) throw new Error(`${where}：清單後面直接接了別的東西，說明書不知道它算不算清單的一部分`);
+    if (line.startsWith('## ')) {
+      if (prev !== 'blank') throw new Error(`${where}：節標題前面要空一行`);
+      const title = noClosingHash(settingsText(line.slice(3), where), where);
+      const section = { title, blocks: [] };
+      doc.sections.push(section);
+      blocks = section.blocks;
+      lastBlock = null;
+      prev = 'heading';
+      continue;
+    }
+    if (prev !== 'blank' && prev !== 'heading') throw new Error(`${where}：段落前面要空一行（說明書一段只收一行）`);
+    const text = settingsText(line, where);
+    if (/^\d{1,9}[.)](\s|$)/u.test(text)) throw new Error(`${where}：段落的字像編號清單，GitHub 會讀成清單，說明書不排`);
+    const para = { kind: 'p', text };
+    blocks.push(para);
+    lastBlock = para;
+    prev = 'p';
+  }
+  if (!doc.sections.length) throw new Error('設定說明裡沒有任何一節（「## 」）');
+  return doc;
+}
+
+/**
  * 標籤那一行切成段。先照規則書的切法分出角色粗體與灰底框，只在框外的文字切「；」；
  * 一段要剛好是登記名、或以「登記名：」開頭，才算新的一段，否則接回上一段
  * （E1「雲端：只驗四欄有填；角色那兩欄要填登記過的名字」的後半是同一段的續句）。
@@ -616,6 +813,74 @@ ${cards.join('\n')}
 </section>`;
 }
 
+function settingsBlocksHtml(blocks, where) {
+  return blocks
+    .map((b, k) => {
+      const at = `${where}的第 ${k + 1} 塊`;
+      if (b.kind === 'p') return `<p>${settingsInline(b.text, at)}</p>`;
+      if (b.kind === 'table') {
+        // GitHub 的表格先把格子裡的「\|」換回「|」再排行內（灰底框裡也是），這裡照做
+        const cell = (c) => settingsInline(c.split('\\|').join('|'), at);
+        return `<div class="table-wrap"><table class="grid"><thead><tr>${b.head.map((c) => `<th>${cell(c)}</th>`).join('')}</tr></thead><tbody>${b.rows
+          .map((r) => `<tr>${r.map((c) => `<td>${cell(c)}</td>`).join('')}</tr>`)
+          .join('')}</tbody></table></div>`;
+      }
+      return `<ul class="items">${b.items
+        .map((it) => `<li>${settingsInline(it.text, at)}${it.sub.length ? `<ol>${it.sub.map((x) => `<li>${settingsInline(x, at)}</li>`).join('')}</ol>` : ''}</li>`)
+        .join('')}</ul>`;
+    })
+    .join('\n');
+}
+
+function settingsPage(doc) {
+  const titles = doc.sections.map((sec) => settingsInline(sec.title, `設定說明「${sec.title}」那一節的標題`));
+  const jumps = titles
+    .map((html, i) => {
+      const label = html.replace(/<[^>]+>/gu, '').replace(/（.*$/u, '').trim();
+      if (!label) throw new Error(`設定說明第 ${i + 1} 節的標題取不出跳節鈕的字（「（」前面是空的）`);
+      return `<button type="button" class="jump" data-jump="set-${i + 1}">${label}</button>`;
+    })
+    .join('');
+  const sections = doc.sections.map((sec, i) => `<section class="block" id="set-${i + 1}" tabindex="-1">
+<h2>${titles[i]}</h2>
+${settingsBlocksHtml(sec.blocks, `設定說明「${sec.title}」那一節`)}
+</section>`);
+  return `<section class="page" id="page-settings" data-page="settings" hidden>
+<header class="page-head">
+<p class="eyebrow">空白設定範本</p>
+<h1>設定</h1>
+<p class="page-sum">新專案的設定從空白範本 tests/helpers/unfilled-settings.json 開始。下面是 tools/build-settings.js 用那份範本產生的設定說明（跟每個專案的 PROJECT-SETTINGS.md 同一個產生器），共 ${doc.sections.length} 節。</p>
+</header>
+<nav class="jumps" aria-label="跳到某一節">${jumps}</nav>
+<div class="settings-body">
+<p class="doc-title">${settingsInline(doc.title, '設定說明的大標題')}</p>
+${settingsBlocksHtml(doc.intro, '設定說明開頭')}
+${sections.join('\n')}
+</div>
+<p class="source-note">來源：tests/helpers/unfilled-settings.json（空白範本）經 tools/build-settings.js 產生的說明。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單、灰底框、粗體，還原反斜線跳脫，其他字照原文顯示（例如 GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、HTML 的寫法），會讓整份停下不產生。</p>
+</section>`;
+}
+
+/** 空白範本（原文）→ 設定說明產生器的產出（Markdown 字串）。範本不是 JSON、或產生器產不出來，都停。 */
+function settingsMarkdown(templateText) {
+  let data;
+  try {
+    data = JSON.parse(templateText);
+  } catch {
+    throw new Error('空白設定範本（tests/helpers/unfilled-settings.json）不是合法的 JSON');
+  }
+  try {
+    return settingsBook.build(data);
+  } catch (err) {
+    throw new Error(`空白設定範本產生不出設定說明：${err.message}`);
+  }
+}
+
+/** 設定說明（Markdown 字串）→ 設定頁的 HTML；讀不懂的形狀、行內記號都在這裡停。 */
+function renderSettings(md) {
+  return settingsPage(parseSettingsDoc(md));
+}
+
 function placeholderPage(page, index) {
   return `<section class="page" id="page-${page.id}" data-page="${page.id}" hidden>
 <header class="page-head"><p class="eyebrow">第 ${index + 1} 頁</p><h1>${esc(page.name)}</h1></header>
@@ -740,6 +1005,14 @@ html.modal-open,html.modal-open body{overflow:hidden}
 .tool{padding:14px 0;border-bottom:1px solid var(--line)}
 .tool h3{margin:0 0 4px;font-size:16px;font-weight:600}
 .tool p{margin:0}
+.settings-body p,.settings-body li{overflow-wrap:anywhere}
+.settings-body .block{scroll-margin-top:16px}
+.settings-body .block:focus{outline:none}
+.doc-title{font-weight:700;margin:0 0 8px}
+.table-wrap{overflow-x:auto;margin:10px 0}
+table.grid{border-collapse:collapse;font-size:15px;line-height:1.6}
+table.grid th,table.grid td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top;min-width:6em}
+table.grid th{background:var(--bg);font-weight:600}
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);background:none}
   .side{z-index:10;max-height:none;padding:10px 0 0;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -749,7 +1022,7 @@ html.modal-open,html.modal-open body{overflow:hidden}
   .side nav a{flex:0 0 auto;padding:6px 12px}
   .soon,.stamp{display:none}
   main{padding-block:24px 72px}
-  .rule,.rule-section,.mrow{scroll-margin-top:120px}
+  .rule,.rule-section,.mrow,.settings-body .block{scroll-margin-top:120px}
   .label-def{grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
@@ -849,6 +1122,7 @@ function readSources(root) {
     tools: readTools(root),
     tests: readTests(root),
     templates: readTemplates(root),
+    settingsTemplate: read('tests/helpers/unfilled-settings.json'),
   };
 }
 
@@ -866,6 +1140,7 @@ function build(sources, { stamp } = {}) {
   const tests = testsPage(sources.tests, table.rows);
   const tpl = parseTemplates(sources.machines, sources.templates, ruleIds);
   const templates = templatesPage(tpl, sources.templates, table.rows);
+  const settings = renderSettings(settingsMarkdown(sources.settingsTemplate));
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
   const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
@@ -887,6 +1162,7 @@ ${machines.html}
 ${tools}
 ${tests}
 ${templates}
+${settings}
 ${others.join('\n')}
 </main>
 </div>
@@ -937,4 +1213,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
