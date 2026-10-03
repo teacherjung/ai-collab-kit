@@ -40,9 +40,11 @@ const OLD = '0123456789abcdef0123456789abcdef01234567';
 let seq = 0;
 /** 一則留言。 */
 const c = (body, id = `c${++seq}`) => ({ id, body, createdAt: new Date(Date.UTC(2026, 8, 13, 0, 0, seq)).toISOString() });
+/** 「通過」那一則要帶的兩行固定小標（F7）；預設帶上，headings: false 才拿掉。 */
+const HEADINGS = '\n\n### 本輪實際用的設定\n模型、推理、跑了哪些考題\n\n### 清單逐項結果\n每一項的結果';
 /** 一則帶合規標頭的結論留言。 */
-const verdict = ({ role = 'Beta', source = 'CLI', sha = HEAD, round = 1, verdict: v = '通過', extra = '' } = {}, id) =>
-  c(`🤖 ${role}｜來源：${source}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}${extra}`, id);
+const verdict = ({ role = 'Beta', source = 'CLI', sha = HEAD, round = 1, verdict: v = '通過', extra = '', headings = true } = {}, id) =>
+  c(`🤖 ${role}｜來源：${source}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}${extra}${v === '通過' && headings ? HEADINGS : ''}`, id);
 
 test('基準：指定的那一位對目前版本說通過、沒人阻擋＝通過（對照組）', () => {
   const r = evaluate([verdict()], HEAD, 'Beta', ROLES);
@@ -281,7 +283,7 @@ test('⑩指定的複審者只從說明開頭那一段讀；讀不到就不放�
 test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說通過，六種排列全部判不明', () => {
   const head12 = 'abcdef12' + '0'.repeat(32);
   // ⚠️ 這裡不能用 verdict()：它把版本碼切成七碼，三個樣本就變成同一個字（第一版考題就這樣假綠過）
-  const mk = (sha) => ({ ...c(`🤖 Beta｜來源：CLI｜審 \`${sha}\`｜r1｜結論：通過`), createdAt: '2026-09-13T04:00:00Z' });
+  const mk = (sha) => ({ ...c(`🤖 Beta｜來源：CLI｜審 \`${sha}\`｜r1｜結論：通過${HEADINGS}`), createdAt: '2026-09-13T04:00:00Z' });
   const a = mk('abcdef1'); const b = mk('abcdef12'); const d = mk('abcdef13');
   const perms = [[a, b, d], [a, d, b], [b, a, d], [b, d, a], [d, a, b], [d, b, a]];
   for (const p of perms) {
@@ -315,4 +317,46 @@ test('⑫沒帶時區的留言時間不收＝退 2；同一份留言在 TZ=UTC �
   const outs = ['UTC', 'Asia/Taipei'].map((tz) => spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: tz } }).stdout);
   assert.equal(outs[0], outs[1], `兩個時區判決不同：${outs.join(' | ')}`);
   assert.deepEqual(JSON.parse(outs[0]), [], '帶時區的作廢在兩個時區都生效');
+});
+
+test('⑬「通過」要帶兩行固定小標（F7）：缺了那則不算數、撤不了自己的阻擋；阻擋不要求；重貼合格的就放行', () => {
+  const bare = verdict({ headings: false });
+  const r = evaluate([bare], HEAD, 'Beta', ROLES);
+  assert.ok(r.problems.some((p) => p.includes('缺固定小標「### 本輪實際用的設定」「### 清單逐項結果」')), r.problems.join('\n'));
+  assert.ok(r.problems.some((p) => p.includes('沒有「Beta」對目前版本')), '缺小標的通過不能算成放行');
+  // 只缺一行：點名缺的那一行
+  const half = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n設定`);
+  const rh = evaluate([half], HEAD, 'Beta', ROLES);
+  assert.ok(rh.problems.some((p) => p.includes('缺固定小標「### 清單逐項結果」') && !p.includes('「### 本輪實際用的設定」')), rh.problems.join('\n'));
+  // 小標那一行要逐字：多了字不算；行尾空白可以
+  const loose = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定（補）\n\n### 清單逐項結果   `);
+  assert.ok(evaluate([loose], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('缺固定小標「### 本輪實際用的設定」')), '小標多了字不算');
+  // 缺小標的通過撤不了同一位先前的阻擋
+  const block = verdict({ verdict: '需修改後再審' });
+  const r2 = evaluate([block, verdict({ round: 2, headings: false })], HEAD, 'Beta', ROLES);
+  assert.ok(r2.problems.some((p) => p.includes('還沒有被同一位撤銷')), '不算數的通過不撤銷阻擋');
+  // 阻擋不要求小標（對照組：上面那則阻擋沒有小標，照樣擋）
+  assert.ok(evaluate([block], HEAD, 'Beta', ROLES).problems.some((p) => p.includes('還沒有被同一位撤銷')));
+  // 重貼一則合格的（同輪也可以）就放行，前一則降為提醒
+  const fixed = evaluate([bare, verdict()], HEAD, 'Beta', ROLES);
+  assert.deepEqual(fixed.problems, [], fixed.problems.join('\n'));
+  assert.ok(fixed.warnings.some((w) => w.includes('缺固定小標')), '不算數的那一則要留一句提醒');
+  // 不是指定那一位的缺小標通過：只提醒（它本來就不放行）
+  const other = evaluate([verdict(), verdict({ role: 'Alpha', source: '桌面', headings: false })], HEAD, 'Beta', ROLES);
+  assert.deepEqual(other.problems, [], other.problems.join('\n'));
+  assert.ok(other.warnings.some((w) => w.includes('Alpha（桌面）') && w.includes('缺固定小標')));
+});
+
+test('⑭「文字快速通道」：專案設定裡那位人的「通過」是原話逐字、不要求小標；設定沒填那一位＝不豁免', () => {
+  const ownerPass = verdict({ role: 'Gamma', source: 'Gamma 本人', headings: false });
+  assert.deepEqual(evaluate([ownerPass], HEAD, 'Gamma', ROLES, { humanRole: 'Gamma' }).problems, []);
+  assert.ok(evaluate([ownerPass], HEAD, 'Gamma', ROLES).problems.some((p) => p.includes('缺固定小標')), '沒給 humanRole＝不豁免');
+  // AI 的通過不因為有人被豁免就跟著豁免
+  assert.ok(evaluate([verdict({ headings: false })], HEAD, 'Beta', ROLES, { humanRole: 'Gamma' }).problems.some((p) => p.includes('缺固定小標')));
+  // 端到端：那位人＝參與者裡角色以「裁示者」開頭、識別值與帳號都填了的那一位
+  const people = { participants: [{ role: '裁示者（人）', id: 'Gamma', account: 'g' }, { role: 'AI 甲', id: 'Alpha', account: 'a' }, { role: 'AI 乙', id: 'Beta', account: 'a' }] };
+  const fast = change({ body: '- **實作者**：Alpha\n- **複審者**：Gamma' });
+  assert.equal(gateRun('7', { settings: people, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0);
+  const noAccount = { participants: [{ role: '裁示者（人）', id: 'Gamma', account: '未設定' }, people.participants[1], people.participants[2]] };
+  assert.equal(gateRun('7', { settings: noAccount, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 1, '那一位沒填齊＝不豁免、看得見地擋下');
 });

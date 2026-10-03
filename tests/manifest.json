@@ -24,11 +24,13 @@
   "pending-rulings.test.js",
   "placement.test.js",
   "platform.test.js",
+  "risk-tier.test.js",
   "rules-length.test.js",
   "run-checks.test.js",
   "scan-postmortem.test.js",
   "scan-probe.test.js",
   "settings.test.js",
   "signposts.test.js",
+  "stale-text.test.js",
   "time-point.test.js"
 ]

@@ -21,6 +21,13 @@
 // 誠實劃界：它讀的是留言裡的自我宣告，不是身分證明。要繞過它，改標頭裡的來源就好——
 // 那要靠獨立帳號才擋得住。它防的是混淆與遺漏，不是惡意。
 //
+// ## 「通過」要帶兩個固定小標（規矩 F7；裁示者 2026-10-03 選「A」）
+// 原專案 PFW #655 第三輪的送審提示自訂了回報格式，結論裡沒有清單、也沒寫實際用了什麼設定，而這道閘只看第一行，
+// 沒人發現。所以「通過」那一則還要有兩行固定小標，缺一個那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
+// 要重貼一則合格的。只看小標那一行在不在，不驗底下寫了什麼——擋得住「整段沒寫」，擋不住「寫了不適用卻沒查」。
+// 「文字快速通道」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定裡那位人（角色以「裁示者」開頭的參與者）的，
+// 就不要求。設定沒填那一位時不豁免＝那一則不算數、看得見地擋下。
+//
 // 退出碼：0＝指定的複審者對目前版本說通過、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
@@ -28,6 +35,7 @@ const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
 const { leadingText, stopNote } = require('../markdown-effective.js');
 const { parseInstant } = require('../time-point.js');
+const { deciderOf } = require('../pending-rulings.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
 const VERDICTS = { 通過: false, 需修改後再審: true, 不可合併: true };
@@ -38,6 +46,15 @@ const VERDICTS = { 通過: false, 需修改後再審: true, 不可合併: true }
  * 逐字：🤖 <角色>｜來源：<來源字串>｜審 `<短版本碼>`｜r<輪次>｜結論：<三選一>
  */
 const HEADER = /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*([A-Za-z]+)｜來源：([^｜]+)｜審\s*`?([0-9a-fA-F]{7,40})`?｜r(\d+)｜結論：(\S+?)(?:\*\*|__)?\s*$/mu;
+/** 「通過」那一則要有的兩行固定小標，逐字（templates/verdict-header.md）。 */
+const PASS_HEADINGS = ['### 本輪實際用的設定', '### 清單逐項結果'];
+
+/** 這則留言缺了哪幾行固定小標（行首起算、行尾空白不計；不看圍欄或引用——只核在不在）。 */
+function missingHeadings(body) {
+  const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
+  return PASS_HEADINGS.filter((h) => !lines.includes(h));
+}
+
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
 const VOID = /^ {0,3}作廢上一則：([A-Za-z0-9_-]+)[^\S\n]*$/u;
 
@@ -119,10 +136,12 @@ function sourceLookalike(a, b) {
  * @param {string} head 目前版本
  * @param {string|null} reviewerRole PR說明指定的複審者；null＝讀不出來
  * @param {string[]} roles 專案設定的參與者識別值
+ * @param {{humanRole?: string|null}} [opts] humanRole＝專案設定裡那位人的識別值；他的「通過」不要求固定小標（F12）
  */
-function evaluate(comments, head, reviewerRole, roles) {
+function evaluate(comments, head, reviewerRole, roles, { humanRole = null } = {}) {
   const problems = [];
   const warnings = [];
+  const incomplete = [];
   const latest = {};
   const malformed = [];
   const voids = [];
@@ -146,6 +165,11 @@ function evaluate(comments, head, reviewerRole, roles) {
     }
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
+    // 缺固定小標的「通過」整則不採計（F7）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
+    if (!h.blocking && h.role !== humanRole) {
+      const missing = missingHeadings(c.body);
+      if (missing.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, missing }); return; }
+    }
     const cur = latest[who];
     if (!cur || h.round > cur.round) latest[who] = { ...h, who, shas: [h.sha] };
     else if (h.round === cur.round) {
@@ -200,6 +224,12 @@ function evaluate(comments, head, reviewerRole, roles) {
   }
 
   const passers = ids.filter((h) => !h.blocking && head.startsWith(h.sha));
+  for (const x of incomplete) {
+    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。`;
+    // 只有它本來會是指定那一位對目前版本的通過、而現在沒有別則補上時，它才是擋下的原因；其餘只提醒
+    if (x.role === reviewerRole && head.startsWith(x.sha) && !passers.some((h) => h.role === reviewerRole)) problems.push(note);
+    else warnings.push(note);
+  }
   if (!reviewerRole) {
     problems.push('讀不出PR說明指定的複審者是誰——放行只認指定的那一位，讀不出就不放行。');
   } else if (!passers.some((h) => h.role === reviewerRole)) {
@@ -231,7 +261,8 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     throw e;
   }
   const reviewerRole = canonicalRole(fieldValue(change.body, '複審者'), usable);
-  const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable);
+  const human = deciderOf(settings);
+  const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable, { humanRole: human ? human.id : null });
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
   const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);
@@ -271,4 +302,4 @@ if (require.main === module) {
 // 代價照實說：作廢比原專案寬——任何一位審查者都能作廢任何一則壞留言，不需要裁示者特准。
 // 換來的是裁示者少一種要他親自特准的事，這正是他要的方向。
 
-module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, VERDICTS };
+module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, missingHeadings, VERDICTS, PASS_HEADINGS };

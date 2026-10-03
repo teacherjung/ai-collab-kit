@@ -6,8 +6,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # 轉正式（ready_for_review）不另跑一場（擁有者 2026-10-02 選「甲」）：草稿每次推送都跑過了，轉正式時內容沒變。
+  # 代價：推送之後才公布的相依套件高風險通報，不會在轉正式時被抓到，改成合併後主幹那一場紅、不部署。
+  # 要補考同一版（例如那一場被取消）：在平台上重跑那一場，或把PR關掉再重開；不要推空提交（版本一變，舊的「通過」就失效）。
+  # 日後若改成「草稿不跑」，ready_for_review 要一起加回來，不然轉正式的那一版沒有任何一場考過。
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
