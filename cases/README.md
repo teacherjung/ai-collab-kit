@@ -3,7 +3,7 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
 來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
-共 163 則。
+共 169 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -170,6 +170,12 @@
 | 2026-09-26 | [K2 上限放寬到七千，數法搬去機器表](k2-seven-thousand-count-in-machines.md) | K2、K1 |
 | 2026-09-26 | [轉正式留給起掃描的那一方，沒人起得了掃描時預設實作者](ready-for-review-by-scan-launcher.md) | G4 |
 | 2026-09-30 | [回報不寫已經解決的問題](report-skip-resolved-problems.md) | J2 |
+| 2026-10-02 | [複審用什麼模型、多強，只記在一方的對話裡，各輪各用各的](review-launch-settings-drift.md) | F11 |
+| 2026-10-02 | [一支排版 PR 審了三輪、九個半小時：審多深、掃不掃改成照風險級別查表](review-scope-by-risk-tier.md) | D4、F2、G1 |
+| 2026-10-03 | [拿到通過後順手再改，通過作廢、多審四輪](fix-after-pass-only-six-kinds.md) | F6、F2 |
+| 2026-10-03 | [送審提示由實作者自己寫：限定範圍、不准跑整份考題、蓋掉清單](review-prompt-overrode-template.md) | F3、F1、F7 |
+| 2026-10-03 | [擁有者的常設指示只有一方知道：43 則裡 22 則另一方讀不到或只讀到一部分](standing-instructions-only-one-side.md) | K6 |
+| 2026-10-03 | [只改畫面文字的 PR：擁有者想改成只自審，定案成他自己當複審者](text-only-fast-lane.md) | F12 |
 
 ## 不是事故、但值得記的方法
 

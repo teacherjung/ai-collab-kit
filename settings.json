@@ -89,6 +89,11 @@
    "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）",
    "rules": "H6",
    "where": "未啟用：套件倉庫沒有畫面與部署，acceptance 維持未設定；改動在同步進使用專案那一支照該專案的分級驗收"
+  },
+  {
+   "item": "「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份）",
+   "rules": "K6",
+   "where": "根目錄 AGENTS.md 的「擁有者的常設指示」那一節。不建 CLAUDE.md（也不建 CLAUDE.local.md、.claude/CLAUDE.md）：只要有它，Claude 就只讀它、不讀 AGENTS.md；Codex 只自動讀 AGENTS.md 前約 32 KB，所以那份要保持短"
   }
  ],
  "mainBranch": "main",
@@ -96,7 +101,7 @@
   "tool": "無（套件倉庫沒有隔離盒；掃描者與隔離綁在使用專案）",
   "assignedBy": "無（沒有掃描者）",
   "tieBreak": "無（沒有掃描者）",
-  "fallback": "每支由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：本專案無掃描者」、不擋合併；轉正式也由實作者做",
+  "fallback": "要掃的那幾支（照風險級別，G1）由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：本專案無掃描者」，表定不掃的照 G1 寫；都不擋合併；轉正式也由實作者做",
   "isolation": {
    "provider": "未設定",
    "wrap": [],
@@ -219,6 +224,90 @@
   ],
   "unknownTier": "未設定"
  },
+ "risk": {
+  "families": [
+   {
+    "pattern": "^README\\.md$",
+    "tier": "低"
+   },
+   {
+    "pattern": "^AGENTS\\.md$",
+    "tier": "低"
+   },
+   {
+    "pattern": "^BACKLOG\\.md$",
+    "tier": "低"
+   },
+   {
+    "pattern": "^cases/",
+    "tier": "低"
+   },
+   {
+    "pattern": "^(rules\\.json|RULES\\.md|GLOSSARY\\.md|MACHINES\\.md)$",
+    "tier": "高"
+   },
+   {
+    "pattern": "^(tools|tests|templates|manual|docs)/",
+    "tier": "高"
+   },
+   {
+    "pattern": "^(settings\\.json|PROJECT-SETTINGS\\.md)$",
+    "tier": "高"
+   },
+   {
+    "pattern": "^(\\.github/|package(-lock)?\\.json$|\\.node-version$|\\.gitignore$)",
+    "tier": "高"
+   }
+  ],
+  "raise": [
+   "改到「金額」、「資料存取」、「機密」、「判準」、「禁區」或「閘」的做法（只是提到這些字不算）",
+   "刪掉或放寬「既有考題」的行為檢查"
+  ]
+ },
+ "reviewTiers": {
+  "高": {
+   "full": "每一輪",
+   "diffOnly": "不適用",
+   "afterPassFix": "全審",
+   "scan": "掃"
+  },
+  "中": {
+   "full": "第 1〜7 輪",
+   "diffOnly": "第 8 輪起",
+   "afterPassFix": "只核差異",
+   "scan": "掃"
+  },
+  "低": {
+   "full": "第 1〜3 輪",
+   "diffOnly": "第 4 輪起",
+   "afterPassFix": "只核差異",
+   "scan": "不掃"
+  }
+ },
+ "reviewers": [
+  {
+   "participant": "Claude",
+   "strongest": "claude-fable-5-1",
+   "second": "claude-opus-5-5",
+   "maxEffort": "max",
+   "autoMode": "Ultracode",
+   "launch": "README.md「本倉庫自己怎麼合併」的「送審」那一項（claude -p，帶放行清單與禁止清單）",
+   "machine": "放行清單以外的指令一律被拒（不跳出詢問）；Edit 工具改不了審查樹、只准改突變副本；不讀主目錄的本機設定檔",
+   "promptOnly": "放行的指令仍可能寫檔（例如 git diff 的 --output），副本裡改了程式再跑考題＝能跑任意程式，所以審查樹唯讀靠提示；讀檔的禁令管不到考題程式自己讀檔；助手被拒時最後的輸出看不到，要逐筆搜「has been denied」",
+   "verified": "2026-10-03 玩具資料夾、便宜模型；本倉庫沒實跑過"
+  },
+  {
+   "participant": "Codex",
+   "strongest": "gpt-6-astra",
+   "second": "gpt-6-sol",
+   "maxEffort": "max",
+   "autoMode": "ultra（這一檔會自動派助手）",
+   "launch": "README.md「本倉庫自己怎麼合併」的「送審」那一項（codex exec，工作目錄＝審查樹）",
+   "machine": "幾乎沒有：審查樹與系統暫存區都寫得進；使用者層放行規則命中的指令在沙箱外跑；申請提權會被自動核准",
+   "promptOnly": "唯讀、不轉正式、不合併、只貼一則留言，全靠提示；退出碼一律 0，發審的一方要自己去 PR 看留言在不在；設定檔預設推理是 low，指令漏帶就靜默降級",
+   "verified": "2026-10-03 本倉庫 #30 兩輪"
+  }
+ ],
  "ignoreLists": [
   {
    "file": ".gitignore",
