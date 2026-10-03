@@ -73,6 +73,11 @@
    "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）",
    "rules": "H6",
    "where": "未設定"
+  },
+  {
+   "item": "「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份）",
+   "rules": "K6",
+   "where": "未設定"
   }
  ],
  "mainBranch": "未設定",
@@ -311,6 +316,51 @@
   ],
   "unknownTier": "未設定"
  },
+ "risk": {
+  "families": [
+   {
+    "pattern": "未設定",
+    "tier": "未設定"
+   }
+  ],
+  "raise": [
+   "內容碰到「金額」、「資料存取」、「機密」、「判準」、「禁區」或「閘」",
+   "刪掉或放寬「既有考題」的行為檢查"
+  ]
+ },
+ "reviewTiers": {
+  "高": {
+   "full": "每一輪",
+   "diffOnly": "不適用",
+   "afterPassFix": "全審",
+   "scan": "掃"
+  },
+  "中": {
+   "full": "第 1〜7 輪",
+   "diffOnly": "第 8 輪起",
+   "afterPassFix": "只核差異",
+   "scan": "掃"
+  },
+  "低": {
+   "full": "第 1〜3 輪",
+   "diffOnly": "第 4 輪起",
+   "afterPassFix": "只核差異",
+   "scan": "不掃"
+  }
+ },
+ "reviewers": [
+  {
+   "participant": "未設定",
+   "strongest": "未設定",
+   "second": "未設定",
+   "maxEffort": "未設定",
+   "autoMode": "未設定",
+   "launch": "未設定",
+   "machine": "未設定",
+   "promptOnly": "未設定",
+   "verified": ""
+  }
+ ],
  "ignoreLists": [
   {
    "file": ".gitignore",
