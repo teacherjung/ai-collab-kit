@@ -26,9 +26,9 @@
 // 沒人發現。所以「通過」那一則還要有兩行固定小標，缺一個那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
 // 要重貼一則合格的。只看小標那一行在不在，不驗底下寫了什麼——擋得住「整段沒寫」，擋不住「寫了不適用卻沒查」。
 // 「文字快速通道」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定裡那位人（角色以「裁示者」開頭的參與者）的，
-// 就不要求。設定沒填那一位時不豁免＝那一則不算數、看得見地擋下。
+// 就不要求。設定沒填齊那一位（識別值或貼文帳號）時不豁免＝那一則不算數、看得見地擋下，訊息會說是設定沒填齊、不是要替他的原話補小標。
 //
-// 退出碼：0＝指定的複審者對目前版本說通過、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
+// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標，那位人除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
@@ -49,7 +49,10 @@ const HEADER = /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*([A-Za-z]+)｜來源：([^�
 /** 「通過」那一則要有的兩行固定小標，逐字（templates/verdict-header.md）。 */
 const PASS_HEADINGS = ['### 本輪實際用的設定', '### 清單逐項結果'];
 
-/** 這則留言缺了哪幾行固定小標（行首起算、行尾空白不計；不看圍欄或引用——只核在不在）。 */
+/**
+ * 這則留言缺了哪幾行固定小標：整行逐字比（行首起算、行尾空白不計）。只核在不在、不解讀 Markdown——
+ * 所以圍欄或 HTML 註解裡的小標行也算；引用（> 開頭）、縮排、多了字的都不算。
+ */
 function missingHeadings(body) {
   const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
   return PASS_HEADINGS.filter((h) => !lines.includes(h));
@@ -136,9 +139,10 @@ function sourceLookalike(a, b) {
  * @param {string} head 目前版本
  * @param {string|null} reviewerRole PR說明指定的複審者；null＝讀不出來
  * @param {string[]} roles 專案設定的參與者識別值
- * @param {{humanRole?: string|null}} [opts] humanRole＝專案設定裡那位人的識別值；他的「通過」不要求固定小標（F12）
+ * @param {{humanRole?: string|null, humanUnfilled?: string|null}} [opts] humanRole＝專案設定裡那位人的識別值，他的「通過」不要求固定小標（F12）；
+ *   humanUnfilled＝那位人有登記、但識別值或帳號沒填齊（不豁免，訊息改說設定沒填齊）
  */
-function evaluate(comments, head, reviewerRole, roles, { humanRole = null } = {}) {
+function evaluate(comments, head, reviewerRole, roles, { humanRole = null, humanUnfilled = null } = {}) {
   const problems = [];
   const warnings = [];
   const incomplete = [];
@@ -225,9 +229,16 @@ function evaluate(comments, head, reviewerRole, roles, { humanRole = null } = {}
 
   const passers = ids.filter((h) => !h.blocking && head.startsWith(h.sha));
   for (const x of incomplete) {
-    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。`;
-    // 只有它本來會是指定那一位對目前版本的通過、而現在沒有別則補上時，它才是擋下的原因；其餘只提醒
-    if (x.role === reviewerRole && head.startsWith(x.sha) && !passers.some((h) => h.role === reviewerRole)) problems.push(note);
+    const fix = x.role === humanUnfilled
+      ? '這一位登記成裁示者，他的「通過」照理不要求小標（文字快速通道，F12），但專案設定裡他的識別值或貼文帳號沒填齊，所以沒有豁免：先把設定填齊，不要替他的原話補小標。'
+      : '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。';
+    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：${fix}`;
+    // 它算數的話結果會不會不一樣：①會撤掉同一位較低輪次的阻擋，或②會是指定那一位對目前版本的通過、而沒有別則補上。
+    // 同一位之後又有更高（或同輪）的結論時，它算不算數都改變不了什麼，只提醒。不在目前版本上的也只提醒（算數也會因為版本變了而擋）。
+    const cur = latest[x.who];
+    const revokes = Boolean(cur && cur.blocking && cur.round < x.round);
+    const releases = x.role === reviewerRole && !passers.some((h) => h.role === reviewerRole) && (!cur || cur.round < x.round);
+    if (head.startsWith(x.sha) && (revokes || releases)) problems.push(note);
     else warnings.push(note);
   }
   if (!reviewerRole) {
@@ -241,7 +252,7 @@ function evaluate(comments, head, reviewerRole, roles, { humanRole = null } = {}
     if (h.blocking) problems.push(`${h.who} 在 r${h.round}（審 ${h.sha}）的結論是「${h.verdict}」，還沒有被同一位撤銷。取聯集、不取最後一則：別人說通過不會解除這一條。`);
     else if (!head.startsWith(h.sha)) problems.push(`${h.who} 的「${h.verdict}」是對 ${h.sha} 說的，但目前版本是 ${head.slice(0, 7)}——分支推過之後，那個結論不再適用。`);
   }
-  return { problems, warnings, reviewers: latest };
+  return { problems, warnings, reviewers: latest, incomplete };
 }
 
 function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {}) {
@@ -261,10 +272,16 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     throw e;
   }
   const reviewerRole = canonicalRole(fieldValue(change.body, '複審者'), usable);
+  // 那位人＝角色以「裁示者」開頭的參與者（跟待裁清單認裁示者同一個函式）；識別值跟 rolesOf 一樣去掉前後空白再比
   const human = deciderOf(settings);
-  const { problems, warnings, reviewers, unsure } = evaluate(comments, change.headSha, reviewerRole, usable, { humanRole: human ? human.id : null });
+  const listed = (Array.isArray(settings.participants) ? settings.participants : []).find((p) => p && typeof p.role === 'string' && p.role.startsWith('裁示者'));
+  const listedId = listed && typeof listed.id === 'string' ? listed.id.trim() : '';
+  const { problems, warnings, reviewers, unsure, incomplete } = evaluate(comments, change.headSha, reviewerRole, usable, {
+    humanRole: human ? human.id.trim() : null,
+    humanUnfilled: !human && listedId ? listedId : null,
+  });
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
-  const who = Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`).join('、') || '（沒有任何帶標頭的結論）';
+  const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，缺小標、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);
   if (!problems.length) {
     lines.push(`結論聯集閘｜變更 ${changeId}：指定的複審者對目前版本說通過、沒有未撤銷的阻擋。現況：${who}`);

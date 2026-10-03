@@ -7,7 +7,8 @@
 // 跟合併後的驗收分級（tools/acceptance-tier.js）是兩張不同的表、方向也不同：同一個檔對驗收可能最輕、對風險卻是高（例如工具）。
 // 「這支動到哪些檔」兩支共用同一份算法（changedPaths），不各算各的。
 //
-// 守不到的：內容碰不碰到升級條件（要讀內容才知道，這支只印出條件提醒）；有沒有照印出來的級別送審。
+// 守不到的：內容碰不碰到升級條件（要讀內容才知道，這支只印出條件提醒）；有沒有照印出來的級別送審；
+// 「只升不降」：它只看這支當下動到的檔、不記前幾輪算過的級別，拿掉一個高風險的檔就會印出比較輕的級別。
 // 退出碼：0＝算出來了／2＝算不出來（風險表沒填好、平台問不到、沒有路徑）。⚠️ 不是閘。
 'use strict';
 const { ask } = require('./platform.js');
@@ -53,7 +54,7 @@ function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
   if (row) lines.push(`  照複審與掃描分級表（${r.level}）：全審 ${row.full}；只核差異 ${row.diffOnly}；通過後照 F6 回頭改的那一輪 ${row.afterPassFix}；掃描 ${row.scan}`);
   else lines.push(`  ⚠️ 複審與掃描分級表沒有「${r.level}」那一列：全審幾輪、掃不掃查不到。`);
   lines.push(table.raise.length
-    ? `  內容碰到升級條件就要往重調（${table.raise.join('；')}）；往下只有裁示者能改（D4）。`
+    ? `  內容碰到任一條升級條件，整支就算高（${table.raise.join('；')}）；實作者只能往重調，往下只有裁示者能改；每次送審重算、只升不降，這支工具不記前幾輪的級別（D4）。`
     : '  ⚠️ 專案設定沒填升級條件：內容要不要往重調，只能靠實作者與複審者自己判斷（D4）。');
   return { code: 0, lines, result: r };
 }
