@@ -174,7 +174,7 @@
 | 2026-10-02 | [一支排版 PR 審了三輪、九個半小時：審多深、掃不掃改成照風險級別查表](review-scope-by-risk-tier.md) | D4、F2、G1 |
 | 2026-10-03 | [拿到通過後順手再改，通過作廢、多審四輪](fix-after-pass-only-six-kinds.md) | F6、F2 |
 | 2026-10-03 | [送審提示由實作者自己寫：限定範圍、不准跑整份考題、蓋掉清單](review-prompt-overrode-template.md) | F3、F1、F7 |
-| 2026-10-03 | [擁有者的常設指示只有一方知道：43 則裡 22 則另一方讀不到](standing-instructions-only-one-side.md) | K6 |
+| 2026-10-03 | [擁有者的常設指示只有一方知道：43 則裡 22 則另一方讀不到或只讀到一部分](standing-instructions-only-one-side.md) | K6 |
 | 2026-10-03 | [只改畫面文字的 PR：擁有者想改成只自審，定案成他自己當複審者](text-only-fast-lane.md) | F12 |
 
 ## 不是事故、但值得記的方法

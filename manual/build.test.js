@@ -133,7 +133,7 @@ function ownTemplates(text) {
     return { paths: head.split('`').filter((x) => x.startsWith('templates/')), desc, rules };
   });
 }
-const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3', 'E1'], 'templates/ruling-record.md': ['I1', 'I3'] };
+const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'D4', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3', 'E1'], 'templates/ruling-record.md': ['I1', 'I3'] };
 
 /** 考題自己讀 GLOSSARY.md 的版面約定（不用產生器的 parseLegend）。 */
 function ownLegend(text) {

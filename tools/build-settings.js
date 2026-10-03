@@ -80,7 +80,7 @@ function build(data) {
   }
   out.push('', `主幹分支名（原閘寫死 main，規矩 H2、H3、H4）：${plain(data.mainBranch, '主幹分支名')}`, '');
   out.push('## 四、掃描發射者（規矩 A1、G4）', '');
-  out.push(`- 掃描者：${plain(data.scanner.tool, '掃描者')}（沒有掃描者＝每支的掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式）`);
+  out.push(`- 掃描者：${plain(data.scanner.tool, '掃描者')}（沒有掃描者＝照風險級別要掃的那幾支，掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式；表定不掃的照規矩 G1）`);
   out.push(`- 誰指派、登記在哪：${plain(data.scanner.assignedBy, '掃描發射者的指派方式')}`);
   out.push(`- 兩方都起得了時：${plain(data.scanner.tieBreak, '平手規則')}`);
   out.push(`- 沒有合格者時，誰記錄未執行、誰轉正式：${plain(data.scanner.fallback, '無合格者時的替代')}`);

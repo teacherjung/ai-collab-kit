@@ -50,9 +50,9 @@
 
 ## 範本（本文指到「範本」的地方）
 
-- `templates/pr-body.md`：「PR說明」四欄、風險級別一行與四段小標（D3、E1、F7、G3、H6）。
+- `templates/pr-body.md`：「PR說明」四欄、風險級別一行與四段小標（D3、D4、E1、F7、G3、H6）。
 - `templates/verdict-header.md`：結論留言機器標頭、兩個固定小標、三種留言的分法、撤銷條件（F4、F5、F7）。
-- `templates/review-fixed-dimensions.md`：複審必驗清單，每輪必查 8 項＋看情況 8 項，每項寫明「只核差異」的輪次看整支還是只看差異（F2；檔名沿用舊名）。
+- `templates/review-fixed-dimensions.md`：複審必驗清單，必查 8 項（其中 1 項只在第 1 輪）＋看情況 8 項，每項寫明「只核差異」的輪次看整支還是只看差異（F2；檔名沿用舊名）。
 - `templates/review-request.md`：送審提示，**實作者** 只把尖括號換成事實，連同複審者要回報的兩個固定小標（F3、F11）。
 - `templates/self-review.md`：公開自評的第一行、三題與邊界（F9）。
 - `templates/third-round-self-check.md`：連三輪自問表五題（F10；檔名沿用舊名）。
