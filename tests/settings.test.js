@@ -244,6 +244,7 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
   assert.deepEqual(u.checks.indexAnchors, [UNSET], '索引錨點要沒登記');
   for (const p of u.participants) assert.equal(p.id, UNSET, `身分「${p.role}」要沒填`);
   assert.deepEqual(u.defaultDivision, { implementer: UNSET, reviewer: UNSET }, '預設分工要沒填（空白範本不可以帶套件倉庫自己的分工）');
+  assert.equal(u.owner, UNSET, '擁有者要沒填（空白範本不可以帶套件倉庫自己的擁有者）');
 });
 
 test('⑨b 空白設定跟 settings.json 在套件共用的欄位逐字相同（只准專案自己的值不同）', () => {

@@ -68,6 +68,12 @@ function build(data) {
   // 預設分工（A1）只排版、沒有機器讀它；要在這裡明寫——產生器不認得的欄位不會自己出現在說明書裡
   const division = data.defaultDivision || {};
   out.push(`預設分工（規矩 A1；裁示者沒有逐支指定時，PR說明的「實作者」「複審者」兩欄照這個填）：實作者＝${plain(division.implementer, '預設分工的實作者')}；複審者＝${plain(division.reviewer, '預設分工的複審者')}`, '');
+  // 擁有者另登一欄、不從參與者的角色字樣去猜：裁示者可以由擁有者指定給別人（A1），文字快速通道（F12）的複審者卻一定是擁有者
+  const owner = data.owner === undefined ? '未設定' : data.owner;
+  if (typeof owner === 'string' && owner.trim() !== '未設定' && !(data.participants || []).some((p) => p && typeof p.id === 'string' && p.id.trim() === owner.trim())) {
+    throw new Error(`擁有者「${owner}」不是上表登記的識別值`);
+  }
+  out.push(`擁有者（規矩 A1；文字快速通道由他當複審者，F12，結論閘認他的「通過」不要求固定小標）：${plain(owner, '擁有者識別值')}`, '');
   out.push('## 二、來源字串標準表（結論標頭的來源欄；寫作義務：跨輪次一字不改、不含會變的東西）', '');
   out.push('| 審查工具或工作階段 | 逐字來源字串 |', '|---|---|');
   for (const s of data.sources) {

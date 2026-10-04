@@ -264,6 +264,8 @@ test('設定資料的每一條契約，各有一發壞資料釘著', () => {
     ['機器的狀態不在三種裡', mutateS((d) => { d.machines[0].state = '應該可以'; })],
     ['預設分工整欄不見（產生器要明寫這一欄：不認得的欄位它不會自己排出來）', mutateS((d) => { delete d.defaultDivision; })],
     ['預設分工的複審者是空的', mutateS((d) => { d.defaultDivision.reviewer = ''; })],
+    ['擁有者不是登記的識別值', mutateS((d) => { d.owner = '沒登記的'; })],
+    ['擁有者欄不是字串', mutateS((d) => { d.owner = 7; })],
     ['風險表標了三種以外的級別', mutateS((d) => { d.risk = { families: [{ pattern: '^lib/', tier: '極高' }], raise: ['條件'] }; })],
     ['複審與掃描分級表多了一種級別', mutateS((d) => { d.reviewTiers = { 極低: { full: '第 1 輪', diffOnly: '第 2 輪起', afterPassFix: '只核差異', scan: '不掃' } }; })],
     ['複審者不是登記的識別值', mutateS((d) => { d.reviewers = [{ participant: '沒登記的', strongest: '甲', second: '乙', maxEffort: '最高', autoMode: '丙', launch: '丁', machine: '戊', promptOnly: '己', verified: '' }]; })],
