@@ -57,6 +57,7 @@ function fakeFilled({ log, box, zones }) {
   for (const loc of s.locations) loc.where = '假的位置';
   s.mainBranch = 'main';
   s.defaultDivision = { implementer: 'Alpha', reviewer: 'Beta' };
+  s.owner = 'Boss';
   s.scanner = { tool: '假的掃描者', assignedBy: 'Alpha', tieBreak: '無', fallback: '無', isolation: { provider: '專案自建', wrap: [...recorder(log, 'isolation'), '{box}'], boxRoot: box, forbidden: zones } };
   s.platform = {
     name: 'Fake', project: 'fake/repo', clearEnv: ['GH_REPO'],
