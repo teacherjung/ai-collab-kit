@@ -1011,12 +1011,8 @@ function parseAdopt(readme) {
 
 function adoptPage(sections) {
   const titles = sections.map((sec) => settingsInline(sec.title, `README.md「${sec.title}」那一節的標題`));
-  const jumps = titles
-    .map((html, i) => {
-      const label = html.replace(/<[^>]+>/gu, '').replace(/（.*$/u, '').trim();
-      return `<button type="button" class="jump" data-jump="adopt-${i + 1}">${label}</button>`;
-    })
-    .join('');
+  // 跳節鈕的字＝那一節的標題在「（」之前的字，照 parseAdopt 的找法剛好就是 ADOPT_HEADINGS 那幾個字
+  const jumps = ADOPT_HEADINGS.map((h, i) => `<button type="button" class="jump" data-jump="adopt-${i + 1}">${esc(h)}</button>`).join('');
   const body = sections.map((sec, i) => `<section class="block" id="adopt-${i + 1}" tabindex="-1">
 <h2>${titles[i]}</h2>
 ${settingsBlocksHtml(sec.blocks, `README.md「${sec.title}」那一節`)}
