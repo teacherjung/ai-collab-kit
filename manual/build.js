@@ -24,7 +24,7 @@ const PAGES = [
   { id: 'tests', name: '考題', built: true },
   { id: 'templates', name: '範本', built: true },
   { id: 'settings', name: '設定', built: true },
-  { id: 'adopt', name: '套用', next: '怎麼把套件搬進一個專案；專案裡改到套件的檔要怎麼辦' },
+  { id: 'adopt', name: '套用', built: true },
   { id: 'glossary', name: '名詞', next: '用語對照表，名詞白話手冊併進來' },
   { id: 'cases', name: '案例', next: '每一則裁示背後發生過的事（案例簿）' },
 ];
@@ -48,10 +48,12 @@ const RULE_SEPARATOR = /[、，,；;。]/u;
 // （2026-10-01 在 Node 26 實測：test-a.js、b.test.cjs、c_test.mjs、e.test.ts、test/ 底下的檔都會被當考題跑，latest.js、data-test.json 不會）；這一條比它寬，寧可多停
 const HELPER_TEST_LIKE = /^(?=.*test).*\.(?:js|cjs|mjs|ts|cts|mts)$/iu;
 const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
+// 程式碼框的圍欄（套用頁的編號清單項底下用）
+const FENCE = '```';
 const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
-// 範本跳窗不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
-// （NUL 會被丟掉、\r 會變成換行、其餘看不見），跳窗就不是原文了
-const TEMPLATE_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
+// 範本跳窗與套用頁不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
+// （NUL 會被丟掉、\r 會變成換行、其餘看不見），網頁上就不是原文了
+const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
   laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
@@ -60,7 +62,7 @@ const TEMPLATE_NOTE = {
 };
 
 /**
- * 排版那一套（設定頁、範本跳窗共用）認不得某一行或某個行內記號時丟的例外。設定頁照樣整份停下；
+ * 排版那一套（設定頁、範本跳窗、套用頁共用）認不得某一行或某個行內記號時丟的例外。設定頁與套用頁照樣整份停下；
  * 範本跳窗只接這一種、改成照原始檔顯示——其他例外（程式自己的錯）一律往外丟，說明書不產生。
  */
 class LayoutError extends Error {}
@@ -383,8 +385,8 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
- * 行內排版（設定頁與範本跳窗共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
- * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
+ * 行內排版（設定頁、範本跳窗、套用頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
+ * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本與 README 是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
  * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
@@ -465,10 +467,14 @@ function tableCells(line, where) {
 // 設定說明產生器今天只產這一種分隔列；別種（冒號、少於三個 -、夾了字）一律停（範本也一樣）
 const SETTINGS_TABLE_RULE = /^\|(?:---\|)+$/u;
 
-/** 段落、標題、清單項、子項的字：開頭不能是空白或沒跳脫的半形標點（GitHub 會把它讀成別的區塊），結尾不能有空白。 */
-function settingsText(text, where) {
+/**
+ * 段落、標題、清單項、子項的字：開頭不能是空白或沒跳脫的半形標點（GitHub 會把它讀成別的區塊），結尾不能有空白。
+ * leadingBold（只有套用頁打開）：開頭是 ** 而且後面緊接著不是空白、不是 * 的字＝粗體開頭，照收（GitHub 不會把它讀成別種區塊；粗體成不成對由行內排版再核）。
+ */
+function settingsText(text, where, leadingBold = false) {
   if (!text || /^\s|\s$/u.test(text)) throw new LayoutError(`${where}：字是空的、或頭尾有空白，說明書不排`);
-  if (/^[!-/:-@[-`{-~]/u.test(text) && !/^\\[!-/:-@[-`{-~]/u.test(text)) throw new LayoutError(`${where}：開頭是沒跳脫的半形標點（${text[0]}），GitHub 可能讀成別種區塊，說明書不排`);
+  const boldStart = leadingBold && /^\*\*[^\s*]/u.test(text);
+  if (!boldStart && /^[!-/:-@[-`{-~]/u.test(text) && !/^\\[!-/:-@[-`{-~]/u.test(text)) throw new LayoutError(`${where}：開頭是沒跳脫的半形標點（${text[0]}），GitHub 可能讀成別種區塊，說明書不排`);
   return text;
 }
 
@@ -479,18 +485,26 @@ function noClosingHash(title, where) {
 }
 
 /**
- * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁與範本跳窗共用）。只認設定說明產生器今天產的這幾種行，
+ * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁、範本跳窗、套用頁共用）。只認設定說明產生器今天產的這幾種行，
  * 其他一律丟 LayoutError（說明產生器的格式變了，要人先決定說明書怎麼排；範本則改成照原始檔顯示）：
  * 第一行「# 」大標題、「## 」節標題（前面空一行）、空行（真的空）、段落（一行一段）、表格（表頭、只准 |---| 的分隔列、
  * 每一列格數一樣；格子可以空，例如還沒驗過的日期）、「- 」清單、清單項底下兩格縮排、從 1 連號的「N. 」子項。
  * 區塊之間要空一行（清單接清單項、清單項接子項、表格的列除外）；兩串清單只隔一個空行也停（GitHub 會把它們當成同一串）。
- * 整份有 tab 或 \r、或任何一行結尾有空白，也停。name＝訊息裡怎麼稱呼這一份；needSections＝至少要有一節（設定說明要、範本不用）。
+ * 整份有 tab 或 \r、或任何一行結尾有空白，也停。name＝訊息裡怎麼稱呼這一份。opts：needSections＝至少要有一節（設定說明要、範本不用）；
+ * lineOffset＝訊息裡的行號要加多少（套用頁從 README 中間切出一節來讀，行號照 README 的）；
+ * readme＝多認三種（只有套用頁打開）：開頭是粗體的字、頂格從 1 連號的「N. 」編號清單（項目之間可以空一行；空行後接著寫下一個號碼＝同一串，
+ * 寫 1＝停，GitHub 會把它們併成一串）、編號清單項底下的程式碼框（前面空一行，三個反引號＋可有可無的語言名，縮排剛好對齊那一項的字；
+ * 框裡每一行至少縮排那麼多（多的照留）或是空行；去掉那個縮排之後以 0〜3 格空白加三個反引號開頭的行停（說明書不知道框到哪裡結束），
+ * 多 4 格以上的照字面；收尾的三個反引號剛好對齊、後面要空一行；語言名跟三個反引號一樣是記號，不顯示）。
  */
-function parseDoc(md, name, needSections) {
+function parseDoc(md, name, opts = {}) {
+  const { needSections = false, lineOffset = 0, readme = false } = opts;
+  const at = (i) => `${name}第 ${i + 1 + lineOffset} 行`;
+  const text = (t, where) => settingsText(t, where, readme);
   if (/[\t\r]/u.test(md)) throw new LayoutError(`${name}裡有 tab 或 \\r，說明書不排`);
   const lines = md.split('\n');
   if (!lines[0].startsWith('# ')) throw new LayoutError(`${name}第一行應該是「# 」開頭的大標題`);
-  const doc = { title: noClosingHash(settingsText(lines[0].slice(2), `${name}的大標題`), `${name}的大標題`), intro: [], sections: [] };
+  const doc = { title: noClosingHash(text(lines[0].slice(2), `${name}的大標題`), `${name}的大標題`), intro: [], sections: [] };
   let blocks = doc.intro;
   let prev = 'heading';
   let lastBlock = null;
@@ -498,7 +512,7 @@ function parseDoc(md, name, needSections) {
   let list = null;
   for (let i = 1; i < lines.length; i += 1) {
     const line = lines[i];
-    const where = `${name}第 ${i + 1} 行`;
+    const where = at(i);
     if (!line.trim()) {
       if (line) throw new LayoutError(`${where}：空行裡有空白字元`);
       prev = 'blank';
@@ -515,8 +529,8 @@ function parseDoc(md, name, needSections) {
       } else if (prev === 'blank' || prev === 'heading') {
         const head = tableCells(line, where);
         const rule = lines[i + 1] || '';
-        if (!SETTINGS_TABLE_RULE.test(rule) || tableCells(rule, `${name}第 ${i + 2} 行`).length !== head.length) {
-          throw new LayoutError(`${name}第 ${i + 2} 行：表頭底下應該是一樣格數的分隔列（|---|）`);
+        if (!SETTINGS_TABLE_RULE.test(rule) || tableCells(rule, at(i + 1)).length !== head.length) {
+          throw new LayoutError(`${at(i + 1)}：表頭底下應該是一樣格數的分隔列（|---|）`);
         }
         table = { kind: 'table', head, rows: [] };
         blocks.push(table);
@@ -529,25 +543,70 @@ function parseDoc(md, name, needSections) {
       continue;
     }
     if (table) throw new LayoutError(`${where}：表格後面直接接了別的東西，說明書不知道它算不算表格`);
+    if (readme && /^ +```/u.test(line) && prev === 'blank' && lastBlock && lastBlock.kind === 'olist') {
+      const item = lastBlock.items[lastBlock.items.length - 1];
+      const pad = ' '.repeat(item.n.length + 2);
+      const open = line.startsWith(pad + FENCE) ? line.slice(pad.length + 3) : null;
+      if (open === null || !/^[A-Za-z0-9+-]*$/u.test(open)) {
+        throw new LayoutError(`${where}：程式碼框要剛好縮排 ${pad.length} 格（對齊第 ${item.n} 項的字）、三個反引號後面只准接語言名（英文字母、數字、+、-）`);
+      }
+      const code = [];
+      let j = i + 1;
+      for (; j < lines.length && lines[j] !== pad + FENCE; j += 1) {
+        if (lines[j] && !lines[j].startsWith(pad)) throw new LayoutError(`${at(j)}：程式碼框裡的每一行都要縮排 ${pad.length} 格（或是空行）`);
+        if (/\s$/u.test(lines[j])) throw new LayoutError(`${at(j)}：結尾有空白`);
+        const content = lines[j].slice(pad.length);
+        if (/^ {0,3}```/u.test(content)) throw new LayoutError(`${at(j)}：程式碼框裡又有三個反引號開頭的行，說明書不知道框到哪裡結束`);
+        code.push(content);
+      }
+      if (j >= lines.length) throw new LayoutError(`${where}：程式碼框沒有收尾（要有一行剛好縮排 ${pad.length} 格的三個反引號）`);
+      if (lines[j + 1]) throw new LayoutError(`${at(j + 1)}：程式碼框後面要空一行`);
+      item.code.push(code);
+      i = j;
+      prev = 'code';
+      continue;
+    }
     const sub = line.match(/^ {2}(\d+)\. (.*)$/u);
     if (sub) {
-      if (!list) throw new LayoutError(`${where}：子項前面要是「- 」清單`);
+      if (!list || list.kind !== 'list') throw new LayoutError(`${where}：子項前面要是「- 」清單`);
       const item = list.items[list.items.length - 1];
       if (sub[1] !== String(item.sub.length + 1)) throw new LayoutError(`${where}：子項要從 1 起連號、照寫成 ${item.sub.length + 1}（這裡寫的是 ${sub[1]}）`);
-      const subText = settingsText(sub[2], where);
+      const subText = text(sub[2], where);
       if (/^\d{1,9}[.)](\s|$)/u.test(subText)) throw new LayoutError(`${where}：子項的字像編號清單，GitHub 會讀成更深一層的清單，說明書不排`);
       item.sub.push(subText);
       prev = 'sub';
       continue;
     }
+    const olItem = readme ? line.match(/^(\d{1,9})\. (.*)$/u) : null;
+    if (olItem) {
+      const itemText = text(olItem[2], where);
+      if (/^\d{1,9}[.)](\s|$)/u.test(itemText)) throw new LayoutError(`${where}：編號清單項的字又像編號清單，GitHub 會讀成巢狀清單，說明書不排`);
+      const same = list && list.kind === 'olist' ? list : prev === 'blank' && lastBlock && lastBlock.kind === 'olist' ? lastBlock : null;
+      if (same) {
+        if (olItem[1] !== String(same.items.length + 1)) throw new LayoutError(`${where}：編號清單要從 1 起連號、照寫成 ${same.items.length + 1}（這裡寫的是 ${olItem[1]}）`);
+        same.items.push({ n: olItem[1], text: itemText, code: [] });
+        list = same;
+      } else if (prev === 'blank' || prev === 'heading') {
+        if (olItem[1] !== '1') throw new LayoutError(`${where}：編號清單要從 1 起（這裡寫的是 ${olItem[1]}）`);
+        list = { kind: 'olist', items: [{ n: '1', text: itemText, code: [] }] };
+        blocks.push(list);
+        lastBlock = list;
+      } else {
+        throw new LayoutError(`${where}：清單前面要空一行`);
+      }
+      prev = 'item';
+      continue;
+    }
     if (line.startsWith('- ')) {
-      const text = settingsText(line.slice(2), where);
-      if (/^\d{1,9}[.)](\s|$)/u.test(text)) throw new LayoutError(`${where}：清單項的字像編號清單，GitHub 會讀成巢狀清單，說明書不排`);
-      if (list) {
-        list.items.push({ text, sub: [] });
+      const itemText = text(line.slice(2), where);
+      if (/^\d{1,9}[.)](\s|$)/u.test(itemText)) throw new LayoutError(`${where}：清單項的字像編號清單，GitHub 會讀成巢狀清單，說明書不排`);
+      if (list && list.kind === 'list') {
+        list.items.push({ text: itemText, sub: [] });
+      } else if (list) {
+        throw new LayoutError(`${where}：編號清單後面直接接了「- 」清單，說明書不排`);
       } else if (prev === 'blank' || prev === 'heading') {
         if (prev === 'blank' && lastBlock && lastBlock.kind === 'list') throw new LayoutError(`${where}：兩串清單之間只隔一個空行，GitHub 會把它們當成同一串，說明書不排`);
-        list = { kind: 'list', items: [{ text, sub: [] }] };
+        list = { kind: 'list', items: [{ text: itemText, sub: [] }] };
         blocks.push(list);
         lastBlock = list;
       } else {
@@ -559,7 +618,7 @@ function parseDoc(md, name, needSections) {
     if (list) throw new LayoutError(`${where}：清單後面直接接了別的東西，說明書不知道它算不算清單的一部分`);
     if (line.startsWith('## ')) {
       if (prev !== 'blank') throw new LayoutError(`${where}：節標題前面要空一行`);
-      const title = noClosingHash(settingsText(line.slice(3), where), where);
+      const title = noClosingHash(text(line.slice(3), where), where);
       const section = { title, blocks: [] };
       doc.sections.push(section);
       blocks = section.blocks;
@@ -568,9 +627,9 @@ function parseDoc(md, name, needSections) {
       continue;
     }
     if (prev !== 'blank' && prev !== 'heading') throw new LayoutError(`${where}：段落前面要空一行（說明書一段只收一行）`);
-    const text = settingsText(line, where);
-    if (/^\d{1,9}[.)](\s|$)/u.test(text)) throw new LayoutError(`${where}：段落的字像編號清單，GitHub 會讀成清單，說明書不排`);
-    const para = { kind: 'p', text };
+    const paraText = text(line, where);
+    if (/^\d{1,9}[.)](\s|$)/u.test(paraText)) throw new LayoutError(`${where}：段落的字像編號清單，GitHub 會讀成清單，說明書不排`);
+    const para = { kind: 'p', text: paraText };
     blocks.push(para);
     lastBlock = para;
     prev = 'p';
@@ -581,7 +640,7 @@ function parseDoc(md, name, needSections) {
 
 /** 設定說明整份讀成一節一節（至少要有一節）。 */
 function parseSettingsDoc(md) {
-  return parseDoc(md, '設定說明', true);
+  return parseDoc(md, '設定說明', { needSections: true });
 }
 
 /**
@@ -870,6 +929,11 @@ function settingsBlocksHtml(blocks, where) {
           .map((r) => `<tr>${r.map((c) => `<td>${cell(c)}</td>`).join('')}</tr>`)
           .join('')}</tbody></table></div>`;
       }
+      if (b.kind === 'olist') {
+        return `<ol class="items">${b.items
+          .map((it) => `<li>${settingsInline(it.text, at)}${it.code.map((c) => `<pre class="code-box"><code>${esc(c.join('\n'))}</code></pre>`).join('')}</li>`)
+          .join('')}</ol>`;
+      }
       return `<ul class="items">${b.items
         .map((it) => `<li>${settingsInline(it.text, at)}${it.sub.length ? `<ol>${it.sub.map((x) => `<li>${settingsInline(x, at)}</li>`).join('')}</ol>` : ''}</li>`)
         .join('')}</ul>`;
@@ -926,6 +990,55 @@ function renderSettings(md) {
   return settingsPage(parseSettingsDoc(md));
 }
 
+// 套用頁從 README.md 取的兩節（照這個順序）
+const ADOPT_HEADINGS = ['搬進一個專案', '專案裡改到套件的檔'];
+
+/**
+ * README.md 裡套用頁要的那兩節：「## 」開頭、標題剛好是 ADOPT_HEADINGS 那幾個字，或那幾個字後面接「（」補充；每一個都要剛好找到一行，
+ * 一節到下一個「## 」（或檔案結尾）為止；那一節裡有 tab 與換行以外的控制字元就停（跟範本跳窗同一條）。
+ * 每一節照設定頁那一套讀，另外打開 readme 那三種（parseDoc），訊息裡的行號照 README 的。
+ */
+function parseAdopt(readme) {
+  const lines = readme.split('\n');
+  return ADOPT_HEADINGS.map((head) => {
+    const hits = lines.map((l, i) => [l, i]).filter(([l]) => l === `## ${head}` || l.startsWith(`## ${head}（`));
+    if (hits.length !== 1) throw new Error(`README.md 裡標題是「${head}」的那一節要剛好一節（找到 ${hits.length} 節）：說明書不產生`);
+    const at = hits[0][1];
+    const next = lines.findIndex((l, i) => i > at && l.startsWith('## '));
+    const body = lines.slice(at, next < 0 ? lines.length : next);
+    if (CONTROL_CHARS.test(body.join('\n'))) throw new Error(`README.md「${head}」那一節裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：網頁顯示不出原文，說明書不產生`);
+    // 前面補一行大標題與一個空行，讓它照整份文件的規矩讀；那一節的標題在第 3 行，所以行號要加 at - 2
+    return parseDoc(`# README.md\n\n${body.join('\n')}`, 'README.md ', { needSections: true, readme: true, lineOffset: at - 2 }).sections[0];
+  });
+}
+
+function adoptPage(sections) {
+  const titles = sections.map((sec) => settingsInline(sec.title, `README.md「${sec.title}」那一節的標題`));
+  // 跳節鈕的字＝那一節的標題在「（」之前的字，照 parseAdopt 的找法剛好就是 ADOPT_HEADINGS 那幾個字
+  const jumps = ADOPT_HEADINGS.map((h, i) => `<button type="button" class="jump" data-jump="adopt-${i + 1}">${esc(h)}</button>`).join('');
+  const body = sections.map((sec, i) => `<section class="block" id="adopt-${i + 1}" tabindex="-1">
+<h2>${titles[i]}</h2>
+${settingsBlocksHtml(sec.blocks, `README.md「${sec.title}」那一節`)}
+</section>`);
+  return `<section class="page" id="page-adopt" data-page="adopt" hidden>
+<header class="page-head">
+<p class="eyebrow">README 的兩節</p>
+<h1>套用</h1>
+<p class="page-sum">怎麼把套件搬進一個專案、專案裡改到套件的檔要怎麼辦：下面是 README.md 的${ADOPT_HEADINGS.map((h) => `「${h}」`).join('')}這 ${sections.length} 節原文，照說明書的排法排。</p>
+</header>
+<nav class="jumps" aria-label="跳到某一節">${jumps}</nav>
+<div class="settings-body adopt-body">
+${body.join('\n')}
+</div>
+<p class="source-note">來源：README.md 的${ADOPT_HEADINGS.map((h) => `「${h}」`).join('')}兩節。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單（含從 1 連號的編號清單，與編號清單項底下的程式碼框）、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與程式碼框開頭的語言名不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、刪除線、HTML 的寫法），會讓整份停下不產生。</p>
+</section>`;
+}
+
+/** README.md（原文）→ 套用頁的 HTML；認不得的形狀、行內記號都在這裡停。 */
+function renderAdopt(readme) {
+  return adoptPage(parseAdopt(readme));
+}
+
 /** 排得了的範本：大標題、開頭各塊、每一節（跳窗的標題是 h2，節標題用 h3）。 */
 function templateDocHtml(doc, name) {
   const parts = [`<p class="doc-title">${settingsInline(doc.title, `${name}的大標題`)}</p>`, settingsBlocksHtml(doc.intro, `${name}開頭`)];
@@ -940,11 +1053,11 @@ function templateDocHtml(doc, name) {
  * 就整份照原始檔顯示，不會半份排版半份原文；不是 .md 的一律照原始檔顯示。有 tab 與換行以外的控制字元就停：照原始檔也顯示不出原文。
  */
 function templateView(file) {
-  if (TEMPLATE_CONTROL.test(file.text)) throw new Error(`${file.path} 裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：跳窗沒辦法照原文顯示，說明書不產生`);
+  if (CONTROL_CHARS.test(file.text)) throw new Error(`${file.path} 裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：跳窗沒辦法照原文顯示，說明書不產生`);
   if (file.path.endsWith('.md')) {
     const name = `${file.path} `;
     try {
-      return { laidOut: true, html: templateDocHtml(parseDoc(file.text, name, false), name) };
+      return { laidOut: true, html: templateDocHtml(parseDoc(file.text, name), name) };
     } catch (err) {
       if (!(err instanceof LayoutError)) throw err;
     }
@@ -1102,6 +1215,9 @@ html.modal-open,html.modal-open body{overflow:hidden}
 /* 排好版的字照原文留空白：連續空白不合併（說明書不照 GitHub 的畫法，其他字照原文） */
 .settings-body :is(p,li,th,td),.tpl-body :is(p,li,th,td){white-space:pre-wrap}
 .settings-body .block{scroll-margin-top:16px}
+.adopt-body ol.items>li{margin:10px 0}
+.code-box{margin:8px 0 0;padding:10px 12px;background:var(--code-bg);border-radius:6px;font-family:var(--mono);font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.code-box code{background:none;padding:0;border-radius:0;font-size:inherit}
 .settings-body .block:focus{outline:none}
 .doc-title{font-weight:700;margin:0 0 8px}
 .table-wrap{overflow-x:auto;margin:10px 0}
@@ -1231,6 +1347,7 @@ function readSources(root) {
     tests: readTests(root),
     templates: readTemplates(root),
     settingsTemplate: read('tests/helpers/unfilled-settings.json'),
+    readme: read('README.md'),
   };
 }
 
@@ -1260,6 +1377,8 @@ function build(sources, { stamp } = {}) {
   const tests = testsPage(sources.tests, table.rows);
   const templates = templatesPage(tpl, files, table.rows, popups.laidOut);
   const settings = renderSettings(settingsMarkdown(sources.settingsTemplate));
+  const adoptSections = parseAdopt(sources.readme);
+  const adopt = adoptPage(adoptSections);
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
   const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
@@ -1283,6 +1402,7 @@ ${tools}
 ${tests}
 ${templates}
 ${settings}
+${adopt}
 ${others.join('\n')}
 </main>
 </div>
@@ -1305,6 +1425,7 @@ ${others.join('\n')}
     templates: sources.templates.length,
     templateItems: tpl.items.length,
     templatesLaidOut: popups.laidOut,
+    adoptSections: adoptSections.length,
   };
 }
 
@@ -1328,11 +1449,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
