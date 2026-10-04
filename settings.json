@@ -22,6 +22,7 @@
   "implementer": "Claude",
   "reviewer": "Codex"
  },
+ "owner": "William",
  "sources": [
   {
    "tool": "本機 codex CLI 起的審查 session",

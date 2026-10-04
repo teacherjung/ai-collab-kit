@@ -25,17 +25,18 @@
 // 原專案 PFW #655 第三輪的送審提示自訂了回報格式，結論裡沒有清單、也沒寫實際用了什麼設定，而這道閘只看第一行，
 // 沒人發現。所以「通過」那一則還要有兩行固定小標，缺一個那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
 // 要重貼一則合格的。只看小標那一行在不在，不驗底下寫了什麼——擋得住「整段沒寫」，擋不住「寫了不適用卻沒查」。
-// 「文字快速通道」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定裡那位人（角色以「裁示者」開頭的參與者）的，
-// 就不要求。設定沒填齊那一位（識別值或貼文帳號）時不豁免＝那一則不算數、看得見地擋下，訊息會說是設定沒填齊、不是要替他的原話補小標。
+// 「文字快速通道」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定登記的擁有者（owner 那一欄）的，就不要求。
+// 認的是擁有者、不是裁示者（#32 r1）：裁示者可以由擁有者指定給別人（A1），認裁示者的話，裁示者若指定給某個 AI，
+// 那個 AI 的通過就跳過小標，擁有者的原話反而被擋。擁有者沒登記（或登記的不是參與者）時不豁免＝那一則不算數、看得見地擋下，
+// 訊息會提醒先登記擁有者、不要替他的原話補小標。
 //
-// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標，那位人除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
+// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標，擁有者除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
 'use strict';
 const { ask, PlatformError } = require('../platform.js');
 const { read: readSettings } = require('../settings-data.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./check-collab-fields.js');
 const { leadingText, stopNote } = require('../markdown-effective.js');
 const { parseInstant } = require('../time-point.js');
-const { deciderOf } = require('../pending-rulings.js');
 
 /** 結論只認這三種，寫別的等於沒下結論。字串與 templates/verdict-header.md、規矩 F3 逐字相同。 */
 const VERDICTS = { 通過: false, 需修改後再審: true, 不可合併: true };
@@ -139,10 +140,9 @@ function sourceLookalike(a, b) {
  * @param {string} head 目前版本
  * @param {string|null} reviewerRole PR說明指定的複審者；null＝讀不出來
  * @param {string[]} roles 專案設定的參與者識別值
- * @param {{humanRole?: string|null, humanUnfilled?: string|null}} [opts] humanRole＝專案設定裡那位人的識別值，他的「通過」不要求固定小標（F12）；
- *   humanUnfilled＝那位人有登記、但識別值或帳號沒填齊（不豁免，訊息改說設定沒填齊）
+ * @param {{ownerRole?: string|null}} [opts] ownerRole＝專案設定登記的擁有者識別值，他的「通過」不要求固定小標（F12）；null＝沒登記（不豁免）
  */
-function evaluate(comments, head, reviewerRole, roles, { humanRole = null, humanUnfilled = null } = {}) {
+function evaluate(comments, head, reviewerRole, roles, { ownerRole = null } = {}) {
   const problems = [];
   const warnings = [];
   const incomplete = [];
@@ -170,7 +170,7 @@ function evaluate(comments, head, reviewerRole, roles, { humanRole = null, human
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
     // 缺固定小標的「通過」整則不採計（F7）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
-    if (!h.blocking && h.role !== humanRole) {
+    if (!h.blocking && h.role !== ownerRole) {
       const missing = missingHeadings(c.body);
       if (missing.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, missing }); return; }
     }
@@ -229,9 +229,9 @@ function evaluate(comments, head, reviewerRole, roles, { humanRole = null, human
 
   const passers = ids.filter((h) => !h.blocking && head.startsWith(h.sha));
   for (const x of incomplete) {
-    const fix = x.role === humanUnfilled
-      ? '這一位登記成裁示者，他的「通過」照理不要求小標（文字快速通道，F12），但專案設定裡他的識別值或貼文帳號沒填齊，所以沒有豁免：先把設定填齊，不要替他的原話補小標。'
-      : '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。';
+    const fix = ownerRole
+      ? '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。'
+      : '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）；如果這一則是擁有者走文字快速通道（F12）的原話：專案設定還沒登記擁有者，所以沒有豁免，先登記擁有者，不要替他的原話補小標。';
     const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：${fix}`;
     // 它算數的話結果會不會不一樣：①會撤掉同一位較低輪次的阻擋，或②會是指定那一位對目前版本的通過、而沒有別則補上。
     // 同一位之後又有更高（或同輪）的結論時，它算不算數都改變不了什麼，只提醒。不在目前版本上的也只提醒（算數也會因為版本變了而擋）。
@@ -272,13 +272,10 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     throw e;
   }
   const reviewerRole = canonicalRole(fieldValue(change.body, '複審者'), usable);
-  // 那位人＝角色以「裁示者」開頭的參與者（跟待裁清單認裁示者同一個函式）；識別值跟 rolesOf 一樣去掉前後空白再比
-  const human = deciderOf(settings);
-  const listed = (Array.isArray(settings.participants) ? settings.participants : []).find((p) => p && typeof p.role === 'string' && p.role.startsWith('裁示者'));
-  const listedId = listed && typeof listed.id === 'string' ? listed.id.trim() : '';
+  // 擁有者＝專案設定 owner 那一欄，要是可用的參與者識別值才算登記了；跟 rolesOf 一樣去掉前後空白再比
+  const ownerId = typeof settings.owner === 'string' ? settings.owner.trim() : '';
   const { problems, warnings, reviewers, unsure, incomplete } = evaluate(comments, change.headSha, reviewerRole, usable, {
-    humanRole: human ? human.id.trim() : null,
-    humanUnfilled: !human && listedId ? listedId : null,
+    ownerRole: usable.includes(ownerId) ? ownerId : null,
   });
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
   const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，缺小標、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';

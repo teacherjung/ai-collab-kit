@@ -126,14 +126,20 @@ test('④基準版本找不到、不在倉庫裡、主幹沒填又沒給 --base�
     // git 出錯不可以當成沒命中（要有字串可搜，grep 才會被叫到）
     const withPhrase = repo({ 'a.md': '核對請用日期\n', 'b.md': '核對請用日期\n' }, { 'a.md': '改用編號\n' });
     try {
-      const failOn = (sub) => (args, opts) => (args[0] === sub ? { status: 128, stdout: '', stderr: `fatal: 假的 ${sub} 錯誤` } : spawnSync('git', args, { cwd: opts.cwd, env: gitEnv(), encoding: 'utf8', input: opts.input }));
-      const grepFail = run(['--base', withPhrase.base], { settings: SETTINGS, cwd: withPhrase.dir, runGit: failOn('grep') });
-      assert.equal(grepFail.code, 2);
-      assert.match(grepFail.lines[0], /git grep 出錯（退出碼 128）/u);
-      const diffFail = run(['--base', withPhrase.base], { settings: SETTINGS, cwd: withPhrase.dir, runGit: failOn('diff') });
-      assert.equal(diffFail.code, 2);
-      assert.match(diffFail.lines[0], /git diff 出錯（退出碼 128）/u);
-      const killed = run(['--base', withPhrase.base], { settings: SETTINGS, cwd: withPhrase.dir, runGit: (args, opts) => (args[0] === 'grep' ? { status: null, stdout: '', stderr: '' } : spawnSync('git', args, { cwd: opts.cwd, env: gitEnv(), encoding: 'utf8', input: opts.input })) });
+      // 每一次 git 查詢各自注入失敗、其餘照常（#32 r1：兩次差異查詢共用一個注入時，刪掉其中一道保護考題照樣綠）
+      const real = (args, opts) => spawnSync('git', args, { cwd: opts.cwd, env: gitEnv(), encoding: 'utf8', input: opts.input });
+      const failWhen = (pick) => (args, opts) => (pick(args) ? { status: 128, stdout: '', stderr: `fatal: 假的 ${args[0]} 錯誤` } : real(args, opts));
+      const cases = [
+        ['git grep', (a) => a[0] === 'grep', /git grep 出錯（退出碼 128）/u],
+        ['內容差異', (a) => a[0] === 'diff' && a.includes('--unified=0'), /git diff 出錯（退出碼 128）/u],
+        ['改名與刪檔清單', (a) => a[0] === 'diff' && a.includes('--name-status'), /git diff 出錯（退出碼 128）/u],
+      ];
+      for (const [what, pick, msg] of cases) {
+        const out = run(['--base', withPhrase.base], { settings: SETTINGS, cwd: withPhrase.dir, runGit: failWhen(pick) });
+        assert.equal(out.code, 2, `${what}出錯：退 2，不可以當成沒命中`);
+        assert.match(out.lines[0], msg, what);
+      }
+      const killed = run(['--base', withPhrase.base], { settings: SETTINGS, cwd: withPhrase.dir, runGit: (args, opts) => (args[0] === 'grep' ? { status: null, stdout: '', stderr: '' } : real(args, opts)) });
       assert.equal(killed.code, 2, '被殺掉或超過輸出上限（退出碼是 null）也是錯誤');
     } finally { withPhrase.cleanup(); }
     // 預設跟 origin/<主幹> 比：這個倉庫沒有 origin＝找不到基準＝退 2（不猜）

@@ -20,15 +20,15 @@
 //   ⑬「通過」要帶兩行固定小標（F7）：缺了那則不算數、撤不了自己先前的阻擋；只缺一行就點名那一行；小標逐字（多了字、放進引用都不算，
 //     行尾空白與 CR 換行可以）；阻擋不要求；重貼合格的就放行；它算數會改變結果時（會撤掉自己較低輪的阻擋、或會是指定那一位
 //     對目前版本的通過）才列成擋下的原因，否則只提醒；缺小標的通過裡的作廢行照樣生效；現況那一行照實列出不算數的那則。
-//   ⑭文字快速通道（F12）：專案設定裡那位人（角色以「裁示者」開頭、識別值與帳號都填了，識別值去前後空白比）的通過不要求小標；
-//     設定沒填齊＝不豁免，訊息說是設定沒填齊、不要替他的原話補小標；AI 的通過不跟著豁免。
+//   ⑭文字快速通道（F12）：專案設定登記的擁有者（owner 那一欄，要是參與者，去前後空白比）的通過不要求小標；認擁有者不認裁示者
+//     （裁示者指定給 AI 時，那個 AI 的通過照樣要小標、擁有者的原話照樣接受）；沒登記＝不豁免，訊息提醒先登記、不要替他的原話補小標；AI 的通過不跟著豁免。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。複審者用反例推翻（舊版本 01:00、目前版本 02:00、
 //    反序餵入：有排序退 1、沒排序退 0）——當時同輪同結論異版本是「先遇到哪一則就用哪一則」，排序決定了誰先。
 //    現在同輪異版本一律判不明，**判決**跟順序無關（⑨那題把每一種排列都跑一遍、比對整份 problems）。
 //    排序仍然不是等價突變：它決定訊息裡兩個版本的先後（照時間），拿掉會讓 ⑨ 的訊息比對紅——
 //    所以它是「訊息確定性」的零件，不是判決的依據。兩句都照實寫，不再宣稱「等價」。
 //
-// ⚠️ 守不到的：小標底下寫了什麼（只核那兩行在不在）；圍欄或 HTML 註解裡的小標行也算；這支PR是不是真的只改了文字（那位人的通過在任何PR都豁免，
+// ⚠️ 守不到的：小標底下寫了什麼（只核那兩行在不在）；圍欄或 HTML 註解裡的小標行也算；這支PR是不是真的只改了文字（擁有者的通過在任何PR都豁免，
 //    要靠協作欄位寫的複審者）；標頭是自我宣告不是身分證明（改來源就能冒充另一位）；留言清單有沒有少給
 //    （分頁是那條登記指令的責任）；作廢比原專案寬——任何一位都能作廢任何壞留言（裁示者裁的方向）。
 'use strict';
@@ -375,22 +375,31 @@ test('⑬「通過」要帶兩行固定小標（F7）：缺了那則不算數、
   assert.ok(rv.warnings.some((w) => w.includes('已被') && w.includes('作廢')), '作廢要生效');
 });
 
-test('⑭「文字快速通道」：專案設定裡那位人的「通過」是原話逐字、不要求小標；設定沒填那一位＝不豁免', () => {
+test('⑭「文字快速通道」：專案設定登記的擁有者的「通過」是原話逐字、不要求小標；認擁有者不認裁示者；沒登記＝不豁免', () => {
   const ownerPass = verdict({ role: 'Gamma', source: 'Gamma 本人', headings: false });
-  assert.deepEqual(evaluate([ownerPass], HEAD, 'Gamma', ROLES, { humanRole: 'Gamma' }).problems, []);
-  assert.ok(evaluate([ownerPass], HEAD, 'Gamma', ROLES).problems.some((p) => p.includes('缺固定小標')), '沒給 humanRole＝不豁免');
+  assert.deepEqual(evaluate([ownerPass], HEAD, 'Gamma', ROLES, { ownerRole: 'Gamma' }).problems, []);
+  assert.ok(evaluate([ownerPass], HEAD, 'Gamma', ROLES).problems.some((p) => p.includes('缺固定小標')), '沒給 ownerRole＝不豁免');
   // AI 的通過不因為有人被豁免就跟著豁免
-  assert.ok(evaluate([verdict({ headings: false })], HEAD, 'Beta', ROLES, { humanRole: 'Gamma' }).problems.some((p) => p.includes('缺固定小標')));
-  // 端到端：那位人＝參與者裡角色以「裁示者」開頭、識別值與帳號都填了的那一位
-  const people = { participants: [{ role: '裁示者（人）', id: 'Gamma', account: 'g' }, { role: 'AI 甲', id: 'Alpha', account: 'a' }, { role: 'AI 乙', id: 'Beta', account: 'a' }] };
+  assert.ok(evaluate([verdict({ headings: false })], HEAD, 'Beta', ROLES, { ownerRole: 'Gamma' }).problems.some((p) => p.includes('缺固定小標')));
+  // 端到端：擁有者＝設定的 owner 那一欄（要是登記的參與者）
+  const people = { participants: [{ role: '裁示者（人）', id: 'Gamma', account: 'g' }, { role: 'AI 甲', id: 'Alpha', account: 'a' }, { role: 'AI 乙', id: 'Beta', account: 'a' }], owner: 'Gamma' };
   const fast = change({ body: '- **實作者**：Alpha\n- **複審者**：Gamma' });
   assert.equal(gateRun('7', { settings: people, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0);
-  const noAccount = { participants: [{ role: '裁示者（人）', id: 'Gamma', account: '未設定' }, people.participants[1], people.participants[2]] };
-  const blocked = gateRun('7', { settings: noAccount, platform: fakePlatform({ change: fast, comments: [ownerPass] }) });
-  assert.equal(blocked.code, 1, '那一位沒填齊＝不豁免、看得見地擋下');
-  assert.match(blocked.lines.join('\n'), /識別值或貼文帳號沒填齊，所以沒有豁免：先把設定填齊，不要替他的原話補小標/u);
-  assert.match(blocked.lines.join('\n'), /現況：Gamma（Gamma 本人）=通過（r1，缺小標、不算數）/u, '現況照實列出不算數的那則');
+  // 擁有者把裁示者指定給某個 AI（A1）：那個 AI 不帶小標的通過照樣不算數，擁有者的原話照樣接受（#32 r1）
+  const delegated = { participants: [{ role: '擁有者（人）', id: 'Gamma', account: 'g' }, { role: '裁示者（AI）', id: 'Beta', account: 'a' }, { role: 'AI 甲', id: 'Alpha', account: 'a' }], owner: 'Gamma' };
+  const toBeta = change({ body: '- **實作者**：Alpha\n- **複審者**：Beta' });
+  assert.equal(gateRun('7', { settings: delegated, platform: fakePlatform({ change: toBeta, comments: [verdict({ headings: false })] }) }).code, 1, '裁示者是 AI 時，它的通過照樣要小標');
+  assert.equal(gateRun('7', { settings: delegated, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0, '擁有者的原話照樣接受');
+  // 沒登記擁有者（未設定、欄位不見、登記的不是參與者）＝不豁免，訊息提醒先登記、不要替他的原話補小標
+  for (const owner of ['未設定', undefined, 'Nobody']) {
+    const blocked = gateRun('7', { settings: { ...people, owner }, platform: fakePlatform({ change: fast, comments: [ownerPass] }) });
+    assert.equal(blocked.code, 1, `owner=${owner}：不豁免、看得見地擋下`);
+    assert.match(blocked.lines.join('\n'), /專案設定還沒登記擁有者，所以沒有豁免，先登記擁有者，不要替他的原話補小標/u);
+    assert.match(blocked.lines.join('\n'), /現況：Gamma（Gamma 本人）=通過（r1，缺小標、不算數）/u, '現況照實列出不算數的那則');
+  }
+  // 有登記擁有者時，AI 缺小標的訊息不提那一句
+  const ai = gateRun('7', { settings: people, platform: fakePlatform({ change: change(), comments: [verdict({ headings: false })] }) });
+  assert.doesNotMatch(ai.lines.join('\n'), /還沒登記擁有者/u);
   // 識別值前後帶空白：跟 rolesOf 一樣去掉再比，照樣豁免
-  const spaced = { participants: [{ role: '裁示者（人）', id: 'Gamma ', account: 'g' }, people.participants[1], people.participants[2]] };
-  assert.equal(gateRun('7', { settings: spaced, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0);
+  assert.equal(gateRun('7', { settings: { ...people, owner: ' Gamma ' }, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0);
 });
