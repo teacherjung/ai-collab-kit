@@ -429,12 +429,14 @@ function parseTemplates(text, files, ruleIds) {
  * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
  * 其他字元照字面顯示——說明書不照 GitHub 的畫法（擁有者 2026-10-02 裁 a，留痕在 #28）：GitHub 另外加工的寫法（表情代碼、網址自動連結等）這裡照字面。
  * caseLinks（只有案例頁給：檔名 → 標題）：給了才多認兩種，其餘的「[」與「<」接半形字元照舊停——
- * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在）排成一顆鈕，字是那一則的標題、點了打開那一則；
- * 網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
+ * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
+ * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
  */
 function settingsInline(text, where, caseLinks = null) {
   let out = '';
   let i = 0;
+  // 上一個照字面印出的「!」在哪（跳脫的「\!」不算）：緊接著連結就是 GitHub 的圖片
+  let bang = null;
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1] || '';
@@ -479,11 +481,14 @@ function settingsInline(text, where, caseLinks = null) {
     } else if (ch === '[') {
       const link = caseLinks ? text.slice(i).match(CASE_LINK) : null;
       if (!link) throw new LayoutError(`${where}：「[」GitHub 可能當成連結，說明書不排`);
+      if (bang === i - 1) throw new LayoutError(`${where}：「![」GitHub 會當成圖片，說明書不排`);
       if (link[1] !== link[2]) throw new LayoutError(`${where}：連結的字「${link[1]}」跟它指到的 ${link[2]}.md 不一樣，說明書不知道該顯示哪一個`);
       if (!caseLinks.has(link[1])) throw new LayoutError(`${where}：連結指到的 ${link[1]}.md 不在 cases/`);
-      out += `<button type="button" class="case-link" data-case="${link[1]}">${esc(caseLinks.get(link[1]))}</button>`;
+      // 用行內的連結、不用鈕：鈕是拆不開的一整塊，標題一長整顆被推到下一行，前一行留一大片空白、「、」掉到行首
+      out += `<a href="#cases" class="case-link" data-case="${link[1]}">${esc(caseLinks.get(link[1]))}</a>`;
       i += link[0].length;
     } else {
+      if (ch === '!') bang = i;
       out += esc(ch);
       i += 1;
     }
@@ -1127,8 +1132,9 @@ function parseCaseNotes(text) {
 /**
  * 每一則案例照固定形狀讀，多一行少一行都停：第 1 行「# 標題」、第 2 行空著、接著六欄依序各一行「- 欄名：值」、最後可有一行「- 相關：值」
  * （檔尾的空行不算）。檔名要是小寫英數與連字號；值不能空、頭尾不能有空白；日期寫成 YYYY-MM-DD；本文條號寫成 A1 或 A1、B2，
- * 每一條都要在規則資料裡、不重複；標題結尾不能是「#」（GitHub 會拿掉），也不能有排版記號（索引、跳窗的標題、指到它的連結鈕都顯示同一串字）；
- * 有 tab、控制字元或 U+2028／U+2029 就停。照 cases/README.md 的排法排：照日期、同一天照檔名。
+ * 每一條都要在規則資料裡、不重複；標題結尾不能是「#」（GitHub 會拿掉），也不能有排版記號或連續的空白（索引、跳窗的標題、指到它的連結都顯示同一串字，
+ * 瀏覽器會把連續的空白併成一個）；有 tab、控制字元或 U+2028／U+2029 就停。照日期、同一天照檔名排，檔名比字碼、不跟著機器的語系走
+ * （cases/README.md 的索引產生器用跟著語系走的比法：2026-10-05 量過英文、中文等十幾種語系兩者順序一樣，立陶宛語系不一樣）。
  */
 function parseCases(cases, ruleIds) {
   const notes = parseCaseNotes(cases.notes);
@@ -1145,6 +1151,7 @@ function parseCases(cases, ruleIds) {
     if (!lines[0].startsWith('# ')) throw new Error(`${at(0)}：要是「# 標題」`);
     const title = lines[0].slice(2);
     if (!title || /^\s|\s$/u.test(title)) throw new Error(`${at(0)}：標題是空的、或頭尾有空白`);
+    if (/ {2}/u.test(title)) throw new LayoutError(`${at(0)}：標題裡有連續的空白，說明書不排——索引、跳窗的標題、指到它的連結都顯示同一串字，瀏覽器會把連續的空白併成一個`);
     noClosingHash(title, at(0));
     if (settingsInline(title, `${at(0)}的標題`) !== esc(title)) throw new LayoutError(`${at(0)}：標題裡有排版記號（灰底框、粗體、跳脫），說明書不排——索引、跳窗的標題、指到它的連結鈕都顯示同一串字`);
     if (lines[1] !== '') throw new Error(`${at(1)}：要空著`);
@@ -1165,7 +1172,7 @@ function parseCases(cases, ruleIds) {
     if (new Set(rules).size !== rules.length) throw new Error(`${fields.本文條號.where}：本文條號有一條寫了兩次`);
     return { slug, path: file.path, title, date: fields.日期.value, rules, fields };
   });
-  list.sort((a, b) => (a.date === b.date ? a.slug.localeCompare(b.slug) : a.date.localeCompare(b.date)));
+  list.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.slug < b.slug ? -1 : 1));
   return { notes, cases: list };
 }
 
@@ -1206,7 +1213,7 @@ ${rows.join('\n')}
 </tbody></table></div>
 </section>
 ${extra.join('\n')}
-<p class="source-note">來源：cases/ 底下每一則案例檔（標題、六欄、「相關」）與 cases/index.json（索引的標題、開頭的說明、末尾的小節）；cases/README.md 是用同一批檔產生的索引，這一頁不讀它、照它的排法自己排（照日期、同一天照檔名）。案例的字照說明書的排法：只排灰底框、粗體，指到別則案例的連結顯示成那一則的標題、點了打開那一則；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；網址的自動連結照字面、連尖括號，不變成連結）。索引的說明與小節照原文顯示。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號），會讓整份停下不產生。</p>
+<p class="source-note">來源：cases/ 底下每一則案例檔（標題、六欄、「相關」）與 cases/index.json（索引的標題、開頭的說明、末尾的小節）；cases/README.md 是用同一批檔產生的索引，這一頁不讀它，自己照日期、同一天照檔名排。案例的字照說明書的排法：只排灰底框、粗體，指到別則案例的連結顯示成那一則的標題、點了打開那一則；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面，用尖括號包住的網址也照字面、連尖括號）。索引的說明與小節照原文顯示。說明書認不得的寫法（例如會變成斜體、刪除線、圖片、HTML 的記號），會讓整份停下不產生。</p>
 </section>`;
   return { html, caseData };
 }
@@ -1413,6 +1420,8 @@ table.case-index th,table.case-index td{min-width:0}
 table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
 .case-rules{display:flex;flex-wrap:wrap;gap:6px}
 .case-link{border:0;background:none;padding:0;color:var(--accent);text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+/* 案例的字與索引的說明照原文留空白：連續空白不合併（跟設定頁、範本跳窗同一條） */
+.case-def dd,[data-page="cases"] .block :is(h2,p){white-space:pre-wrap}
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);background:none}
   .side{z-index:10;max-height:none;padding:10px 0 0;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -1432,6 +1441,8 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 `;
 
+// 網頁上的互動。開跳窗時背後的頁面會捲回頂端（html、body 鎖住捲動），所以開的時候記下捲到哪、關掉時捲回去，
+// 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1470,8 +1481,9 @@ const JS = `
   var closeBtn = modal.querySelector('.close');
   var sheet = modal.querySelector('.sheet');
   var lastFocus = null;
+  var lastScroll = 0;
   function openModal(title, html, wide){
-    if (modal.hidden) lastFocus = document.activeElement;
+    if (modal.hidden) { lastFocus = document.activeElement; lastScroll = window.scrollY; }
     mTitle.textContent = title; mBody.innerHTML = html;
     sheet.classList.toggle('wide', !!wide);
     modal.hidden = false; app.inert = true; document.documentElement.classList.add('modal-open');
@@ -1483,7 +1495,7 @@ const JS = `
   function openCase(slug){ var c = cases[slug]; if (c) openModal(c.title, c.html); }
   function closeModal(restore){
     modal.hidden = true; app.inert = false; document.documentElement.classList.remove('modal-open');
-    if (restore && lastFocus) lastFocus.focus();
+    if (restore) { window.scrollTo(0, lastScroll); if (lastFocus) lastFocus.focus({ preventScroll: true }); }
   }
   var rules = Array.prototype.slice.call(document.querySelectorAll('.rule'));
   var sections = Array.prototype.slice.call(document.querySelectorAll('.rule-section'));
@@ -1512,7 +1524,7 @@ const JS = `
     var chip = t.closest('[data-label]'); if (chip) { openLabel(chip.getAttribute('data-label')); return; }
     var mach = t.closest('[data-machine]'); if (mach) { openMachine(mach.getAttribute('data-machine')); return; }
     var tp = t.closest('[data-template]'); if (tp) { openTemplate(tp.getAttribute('data-template')); return; }
-    var cs = t.closest('[data-case]'); if (cs) { openCase(cs.getAttribute('data-case')); return; }
+    var cs = t.closest('[data-case]'); if (cs) { e.preventDefault(); openCase(cs.getAttribute('data-case')); return; }
     var go = t.closest('[data-goto]'); if (go) { closeModal(false); goTo(go.getAttribute('data-goto')); return; }
     var f = t.closest('[data-filter]'); if (f) { setFilter(f.getAttribute('data-filter')); return; }
     var j = t.closest('[data-jump]'); if (j) { var s = document.getElementById(j.getAttribute('data-jump')); if (s) reveal(s); return; }
