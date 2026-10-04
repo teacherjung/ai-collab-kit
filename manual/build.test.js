@@ -4,7 +4,8 @@
 // 跳窗資料、版面約定逐條、檔頭原文；機器頁（標籤定義、那張表每一列的條號、移植狀態、跳窗四欄、重名列的完整標題）、
 // 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）、
 // 設定頁（設定說明產生器對空白範本的產出：每一節、段落、表格每一格、清單與子項）、範本全文跳窗（排得了的照設定頁那一套排、
-// 其餘照原始檔；規矩卡與範本頁的鈕對到哪一份）、套用頁（README 那兩節：每一節、每一段、編號清單每一步與底下的程式碼框、清單每一項）；
+// 其餘照原始檔；規矩卡與範本頁的鈕對到哪一份）、套用頁（README 那兩節：每一節、每一段、編號清單每一步與底下的程式碼框、清單每一項）、
+// 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
@@ -498,7 +499,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
   assert.match(ok.stderr, /產好說明書：9 頁/u);
   const laidOut = Object.values(JSON.parse(ok.stdout.match(/id="template-data">([\s\S]*?)<\/script>/u)[1])).filter((e) => e.html.includes('<div class="tpl-body">')).length;
-  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節）\n$`, 'u'));
+  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；案例 ${ownCaseSources().files.length} 則）\n$`, 'u'));
   const out = run(['--out', 'x.html']);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /產生器不自己存檔/u);
@@ -516,7 +517,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
       fs.mkdirSync(path.dirname(path.join(kit, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(kit, rel));
     }
-    for (const dir of ['tools', 'tests', 'templates']) fs.cpSync(path.join(manual.ROOT, dir), path.join(kit, dir), { recursive: true });
+    for (const dir of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, dir), path.join(kit, dir), { recursive: true });
     assert.equal(run([], path.join(kit, 'manual/build.js')).status, 0, '複本本身要先能產生（對照組）');
     fs.writeFileSync(path.join(kit, 'tools', 'notes.md'), '不認得的檔\n');
     const odd = run([], path.join(kit, 'manual/build.js'));
@@ -653,10 +654,13 @@ test('⑪ 規矩頁的「機器表」連結：每一條列出的列＝機器表�
   assert.equal(new Set(titles).size, titles.length, '兩列機器的跳窗標題一樣，分不出是哪一列');
 });
 
-test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md）', () => {
+test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md、案例簿）', () => {
   const src = sources();
   const o = own();
-  assert.deepEqual(Object.keys(src).sort(), ['glossary', 'machines', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.deepEqual(Object.keys(src).sort(), ['cases', 'glossary', 'machines', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  const ownCases = ownCaseSources();
+  assert.ok(ownCases.files.length >= 100, '考題自己列到的案例太少');
+  assert.deepEqual(src.cases, ownCases, '案例簿（index.json、每一則的檔名、順序、原文）讀進來跟磁碟上的不一樣');
   assert.equal(src.readme, disk('README.md'), 'README.md 讀進來跟磁碟上的不一樣');
   assert.equal(src.settingsTemplate, disk('tests/helpers/unfilled-settings.json'), '空白設定範本讀進來跟磁碟上的不一樣');
   assert.deepEqual(src.rules, o.rules, 'rules.json 讀進來跟磁碟上的不一樣');
@@ -1200,7 +1204,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-settings-'));
   try {
     for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
-    for (const d of ['tools', 'tests', 'templates']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
+    for (const d of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
     assert.doesNotThrow(() => manual.readSources(dir), '對照組：複本本身要讀得到');
     fs.rmSync(path.join(dir, 'tests', 'helpers', 'unfilled-settings.json'));
     assert.throws(() => manual.readSources(dir), /讀不到 tests\/helpers\/unfilled-settings\.json/u);
@@ -1537,8 +1541,316 @@ test('⑰ 套用頁：README.md「搬進一個專案」「專案裡改到套件�
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-adopt-'));
   try {
     for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md']) fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
-    for (const d of ['tools', 'tests', 'templates']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
+    for (const d of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
     assert.throws(() => manual.readSources(dir), /讀不到 README\.md/u);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── 案例頁（⑱）：預期值由考題自己讀 cases/、自己切行內記號；排的順序另外跟 cases/README.md（同一批檔產生的索引）對 ──
+const CASE_TEXTS = ['發生什麼', '代價', '教訓', '來源'];
+/** 考題自己讀 cases/（不經過產生器的 readCases）：index.json，與 README.md 以外的每一則 .md（照檔名排）。 */
+function ownCaseSources(root = manual.ROOT) {
+  const dir = path.join(root, 'cases');
+  const names = fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md').sort();
+  return { notes: fs.readFileSync(path.join(dir, 'index.json'), 'utf8'), files: names.map((f) => ({ path: `cases/${f}`, text: fs.readFileSync(path.join(dir, f), 'utf8') })) };
+}
+/** 考題自己讀一則案例：一行一行對「- 欄名：值」（不用產生器的 parseCases）。 */
+function ownCase(file) {
+  const lines = file.text.replace(/\n+$/u, '').split('\n');
+  const fields = {};
+  for (const line of lines.slice(2)) {
+    const m = line.match(/^- ([^：]+)：(.*)$/u);
+    fields[m[1]] = m[2];
+  }
+  return { slug: file.path.replace(/^cases\//u, '').replace(/\.md$/u, ''), title: lines[0].replace(/^# /u, ''), date: fields.日期, rules: fields.本文條號.split('、'), fields };
+}
+/** 考題自己的排法：照日期、同一天照檔名（字碼順序；頁首寫的就是這一句）。 */
+const ownCaseOrder = (list) => [...list].sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.slug < b.slug ? -1 : 1));
+/**
+ * 案例欄位的行內記號（考題自己切，不用產生器的 settingsInline）：「\」＋半形標點＝那個標點、一對反引號＝灰底框、一對 **＝粗體（裡面可以再有別的）、
+ * [檔名](檔名.md)＝指到那一則的連結、<https://…>＝照字面的字，其餘照字面。回傳 ownInline 那種形狀，多一種 ['case', 檔名]。
+ */
+function ownCaseInline(src) {
+  const out = [];
+  const push = (tok) => {
+    const last = out[out.length - 1];
+    if (tok[0] === 't' && last && last[0] === 't') last[1] += tok[1];
+    else out.push(tok);
+  };
+  for (let i = 0; i < src.length;) {
+    const link = src.slice(i).match(/^\[([a-z0-9-]+)\]\(\1\.md\)/u);
+    const auto = src.slice(i).match(/^<https:\/\/[^\s<>]+>/u);
+    if (src[i] === '\\' && /^[!-/:-@[-`{-~]$/u.test(src[i + 1] || '')) {
+      push(['t', src[i + 1]]);
+      i += 2;
+    } else if (src[i] === '`') {
+      const j = src.indexOf('`', i + 1);
+      push(['code', src.slice(i + 1, j)]);
+      i = j + 1;
+    } else if (src.startsWith('**', i)) {
+      const j = src.indexOf('**', i + 2);
+      push(['strong', ownCaseInline(src.slice(i + 2, j))]);
+      i = j + 2;
+    } else if (link) {
+      push(['case', link[1]]);
+      i += link[0].length;
+    } else if (auto) {
+      push(['t', auto[0]]);
+      i += auto[0].length;
+    } else {
+      push(['t', src[i]]);
+      i += 1;
+    }
+  }
+  return out;
+}
+/** 一串行內形狀看得到的字：連結看得到的是它指到那一則的標題。 */
+const caseVisible = (toks, titles) => toks.map(([kind, v]) => (kind === 'strong' ? caseVisible(v, titles) : kind === 'case' ? titles.get(v) : v)).join('');
+/** 排好的案例欄位切回同樣的形狀：<strong>、<code>、案例連結鈕（字要是那一則的標題）、其餘的字；有別的標籤就停。 */
+function htmlCaseInline(html, where, titles) {
+  const BTN = /^<button type="button" class="case-link" data-case="([a-z0-9-]+)">([^<]*)<\/button>$/u;
+  const PARTS = /(<\/?(?:strong|code)>|<button type="button" class="case-link" data-case="[a-z0-9-]+">[^<]*<\/button>)/u;
+  const parts = html.split(PARTS);
+  assert.ok(!/[<>]/u.test(parts.filter((p, k) => k % 2 === 0).join('')), `${where}：行內出現 <strong>、<code>、案例連結鈕以外的標籤`);
+  const root = [];
+  const stack = [root];
+  let code = null;
+  const push = (tok) => {
+    const cur = stack[stack.length - 1];
+    const last = cur[cur.length - 1];
+    if (tok[0] === 't' && last && last[0] === 't') last[1] += tok[1];
+    else cur.push(tok);
+  };
+  for (const part of parts) {
+    const btn = part.match(BTN);
+    if (btn) {
+      assert.equal(unescT(btn[2]), titles.get(btn[1]), `${where}：連到 ${btn[1]} 的鈕，字不是那一則的標題`);
+      push(['case', btn[1]]);
+    } else if (part === '<strong>') {
+      const kids = [];
+      push(['strong', kids]);
+      stack.push(kids);
+    } else if (part === '</strong>') {
+      stack.pop();
+    } else if (part === '<code>') {
+      code = '';
+    } else if (part === '</code>') {
+      push(['code', code]);
+      code = null;
+    } else if (code !== null) {
+      code += unescT(part);
+    } else if (part) {
+      push(['t', unescT(part)]);
+    }
+  }
+  return root;
+}
+/** 案例頁整頁與每一則的跳窗，照考題自己讀的 cases 來源比（索引的說明、每一列、末尾小節、跳窗每一欄與行內記號）。回傳考題自己排好的清單。 */
+function checkCasesPage({ html, caseData }, cases, where) {
+  const notes = JSON.parse(cases.notes);
+  const list = ownCaseOrder(cases.files.map(ownCase));
+  const titles = new Map(list.map((c) => [c.slug, c.title]));
+  const n = list.length;
+  const ruleButtons = (ids) => `<span class="case-rules">${ids.map((id) => `<button type="button" class="rule-link" data-goto="rule-${id}">${id}</button>`).join('')}</span>`;
+  const page = html.match(/^<section class="page" id="page-cases" data-page="cases" hidden>\n([\s\S]*)\n<p class="source-note">來源：cases\/[^<]*<\/p>\n<\/section>$/u);
+  assert.ok(page, `${where}：案例頁的外框不對`);
+  const head = `<header class="page-head">\n<p class="eyebrow">cases/ 底下的案例簿</p>\n<h1>案例</h1>\n<p class="page-sum">${n} 則案例，一則一檔，照日期排（同一天照檔名）。點標題看全文：發生什麼、代價、教訓、來源、相關；點條號跳到那一條規矩。</p>\n</header>\n`;
+  assert.ok(page[1].startsWith(head), `${where}：頁首不對（數字或字）`);
+  const idx = page[1].slice(head.length).match(/^<section class="block"><h2>([^<]*)<span class="sec-count">(\d+) 則<\/span><\/h2>\n((?:<p class="muted">[^<]*<\/p>\n)*)<div class="table-wrap"><table class="grid case-index"><thead><tr><th>日期<\/th><th>案例<\/th><th>本文條號<\/th><\/tr><\/thead><tbody>\n([\s\S]*?)\n<\/tbody><\/table><\/div>\n<\/section>/u);
+  assert.ok(idx, `${where}：索引那一塊的形狀不對`);
+  assert.equal(unescT(idx[1]), notes.title, `${where}：索引的標題不是 index.json 的`);
+  assert.equal(idx[2], String(n), `${where}：索引標題旁的則數不對`);
+  assert.equal(idx[3], notes.intro.map((l) => `<p class="muted">${escT(l)}</p>\n`).join(''), `${where}：索引開頭的說明不是 index.json 的原文（照字面）`);
+  const rows = idx[4].split('\n');
+  assert.equal(rows.length, n, `${where}：索引的列數不對`);
+  rows.forEach((row, k) => {
+    const c = list[k];
+    assert.equal(row, `<tr><td>${escT(c.date)}</td><td><button type="button" class="case-link" data-case="${c.slug}">${escT(c.title)}</button></td><td>${ruleButtons(c.rules)}</td></tr>`, `${where}：索引第 ${k + 1} 列不對（順序、日期、哪一則、標題或條號）`);
+  });
+  const rest = page[1].slice(head.length + idx[0].length);
+  assert.equal(rest, `\n${notes.sections.map((s) => `<section class="block"><h2>${escT(s.title)}</h2>\n${s.lines.map((l) => `<p>${escT(l)}</p>`).join('\n')}\n</section>`).join('\n')}`, `${where}：索引末尾的小節不是 index.json 的原文（照字面）`);
+  assert.deepEqual(Object.keys(caseData).sort(), [...titles.keys()].sort(), `${where}：跳窗資料要每一則剛好一筆`);
+  for (const c of list) {
+    const e = caseData[c.slug];
+    const at = `${where}「${c.slug}」的跳窗`;
+    assert.deepEqual(Object.keys(e).sort(), ['html', 'title'], `${at}的欄位不對`);
+    assert.equal(e.title, c.title, `${at}的標題不對`);
+    const dl = e.html.match(/^<dl class="def case-def">([\s\S]*)<\/dl>$/u);
+    assert.ok(dl, `${at}：外框不對`);
+    const pairs = [...dl[1].matchAll(/<dt>([^<]*)<\/dt><dd>([\s\S]*?)<\/dd>/gu)];
+    assert.equal(pairs.map((p) => p[0]).join(''), dl[1], `${at}：dt／dd 以外還有別的東西`);
+    assert.deepEqual(pairs.map((p) => p[1]), ['日期', '本文條號', ...CASE_TEXTS, ...(c.fields.相關 === undefined ? [] : ['相關'])], `${at}：欄位的順序或有無不對`);
+    assert.equal(pairs[0][2], escT(c.date), `${at}的日期不對`);
+    assert.equal(pairs[1][2], ruleButtons(c.rules), `${at}的本文條號不對`);
+    for (const [, name, dd] of pairs.slice(2)) {
+      const toks = ownCaseInline(c.fields[name]);
+      assert.equal(strip(dd), escT(caseVisible(toks, titles)), `${at}「${name}」看得到的字不是原文`);
+      assert.deepEqual(htmlCaseInline(dd, `${at}「${name}」`, titles), toks, `${at}「${name}」的粗體、灰底框、連結不對`);
+    }
+  }
+  return list;
+}
+
+test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、條號），點開的跳窗每一欄照原文（灰底框、粗體、指到別則的連結、網址照字面）；索引的說明與末尾小節照原文；順序與標題跟 cases/README.md 一樣；認不得的形狀就停', () => {
+  const src = sources();
+  const built = manual.build(src);
+  const { html } = built;
+  const ruleIds = own().rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
+  const caseData = JSON.parse(html.match(/<script type="application\/json" id="case-data">([\s\S]*?)<\/script>/u)[1]);
+  const pageHtml = html.match(/<section class="page" id="page-cases" data-page="cases" hidden>[\s\S]*?<p class="source-note">來源：cases\/[^<]*<\/p>\n<\/section>/u)[0];
+  const list = checkCasesPage({ html: pageHtml, caseData }, ownCaseSources(), '案例頁');
+  assert.ok(list.length >= 100, '前提：考題自己讀到的案例太少');
+  assert.equal(built.cases, list.length, '回傳的案例則數不對');
+  assert.deepEqual(manual.CASE_FIELDS, ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'], '案例的欄位改了：要連這一題一起改');
+  // 順序、日期、標題、條號另外跟 cases/README.md 對：那是案例簿的索引產生器用同一批檔產生的，考題自己讀那張表（標題的半形標點在那裡是跳脫的）
+  const index = disk('cases/README.md');
+  const rows = [...index.matchAll(/^\| (\d{4}-\d{2}-\d{2}) \| \[(.*)\]\(([a-z0-9-]+)\.md\) \| ([A-Z0-9、]+) \|$/gmu)];
+  assert.match(index, new RegExp(`\\n共 ${list.length} 則。\\n`, 'u'), '前提：cases/README.md 的「共 N 則」跟案例檔數一樣');
+  assert.deepEqual(rows.map((r) => [r[1], r[2].replace(/\\([!-/:-@[-`{-~])/gu, '$1'), r[3], r[4]]), list.map((c) => [c.date, c.title, c.slug, c.rules.join('、')]), '案例頁的順序、日期、標題或條號跟 cases/README.md 那張索引不一樣');
+  assert.ok(list.some((c, k) => k > 0 && list[k - 1].date === c.date), '前提：真的案例裡有同一天的（才驗得到「同一天照檔名」）');
+  // 每一顆條號鈕都跳得到規矩頁的那一條；每一顆案例鈕都開得到一筆跳窗
+  const all = [pageHtml, ...Object.values(caseData).map((e) => e.html)].join('\n');
+  for (const m of all.matchAll(/data-goto="(rule-[A-Z]\d+)"/gu)) assert.ok(html.includes(`<article class="rule" id="${m[1]}"`), `${m[1]} 在規矩頁找不到`);
+  for (const m of all.matchAll(/data-case="([a-z0-9-]+)"/gu)) assert.ok(caseData[m[1]], `案例鈕 ${m[1]} 沒有對應的跳窗`);
+  assert.ok(html.includes('<a href="#cases" data-route="cases"><span>案例</span></a>'), '目錄上的案例不該再標「準備中」');
+  assert.ok(!html.includes('<p class="eyebrow">第 9 頁</p>'), '案例頁不該再是「準備中」');
+  assert.ok(html.includes('<p class="source-note">來源：cases/ 底下每一則案例檔（標題、六欄、「相關」）與 cases/index.json（索引的標題、開頭的說明、末尾的小節）；cases/README.md 是用同一批檔產生的索引，這一頁不讀它、照它的排法自己排（照日期、同一天照檔名）。案例的字照說明書的排法：只排灰底框、粗體，指到別則案例的連結顯示成那一則的標題、點了打開那一則；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；網址的自動連結照字面、連尖括號，不變成連結）。索引的說明與小節照原文顯示。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號），會讓整份停下不產生。</p>'), '案例頁的來源註記不對');
+  // 寫死的樣本：索引第一列、網址照字面（連尖括號）、相關排成那幾則的標題、代價裡指到別則的連結、灰底框、粗體、「<」接中文照字面、末尾小節照字面
+  assert.ok(pageHtml.includes('<tr><td>2026-07-10</td><td><button type="button" class="case-link" data-case="delete-branch-closed-stacked-pr">合併時刪基底分支，上層兩支被平台關閉</button></td><td><span class="case-rules"><button type="button" class="rule-link" data-goto="rule-H2">H2</button></span></td></tr>'), '索引第一列不對（寫死的樣本）');
+  assert.ok(caseData['bare-repo-incident'].html.includes('<dt>來源</dt><dd>PFW #433（2026-08-09）&lt;https://github.com/teacherjung/personal-finance-webapp/pull/433&gt; ；PFW #435（2026-08-10）&lt;https://github.com/teacherjung/personal-finance-webapp/pull/435#issuecomment-5234813685&gt;</dd>'), '來源的網址要照字面、連尖括號（寫死的樣本）');
+  assert.ok(caseData['bare-repo-incident'].html.endsWith('<dt>相關</dt><dd><button type="button" class="case-link" data-case="my-own-guards-lied">六條備份考題全綠，其中三條弄壞了也不會紅</button>、<button type="button" class="case-link" data-case="silent-pass-is-worst">閘沒跑卻回報通過</button>、<button type="button" class="case-link" data-case="guard-claims-vs-evidence">護欄的宣稱一直超出證據</button></dd></dl>'), '相關要排成那幾則的標題（寫死的樣本）');
+  assert.ok(caseData['absolute-guarantee-invites-blockers'].html.includes('記在 <button type="button" class="case-link" data-case="pending-rulings-list-tool">待裁清單工具不是閘</button>，那裡不再重複計'), '代價裡指到別則的連結（寫死的樣本）');
+  assert.ok(caseData['grey-box-copy-verbatim'].html.includes('（<code>未執行：&lt;原因&gt;</code>）'), '灰底框（寫死的樣本）');
+  assert.ok(caseData['designed-shapes-never-touched-a-real-platform'].html.includes('<strong>每一頁各印一個</strong>'), '粗體（寫死的樣本）');
+  assert.ok(caseData['review-verdict-strings'].html.includes('「結論：&lt;你的結論&gt;」'), '「<」接中文照字面（寫死的樣本）');
+  assert.ok(pageHtml.includes('<h2>不是事故、但值得記的方法</h2>\n<p>- 用算式重算對方回報的每一個數字：'), '索引末尾的小節照字面（寫死的樣本）');
+  // 互動接線（雲端考卷沒有瀏覽器，這裡只釘住程式在、PR 說明另外用瀏覽器量）與兩條樣式
+  const caseJson = html.match(/<script type="application\/json" id="case-data">([\s\S]*?)<\/script>/u)[1];
+  assert.ok(!caseJson.includes('<') && caseJson.includes('\\u003c'), '案例的跳窗資料裡的「<」要寫成 \\u003c（不然一段字就能結束這個 script）');
+  assert.ok(html.includes("var cases = JSON.parse(document.getElementById('case-data').textContent);"), '要讀案例的跳窗資料');
+  assert.ok(html.includes("function openCase(slug){ var c = cases[slug]; if (c) openModal(c.title, c.html); }"), '要有開案例跳窗的程式');
+  assert.ok(html.includes("var cs = t.closest('[data-case]'); if (cs) { openCase(cs.getAttribute('data-case')); return; }"), '點案例鈕要開那一則');
+  assert.ok(html.includes('if (modal.hidden) lastFocus = document.activeElement;'), '從一則案例的跳窗點到另一則，關掉後焦點要回到最早點開的那顆鈕');
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  assert.match(css, /\ntable\.case-index td:first-child\{white-space:nowrap;/u, '索引的日期不折行');
+  assert.match(css, /\n\.case-link\{[^}]*cursor:pointer[^}]*\}/u, '案例鈕的樣式');
+  assert.match(css, /@media \(max-width:760px\)\{[^@]*\n {2}table\.case-index th:last-child,table\.case-index td:last-child\{width:1%\}/u, '手機上「本文條號」那一欄收到最窄，標題那一欄才排得開');
+
+  // 對照組：同一套比法跑一份「什麼都有」的案例簿（粗體裡有灰底框與連結、灰底框裡的 < & [ 照字面、跳脫、「<」接中文、
+  // 網址裡有 _ 與 &、沒有「相關」、檔尾多個空行、檔尾沒有換行、同一天兩則、檔案順序打亂、兩個小節）
+  const at = (lines) => lines.join('\n');
+  const RICH = {
+    notes: JSON.stringify({ title: '對照組的索引', intro: ['一則一檔；每則指回本文條號。','來源欄的 PFW #n ＝原專案的第 n 支PR（<不是連結> & "引號"）。'], sections: [{ title: '方法一', lines: ['- 照字面，**不排**、`不框`、<b>。'] }, { title: '方法二', lines: ['第一行', '第二行'] }] }),
+    files: [
+      { path: 'cases/ab.md', text: at(['# 乙：同一天、檔名在後', '', '- 日期：2026-09-01', '- 本文條號：K4', '- 發生什麼：見 [a-b](a-b.md)。', '- 代價：沒有。', '- 教訓：無。', '- 來源：私人紀錄', '', '', '']) },
+      { path: 'cases/a-b.md', text: at(['# 甲：同一天、檔名在前', '', '- 日期：2026-09-01', '- 本文條號：E4、K4', '- 發生什麼：見 **粗 `框` 與 [ab](ab.md) 體** 與 `<x> & [y](y.md)`，\\*照字面\\*。', '- 代價：記在 [old](old.md)，那裡不再計。', '- 教訓：「<」接中文照字面：<你的結論>、「>」。', '- 來源：PFW #1（2026-09-01）<https://github.com/o/r/pull/1#issuecomment-2> ；<https://example.com/a_b?c=1&d=2>', '- 相關：[ab](ab.md)、[old](old.md)', '']) },
+      { path: 'cases/old.md', text: at(['# 丙：日期最早', '', '- 日期：2026-07-01', '- 本文條號：A1', '- 發生什麼：甲', '- 代價：乙', '- 教訓：丙', '- 來源：丁']) },
+    ],
+  };
+  const rich = manual.renderCases(RICH, ruleIds);
+  assert.deepEqual(checkCasesPage(rich, RICH, '對照組').map((c) => c.slug), ['old', 'a-b', 'ab'], '對照組：照日期、同一天照檔名（「-」排在字母前面）');
+  assert.ok(rich.caseData['a-b'].html.includes('<dd>見 <strong>粗 <code>框</code> 與 <button type="button" class="case-link" data-case="ab">乙：同一天、檔名在後</button> 體</strong> 與 <code>&lt;x&gt; &amp; [y](y.md)</code>，*照字面*。</dd>'), '對照組：粗體裡的灰底框與連結、灰底框裡照字面、跳脫（寫死的樣本）');
+  assert.ok(rich.caseData['a-b'].html.includes('<dd>「&lt;」接中文照字面：&lt;你的結論&gt;、「&gt;」。</dd>') && rich.caseData['a-b'].html.includes('&lt;https://example.com/a_b?c=1&amp;d=2&gt;</dd>'), '對照組：「<」接中文、網址裡的 _ 與 & 照字面（寫死的樣本）');
+  assert.ok(rich.caseData.ab.html.endsWith('<dt>來源</dt><dd>私人紀錄</dd></dl>'), '對照組：沒有「相關」的那一則不印那一欄');
+  assert.ok(rich.html.includes('<h2>方法一</h2>\n<p>- 照字面，**不排**、`不框`、&lt;b&gt;。</p>\n</section>\n<section class="block"><h2>方法二</h2>\n<p>第一行</p>\n<p>第二行</p>\n</section>'), '對照組：末尾的小節照字面、兩個小節照順序（寫死的樣本）');
+
+  // 認不得就停（原因要對，行號照案例檔的）
+  const ed = (from, to, p = 'cases/a-b.md') => ({ ...RICH, files: RICH.files.map((f) => (f.path === p ? { ...f, text: f.text.split(from).join(to) } : f)) });
+  const notesWith = (patch) => ({ ...RICH, notes: JSON.stringify({ ...JSON.parse(RICH.notes), ...patch }) });
+  const BEL = String.fromCharCode(7);
+  const LS = String.fromCharCode(0x2028);
+  const bad = [
+    ['index.json 不是 JSON', { ...RICH, notes: '{' }, /cases\/index\.json 不是合法的 JSON/u],
+    ['index.json 多一個鍵', notesWith({ extra: 1 }), /cases\/index\.json 的最外層要剛好有 title、intro、sections 這幾個鍵/u],
+    ['index.json 少一個鍵', { ...RICH, notes: JSON.stringify({ title: 'x', intro: [] }) }, /最外層要剛好有 title、intro、sections 這幾個鍵/u],
+    ['開頭不是陣列', notesWith({ intro: 'x' }), /cases\/index\.json 的開頭要是陣列/u],
+    ['索引標題是空的', notesWith({ title: '' }), /cases\/index\.json 的標題要是一行非空/u],
+    ['開頭一行頭有空白', notesWith({ intro: [' x'] }), /cases\/index\.json 的開頭第 1 行要是一行非空/u],
+    ['開頭一行有換行', notesWith({ intro: ['a\nb'] }), /開頭第 1 行要是一行非空/u],
+    ['小節的字有 tab', notesWith({ sections: [{ title: 't', lines: ['a\tb'] }] }), /cases\/index\.json 的第 1 個小節第 1 行要是一行非空/u],
+    ['小節的字有 U+2028', notesWith({ sections: [{ title: 't', lines: [`a${LS}b`] }] }), /第 1 個小節第 1 行要是一行非空/u],
+    ['小節少了 lines', notesWith({ sections: [{ title: 't' }] }), /cases\/index\.json 的第 1 個小節要剛好有 title、lines 這幾個鍵/u],
+    ['小節的內容不是陣列', notesWith({ sections: [{ title: 't', lines: 'x' }] }), /第 1 個小節的內容要是陣列/u],
+    ['檔名有大寫', { ...RICH, files: RICH.files.map((f) => (f.path === 'cases/old.md' ? { ...f, path: 'cases/Old.md' } : f)) }, /cases\/Old\.md：檔名要是小寫英數與連字號/u],
+    ['控制字元', ed('那裡不再計', `那裡${BEL}不再計`), /cases\/a-b\.md 裡有 tab、控制字元或 U\+2028／U\+2029/u],
+    ['tab', ed('那裡不再計', '那裡\t不再計'), /cases\/a-b\.md 裡有 tab、控制字元或 U\+2028／U\+2029/u],
+    ['U+2028', ed('那裡不再計', `那裡${LS}不再計`), /cases\/a-b\.md 裡有 tab、控制字元或 U\+2028／U\+2029/u],
+    ['少兩行', ed('- 代價：記在 [old](old.md)，那裡不再計。\n- 教訓：「<」接中文照字面：<你的結論>、「>」。\n', ''), /cases\/a-b\.md 有 7 行：案例的固定形狀是標題、空行、6 欄，最多再加一行「相關」/u],
+    ['多一行', ed('- 相關：', '- 相關：[ab](ab.md)\n- 相關：'), /cases\/a-b\.md 有 10 行/u],
+    ['標題沒有空格', ed('# 甲', '#甲'), /cases\/a-b\.md 第 1 行：要是「# 標題」/u],
+    ['標題尾端空白', ed('檔名在前\n', '檔名在前 \n'), /cases\/a-b\.md 第 1 行：標題是空的、或頭尾有空白/u],
+    ['標題結尾 #', ed('檔名在前\n', '檔名在前 #\n'), /cases\/a-b\.md 第 1 行：標題結尾是「#」/u],
+    ['標題有灰底框', ed('檔名在前\n', '檔名在前 `x`\n'), /cases\/a-b\.md 第 1 行：標題裡有排版記號/u],
+    ['標題有粗體', ed('檔名在前\n', '檔名**在前**\n'), /cases\/a-b\.md 第 1 行：標題裡有排版記號/u],
+    ['標題有跳脫', ed('檔名在前\n', '檔名\\#在前\n'), /cases\/a-b\.md 第 1 行：標題裡有排版記號/u],
+    ['標題有連結', ed('檔名在前\n', '檔名在前 [ab](ab.md)\n'), /cases\/a-b\.md 第 1 行的標題：「\[」GitHub 可能當成連結/u],
+    ['第 2 行不是空的', ed('檔名在前\n\n', '檔名在前\nx\n'), /cases\/a-b\.md 第 2 行：要空著/u],
+    ['欄位順序', ed('- 代價：記在 [old](old.md)，那裡不再計。\n- 教訓：「<」接中文照字面：<你的結論>、「>」。', '- 教訓：「<」接中文照字面：<你的結論>、「>」。\n- 代價：記在 [old](old.md)，那裡不再計。'), /cases\/a-b\.md 第 6 行：應該是「- 代價：…」/u],
+    ['欄名後是半形冒號', ed('- 日期：', '- 日期:'), /cases\/a-b\.md 第 3 行：應該是「- 日期：…」/u],
+    ['欄位是空的', ed('- 代價：記在 [old](old.md)，那裡不再計。', '- 代價：'), /cases\/a-b\.md 第 6 行：「代價」是空的、或頭尾有空白/u],
+    ['欄位頭有空白', ed('- 代價：記在', '- 代價： 記在'), /cases\/a-b\.md 第 6 行：「代價」是空的、或頭尾有空白/u],
+    ['日期格式', ed('- 日期：2026-09-01', '- 日期：2026-9-1'), /cases\/a-b\.md 第 3 行：日期要寫成 YYYY-MM-DD/u],
+    ['條號格式', ed('E4、K4', 'E4,K4'), /cases\/a-b\.md 第 4 行：本文條號要寫成 A1 或 A1、B2/u],
+    ['條號不在規則裡', ed('E4、K4', 'E4、K99'), /cases\/a-b\.md 第 4 行：本文條號 K99 不在規則資料裡/u],
+    ['條號重複', ed('E4、K4', 'E4、E4'), /cases\/a-b\.md 第 4 行：本文條號有一條寫了兩次/u],
+    ['第 9 行不是相關', ed('- 相關：', '- 備註：'), /cases\/a-b\.md 第 9 行：應該是「- 相關：…」/u],
+    ['連到不在的案例', ed('記在 [old](old.md)', '記在 [nope](nope.md)'), /cases\/a-b\.md 第 6 行的「代價」：連結指到的 nope\.md 不在 cases\//u],
+    ['連結的字跟檔名不一樣', ed('記在 [old](old.md)', '記在 [ab](old.md)'), /cases\/a-b\.md 第 6 行的「代價」：連結的字「ab」跟它指到的 old\.md 不一樣/u],
+    ['別種連結', ed('記在 [old](old.md)', '記在 [old](https://x.y)'), /cases\/a-b\.md 第 6 行的「代價」：「\[」GitHub 可能當成連結/u],
+    ['相關裡連到不在的', ed('、[old](old.md)\n', '、[zz](zz.md)\n'), /cases\/a-b\.md 第 9 行的「相關」：連結指到的 zz\.md 不在 cases\//u],
+    ['http 的自動連結', ed('<https://example.com', '<http://example.com'), /cases\/a-b\.md 第 8 行的「來源」：「<」後面緊接著半形字元/u],
+    ['自動連結裡有空白', ed('<https://example.com/a_b', '<https://example.com/a b'), /cases\/a-b\.md 第 8 行的「來源」：「<」後面緊接著半形字元/u],
+    ['自動連結沒收尾', ed('c=1&d=2>', 'c=1&d=2'), /cases\/a-b\.md 第 8 行的「來源」：「<」後面緊接著半形字元/u],
+    ['HTML', ed('那裡不再計', '那裡<b>不</b>再計'), /cases\/a-b\.md 第 6 行的「代價」：「<」後面緊接著半形字元/u],
+    ['單獨的星號', ed('那裡不再計', '那裡*不*再計'), /cases\/a-b\.md 第 6 行的「代價」：單獨的「\*」/u],
+    ['底線斜體', ed('那裡不再計', '那裡 _不_ 再計'), /cases\/a-b\.md 第 6 行的「代價」：「_」後面緊接著字/u],
+    ['刪除線', ed('那裡不再計', '那裡~~不~~再計'), /cases\/a-b\.md 第 6 行的「代價」：「~」後面緊接著字/u],
+    ['字元代碼', ed('那裡不再計', '那裡&amp;再計'), /cases\/a-b\.md 第 6 行的「代價」：「&」後面接英文字母或 #/u],
+    ['粗體頭有空白', ed('**粗 `框`', '** 粗 `框`'), /cases\/a-b\.md 第 5 行的「發生什麼」：粗體的頭尾緊貼空白或標點/u],
+    ['反引號沒成對', ed('`<x> & [y](y.md)`', '`<x> & [y](y.md)'), /cases\/a-b\.md 第 5 行的「發生什麼」：反引號沒有成對/u],
+  ];
+  for (const [name, x, why] of bad) {
+    assert.notEqual(JSON.stringify(x), JSON.stringify(RICH), `「${name}」這一發沒有改到來源`);
+    assert.throws(() => manual.renderCases(x, ruleIds), why, `「${name}」應該停下、而且原因要對`);
+  }
+  // 整份產生時也停；連結與自動連結只開給案例頁：設定頁、範本跳窗、套用頁照舊
+  assert.throws(() => manual.build({ ...src, cases: { ...src.cases, notes: '{' } }), /cases\/index\.json 不是合法的 JSON/u);
+  assert.throws(() => manual.build({ ...src, cases: { ...src.cases, files: [...src.cases.files, { path: 'cases/zz.md', text: 'x\n' }] } }), /cases\/zz\.md 有 1 行/u);
+  assert.throws(() => manual.renderSettings('# 標題\n\n## 一\n\n見 [a](a.md)。\n'), /「\[」GitHub 可能當成連結/u, '設定頁仍不收連結');
+  assert.throws(() => manual.renderSettings('# 標題\n\n## 一\n\n見 <https://x.y>。\n'), /「<」後面緊接著半形字元/u, '設定頁仍不收自動連結');
+  assert.equal(manual.templateView({ path: 'templates/t.md', text: '# 標題\n\n見 [a](a.md) 與 <https://x.y>。\n' }).laidOut, false, '範本跳窗仍不排連結與自動連結（照原始檔）');
+  assert.throws(() => manual.renderAdopt('# 套件\n\n## 搬進一個專案\n\n見 <https://x.y>。\n\n## 專案裡改到套件的檔\n\n- 例外\n'), /「<」後面緊接著半形字元/u, '套用頁仍不收自動連結');
+
+  // 讀來源：cases/ 或 index.json 不在、多了不是 .md 的檔或子資料夾、不是合法的 UTF-8，都停；README.md 不讀
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-cases-'));
+  try {
+    const casesDir = path.join(dir, 'cases');
+    assert.throws(() => manual.readCases(dir), /讀不到 cases\/：說明書不產生/u);
+    fs.mkdirSync(casesDir);
+    for (const f of RICH.files) fs.writeFileSync(path.join(dir, f.path), f.text);
+    assert.throws(() => manual.readCases(dir), /讀不到 cases\/index\.json/u);
+    fs.writeFileSync(path.join(casesDir, 'index.json'), RICH.notes);
+    fs.writeFileSync(path.join(casesDir, 'README.md'), '不讀的索引 <b>\n');
+    assert.deepEqual(manual.readCases(dir), { notes: RICH.notes, files: [...RICH.files].sort((a, b) => (a.path < b.path ? -1 : 1)) }, '讀到的是 index.json 與每一則案例（照檔名排）、README.md 不算');
+    for (const [name, file, make, why] of [
+      ['不是 .md 的檔', 'notes.txt', (p) => fs.writeFileSync(p, 'x'), /cases\/notes\.txt：案例頁不知道它算不算案例/u],
+      ['子資料夾', 'sub.md', (p) => fs.mkdirSync(p), /cases\/sub\.md：案例頁不知道它算不算案例/u],
+      ['不是合法的 UTF-8', 'bad.md', (p) => fs.writeFileSync(p, Buffer.from([0x23, 0x20, 0xff, 0x0a])), /cases\/bad\.md 不是合法的 UTF-8 文字/u],
+    ]) {
+      const p = path.join(casesDir, file);
+      make(p);
+      assert.throws(() => manual.readCases(dir), why, `「${name}」應該停下`);
+      fs.rmSync(p, { recursive: true, force: true });
+    }
+    // 檔頭的 BOM 照留（看不見的字），第 1 行就不是「# 標題」，停
+    const bom = path.join(casesDir, 'bom.md');
+    fs.writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(RICH.files[2].text)]));
+    assert.throws(() => manual.renderCases(manual.readCases(dir), ruleIds), /cases\/bom\.md 第 1 行：要是「# 標題」/u, '檔頭有 BOM 應該停下');
+    fs.rmSync(bom);
+    fs.writeFileSync(path.join(casesDir, 'index.json'), Buffer.from([0x7b, 0xff, 0x7d]));
+    assert.throws(() => manual.readCases(dir), /cases\/index\.json 不是合法的 UTF-8 文字/u);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
