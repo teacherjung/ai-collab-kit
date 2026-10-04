@@ -51,9 +51,9 @@ const TEMPLATE_HEAD = '## 範本（本文指到「範本」的地方）';
 // 程式碼框的圍欄（套用頁的編號清單項底下用）
 const FENCE = '```';
 const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$/u;
-// 範本跳窗不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
-// （NUL 會被丟掉、\r 會變成換行、其餘看不見），跳窗就不是原文了
-const TEMPLATE_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
+// 範本跳窗與套用頁不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
+// （NUL 會被丟掉、\r 會變成換行、其餘看不見），網頁上就不是原文了
+const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
   laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
@@ -62,7 +62,7 @@ const TEMPLATE_NOTE = {
 };
 
 /**
- * 排版那一套（設定頁、範本跳窗共用）認不得某一行或某個行內記號時丟的例外。設定頁照樣整份停下；
+ * 排版那一套（設定頁、範本跳窗、套用頁共用）認不得某一行或某個行內記號時丟的例外。設定頁與套用頁照樣整份停下；
  * 範本跳窗只接這一種、改成照原始檔顯示——其他例外（程式自己的錯）一律往外丟，說明書不產生。
  */
 class LayoutError extends Error {}
@@ -385,8 +385,8 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
- * 行內排版（設定頁與範本跳窗共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
- * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
+ * 行內排版（設定頁、範本跳窗、套用頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
+ * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本與 README 是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
  * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
@@ -493,8 +493,9 @@ function noClosingHash(title, where) {
  * 整份有 tab 或 \r、或任何一行結尾有空白，也停。name＝訊息裡怎麼稱呼這一份。opts：needSections＝至少要有一節（設定說明要、範本不用）；
  * lineOffset＝訊息裡的行號要加多少（套用頁從 README 中間切出一節來讀，行號照 README 的）；
  * readme＝多認三種（只有套用頁打開）：開頭是粗體的字、頂格從 1 連號的「N. 」編號清單（項目之間可以空一行；空行後接著寫下一個號碼＝同一串，
- * 寫 1＝停，GitHub 會把它們併成一串）、編號清單項底下的程式碼框（前面空一行，三個反引號＋可有可無的語言名，縮排剛好對齊那一項的字，
- * 框裡每一行同樣縮排或是空行，框裡不准再出現三個反引號開頭的行，收尾的三個反引號同樣縮排、後面要空一行；語言名跟三個反引號一樣是記號，不顯示）。
+ * 寫 1＝停，GitHub 會把它們併成一串）、編號清單項底下的程式碼框（前面空一行，三個反引號＋可有可無的語言名，縮排剛好對齊那一項的字；
+ * 框裡每一行至少縮排那麼多（多的照留）或是空行；去掉那個縮排之後以 0〜3 格空白加三個反引號開頭的行停（說明書不知道框到哪裡結束），
+ * 多 4 格以上的照字面；收尾的三個反引號剛好對齊、後面要空一行；語言名跟三個反引號一樣是記號，不顯示）。
  */
 function parseDoc(md, name, opts = {}) {
   const { needSections = false, lineOffset = 0, readme = false } = opts;
@@ -994,16 +995,18 @@ const ADOPT_HEADINGS = ['搬進一個專案', '專案裡改到套件的檔'];
 
 /**
  * README.md 裡套用頁要的那兩節：「## 」開頭、標題剛好是 ADOPT_HEADINGS 那幾個字，或那幾個字後面接「（」補充；每一個都要剛好找到一行，
- * 一節到下一個「## 」（或檔案結尾）為止。每一節照設定頁那一套讀，另外打開 readme 那三種（parseDoc），訊息裡的行號照 README 的。
+ * 一節到下一個「## 」（或檔案結尾）為止；那一節裡有 tab 與換行以外的控制字元就停（跟範本跳窗同一條）。
+ * 每一節照設定頁那一套讀，另外打開 readme 那三種（parseDoc），訊息裡的行號照 README 的。
  */
 function parseAdopt(readme) {
   const lines = readme.split('\n');
   return ADOPT_HEADINGS.map((head) => {
     const hits = lines.map((l, i) => [l, i]).filter(([l]) => l === `## ${head}` || l.startsWith(`## ${head}（`));
-    if (hits.length !== 1) throw new Error(`README.md 裡標題是「${head}」的那一節要剛好一節（找到 ${hits.length} 節）：套用頁不產生`);
+    if (hits.length !== 1) throw new Error(`README.md 裡標題是「${head}」的那一節要剛好一節（找到 ${hits.length} 節）：說明書不產生`);
     const at = hits[0][1];
     const next = lines.findIndex((l, i) => i > at && l.startsWith('## '));
     const body = lines.slice(at, next < 0 ? lines.length : next);
+    if (CONTROL_CHARS.test(body.join('\n'))) throw new Error(`README.md「${head}」那一節裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：網頁顯示不出原文，說明書不產生`);
     // 前面補一行大標題與一個空行，讓它照整份文件的規矩讀；那一節的標題在第 3 行，所以行號要加 at - 2
     return parseDoc(`# README.md\n\n${body.join('\n')}`, 'README.md ', { needSections: true, readme: true, lineOffset: at - 2 }).sections[0];
   });
@@ -1027,7 +1030,7 @@ ${settingsBlocksHtml(sec.blocks, `README.md「${sec.title}」那一節`)}
 <div class="settings-body adopt-body">
 ${body.join('\n')}
 </div>
-<p class="source-note">來源：README.md 的${ADOPT_HEADINGS.map((h) => `「${h}」`).join('')}兩節。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單（含從 1 連號的編號清單，與編號清單項底下的程式碼框）、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、刪除線、HTML 的寫法），會讓整份停下不產生。</p>
+<p class="source-note">來源：README.md 的${ADOPT_HEADINGS.map((h) => `「${h}」`).join('')}兩節。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單（含從 1 連號的編號清單，與編號清單項底下的程式碼框）、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與程式碼框開頭的語言名不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、刪除線、HTML 的寫法），會讓整份停下不產生。</p>
 </section>`;
 }
 
@@ -1050,7 +1053,7 @@ function templateDocHtml(doc, name) {
  * 就整份照原始檔顯示，不會半份排版半份原文；不是 .md 的一律照原始檔顯示。有 tab 與換行以外的控制字元就停：照原始檔也顯示不出原文。
  */
 function templateView(file) {
-  if (TEMPLATE_CONTROL.test(file.text)) throw new Error(`${file.path} 裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：跳窗沒辦法照原文顯示，說明書不產生`);
+  if (CONTROL_CHARS.test(file.text)) throw new Error(`${file.path} 裡有 tab 與換行以外的控制字元（例如 \\r、NUL）：跳窗沒辦法照原文顯示，說明書不產生`);
   if (file.path.endsWith('.md')) {
     const name = `${file.path} `;
     try {
