@@ -5,7 +5,7 @@
 // 先由機器依檔案算，實作者只能往重調、複審者第 1 輪核實、裁示者往上往下都可以改（D4）。
 //
 // 跟合併後的驗收分級（tools/acceptance-tier.js）是兩張不同的表、方向也不同：同一個檔對驗收可能最輕、對風險卻是高（例如工具）。
-// 「這支動到哪些檔」兩支共用同一份算法（changedPaths），不各算各的。
+// 「這支動到哪些檔」兩支共用同一份算法（changedPaths），不各算各的；「一個檔算哪一級」不共用：一個檔對上幾個家族，這裡取最重的。
 //
 // 守不到的：內容碰不碰到升級條件（要讀內容才知道，這支只印出條件提醒）；有沒有照印出來的級別送審；
 // 「只升不降」：它只看這支當下動到的檔、不記前幾輪算過的級別，拿掉一個高風險的檔就會印出比較輕的級別。
@@ -13,7 +13,7 @@
 'use strict';
 const { ask } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
-const { classify, changedPaths } = require('./acceptance-tier.js');
+const { changedPaths } = require('./acceptance-tier.js');
 const { RISK_TIERS } = require('./build-settings.js');
 
 /**
@@ -32,8 +32,23 @@ function riskTableOf(settings) {
     families.push({ re, tier: f.tier });
   }
   const raise = Array.isArray(r.raise) ? r.raise.filter((x) => typeof x === 'string' && x.trim() && x !== '未設定') : [];
-  // 級別從重到輕排（classify 取第一個命中的當級別）；沒列到的＝高
-  return { tiers: RISK_TIERS.map((id) => ({ id, action: '' })), families, unknownTier: RISK_TIERS[0], raise };
+  return { families, raise };
+}
+
+/**
+ * 純判斷層：每個檔在**所有**對上的家族裡取最重的那一級（不是第一個對上的），沒對上的＝高；整支取最重的。
+ * 為什麼不沿用驗收分級的 classify：那邊每個檔取第一個對上的家族，表的列一重疊（例如 ^docs/ 低、^docs/contracts/ 高），
+ * 換一下順序級別就變輕——驗收分級可以讓表的人自己排順序，風險分級不行（#32 r2）：表上寫明是高的檔，不可以因為排在後面就算低。
+ */
+function classifyRisk(paths, table) {
+  const rank = (t) => RISK_TIERS.indexOf(t);
+  const hits = paths.map((p) => {
+    const tiers = table.families.filter((f) => f.re.test(p)).map((f) => f.tier);
+    if (!tiers.length) return { path: p, tier: RISK_TIERS[0], known: false };
+    return { path: p, tier: tiers.reduce((a, b) => (rank(b) < rank(a) ? b : a)), known: true };
+  });
+  const level = RISK_TIERS.find((t) => hits.some((h) => h.tier === t)) || null;
+  return { level, hits, unknown: hits.filter((h) => !h.known).map((h) => h.path) };
 }
 
 function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
@@ -43,7 +58,7 @@ function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
   const got = changedPaths(changeId, { settings, platform, what: '風險分級' });
   if (got.error) return { code: 2, lines: got.error };
   const { paths, countNote } = got;
-  const r = classify(paths, table);
+  const r = classifyRisk(paths, table);
   const lines = [`風險分級｜變更 ${changeId}：${r.level}（依檔案先算；動到 ${paths.length} 個路徑）${countNote}`];
   for (const id of RISK_TIERS) {
     const hit = r.hits.filter((h) => h.tier === id && h.known).map((h) => h.path);
@@ -66,4 +81,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, riskTableOf };
+module.exports = { run, riskTableOf, classifyRisk };

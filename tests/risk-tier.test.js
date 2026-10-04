@@ -4,12 +4,13 @@
 //   ③改名前的舊路徑也算（跟驗收分級共用 changedPaths）；④印出那一級在複審與掃描分級表上的那一列、沒有那一列要說；
 //   ⑤升級條件照設定印出來，沒填要說；⑥風險表有一筆壞（樣式沒以 ^ 開頭、不是合法正規式、級別不在三種裡）就整張不算＝退 2；
 //   ⑦平台問不到、沒有路徑、沒給編號＝退 2；空白設定的複本裡跑指令入口＝退 2。
-//   ⑧第一行印出級別與清單有沒有跟平台自報總數對帳。
+//   ⑧第一行印出級別與清單有沒有跟平台自報總數對帳；
+//   ⑨一個檔對上幾個家族取最重的、跟表的順序無關（#32 r2：取第一個對上的話，^docs/ 低排在 ^docs/contracts/ 高前面就把高算成低）。
 // ⚠️ 守不到的：內容碰不碰到升級條件（要讀內容）；表本身分得對不對；有沒有照印出來的級別送審；只升不降（工具不記前幾輪）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { run, riskTableOf } = require('../tools/risk-tier.js');
+const { run, riskTableOf, classifyRisk } = require('../tools/risk-tier.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -91,4 +92,21 @@ test('⑦平台問不到、沒有路徑、沒給編號＝退 2；程式錯誤不
   const copy = runInCopy('tools/risk-tier.js', ['7']);
   assert.equal(copy.status, 2, copy.stdout + copy.stderr);
   assert.match(copy.stdout, /風險表沒填好/u);
+});
+
+test('⑨一個檔對上幾個家族取最重的、跟表的順序無關', () => {
+  const lowFirst = [{ pattern: '^docs/', tier: '低' }, { pattern: '^docs/contracts/', tier: '高' }];
+  const highFirst = [lowFirst[1], lowFirst[0]];
+  for (const families of [lowFirst, highFirst]) {
+    const s = { risk: { families, raise: ['條件'] }, reviewTiers: TIERS };
+    const r = run('7', { settings: s, platform: fake([f('docs/contracts/a.md')]) });
+    assert.equal(r.code, 0, r.lines.join('\n'));
+    assert.equal(r.result.level, '高', `順序 ${families.map((x) => x.tier).join('→')}：表上寫明是高的檔要算高`);
+    assert.match(r.lines.join('\n'), /照複審與掃描分級表（高）：全審 每一輪/u);
+    assert.equal(run('7', { settings: s, platform: fake([f('docs/a.md')]) }).result.level, '低', '只對上低的就是低');
+  }
+  // 純判斷層：中、低重疊取中；沒對上的算高
+  const t = riskTableOf({ risk: { families: [{ pattern: '^src/', tier: '低' }, { pattern: '^src/ui/', tier: '中' }] } });
+  assert.deepEqual(classifyRisk(['src/ui/x.js'], t).hits.map((h) => h.tier), ['中']);
+  assert.equal(classifyRisk(['other/y.js'], t).level, '高');
 });
