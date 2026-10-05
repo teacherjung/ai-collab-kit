@@ -6,4 +6,4 @@
 - 代價：差點把既有抖動記成自己這支弄的，要多花一段時間量對照組才排除。
 - 教訓：紅了先問紅的是哪一題，再拿主幹跑對照組；別看整場結論，失敗不擋的工作會被整場的綠蓋掉；自己這支有沒有份，用這一輪的差異內容證，不靠印象。
 - 來源：PFW #533（2026-08-30）<https://github.com/teacherjung/personal-finance-webapp/pull/533> 這支只能定位是哪一支變更，差點誤判與對照組那三次失敗沒有公開留言；私人紀錄（2026-08-30，無公開原文）
-- 相關：[forward-job-red-stopped-proxy-merge](forward-job-red-stopped-proxy-merge.md)、[same-blind-spot-no-gate](same-blind-spot-no-gate.md)、[shared-state-flaky-across-sessions](shared-state-flaky-across-sessions.md)、[blank-round-control-group](blank-round-control-group.md)、[machine-load-breaks-timing-tests](machine-load-breaks-timing-tests.md)
+- 相關：[forward-job-red-stopped-proxy-merge](forward-job-red-stopped-proxy-merge.md)、[same-blind-spot-no-gate](same-blind-spot-no-gate.md)、[shared-state-flaky-across-sessions](shared-state-flaky-across-sessions.md)、[blank-round-control-group](blank-round-control-group.md)、[machine-load-breaks-timing-tests](machine-load-breaks-timing-tests.md)、[lenient-test-double-hid-day-one-bug](lenient-test-double-hid-day-one-bug.md)

@@ -3,7 +3,7 @@
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
 來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
-共 171 則。
+共 180 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -11,6 +11,7 @@
 | 2026-07-18 | [瀏覽器驗證誤套用到真實資料](verify-mutations-on-real-data.md) | B4 |
 | 2026-07-24 | [管線吃掉退出碼，四條錯漏網](piped-exit-code-hid-lint-errors.md) | E2、E5 |
 | 2026-07-28 | [堆疊變更合進中間分支](stacked-pr-merged-into-base.md) | H2、K1 |
+| 2026-07-29 | [刪掉受測操作還綠，不代表考題假綠](deleting-the-operation-is-not-a-mutation.md) | E8 |
 | 2026-07-30 | [加規則與刪規則混在一份提案](add-and-delete-rules-in-one-change.md) | C2 |
 | 2026-07-30 | [實作者不按自己的合併鍵](implementer-never-presses-merge.md) | A4 |
 | 2026-07-30 | [審查方切走主幹、主目錄卡住](reviewer-worktree-took-over-main.md) | A3 |
@@ -46,6 +47,7 @@
 | 2026-08-09 | [測試夾具把倉庫寫成裸倉庫](bare-repo-incident.md) | E4、K4 |
 | 2026-08-09 | [兩個工作階段共用一棵樹，改到一半的檔被覆寫](concurrent-session-same-worktree.md) | D2 |
 | 2026-08-09 | [對方代為提交我的半成品，附上沒人跑過的數字](proxy-commit-voided-pass.md) | A2 |
+| 2026-08-10 | [清環境的考題只看幾個名字，退化成列名照樣全綠](child-env-proxy-test-stayed-green.md) | E4、E8 |
 | 2026-08-12 | [進度留言帶了結論專用記號](bot-mark-on-progress-comment.md) | F4 |
 | 2026-08-13 | [審過即合併的常設授權](merge-standing-authorization.md) | A5 |
 | 2026-08-14 | [判不出算不算架構，一律當作算](architecture-undecidable-counts.md) | F8 |
@@ -56,6 +58,7 @@
 | 2026-08-14 | [複審與修不修的常設授權](standing-review-authorization.md) | F6、F8 |
 | 2026-08-14 | [樹在腳下被切到別人的分支，提交落進別人的變更](worktree-switched-under-feet.md) | D2 |
 | 2026-08-15 | [留言尾註的機器人記號觸發永久阻擋](bot-signature-in-pr-comment.md) | F4 |
+| 2026-08-15 | [一顆空字元讓新閘的差異只剩「二進位檔不同」](control-char-hid-the-diff.md) | E6 |
 | 2026-08-15 | [回報裡不放版本雜湊那類亂碼](no-hash-ids-in-reports.md) | J2 |
 | 2026-08-15 | [規則越補越精確補到現場記不住](precision-can-defeat-usability.md) | K2、K3 |
 | 2026-08-15 | [雲端檢查紅了八輪沒人看](same-blind-spot-no-gate.md) | E3 |
@@ -79,6 +82,7 @@
 | 2026-08-31 | [不擋部署的工作紅著，代合併照規矩停在確認全綠那一步](forward-job-red-stopped-proxy-merge.md) | E3、H1 |
 | 2026-08-31 | [提示詞要具體字串、整遍掃描判事故](scan-prompt-asked-for-literal-strings.md) | G2、G3 |
 | 2026-09-01 | [夾具在新環境靜靜變空包彈](fixture-control-assertion.md) | E8、K4 |
+| 2026-09-01 | [假替身比真的寬鬆、間歇紅被當成負載和抖動，一道牆的收尾從第一天就沒生效](lenient-test-double-hid-day-one-bug.md) | E8、H1 |
 | 2026-09-01 | [原話含個人狀況抄進公開倉庫](personal-details-not-public.md) | B5 |
 | 2026-09-01 | [沒按信任的攔截鉤子一聲不吭跳過](untrusted-hook-silently-skipped.md) | B1 |
 | 2026-09-02 | [代理在我的樹上突變被提交進去](agent-mutation-in-live-worktree.md) | D2、E10 |
@@ -100,6 +104,7 @@
 | 2026-09-04 | [純考題變更也把別檔的劃界句弄成假話](stale-header-in-tests-only-change.md) | K5、K3 |
 | 2026-09-04 | [正規式護欄同時假綠假紅](structural-guard-use-parser.md) | E8 |
 | 2026-09-05 | [「紅了重跑一次」擴為常設](gate-rerun-once-standing.md) | H4 |
+| 2026-09-05 | [突變沒改到東西，紅綠照樣算數](mutation-replaced-nothing.md) | E8、E10 |
 | 2026-09-05 | [改說明的斷言失敗、上傳照跑](pr-body-edit-chain-did-not-stop.md) | E10 |
 | 2026-09-05 | [重整時整檔換邊丟掉對方的考題](rebase-checkout-theirs-loses-hunks.md) | K4、E10 |
 | 2026-09-06 | [問裁示者的固定形狀](ask-shape-three-options.md) | I1 |
@@ -112,6 +117,7 @@
 | 2026-09-06 | [審查附件改摘要加連結](review-attachment-summary-and-link.md) | J1 |
 | 2026-09-06 | [版本往前走了閘照樣放行](stale-pass-on-moved-head.md) | F5 |
 | 2026-09-07 | [檔頭一句絕對保證審了二十九輪](absolute-guarantee-invites-blockers.md) | F10、K3、K4 |
+| 2026-09-07 | [共用夾具搬進子資料夾，守它的檢查靜靜失效](check-scope-lost-on-file-move.md) | K3 |
 | 2026-09-07 | [夾具自己同時帶兩個變因](fixture-carries-two-variables.md) | E8 |
 | 2026-09-07 | [考題邊界外推一格連九輪被繞](pin-widening-treadmill.md) | F10、K4 |
 | 2026-09-07 | [改出來的審查提示漏改編號](review-prompt-derivation-slip.md) | F3 |
@@ -119,6 +125,7 @@
 | 2026-09-08 | [用量不到的好處換來裁示](benefit-claims-to-decider.md) | I4、K4 |
 | 2026-09-08 | [契約句沒跑過工具就寫進規則書](contract-sentence-must-be-run.md) | K4、E8、G1、I3 |
 | 2026-09-08 | [想從散文抽出「現行規則是哪幾個字」，審了十一輪](extract-current-rule-from-prose.md) | F10 |
+| 2026-09-08 | [搬走的規矩留樁保號，樁的後半還掛著一條活規矩](moved-rule-stub-hid-live-rule.md) | K1 |
 | 2026-09-08 | [釘住一條規則的考題，條界說明連補十三輪](rule-item-pin-overclaimed-boundary.md) | K4、K3、F10 |
 | 2026-09-08 | [判準簡化後，考題註解還在講已刪的機制](stale-comments-after-parser-simplified.md) | K5、K3 |
 | 2026-09-08 | [撤回只限三種客觀理由，而且一定印出來](withdrawal-three-objective-reasons.md) | D1 |
@@ -145,11 +152,13 @@
 | 2026-09-10 | [誰在磨誰拍板](whoever-is-grinding-decides.md) | A1、F6 |
 | 2026-09-11 | [兩個「發射者」撞名](role-name-collision-scan-launcher.md) | A1、G4 |
 | 2026-09-13 | [九個動作的形狀全是我自己想的，碰真平台第一分鐘就破](designed-shapes-never-touched-a-real-platform.md) | E5、H1 |
+| 2026-09-19 | [驗收在新舊兩版印同一句，漏掉的那一步看不出來](acceptance-same-result-old-and-new.md) | H6、E8 |
 | 2026-09-20 | [合併指令改由實作者自己跑](implementer-runs-merge-command.md) | A4、A2 |
 | 2026-09-20 | [從裁示者分出一個只有人能坐的擁有者座位](owner-seat.md) | A1、A3、B1、B2、B3、B5 |
 | 2026-09-21 | [刪掉「加一條先說砍哪一條」，改用進門五問](k2-drop-cut-one-first.md) | K2 |
 | 2026-09-21 | [一次一支與最多兩支併成一條](one-thing-merge-c1-c2.md) | C1 |
 | 2026-09-21 | [給裁示者的留言編號是憑印象編出來的](report-link-from-memory.md) | J4、J1 |
+| 2026-09-22 | [考題掃不到，被寫成規矩不適用](test-reach-read-as-rule-reach.md) | J3、K4、E6 |
 | 2026-09-23 | [對裁示者說的話要分開量到的與推論的](j4-facts-vs-inference-rule.md) | J4、I1、J3 |
 | 2026-09-23 | [合併前不再回頭問裁示者](merge-without-asking-decider.md) | A5 |
 | 2026-09-24 | [框框從強調定成本規則的關鍵詞，框了就查得到](brackets-mark-keywords.md) | J2 |

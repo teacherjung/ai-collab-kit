@@ -6,4 +6,4 @@
 - 代價：那一支的合併停了一次，要重跑一次雲端工作、再走一遍合併步驟。
 - 教訓：既有抖動不是放寬合併步驟的理由，重跑一次拿真的綠燈；「機械閘不看它」跟「程序不看它」是兩回事，擋住你的常常是程序那一步。
 - 來源：PFW #534（2026-08-31）<https://github.com/teacherjung/personal-finance-webapp/pull/534> 這支只能定位是哪一支變更被停下，停在確認全綠那一步沒有公開留言；私人紀錄（2026-08-31，無公開原文）
-- 相關：[ci-forward-job-flaky](ci-forward-job-flaky.md)、[merge-launched-before-cloud-green](merge-launched-before-cloud-green.md)、[gate-rerun-once-standing](gate-rerun-once-standing.md)、[same-blind-spot-no-gate](same-blind-spot-no-gate.md)
+- 相關：[ci-forward-job-flaky](ci-forward-job-flaky.md)、[merge-launched-before-cloud-green](merge-launched-before-cloud-green.md)、[gate-rerun-once-standing](gate-rerun-once-standing.md)、[same-blind-spot-no-gate](same-blind-spot-no-gate.md)、[lenient-test-double-hid-day-one-bug](lenient-test-double-hid-day-one-bug.md)
