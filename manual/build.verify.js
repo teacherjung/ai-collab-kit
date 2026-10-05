@@ -2181,6 +2181,8 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
     ['網址後面緊接灰底框', ed('名詞裡的條號也連結。', '見 https://example.com/`x`。'), /「套件（F1）」的解釋：網址後面緊接著「`」/u],
     ['網址裡像條號的字', ed('名詞裡的條號也連結。', '見 https://example.com/A1。'), /「套件（F1）」的解釋：網址裡有像條號的「A1」/u],
     ['www 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 www.example.com/**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
+    ['http 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 http://example.com/x**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
+    ['ftp 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 ftp://example.com/x**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
     ['版面約定裡沒收尾的程式碼框', ed('開頭的續行接成同一段（B1 也連結）', '~~~'), /GLOSSARY\.md 第 6 行：開頭是沒跳脫的半形標點（~）/u],
     ['版面約定裡的分隔線', ed('開頭的續行接成同一段（B1 也連結）', '---'), /GLOSSARY\.md 第 6 行：開頭是沒跳脫的半形標點（-）/u],
     ['版面約定的條列開頭是記號', ed('- **條號**用【】', '- ```條號用【】'), /GLOSSARY\.md 第 8 行：開頭是沒跳脫的半形標點（`）/u],
@@ -2292,6 +2294,11 @@ test('⑳ 白話說明：manual/plain.md 每一頁各一節（總覽也算一頁
     assert.notEqual(text, base, `「${name}」這一發沒有改到來源`);
     assert.throws(() => manual.build({ ...src, plain: text }), (err) => err instanceof manual.LayoutError && why.test(err.message), `「${name}」應該停下（LayoutError）、而且原因要對`);
   }
+  // 頁的形狀不對就停：開頭那一句或來源那一行不是剛好一個，白話說明不知道放哪裡（今天的十頁都是剛好一個，所以直接餵壞的形狀）
+  const shape = (body) => `<section class="page"><header class="page-head"><h1>X</h1>${body}</section>`;
+  assert.throws(() => manual.withPlain(shape('<p class="page-sum">一</p><p class="page-sum">二</p></header><p class="source-note">來源：x。</p>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '兩個開頭說明要停');
+  assert.throws(() => manual.withPlain(shape('<p class="page-sum">一</p></header>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '沒有來源那一行要停');
+  assert.equal(manual.withPlain(shape('<p class="page-sum">一</p></header><p class="source-note">來源：x。</p>'), { name: 'X' }, ['段'], []), shape(`<div class="plain"><p>段</p></div>\n<p class="page-sum">一</p></header><p class="source-note">來源：x。${PLAIN_NOTE}</p>`), '對照組：形狀對就照放');
   // 讀不到手寫檔就停
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-plain-'));
   try {
