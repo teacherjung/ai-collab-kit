@@ -2181,6 +2181,7 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
   assert.equal(manual.settingsInline('見 `https://x.y`與`框`、**粗`https://z.w`粗**`框`。', 't'), '見 <code>https://x.y</code>與<code>框</code>、<strong>粗<code>https://z.w</code>粗</strong><code>框</code>。', '灰底框裡的網址後面，灰底框照排；粗體裡的也一樣，粗體後面也一樣');
   assert.equal(manual.settingsInline('見 <https://x.y>**粗**與[ab](ab.md)，[ab](ab.md)`框`。', 't', new Map([['ab', '乙']])), '見 &lt;https://x.y&gt;<strong>粗</strong>與<a href="#cases" class="case-link" data-case="ab">乙</a>，<a href="#cases" class="case-link" data-case="ab">乙</a><code>框</code>。', '案例頁：尖括號網址、案例連結後面，粗體、連結、灰底框照排');
   assert.equal(manual.settingsInline('見 `https://x.y`、A4。', 't', null, ruleIds), `見 <code>https://x.y</code>、${ref('A4')}。`, '名詞頁：灰底框裡的網址後面，條號照連');
+  assert.equal(manual.settingsInline('見 https://x.y<界**粗**。', 't'), '見 https://x.y&lt;界<strong>粗</strong>。', '網址到「<」就結束（GitHub 的網址自動連結也是）：後面的粗體照排');
   for (const [s, links, why] of [['見 `c` https://x.y**粗**。', null, /網址後面緊接著「\*」/u], ['見 <https://a.b> https://x.y`c`。', new Map(), /網址後面緊接著「`」/u], ['見 [ab](ab.md) https://x.y[ab](ab.md)。', new Map([['ab', '乙']]), /網址後面緊接著「\[」/u], ['見 **粗** https://x.y**粗**。', null, /網址後面緊接著「\*」/u]]) {
     assert.throws(() => manual.settingsInline(s, 't', links), why, `${s}：灰底框、尖括號網址、案例連結、粗體後面另起的裸網址，後面緊接記號照停`);
   }
