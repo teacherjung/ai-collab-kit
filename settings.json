@@ -95,6 +95,11 @@
    "item": "「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份）",
    "rules": "K6",
    "where": "根目錄 AGENTS.md 的「擁有者的常設指示」那一節。不建 CLAUDE.md（也不建 CLAUDE.local.md、.claude/CLAUDE.md）：只要有它，Claude 就只讀它、不讀 AGENTS.md；Codex 只自動讀 AGENTS.md 前約 32 KB，所以那份要保持短"
+  },
+  {
+   "item": "「進度摘要」放在哪、已結束的留幾天（各方共用一份）",
+   "rules": "J5",
+   "where": "主目錄的上一層、檔名 progress-summary.md，跟使用專案 personal-finance-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）。已結束的留七天（擁有者 2026-09-21 對 personal-finance-webapp 裁的天數；2026-10-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺"
   }
  ],
  "mainBranch": "main",
