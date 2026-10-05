@@ -5,7 +5,8 @@
 // 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）、
 // 設定頁（設定說明產生器對空白範本的產出：每一節、段落、表格每一格、清單與子項）、範本全文跳窗（排得了的照設定頁那一套排、
 // 其餘照原始檔；規矩卡與範本頁的鈕對到哪一份）、套用頁（README 那兩節：每一節、每一段、編號清單每一步與底下的程式碼框、清單每一項）、
-// 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）；
+// 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）、
+// 名詞頁（GLOSSARY.md「版面約定」以外的每一節：說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
@@ -499,7 +500,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
   assert.match(ok.stderr, /產好說明書：9 頁/u);
   const laidOut = Object.values(JSON.parse(ok.stdout.match(/id="template-data">([\s\S]*?)<\/script>/u)[1])).filter((e) => e.html.includes('<div class="tpl-body">')).length;
-  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；案例 ${ownCaseSources().files.length} 則）\n$`, 'u'));
+  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；名詞 ${ownGlossary(disk('GLOSSARY.md')).sections.reduce((n, s) => n + (s.terms ? s.terms.length : 0), 0)} 個；案例 ${ownCaseSources().files.length} 則）\n$`, 'u'));
   const out = run(['--out', 'x.html']);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /產生器不自己存檔/u);
@@ -1868,4 +1869,260 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/**
+ * 考題自己讀 GLOSSARY.md（不用產生器的 parseGlossary／parseDoc）：第一行去掉「# 」是大標題；用「## 」開頭的行切成節，「版面約定」那一節不算；
+ * 一節裡不是空的行全部以「- 」開頭＝一類名詞（每一行在第一個「**：」切開，前面去掉「- **」是名詞、後面是解釋），否則一行一段。
+ */
+function ownGlossary(md) {
+  const lines = md.split('\n');
+  const secs = [];
+  for (const l of lines.slice(1)) {
+    if (l.startsWith('## ')) secs.push({ title: l.slice(3), rows: [] });
+    else if (l && secs.length) secs[secs.length - 1].rows.push(l);
+  }
+  return {
+    title: lines[0].replace(/^# /u, ''),
+    sections: secs
+      .filter((s) => s.title !== '版面約定')
+      .map((s) => (s.rows.every((r) => r.startsWith('- '))
+        ? { title: s.title, terms: s.rows.map((r) => ({ term: r.slice(4, r.indexOf('**：')), def: r.slice(r.indexOf('**：') + 3) })) }
+        : { title: s.title, paras: s.rows })),
+  };
+}
+/** 名詞頁的行內記號（考題自己切）：照 ownInline 切，再把字裡前後不緊接英數字的「A〜K 加數字」切成 ['rule', 條號]（灰底框裡的不切）。 */
+function ownGlossInline(src) {
+  const split = (toks) => toks.flatMap(([kind, v]) => {
+    if (kind === 'strong') return [['strong', split(v)]];
+    if (kind !== 't') return [[kind, v]];
+    return v.split(/(?<![A-Za-z0-9])([A-K][0-9]+)(?![A-Za-z0-9])/u).map((part, k) => [k % 2 ? 'rule' : 't', part]).filter(([k2, part]) => k2 === 'rule' || part);
+  });
+  return split(ownInline(src));
+}
+/** 一串行內形狀看得到的字（條號連結看得到的就是條號）。 */
+const glossVisible = (toks) => toks.map(([kind, v]) => (kind === 'strong' ? glossVisible(v) : v)).join('');
+/** 排好的名詞頁行內 HTML 切回同樣的形狀：<strong>、<code>、條號連結（字要跟它連到的條號一樣）、其餘的字；有別的標籤就停。 */
+function htmlGlossInline(html, where) {
+  const REF = /^<a href="#rules" class="rule-ref" data-goto="rule-([A-K][0-9]+)">([^<]*)<\/a>$/u;
+  const parts = html.split(/(<\/?(?:strong|code)>|<a href="#rules" class="rule-ref" data-goto="rule-[A-K][0-9]+">[^<]*<\/a>)/u);
+  assert.ok(!/[<>]/u.test(parts.filter((p, k) => k % 2 === 0).join('')), `${where}：行內出現 <strong>、<code>、條號連結以外的標籤`);
+  const root = [];
+  const stack = [root];
+  let code = null;
+  const push = (tok) => {
+    const cur = stack[stack.length - 1];
+    const last = cur[cur.length - 1];
+    if (tok[0] === 't' && last && last[0] === 't') last[1] += tok[1];
+    else cur.push(tok);
+  };
+  for (const part of parts) {
+    const ref = part.match(REF);
+    if (ref) {
+      assert.equal(ref[2], ref[1], `${where}：連到 ${ref[1]} 的條號連結，字不是那個條號`);
+      push(['rule', ref[1]]);
+    } else if (part === '<strong>') {
+      const kids = [];
+      push(['strong', kids]);
+      stack.push(kids);
+    } else if (part === '</strong>') {
+      stack.pop();
+    } else if (part === '<code>') {
+      code = '';
+    } else if (part === '</code>') {
+      push(['code', code]);
+      code = null;
+    } else if (code !== null) {
+      code += unescT(part);
+    } else if (part) {
+      push(['t', unescT(part)]);
+    }
+  }
+  return root;
+}
+/** 一格（大標題、節標題、說明的一段、名詞、解釋）的兩種比法：看得到的字，以及粗體、灰底框、條號連結包住哪些字。 */
+function checkGloss(got, src, where) {
+  const toks = ownGlossInline(src);
+  assert.equal(strip(got), escT(glossVisible(toks)), `${where}看得到的字不是原文`);
+  assert.deepEqual(htmlGlossInline(got, where), toks, `${where}的粗體、灰底框、條號連結不對`);
+}
+/**
+ * 名詞頁整頁，照考題自己讀的 GLOSSARY.md 比：頁首（大標題、名詞數、類數）、跳節鈕（只列名詞的那幾類，字是標題「（」之前）、
+ * 每一節（順序、標題、名詞的那幾類寫幾個）、說明的每一段、每一類的每一個名詞與解釋；外框之外不多不少。回傳考題自己讀的形狀。
+ */
+function checkGlossaryPage(html, md, where) {
+  const g = ownGlossary(md);
+  const groups = g.sections.filter((s) => s.terms);
+  const total = groups.reduce((n, s) => n + s.terms.length, 0);
+  const page = html.match(/^<section class="page" id="page-glossary" data-page="glossary" hidden>\n<header class="page-head">\n<p class="eyebrow">GLOSSARY\.md 的名詞<\/p>\n<h1>([^\n]*)<\/h1>\n<p class="page-sum">(\d+) 個名詞，分 (\d+) 類，照對照表的順序。解釋裡寫到的條號，點了跳到那一條規矩。<\/p>\n<\/header>\n<nav class="jumps" aria-label="跳到某一類">([^\n]*)<\/nav>\n<div class="gloss-body">\n([\s\S]*)\n<\/div>\n<p class="source-note">來源：GLOSSARY\.md [^<]*<\/p>\n<\/section>$/u);
+  assert.ok(page, `${where}：名詞頁的外框不對`);
+  checkGloss(page[1], g.title, `${where}的大標題`);
+  assert.deepEqual([page[2], page[3]], [String(total), String(groups.length)], `${where}：頁首的名詞數或類數不對`);
+  const jumps = g.sections
+    .map((s, i) => (s.terms ? `<button type="button" class="jump" data-jump="gloss-${i + 1}">${escT(glossVisible(ownGlossInline(s.title)).replace(/（.*$/u, '').trim())}</button>` : ''))
+    .join('');
+  assert.equal(page[4], jumps, `${where}：跳節鈕不對（只列名詞的那幾類、字是標題「（」之前）`);
+  const secs = [...page[5].matchAll(/<section class="block" id="gloss-(\d+)" tabindex="-1">\n<h2>([^\n]*)<\/h2>\n([\s\S]*?)\n<\/section>/gu)];
+  assert.equal(secs.map((m) => m[0]).join('\n'), page[5], `${where}：每一節的外框之外還有別的東西`);
+  assert.deepEqual(secs.map((m) => m[1]), g.sections.map((s, i) => String(i + 1)), `${where}：節的個數或順序不對（「版面約定」不排）`);
+  secs.forEach((m, i) => {
+    const s = g.sections[i];
+    const at = `${where}「${s.title}」那一節`;
+    if (s.terms) {
+      const count = `<span class="sec-count">${s.terms.length} 個</span>`;
+      assert.ok(m[2].endsWith(count), `${at}：標題旁的個數不對`);
+      checkGloss(m[2].slice(0, -count.length), s.title, `${at}的標題`);
+      const dl = m[3].match(/^<dl class="gloss">\n([\s\S]*)\n<\/dl>$/u);
+      assert.ok(dl, `${at}：名詞清單的外框不對`);
+      const rows = dl[1].split('\n');
+      assert.equal(rows.length, s.terms.length, `${at}：名詞的個數不對`);
+      rows.forEach((row, k) => {
+        const pair = row.match(/^<dt>(.*)<\/dt><dd>(.*)<\/dd>$/u);
+        assert.ok(pair, `${at}第 ${k + 1} 項：不是一個名詞＋一段解釋`);
+        checkGloss(pair[1], s.terms[k].term, `${at}第 ${k + 1} 項的名詞`);
+        checkGloss(pair[2], s.terms[k].def, `${at}第 ${k + 1} 項「${s.terms[k].term}」的解釋`);
+      });
+    } else {
+      checkGloss(m[2], s.title, `${at}的標題`);
+      const ps = m[3].split('\n');
+      assert.equal(ps.length, s.paras.length, `${at}：段數不對`);
+      ps.forEach((p, k) => {
+        const inner = p.match(/^<p>(.*)<\/p>$/u);
+        assert.ok(inner, `${at}第 ${k + 1} 段：不是一段`);
+        checkGloss(inner[1], s.paras[k], `${at}第 ${k + 1} 段`);
+      });
+    }
+  });
+  return g;
+}
+
+test('⑲ 名詞頁：GLOSSARY.md「版面約定」以外的每一節照原文排（說明一段一段；一類名詞一節，每一個名詞與解釋照原文），寫到的條號點得到那一條規矩；整頁不多不少；認不得的形狀與不在規則資料裡的條號就停', () => {
+  const src = sources();
+  const built = manual.build(src);
+  const { html } = built;
+  const ruleIds = own().rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
+  const pageHtml = html.match(/<section class="page" id="page-glossary" data-page="glossary" hidden>[\s\S]*?<p class="source-note">來源：GLOSSARY\.md [^<]*<\/p>\n<\/section>/u)[0];
+  const g = checkGlossaryPage(pageHtml, disk('GLOSSARY.md'), '名詞頁');
+  const groups = g.sections.filter((s) => s.terms);
+  const total = groups.reduce((n, s) => n + s.terms.length, 0);
+  assert.ok(total >= 100 && groups.length >= 5, '前提：考題自己讀到的名詞太少');
+  assert.ok(g.sections.some((s) => s.paras), '前提：真的對照表裡有一節說明（才驗得到說明照段落排）');
+  assert.equal(built.glossaryTerms, total, '回傳的名詞數不對');
+  // 每一個條號連結都跳得到規矩頁的那一條；條號連結只有名詞頁有（別頁、跳窗資料照舊，樣式裡那一條除外）
+  const refs = [...pageHtml.matchAll(/data-goto="rule-([A-K][0-9]+)"/gu)].map((m) => m[1]);
+  assert.ok(refs.length >= 100, '前提：真的對照表裡的條號連結太少');
+  for (const id of new Set(refs)) assert.ok(html.includes(`<article class="rule" id="rule-${id}"`), `條號連結 ${id} 在規矩頁找不到`);
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  const n = (s) => s.split('rule-ref').length - 1;
+  assert.equal(n(html), n(pageHtml) + n(css), '條號連結只開給名詞頁');
+  // 寫死的樣本：名詞裡的條號、灰底框照字面、解釋裡的角色粗體；版面約定不排在這一頁
+  assert.ok(pageHtml.includes('<dt>套件（<a href="#rules" class="rule-ref" data-goto="rule-F1">F1</a>）</dt>'), '名詞裡的條號也點得到（寫死的樣本）');
+  assert.ok(pageHtml.includes('<dt>灰底框</dt><dd>要一字不差照抄的字句，例如 <code>沒有</code>；尖括號裡是要換成實際內容的地方，例如 <code>未執行：&lt;原因&gt;</code>（版面約定）。</dd>'), '灰底框照字面（寫死的樣本）');
+  assert.ok(pageHtml.includes('開一支 PR 請 <strong>複審者</strong> 複審'), '解釋裡的角色粗體（寫死的樣本）');
+  assert.ok(!pageHtml.includes('條號用【】包在最前面'), '版面約定排在規矩頁，名詞頁不排');
+  assert.ok(html.includes('<a href="#glossary" data-route="glossary"><span>名詞</span></a>'), '目錄上的名詞不該再標「準備中」');
+  assert.ok(!html.includes('class="soon"') && !html.includes('class="pending"'), '九頁都有內容，不該再有「準備中」');
+  assert.ok(html.includes('<p class="source-note">來源：GLOSSARY.md 的大標題，與「版面約定」以外的每一節：全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞，照原文的順序；「版面約定」講規則書怎麼排，放在規矩頁上方那個點得開的框。這一頁不照 GitHub 的畫法：只排灰底框、粗體，條號（灰底框以外、A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號），以及規則資料裡沒有的條號，會讓整份停下不產生。</p>'), '名詞頁的來源註記不對');
+  // 互動接線（雲端考卷沒有瀏覽器，這裡只釘住程式在、PR 說明另外用瀏覽器量）與樣式
+  assert.ok(html.includes("var go = t.closest('[data-goto]'); if (go) { e.preventDefault(); closeModal(false); goTo(go.getAttribute('data-goto')); return; }"), '點條號連結不照它的網址走，切到規矩頁那一條');
+  assert.match(css, /\n\.rule-ref\{[^}]*cursor:pointer[^}]*\}/u, '條號連結的樣式');
+  assert.match(css, /\n\.gloss\{display:grid;grid-template-columns:minmax\(6em,11em\) minmax\(0,1fr\);/u, '桌機上名詞｜解釋兩欄');
+  assert.match(css, /@media \(max-width:760px\)\{[^@]*\n {2}\.gloss\{grid-template-columns:minmax\(0,1fr\)\}/u, '手機上名詞在上、解釋在下');
+  assert.match(css, /\n\.gloss :is\(dt,dd\),\.gloss-body \.block :is\(h2,p\)\{white-space:pre-wrap\}/u, '名詞、解釋與說明照原文留空白（連續空白不合併）');
+
+  // 對照組：同一套比法跑一份「什麼都有」的對照表（版面約定有續行與不在規則裡的條號＝名詞頁不讀它；說明兩段；
+  // 粗體裡有灰底框與條號、灰底框裡的條號照字面、英數字緊接著的不算條號、A1〜K6 是兩條、兩位數的條號；名詞用「」框起來、名詞裡有條號；
+  // 要跳脫的 < & "、跳脫的星號、連續空白、底線照字面；檔尾沒有換行）
+  const RICH = [
+    '# 對照組的對照表 <一> & "二"',
+    '',
+    '## 版面約定',
+    '',
+    '規則書的排法，每一條都照 A1 的樣子：',
+    '開頭的續行，名詞頁不讀這一節（K99 也不查）',
+    '',
+    '- 條號用【】包在最前面',
+    '',
+    '## 這份怎麼用',
+    '',
+    '第一段：見 K1、K2，**粗 `框` 與 A4 體**，`A4 在框裡`。',
+    '',
+    '第二段  兩個空白、<不是 HTML>、\\*照字面\\*，XA1、A1B 不是條號，A1〜K6 是兩條，F11 與 E10。',
+    '',
+    '## 平台（GitHub）',
+    '',
+    '- **PR**：見 A4；**粗體裡的 `框` 與 E1**。',
+    '- **「草稿PR」**：名詞用「」框起來也照排；node_modules 的底線照字面。',
+    '',
+    '## 邊界 <界> & "引號"',
+    '',
+    '- **套件（F1）**：名詞裡的條號也連結。',
+    '- **正本／產物**：最後一項，檔尾沒有換行',
+  ].join('\n');
+  const rich = manual.renderGlossary(RICH, ruleIds);
+  const rg = checkGlossaryPage(rich.html, RICH, '對照組');
+  assert.deepEqual(rg.sections.map((s) => s.title), ['這份怎麼用', '平台（GitHub）', '邊界 <界> & "引號"'], '對照組：考題自己讀到的節（前提）');
+  assert.deepEqual([rich.terms, rich.groups], [4, 2], '對照組：回傳的名詞數與類數');
+  const ref = (id) => `<a href="#rules" class="rule-ref" data-goto="rule-${id}">${id}</a>`;
+  assert.ok(rich.html.includes('<h1>對照組的對照表 &lt;一&gt; &amp; &quot;二&quot;</h1>'), '對照組：大標題要跳脫（寫死的樣本）');
+  assert.ok(rich.html.includes(`<p>第一段：見 ${ref('K1')}、${ref('K2')}，<strong>粗 <code>框</code> 與 ${ref('A4')} 體</strong>，<code>A4 在框裡</code>。</p>`), '對照組：說明裡的條號、粗體裡的灰底框與條號、灰底框裡的條號照字面（寫死的樣本）');
+  assert.ok(rich.html.includes(`<p>第二段  兩個空白、&lt;不是 HTML&gt;、*照字面*，XA1、A1B 不是條號，${ref('A1')}〜${ref('K6')} 是兩條，${ref('F11')} 與 ${ref('E10')}。</p>`), '對照組：連續空白、跳脫、英數字緊接著的不算、範圍兩頭各一條、兩位數的條號（寫死的樣本）');
+  assert.ok(rich.html.includes(`<dt>PR</dt><dd>見 ${ref('A4')}；<strong>粗體裡的 <code>框</code> 與 ${ref('E1')}</strong>。</dd>\n<dt>「草稿PR」</dt><dd>名詞用「」框起來也照排；node_modules 的底線照字面。</dd>`), '對照組：一類名詞照順序、名詞用「」框起來（寫死的樣本）');
+  assert.ok(rich.html.includes(`<h2>邊界 &lt;界&gt; &amp; &quot;引號&quot;<span class="sec-count">2 個</span></h2>\n<dl class="gloss">\n<dt>套件（${ref('F1')}）</dt><dd>名詞裡的條號也連結。</dd>`), '對照組：節標題要跳脫、名詞裡的條號（寫死的樣本）');
+  assert.ok(rich.html.includes('<nav class="jumps" aria-label="跳到某一類"><button type="button" class="jump" data-jump="gloss-2">平台</button><button type="button" class="jump" data-jump="gloss-3">邊界 &lt;界&gt; &amp; &quot;引號&quot;</button></nav>'), '對照組：跳節鈕只列名詞的那幾類（寫死的樣本）');
+  assert.ok(!rich.html.includes('條號用【】') && !rich.html.includes('K99'), '對照組：版面約定那一節不排、也不查');
+
+  // 認不得就停（原因要對）
+  const ed = (from, to) => {
+    assert.equal(RICH.split(from).length, 2, `「${from}」在對照組裡要剛好一處（前提）`);
+    return RICH.split(from).join(to);
+  };
+  const bad = [
+    ['第一行不是大標題', ed('# 對照組', '對照組'), /GLOSSARY\.md 第一行應該是「# 」開頭的大標題/u],
+    ['大標題底下有東西', ed('"二"\n\n## 版面約定', '"二"\n\n開頭一段\n\n## 版面約定'), /GLOSSARY\.md 大標題底下、第一節之前有東西/u],
+    ['兩節版面約定', ed('## 這份怎麼用', '## 版面約定\n\n- 第二節\n\n## 這份怎麼用'), /GLOSSARY\.md 有兩節「版面約定」/u],
+    ['沒有任何一類名詞', '# 標題\n\n## 說明\n\n只有一段。\n', /GLOSSARY\.md 裡沒有任何一類名詞/u],
+    ['空的一節', ed('## 平台（GitHub）', '## 空的\n\n## 平台（GitHub）'), /GLOSSARY\.md「空的」那一節要是「全是段落」或「剛好一串名詞清單」/u],
+    ['段落接清單', ed('## 邊界 <界> & "引號"\n\n', '## 邊界 <界> & "引號"\n\n說明一段。\n\n'), /GLOSSARY\.md「邊界 <界> & "引號"」那一節要是「全是段落」或「剛好一串名詞清單」/u],
+    ['清單接段落', ed('檔尾沒有換行', '檔尾沒有換行\n\n後面一段'), /GLOSSARY\.md「邊界 <界> & "引號"」那一節要是「全是段落」或「剛好一串名詞清單」/u],
+    ['表格', ed('\n\n第二段', '\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n第二段'), /GLOSSARY\.md「這份怎麼用」那一節要是「全是段落」或「剛好一串名詞清單」/u],
+    ['兩串清單只隔一個空行', ed('\n- **「草稿PR」**', '\n\n- **「草稿PR」**'), /兩串清單之間只隔一個空行/u],
+    ['子項', ed('名詞裡的條號也連結。', '名詞裡的條號也連結。\n  1. 子項'), /GLOSSARY\.md「邊界 <界> & "引號"」那一節第 1 項底下有子項/u],
+    ['不是名詞的形狀', ed('- **PR**：', '- PR：'), /GLOSSARY\.md「平台（GitHub）」那一節第 1 項不是「\*\*名詞\*\*：解釋」的形狀/u],
+    ['名詞後是半形冒號', ed('- **PR**：', '- **PR**:'), /「平台（GitHub）」那一節第 1 項不是「\*\*名詞\*\*：解釋」的形狀/u],
+    ['名詞有灰底框', ed('- **PR**：', '- **`PR`**：'), /「平台（GitHub）」那一節第 1 項不是「\*\*名詞\*\*：解釋」的形狀/u],
+    ['名詞有反斜線', ed('- **PR**：', '- **P\\R**：'), /「平台（GitHub）」那一節第 1 項不是「\*\*名詞\*\*：解釋」的形狀/u],
+    ['名詞有星號', ed('- **PR**：', '- **P*R**：'), /「平台（GitHub）」那一節第 1 項不是「\*\*名詞\*\*：解釋」的形狀/u],
+    ['名詞頭有空白', ed('- **PR**：', '- ** PR**：'), /GLOSSARY\.md 第 18 行：開頭是沒跳脫的半形標點/u],
+    ['名詞尾有空白', ed('- **PR**：', '- **PR **：'), /「平台（GitHub）」那一節第 1 項：名詞頭尾有空白/u],
+    ['解釋是空的', ed('：名詞裡的條號也連結。', '：'), /「邊界 <界> & "引號"」那一節第 1 項：「套件（F1）」的解釋是空的、或開頭是空白/u],
+    ['解釋開頭空白', ed('：名詞裡的條號也連結。', '： 名詞裡的條號也連結。'), /「套件（F1）」的解釋是空的、或開頭是空白/u],
+    ['名詞重複', ed('- **正本／產物**', '- **PR**'), /「邊界 <界> & "引號"」那一節第 2 項：名詞「PR」出現兩次/u],
+    ['解釋裡的條號不在規則資料裡', ed('見 A4；', '見 K99；'), /GLOSSARY\.md「平台（GitHub）」那一節第 1 項「PR」的解釋：條號 K99 不在規則資料裡/u],
+    ['名詞裡的條號不在規則資料裡', ed('套件（F1）', '套件（F99）'), /那一節第 1 項「套件（F99）」的名詞：條號 F99 不在規則資料裡/u],
+    ['說明裡的條號不在規則資料裡', ed('見 K1、K2', '見 K1、K77'), /GLOSSARY\.md「這份怎麼用」那一節第 1 段：條號 K77 不在規則資料裡/u],
+    ['標題裡的條號不在規則資料裡', ed('## 平台（GitHub）', '## 平台 J99（GitHub）'), /GLOSSARY\.md「平台 J99（GitHub）」那一節的標題：條號 J99 不在規則資料裡/u],
+    ['大標題裡的條號不在規則資料裡', ed('# 對照組', '# 對照組 C99'), /GLOSSARY\.md 的大標題：條號 C99 不在規則資料裡/u],
+    ['跳節鈕取不出字', ed('## 平台（GitHub）', '## （GitHub）'), /GLOSSARY\.md「（GitHub）」那一節的標題取不出跳節鈕的字/u],
+    ['HTML', ed('名詞裡的條號也連結。', '名詞裡的<b>條號</b>也連結。'), /「套件（F1）」的解釋：「<」後面緊接著半形字元/u],
+    ['底線斜體', ed('名詞裡的條號也連結。', '名詞裡的 _條號_ 也連結。'), /「套件（F1）」的解釋：「_」後面緊接著字/u],
+    ['刪除線', ed('名詞裡的條號也連結。', '名詞裡的~~條號~~也連結。'), /「套件（F1）」的解釋：「~」後面緊接著字/u],
+    ['字元代碼', ed('名詞裡的條號也連結。', '名詞裡的&amp;條號也連結。'), /「套件（F1）」的解釋：「&」後面接英文字母或 #/u],
+    ['連結', ed('名詞裡的條號也連結。', '名詞裡的[條號](x.md)也連結。'), /「套件（F1）」的解釋：「\[」GitHub 可能當成連結/u],
+    ['單獨的星號', ed('名詞裡的條號也連結。', '名詞裡的*條號*也連結。'), /「套件（F1）」的解釋：單獨的「\*」/u],
+    ['名詞裡有 HTML', ed('「草稿PR」', '「草稿<b>PR」'), /那一節第 2 項「「草稿<b>PR」」的名詞：「<」後面緊接著半形字元/u],
+    ['小標', ed('\n\n第二段', '\n\n### 小標\n\n第二段'), /GLOSSARY\.md 第 14 行：開頭是沒跳脫的半形標點（#）/u],
+    ['編號清單', ed('\n\n第二段', '\n\n1. 第一步\n\n第二段'), /GLOSSARY\.md 第 14 行：段落的字像編號清單/u],
+    ['tab', ed('名詞裡的條號也連結。', '名詞裡的\t條號也連結。'), /GLOSSARY\.md 裡有 tab 或 \\r/u],
+    ['結尾有空白', ed('底線照字面。', '底線照字面。 '), /GLOSSARY\.md 第 19 行：結尾有空白/u],
+  ];
+  for (const [name, x, why] of bad) {
+    assert.notEqual(x, RICH, `「${name}」這一發沒有改到來源`);
+    assert.throws(() => manual.renderGlossary(x, ruleIds), why, `「${name}」應該停下、而且原因要對`);
+  }
+  // 整份產生時也停；條號連結只開給名詞頁：設定頁、範本跳窗、套用頁、案例頁照舊
+  assert.throws(() => manual.build({ ...src, glossary: src.glossary.replace('\n## 這份對照表怎麼用\n', '\n## 這份對照表怎麼用\n\n| a |\n|---|\n') }), /GLOSSARY\.md「這份對照表怎麼用」那一節要是「全是段落」或「剛好一串名詞清單」/u);
+  assert.ok(!manual.renderSettings('# 標題\n\n## 一\n\n見 A1。\n').includes('rule-ref'), '設定頁不排條號連結');
+  assert.ok(!manual.renderAdopt('# 套件\n\n## 搬進一個專案\n\n見 A1。\n\n## 專案裡改到套件的檔\n\n- 例外\n').includes('rule-ref'), '套用頁不排條號連結');
+  assert.ok(!manual.templateView({ path: 'templates/t.md', text: '# 標題\n\n見 A1。\n' }).html.includes('rule-ref'), '範本跳窗不排條號連結');
 });
