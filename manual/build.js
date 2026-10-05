@@ -26,7 +26,7 @@ const PAGES = [
   { id: 'settings', name: '設定', built: true },
   { id: 'adopt', name: '套用', built: true },
   { id: 'glossary', name: '名詞', next: '用語對照表，名詞白話手冊併進來' },
-  { id: 'cases', name: '案例', next: '每一則裁示背後發生過的事（案例簿）' },
+  { id: 'cases', name: '案例', built: true },
 ];
 
 const LABEL_HEADER = /^\| 標籤 \| 意思 \| 守不到的 \|$/u;
@@ -54,6 +54,18 @@ const TEMPLATE_ITEM = /^- (`templates\/[^`]+`(?:、`templates\/[^`]+`)*)：(.+)$
 // 範本跳窗與套用頁不收的字：tab 與換行以外的控制字元（Unicode 的控制字元＝U+0000〜U+001F、U+007F〜U+009F）——瀏覽器顯示不出它們
 // （NUL 會被丟掉、\r 會變成換行、其餘看不見），網頁上就不是原文了
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/u;
+// 案例頁：cases/ 底下一則一檔，形狀的正本＝tools/build-casebook-index.js 與 tests/casebook.test.js（標題、空行、六欄依序各一行、最後可有一行「相關」）。
+// cases/README.md 是用同一批檔產生的索引：說明書不讀它，照它的排法（照日期、同一天照檔名）自己排
+const CASE_FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
+const CASE_RELATED = '相關';
+const CASE_SLUG = /^[a-z0-9-]+$/u;
+const CASE_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const CASE_RULES = /^[A-Z]\d+(?:、[A-Z]\d+)*$/u;
+// 案例檔與索引說明裡不收的字：tab、控制字元、U+2028／U+2029（網頁上顯示不出原文）
+const CASE_HIDDEN = /[\t\u2028\u2029]/u;
+// 案例欄位今天有、只在案例頁多認的兩種行內寫法：指到別則案例的連結（字跟檔名一樣）、網址的自動連結（只有 https）
+const CASE_LINK = /^\[([a-z0-9-]+)\]\(([a-z0-9-]+)\.md\)/u;
+const CASE_AUTOLINK = /^<https:\/\/[^\s<>]+>/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
   laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
@@ -62,7 +74,7 @@ const TEMPLATE_NOTE = {
 };
 
 /**
- * 排版那一套（設定頁、範本跳窗、套用頁共用）認不得某一行或某個行內記號時丟的例外。設定頁與套用頁照樣整份停下；
+ * 排版那一套（設定頁、範本跳窗、套用頁共用；行內那一半案例頁也用）認不得某一行或某個行內記號時丟的例外。設定頁、套用頁、案例頁照樣整份停下；
  * 範本跳窗只接這一種、改成照原始檔顯示——其他例外（程式自己的錯）一律往外丟，說明書不產生。
  */
 class LayoutError extends Error {}
@@ -345,6 +357,31 @@ function readTemplates(root) {
 }
 
 /**
+ * cases/：索引的說明段（index.json）與每一則案例（.md，照檔名排；README.md 是產生出來的索引，不讀）。
+ * 別的檔、子資料夾都停（說明書不知道它算不算案例）；不是合法的 UTF-8 也停（網頁上就不是原文了）。
+ */
+function readCases(root) {
+  const abs = path.join(root, 'cases');
+  if (!fs.existsSync(abs)) throw new Error('讀不到 cases/：說明書不產生');
+  const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  const decode = (name) => {
+    try {
+      return utf8.decode(fs.readFileSync(path.join(abs, name)));
+    } catch {
+      throw new Error(`cases/${name} 不是合法的 UTF-8 文字：說明書不產生`);
+    }
+  };
+  if (!fs.existsSync(path.join(abs, 'index.json'))) throw new Error('讀不到 cases/index.json：說明書不產生');
+  const files = [];
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (entry.name === 'README.md' || entry.name === 'index.json') continue;
+    if (!entry.isFile() || !entry.name.endsWith('.md')) throw new Error(`cases/${entry.name}：案例頁不知道它算不算案例`);
+    files.push({ path: `cases/${entry.name}`, text: decode(entry.name) });
+  }
+  return { notes: decode('index.json'), files: files.sort((a, b) => (a.path < b.path ? -1 : 1)) };
+}
+
+/**
  * MACHINES.md「## 範本（本文指到「範本」的地方）」那一節：標題之後到下一節標題（或檔案結尾）為止，
  * 每一行要是空行、或「- `templates/…`（多份用「、」接）：說明」這個形狀；別的東西（段落、縮排續行、別種條列）就停。
  * 同一份列兩次、列了卻不在 templates/、templates/ 裡有卻沒列，都停——範本頁的內容只有這一節，沒列的範本沒有說明可放。
@@ -385,16 +422,21 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
- * 行內排版（設定頁、範本跳窗、套用頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
- * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本與 README 是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
+ * 行內排版（設定頁、範本跳窗、套用頁、案例頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
+ * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本、README 與案例是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
  * 後面緊接著字的 ~（刪除線）、後面緊接著半形字元的 <（HTML、連結、信箱）、後面接英文字母或 # 的 &（字元代碼）、[（連結）都停；
  * 其他字元照字面顯示——說明書不照 GitHub 的畫法（擁有者 2026-10-02 裁 a，留痕在 #28）：GitHub 另外加工的寫法（表情代碼、網址自動連結等）這裡照字面。
+ * caseLinks（只有案例頁給：檔名 → 標題）：給了才多認兩種，其餘的「[」與「<」接半形字元照舊停——
+ * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
+ * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
  */
-function settingsInline(text, where) {
+function settingsInline(text, where, caseLinks = null) {
   let out = '';
   let i = 0;
+  // 上一個照字面印出的「!」在哪（跳脫的「\!」不算）：緊接著連結就是 GitHub 的圖片
+  let bang = null;
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1] || '';
@@ -418,7 +460,7 @@ function settingsInline(text, where) {
       if (!inner || /^[\s\p{P}\p{S}]|[\s\p{P}\p{S}]$/u.test(inner) || text[j + 2] === '*') {
         throw new LayoutError(`${where}：粗體的頭尾緊貼空白或標點（或連著三個 *），GitHub 不一定當成粗體，說明書不排`);
       }
-      out += `<strong>${settingsInline(inner, where)}</strong>`;
+      out += `<strong>${settingsInline(inner, where, caseLinks)}</strong>`;
       i = j + 2;
     } else if (ch === '_' || ch === '~') {
       let k = i;
@@ -430,12 +472,23 @@ function settingsInline(text, where) {
       out += esc(text.slice(i, k));
       i = k;
     } else if (ch === '<' && /^[!-~]$/u.test(next)) {
-      throw new LayoutError(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
+      const auto = caseLinks ? text.slice(i).match(CASE_AUTOLINK) : null;
+      if (!auto) throw new LayoutError(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
+      out += esc(auto[0]);
+      i += auto[0].length;
     } else if (ch === '&' && /^[A-Za-z#]$/u.test(next)) {
       throw new LayoutError(`${where}：「&」後面接英文字母或 #，GitHub 可能當成字元代碼，說明書不排`);
     } else if (ch === '[') {
-      throw new LayoutError(`${where}：「[」GitHub 可能當成連結，說明書不排`);
+      const link = caseLinks ? text.slice(i).match(CASE_LINK) : null;
+      if (!link) throw new LayoutError(`${where}：「[」GitHub 可能當成連結，說明書不排`);
+      if (bang === i - 1) throw new LayoutError(`${where}：「![」GitHub 會當成圖片，說明書不排`);
+      if (link[1] !== link[2]) throw new LayoutError(`${where}：連結的字「${link[1]}」跟它指到的 ${link[2]}.md 不一樣，說明書不知道該顯示哪一個`);
+      if (!caseLinks.has(link[1])) throw new LayoutError(`${where}：連結指到的 ${link[1]}.md 不在 cases/`);
+      // 用行內的連結、不用鈕：鈕是拆不開的一整塊，標題一長整顆被推到下一行，前一行留一大片空白、「、」掉到行首
+      out += `<a href="#cases" class="case-link" data-case="${link[1]}">${esc(caseLinks.get(link[1]))}</a>`;
+      i += link[0].length;
     } else {
+      if (ch === '!') bang = i;
       out += esc(ch);
       i += 1;
     }
@@ -1039,6 +1092,137 @@ function renderAdopt(readme) {
   return adoptPage(parseAdopt(readme));
 }
 
+/**
+ * cases/index.json：索引的標題、開頭幾行、末尾幾個小節（{ title, lines }）。鍵要剛好這幾個；每一個字都要一行、非空、頭尾沒有空白，
+ * 不含換行、tab、控制字元、U+2028／U+2029。案例簿的索引產生器把這些字的半形標點全部跳脫、照字面顯示，這裡也照字面。
+ */
+function parseCaseNotes(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('cases/index.json 不是合法的 JSON：說明書不產生');
+  }
+  const shape = (value, keys, what) => {
+    const ok = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === [...keys].sort().join();
+    if (!ok) throw new Error(`cases/index.json 的${what}要剛好有 ${keys.join('、')} 這幾個鍵：說明書不產生`);
+    return value;
+  };
+  const line = (value, what) => {
+    if (typeof value !== 'string' || !value || /^\s|\s$|\n/u.test(value) || CONTROL_CHARS.test(value) || CASE_HIDDEN.test(value)) {
+      throw new Error(`cases/index.json 的${what}要是一行非空、頭尾沒有空白、沒有 tab 與控制字元的字：說明書不產生`);
+    }
+    return value;
+  };
+  const list = (value, what) => {
+    if (!Array.isArray(value)) throw new Error(`cases/index.json 的${what}要是陣列：說明書不產生`);
+    return value;
+  };
+  shape(data, ['title', 'intro', 'sections'], '最外層');
+  return {
+    title: line(data.title, '標題'),
+    intro: list(data.intro, '開頭').map((v, i) => line(v, `開頭第 ${i + 1} 行`)),
+    sections: list(data.sections, '小節').map((s, k) => {
+      shape(s, ['title', 'lines'], `第 ${k + 1} 個小節`);
+      return { title: line(s.title, `第 ${k + 1} 個小節的標題`), lines: list(s.lines, `第 ${k + 1} 個小節的內容`).map((v, i) => line(v, `第 ${k + 1} 個小節第 ${i + 1} 行`)) };
+    }),
+  };
+}
+
+/**
+ * 每一則案例照固定形狀讀，多一行少一行都停：第 1 行「# 標題」、第 2 行空著、接著六欄依序各一行「- 欄名：值」、最後可有一行「- 相關：值」
+ * （檔尾的空行不算）。檔名要是小寫英數與連字號；值不能空、頭尾不能有空白；日期寫成 YYYY-MM-DD；本文條號寫成 A1 或 A1、B2，
+ * 每一條都要在規則資料裡、不重複；標題結尾不能是「#」（GitHub 會拿掉），也不能有排版記號或連續的空白（索引、跳窗的標題、指到它的連結都顯示同一串字，
+ * 瀏覽器會把連續的空白併成一個）；有 tab、控制字元或 U+2028／U+2029 就停。照日期、同一天照檔名排，檔名比字碼、不跟著機器的語系走
+ * （cases/README.md 的索引產生器用跟著語系走的比法：2026-10-05 量過英文、中文等十幾種語系兩者順序一樣，立陶宛語系不一樣）。
+ */
+function parseCases(cases, ruleIds) {
+  const notes = parseCaseNotes(cases.notes);
+  const list = cases.files.map((file) => {
+    const slug = file.path.slice('cases/'.length, -'.md'.length);
+    if (!CASE_SLUG.test(slug)) throw new Error(`${file.path}：檔名要是小寫英數與連字號，說明書不產生`);
+    if (CONTROL_CHARS.test(file.text) || CASE_HIDDEN.test(file.text)) throw new Error(`${file.path} 裡有 tab、控制字元或 U+2028／U+2029：網頁顯示不出原文，說明書不產生`);
+    const lines = file.text.split('\n');
+    while (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const at = (i) => `${file.path} 第 ${i + 1} 行`;
+    if (lines.length !== CASE_FIELDS.length + 2 && lines.length !== CASE_FIELDS.length + 3) {
+      throw new Error(`${file.path} 有 ${lines.length} 行：案例的固定形狀是標題、空行、${CASE_FIELDS.length} 欄，最多再加一行「${CASE_RELATED}」，說明書不產生`);
+    }
+    if (!lines[0].startsWith('# ')) throw new Error(`${at(0)}：要是「# 標題」`);
+    const title = lines[0].slice(2);
+    if (!title || /^\s|\s$/u.test(title)) throw new Error(`${at(0)}：標題是空的、或頭尾有空白`);
+    if (/ {2}/u.test(title)) throw new LayoutError(`${at(0)}：標題裡有連續的空白，說明書不排——索引、跳窗的標題、指到它的連結都顯示同一串字，瀏覽器會把連續的空白併成一個`);
+    noClosingHash(title, at(0));
+    if (settingsInline(title, `${at(0)}的標題`) !== esc(title)) throw new LayoutError(`${at(0)}：標題裡有排版記號（灰底框、粗體、跳脫），說明書不排——索引、跳窗的標題、指到它的連結鈕都顯示同一串字`);
+    if (lines[1] !== '') throw new Error(`${at(1)}：要空著`);
+    const names = lines.length === CASE_FIELDS.length + 3 ? [...CASE_FIELDS, CASE_RELATED] : CASE_FIELDS;
+    const fields = {};
+    names.forEach((name, k) => {
+      const i = k + 2;
+      const head = `- ${name}：`;
+      if (!lines[i].startsWith(head)) throw new Error(`${at(i)}：應該是「${head}…」`);
+      const value = lines[i].slice(head.length);
+      if (!value || /^\s|\s$/u.test(value)) throw new Error(`${at(i)}：「${name}」是空的、或頭尾有空白`);
+      fields[name] = { value, where: at(i) };
+    });
+    if (!CASE_DATE.test(fields.日期.value)) throw new Error(`${fields.日期.where}：日期要寫成 YYYY-MM-DD`);
+    if (!CASE_RULES.test(fields.本文條號.value)) throw new Error(`${fields.本文條號.where}：本文條號要寫成 A1 或 A1、B2`);
+    const rules = fields.本文條號.value.split('、');
+    for (const id of rules) if (!ruleIds.includes(id)) throw new Error(`${fields.本文條號.where}：本文條號 ${id} 不在規則資料裡`);
+    if (new Set(rules).size !== rules.length) throw new Error(`${fields.本文條號.where}：本文條號有一條寫了兩次`);
+    return { slug, path: file.path, title, date: fields.日期.value, rules, fields };
+  });
+  list.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.slug < b.slug ? -1 : 1));
+  return { notes, cases: list };
+}
+
+/** 條號一顆一顆鈕，點了跳到那一條規矩（索引那一格、跳窗的「本文條號」共用）。 */
+function caseRuleLinks(ids) {
+  return `<span class="case-rules">${ids.map((id) => `<button type="button" class="rule-link" data-goto="rule-${id}">${id}</button>`).join('')}</span>`;
+}
+
+/**
+ * 案例頁：索引的說明、照日期排的索引表（日期｜案例｜本文條號；案例的標題是開跳窗的鈕）、索引末尾的小節；
+ * 每一則一筆跳窗資料（以檔名為鍵）：日期、本文條號、發生什麼、代價、教訓、來源、相關（有才有），欄位的字照案例頁的行內排版排。
+ */
+function casesPage(book) {
+  const caseLinks = new Map(book.cases.map((c) => [c.slug, c.title]));
+  const rows = book.cases.map((c) => `<tr><td>${esc(c.date)}</td><td><button type="button" class="case-link" data-case="${c.slug}">${esc(c.title)}</button></td><td>${caseRuleLinks(c.rules)}</td></tr>`);
+  const caseData = {};
+  for (const c of book.cases) {
+    const field = (name) => `<dt>${name}</dt><dd>${settingsInline(c.fields[name].value, `${c.fields[name].where}的「${name}」`, caseLinks)}</dd>`;
+    const texts = [...CASE_FIELDS.slice(2), ...(c.fields[CASE_RELATED] ? [CASE_RELATED] : [])];
+    caseData[c.slug] = {
+      title: c.title,
+      html: `<dl class="def case-def"><dt>日期</dt><dd>${esc(c.date)}</dd><dt>本文條號</dt><dd>${caseRuleLinks(c.rules)}</dd>${texts.map(field).join('')}</dl>`,
+    };
+  }
+  const n = book.cases.length;
+  const intro = book.notes.intro.map((l) => `<p class="muted">${esc(l)}</p>`).join('\n');
+  const extra = book.notes.sections.map((s) => `<section class="block"><h2>${esc(s.title)}</h2>\n${s.lines.map((l) => `<p>${esc(l)}</p>`).join('\n')}\n</section>`);
+  const html = `<section class="page" id="page-cases" data-page="cases" hidden>
+<header class="page-head">
+<p class="eyebrow">cases/ 底下的案例簿</p>
+<h1>案例</h1>
+<p class="page-sum">${n} 則案例，一則一檔，照日期排（同一天照檔名）。點標題看全文：發生什麼、代價、教訓、來源、相關；點條號跳到那一條規矩。</p>
+</header>
+<section class="block"><h2>${esc(book.notes.title)}<span class="sec-count">${n} 則</span></h2>
+${intro}
+<div class="table-wrap"><table class="grid case-index"><thead><tr><th>日期</th><th>案例</th><th>本文條號</th></tr></thead><tbody>
+${rows.join('\n')}
+</tbody></table></div>
+</section>
+${extra.join('\n')}
+<p class="source-note">來源：cases/ 底下每一則案例檔（標題、六欄、「相關」）與 cases/index.json（索引的標題、開頭的說明、末尾的小節）；cases/README.md 是用同一批檔產生的索引，這一頁不讀它，自己照日期、同一天照檔名排。案例的字照說明書的排法：只排灰底框、粗體，指到別則案例的連結顯示成那一則的標題、點了打開那一則；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面，用尖括號包住的網址也照字面、連尖括號）。索引的說明與小節照原文顯示。說明書認不得的寫法（例如會變成斜體、刪除線、圖片、HTML 的記號），會讓整份停下不產生。</p>
+</section>`;
+  return { html, caseData };
+}
+
+/** cases/ 的來源（readCases 的形狀）→ 案例頁的 HTML 與跳窗資料；認不得的形狀、行內記號都在這裡停。 */
+function renderCases(cases, ruleIds) {
+  return casesPage(parseCases(cases, ruleIds));
+}
+
 /** 排得了的範本：大標題、開頭各塊、每一節（跳窗的標題是 h2，節標題用 h3）。 */
 function templateDocHtml(doc, name) {
   const parts = [`<p class="doc-title">${settingsInline(doc.title, `${name}的大標題`)}</p>`, settingsBlocksHtml(doc.intro, `${name}開頭`)];
@@ -1231,6 +1415,13 @@ table.grid th{background:var(--bg);font-weight:600}
 .tpl-body table.grid th,.tpl-body table.grid td{min-width:3em}
 .tpl-raw{margin:0;padding:12px 14px;background:var(--code-bg);border-radius:6px;font-family:var(--mono);font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
 .tpl-raw code{background:none;padding:0;border-radius:0;font-size:inherit}
+table.case-index{width:100%}
+table.case-index th,table.case-index td{min-width:0}
+table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.case-rules{display:flex;flex-wrap:wrap;gap:6px}
+.case-link{border:0;background:none;padding:0;color:var(--accent);text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+/* 案例的字與索引的說明照原文留空白：連續空白不合併（跟設定頁、範本跳窗同一條） */
+.case-def dd,[data-page="cases"] .block :is(h2,p){white-space:pre-wrap}
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);background:none}
   .side{z-index:10;max-height:none;padding:10px 0 0;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -1242,10 +1433,16 @@ table.grid th{background:var(--bg);font-weight:600}
   main{padding-block:24px 72px}
   .rule,.rule-section,.mrow,.settings-body .block{scroll-margin-top:120px}
   .label-def{grid-template-columns:minmax(0,1fr)}
+  table.case-index th,table.case-index td{padding:6px 8px}
+  table.case-index td:first-child{font-size:13px}
+  table.case-index th:last-child{white-space:nowrap}
+  table.case-index th:last-child,table.case-index td:last-child{width:1%}
 }
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 `;
 
+// 網頁上的互動。開跳窗時背後的頁面會捲回頂端（html、body 鎖住捲動），所以開的時候記下捲到哪、關掉時捲回去，
+// 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1277,14 +1474,16 @@ const JS = `
   var labels = JSON.parse(document.getElementById('label-data').textContent);
   var machines = JSON.parse(document.getElementById('machine-data').textContent);
   var templates = JSON.parse(document.getElementById('template-data').textContent);
+  var cases = JSON.parse(document.getElementById('case-data').textContent);
   var modal = document.getElementById('modal');
   var mTitle = document.getElementById('modal-title');
   var mBody = document.getElementById('modal-body');
   var closeBtn = modal.querySelector('.close');
   var sheet = modal.querySelector('.sheet');
   var lastFocus = null;
+  var lastScroll = 0;
   function openModal(title, html, wide){
-    lastFocus = document.activeElement;
+    if (modal.hidden) { lastFocus = document.activeElement; lastScroll = window.scrollY; }
     mTitle.textContent = title; mBody.innerHTML = html;
     sheet.classList.toggle('wide', !!wide);
     modal.hidden = false; app.inert = true; document.documentElement.classList.add('modal-open');
@@ -1293,9 +1492,10 @@ const JS = `
   function openLabel(name){ var l = labels[name]; if (l) openModal(name, l.html); }
   function openMachine(id){ var m = machines[id]; if (m) openModal(m.title, m.html); }
   function openTemplate(p){ var x = templates[p]; if (x) openModal(x.title, x.html, true); }
+  function openCase(slug){ var c = cases[slug]; if (c) openModal(c.title, c.html); }
   function closeModal(restore){
     modal.hidden = true; app.inert = false; document.documentElement.classList.remove('modal-open');
-    if (restore && lastFocus) lastFocus.focus();
+    if (restore) { window.scrollTo(0, lastScroll); if (lastFocus) lastFocus.focus({ preventScroll: true }); }
   }
   var rules = Array.prototype.slice.call(document.querySelectorAll('.rule'));
   var sections = Array.prototype.slice.call(document.querySelectorAll('.rule-section'));
@@ -1324,6 +1524,7 @@ const JS = `
     var chip = t.closest('[data-label]'); if (chip) { openLabel(chip.getAttribute('data-label')); return; }
     var mach = t.closest('[data-machine]'); if (mach) { openMachine(mach.getAttribute('data-machine')); return; }
     var tp = t.closest('[data-template]'); if (tp) { openTemplate(tp.getAttribute('data-template')); return; }
+    var cs = t.closest('[data-case]'); if (cs) { e.preventDefault(); openCase(cs.getAttribute('data-case')); return; }
     var go = t.closest('[data-goto]'); if (go) { closeModal(false); goTo(go.getAttribute('data-goto')); return; }
     var f = t.closest('[data-filter]'); if (f) { setFilter(f.getAttribute('data-filter')); return; }
     var j = t.closest('[data-jump]'); if (j) { var s = document.getElementById(j.getAttribute('data-jump')); if (s) reveal(s); return; }
@@ -1348,6 +1549,7 @@ function readSources(root) {
     templates: readTemplates(root),
     settingsTemplate: read('tests/helpers/unfilled-settings.json'),
     readme: read('README.md'),
+    cases: readCases(root),
   };
 }
 
@@ -1379,11 +1581,14 @@ function build(sources, { stamp } = {}) {
   const settings = renderSettings(settingsMarkdown(sources.settingsTemplate));
   const adoptSections = parseAdopt(sources.readme);
   const adopt = adoptPage(adoptSections);
+  const casebook = parseCases(sources.cases, ruleIds);
+  const cases = casesPage(casebook);
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
   const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
   const machineJson = JSON.stringify(machines.machineData).replace(/</gu, '\\u003c');
   const templateJson = JSON.stringify(popups.data).replace(/</gu, '\\u003c');
+  const caseJson = JSON.stringify(cases.caseData).replace(/</gu, '\\u003c');
   const html = `<title>協作套件說明書</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1404,6 +1609,7 @@ ${templates}
 ${settings}
 ${adopt}
 ${others.join('\n')}
+${cases.html}
 </main>
 </div>
 <div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1412,6 +1618,7 @@ ${others.join('\n')}
 <script type="application/json" id="label-data">${labelJson}</script>
 <script type="application/json" id="machine-data">${machineJson}</script>
 <script type="application/json" id="template-data">${templateJson}</script>
+<script type="application/json" id="case-data">${caseJson}</script>
 <script>${JS}</script>
 `;
   return {
@@ -1426,6 +1633,7 @@ ${others.join('\n')}
     templateItems: tpl.items.length,
     templatesLaidOut: popups.laidOut,
     adoptSections: adoptSections.length,
+    cases: casebook.cases.length,
   };
 }
 
@@ -1449,11 +1657,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；案例 ${result.cases} 則）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS,settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
