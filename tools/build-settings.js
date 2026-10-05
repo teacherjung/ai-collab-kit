@@ -162,7 +162,7 @@ function build(data) {
   out.push('', '沒列到的路徑算高（規矩 D4：判不出＝高）。', '');
   out.push('升級條件（內容碰到任一條，整支就算高）：', '');
   for (const r of (risk.raise || ['未設定'])) out.push(`- ${plain(r, '升級條件')}`);
-  out.push('', '## 十、複審與掃描分級（規矩 F2、G1；模型與推理見第十一節）', '');
+  out.push('', '## 十、複審與掃描分級（規矩 F2、G1；複審者的模型與推理見第十一節、掃描者的見第四節）', '');
   const tiers = data.reviewTiers || {};
   const strayTiers = Object.keys(tiers).filter((k) => !RISK_TIERS.includes(k));
   if (strayTiers.length) throw new Error(`複審與掃描分級表有不認得的級別：${strayTiers.join('、')}（只准 ${RISK_TIERS.join('／')}）`);
