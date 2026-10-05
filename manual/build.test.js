@@ -1744,11 +1744,11 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   // 網址裡有 _ 與 &、沒有「相關」、檔尾多個空行、檔尾沒有換行、同一天兩則、檔案順序打亂、兩個小節）
   const at = (lines) => lines.join('\n');
   const RICH = {
-    notes: JSON.stringify({ title: '對照組的索引', intro: ['一則一檔；每則指回本文條號，**粗** 與 `框` 照字面。','來源欄的 PFW #n ＝原專案的第 n 支PR（<不是連結> & "引號"）。'], sections: [{ title: '方法一', lines: ['- 照字面，**不排**、`不框`、<b>。'] }, { title: '方法二', lines: ['第一行  兩個空白', '第二行'] }] }),
+    notes: JSON.stringify({ title: '對照組的索引 <一> & "二"', intro: ['一則一檔；每則指回本文條號，**粗** 與 `框` 照字面。','來源欄的 PFW #n ＝原專案的第 n 支PR（<不是連結> & "引號"）。'], sections: [{ title: '方法一 <x>', lines: ['- 照字面，**不排**、`不框`、<b>。'] }, { title: '方法二', lines: ['第一行  兩個空白', '第二行'] }] }),
     files: [
       { path: 'cases/ab.md', text: at(['# 乙：同一天、檔名在後', '', '- 日期：2026-09-01', '- 本文條號：K4', '- 發生什麼：見 [a-b](a-b.md)。', '- 代價：沒有。', '- 教訓：無，\\![a-b](a-b.md) 是連結，A  B 兩個空白照留。', '- 來源：私人紀錄', '', '', '']) },
       { path: 'cases/a-b.md', text: at(['# 甲：同一天、檔名在前', '', '- 日期：2026-09-01', '- 本文條號：E4、K4', '- 發生什麼：見 **粗 `框` 與 [ab](ab.md) 體** 與 `<x> & [y](y.md)`，\\*照字面\\*。', '- 代價：記在 [old](old.md)，那裡不再計。', '- 教訓：「<」接中文照字面：<你的結論>、「>」。', '- 來源：PFW #1（2026-09-01）<https://github.com/o/r/pull/1#issuecomment-2> ；<https://example.com/a_b?c=1&d=2>', '- 相關：[ab](ab.md)、[old](old.md)', '']) },
-      { path: 'cases/old.md', text: at(['# 丙：日期最早', '', '- 日期：2026-07-01', '- 本文條號：A1', '- 發生什麼：甲', '- 代價：乙', '- 教訓：丙', '- 來源：丁']) },
+      { path: 'cases/old.md', text: at(['# 丙：日期最早 <舊> & "引號"', '', '- 日期：2026-07-01', '- 本文條號：A1', '- 發生什麼：甲', '- 代價：乙', '- 教訓：丙', '- 來源：丁']) },
     ],
   };
   const rich = manual.renderCases(RICH, ruleIds);
@@ -1758,7 +1758,8 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   assert.ok(rich.caseData.ab.html.endsWith('<dt>來源</dt><dd>私人紀錄</dd></dl>'), '對照組：沒有「相關」的那一則不印那一欄');
   assert.ok(rich.caseData.ab.html.includes('<dd>無，!<a href="#cases" class="case-link" data-case="a-b">甲：同一天、檔名在前</a> 是連結，A  B 兩個空白照留。</dd>'), '對照組：跳脫的「!」照字面、後面的連結照排；連續空白照留（寫死的樣本）');
   assert.ok(rich.html.includes('<p class="muted">一則一檔；每則指回本文條號，**粗** 與 `框` 照字面。</p>'), '對照組：索引的說明照字面，不排粗體與灰底框（寫死的樣本）');
-  assert.ok(rich.html.includes('<h2>方法一</h2>\n<p>- 照字面，**不排**、`不框`、&lt;b&gt;。</p>\n</section>\n<section class="block"><h2>方法二</h2>\n<p>第一行  兩個空白</p>\n<p>第二行</p>\n</section>'), '對照組：末尾的小節照字面、兩個小節照順序（寫死的樣本）');
+  assert.ok(rich.html.includes('<h2>對照組的索引 &lt;一&gt; &amp; &quot;二&quot;<span class="sec-count">3 則</span></h2>') && rich.html.includes('<td><button type="button" class="case-link" data-case="old">丙：日期最早 &lt;舊&gt; &amp; &quot;引號&quot;</button></td>') && rich.caseData['a-b'].html.includes('記在 <a href="#cases" class="case-link" data-case="old">丙：日期最早 &lt;舊&gt; &amp; &quot;引號&quot;</a>，那裡不再計。') && rich.caseData.old.title === '丙：日期最早 <舊> & "引號"', '對照組：索引標題、索引表與連結裡的案例標題要跳脫，跳窗的標題是原字（寫死的樣本）');
+  assert.ok(rich.html.includes('<h2>方法一 &lt;x&gt;</h2>\n<p>- 照字面，**不排**、`不框`、&lt;b&gt;。</p>\n</section>\n<section class="block"><h2>方法二</h2>\n<p>第一行  兩個空白</p>\n<p>第二行</p>\n</section>'), '對照組：末尾的小節照字面、兩個小節照順序（寫死的樣本）');
 
   // 認不得就停（原因要對，行號照案例檔的）
   const ed = (from, to, p = 'cases/a-b.md') => ({ ...RICH, files: RICH.files.map((f) => (f.path === p ? { ...f, text: f.text.split(from).join(to) } : f)) });
@@ -1772,6 +1773,8 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
     ['開頭不是陣列', notesWith({ intro: 'x' }), /cases\/index\.json 的開頭要是陣列/u],
     ['索引標題是空的', notesWith({ title: '' }), /cases\/index\.json 的標題要是一行非空/u],
     ['開頭一行頭有空白', notesWith({ intro: [' x'] }), /cases\/index\.json 的開頭第 1 行要是一行非空/u],
+    ['開頭一行不是字', notesWith({ intro: [{ text: '應保留的說明' }] }), /cases\/index\.json 的開頭第 1 行要是一行非空/u],
+    ['開頭一行有控制字元', notesWith({ intro: [`A${String.fromCharCode(0)}B`] }), /cases\/index\.json 的開頭第 1 行要是一行非空/u],
     ['開頭一行有換行', notesWith({ intro: ['a\nb'] }), /開頭第 1 行要是一行非空/u],
     ['小節的字有 tab', notesWith({ sections: [{ title: 't', lines: ['a\tb'] }] }), /cases\/index\.json 的第 1 個小節第 1 行要是一行非空/u],
     ['小節的字有 U+2028', notesWith({ sections: [{ title: 't', lines: [`a${LS}b`] }] }), /第 1 個小節第 1 行要是一行非空/u],
@@ -1784,6 +1787,7 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
     ['少兩行', ed('- 代價：記在 [old](old.md)，那裡不再計。\n- 教訓：「<」接中文照字面：<你的結論>、「>」。\n', ''), /cases\/a-b\.md 有 7 行：案例的固定形狀是標題、空行、6 欄，最多再加一行「相關」/u],
     ['多一行', ed('- 相關：', '- 相關：[ab](ab.md)\n- 相關：'), /cases\/a-b\.md 有 10 行/u],
     ['標題沒有空格', ed('# 甲', '#甲'), /cases\/a-b\.md 第 1 行：要是「# 標題」/u],
+    ['標題是空的', ed('# 甲：同一天、檔名在前\n', '# \n'), /cases\/a-b\.md 第 1 行：標題是空的、或頭尾有空白/u],
     ['標題尾端空白', ed('檔名在前\n', '檔名在前 \n'), /cases\/a-b\.md 第 1 行：標題是空的、或頭尾有空白/u],
     ['標題結尾 #', ed('檔名在前\n', '檔名在前 #\n'), /cases\/a-b\.md 第 1 行：標題結尾是「#」/u],
     ['標題有灰底框', ed('檔名在前\n', '檔名在前 `x`\n'), /cases\/a-b\.md 第 1 行：標題裡有排版記號/u],
