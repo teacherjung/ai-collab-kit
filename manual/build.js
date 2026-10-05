@@ -444,7 +444,7 @@ function parseTemplates(text, files, ruleIds) {
  * caseLinks（只有案例頁給：檔名 → 標題）：給了才多認兩種，其餘的「[」與「<」接半形字元照舊停——
  * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
  * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
- * ruleIds（只有名詞頁給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
+ * ruleIds（名詞頁與白話說明給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
  * 網址（http://、https://、ftp://、www. 開頭）到下一個空白或「<」之前，又出現 *、`、[ 或像條號的字：GitHub 會把它們算進網址，停（見 URL_START）；
  * 網址從哪裡算起：上一個空白、「<」，或上一個已經結束的灰底框、尖括號網址之後（案例連結前面若有網址，到「[」就停了）。
  */
@@ -1369,6 +1369,48 @@ function renderGlossary(md, ruleIds) {
   return glossaryPage(parseGlossary(md), ruleIds);
 }
 
+const PLAIN_FILE = 'manual/plain.md';
+const PLAIN_LISTS = ['優點', '缺點'];
+
+/**
+ * 手寫的那兩塊（擁有者 2026-09-27：說明書只有「白話說明」與「優缺點」手寫）＝manual/plain.md。
+ * 九頁各一節（節名＝頁名、照頁的順序），只收段落；再來優點、缺點各一節，只收一串「- 」條列（不收子項）。
+ * 節多、少、重複、順序不對、空的、或寫成別種形狀，就停：手寫的字不會靜靜少一段或排到別頁。
+ */
+function parsePlain(md) {
+  if (CONTROL_CHARS.test(md) || CASE_HIDDEN.test(md)) throw new LayoutError(`${PLAIN_FILE} 裡有 tab、控制字元或 U+2028／U+2029：網頁顯示不出原文，說明書不產生`);
+  const doc = parseDoc(md, `${PLAIN_FILE} `, { needSections: true, leadingBold: true });
+  const want = [...PAGES.map((p) => p.name), ...PLAIN_LISTS];
+  const got = doc.sections.map((sec) => sec.title);
+  if (got.join('\n') !== want.join('\n')) throw new LayoutError(`${PLAIN_FILE} 的節要剛好是「${want.join('、')}」照這個順序；現在是「${got.join('、')}」`);
+  const pages = new Map();
+  const lists = {};
+  for (const sec of doc.sections) {
+    const where = `${PLAIN_FILE}「${sec.title}」那一節`;
+    if (PLAIN_LISTS.includes(sec.title)) {
+      if (sec.blocks.length !== 1 || sec.blocks[0].kind !== 'list') throw new LayoutError(`${where}要剛好是一串「- 」條列`);
+      if (sec.blocks[0].items.some((item) => item.sub.length)) throw new LayoutError(`${where}的條列底下有子項，說明書不排`);
+      lists[sec.title] = sec.blocks[0].items.map((item) => item.text);
+    } else {
+      if (!sec.blocks.length || sec.blocks.some((b) => b.kind !== 'p')) throw new LayoutError(`${where}要是一段以上的段落（不收條列、表格）`);
+      pages.set(sec.title, sec.blocks.map((b) => b.text));
+    }
+  }
+  return { pages, pros: lists[PLAIN_LISTS[0]], cons: lists[PLAIN_LISTS[1]] };
+}
+
+/** 把一頁的白話說明放進那一頁的開頭（標題底下、自動產生的那一句上面），來源那一行補一句它是手寫的。 */
+function withPlain(html, page, paras, ruleIds) {
+  const where = `${PLAIN_FILE}「${page.name}」那一節`;
+  const sum = '<p class="page-sum">';
+  const note = '<p class="source-note">';
+  if (html.split(sum).length !== 2 || html.split(note).length !== 2) throw new LayoutError(`「${page.name}」頁的開頭說明或來源那一行不是剛好一個，白話說明不知道放哪裡`);
+  const body = paras.map((p, k) => `<p>${settingsInline(p, `${where}第 ${k + 1} 段`, null, ruleIds)}</p>`).join('');
+  const withIntro = html.replace(sum, () => `<div class="plain">${body}</div>\n${sum}`);
+  const at = withIntro.indexOf('</p>', withIntro.indexOf(note));
+  return `${withIntro.slice(0, at)}最上面那段白話說明是手寫的（${PLAIN_FILE}）。${withIntro.slice(at)}`;
+}
+
 /** 排得了的範本：大標題、開頭各塊、每一節（跳窗的標題是 h2，節標題用 h3）。 */
 function templateDocHtml(doc, name) {
   const parts = [`<p class="doc-title">${settingsInline(doc.title, `${name}的大標題`)}</p>`, settingsBlocksHtml(doc.intro, `${name}開頭`)];
@@ -1454,6 +1496,8 @@ main{min-width:0;padding-inline:clamp(16px,5vw,56px);padding-block:36px 96px}
 .eyebrow{margin:0;font-size:13px;letter-spacing:.14em;color:var(--accent)}
 h1{margin:0;font-family:var(--display);font-size:clamp(28px,4vw,36px);line-height:1.3;text-wrap:balance}
 .page-sum{margin:0;color:var(--muted);max-width:62ch}
+.plain{display:grid;gap:8px;max-width:62ch;margin:4px 0 2px;padding-left:14px;border-left:3px solid var(--accent)}
+.plain p{margin:0;font-size:16px;line-height:1.75}
 .overview{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:16px}
 .overview-note{margin:0;font-size:14px;line-height:1.7;color:var(--muted)}
 .bar{display:flex;gap:3px;height:12px}
@@ -1699,6 +1743,7 @@ function readSources(root) {
     settingsTemplate: read('tests/helpers/unfilled-settings.json'),
     readme: read('README.md'),
     cases: readCases(root),
+    plain: read(PLAIN_FILE),
   };
 }
 
@@ -1733,6 +1778,9 @@ function build(sources, { stamp } = {}) {
   const glossary = renderGlossary(sources.glossary, ruleIds);
   const casebook = parseCases(sources.cases, ruleIds);
   const cases = casesPage(casebook);
+  const plain = parsePlain(sources.plain);
+  const pageHtml = { rules: rules.html, machines: machines.html, tools, tests, templates, settings, adopt, glossary: glossary.html, cases: cases.html };
+  const main = PAGES.map((p) => withPlain(pageHtml[p.id], p, plain.pages.get(p.name), ruleIds)).join('\n');
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span></a>`).join('');
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
   const machineJson = JSON.stringify(machines.machineData).replace(/</gu, '\\u003c');
@@ -1750,15 +1798,7 @@ function build(sources, { stamp } = {}) {
 ${stamp ? `<p class="stamp">產生自套件 ${esc(stamp)}</p>` : ''}
 </aside>
 <main>
-${rules.html}
-${machines.html}
-${tools}
-${tests}
-${templates}
-${settings}
-${adopt}
-${glossary.html}
-${cases.html}
+${main}
 </main>
 </div>
 <div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1784,6 +1824,7 @@ ${cases.html}
     adoptSections: adoptSections.length,
     glossaryTerms: glossary.terms,
     cases: casebook.cases.length,
+    plainPages: plain.pages.size,
   };
 }
 
@@ -1807,11 +1848,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；名詞 ${result.glossaryTerms} 個；案例 ${result.cases} 則）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；名詞 ${result.glossaryTerms} 個；案例 ${result.cases} 則；白話說明 ${result.plainPages} 頁）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS, parseGlossary, renderGlossary, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { parsePlain, withPlain, PLAIN_FILE, PLAIN_LISTS, build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS, parseGlossary, renderGlossary, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
