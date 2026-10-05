@@ -87,6 +87,8 @@
   "assignedBy": "未設定",
   "tieBreak": "實作者",
   "fallback": "實作者",
+  "strongest": "未設定",
+  "maxEffort": "未設定",
   "isolation": {
    "provider": "未設定",
    "wrap": [],

@@ -58,7 +58,7 @@ function fakeFilled({ log, box, zones }) {
   s.mainBranch = 'main';
   s.defaultDivision = { implementer: 'Alpha', reviewer: 'Beta' };
   s.owner = 'Boss';
-  s.scanner = { tool: '假的掃描者', assignedBy: 'Alpha', tieBreak: '無', fallback: '無', isolation: { provider: '專案自建', wrap: [...recorder(log, 'isolation'), '{box}'], boxRoot: box, forbidden: zones } };
+  s.scanner = { tool: '假的掃描者', assignedBy: 'Alpha', tieBreak: '無', fallback: '無', strongest: '假的最強', maxEffort: '假的最高', isolation: { provider: '專案自建', wrap: [...recorder(log, 'isolation'), '{box}'], boxRoot: box, forbidden: zones } };
   s.platform = {
     name: 'Fake', project: 'fake/repo', clearEnv: ['GH_REPO'],
     operations: Object.fromEntries(Object.entries(OPERATIONS).map(([name, op]) => [name, [...recorder(log, `op:${name}`), ...op.params.map((p) => `{${p}}`)]])),
