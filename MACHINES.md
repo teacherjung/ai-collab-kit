@@ -60,6 +60,7 @@
 - `templates/third-round-self-check.md`：連三輪自問表五題（F10；檔名沿用舊名）。
 - `templates/scan-record.md`：掃描紀錄與未執行收口（G3）。
 - `templates/ruling-record.md`：問裁示者、裁示落地、合規撤回的留痕形狀（I1、I3）。
+- `templates/progress-report.md`：進度回報的版面細節（J1；附件連結發出前先查一次＝J4）：被問進度也算回報、標籤粗體與空行、`還沒`、編號清單、好幾件事怎麼排。考題只看它在不在、有沒有被這張表指到；回報照不照它寫，沒有考題或閘看，靠自覺。
 - `templates/platform-github.json`：平台介面每個動作（現在十個）的翻譯範例（E5、H1），外加合併指令的範例。**不是正本**，是抄過去填進 `settings.json` 的起點；2026-09-13 對真倉庫實跑過。
 - `templates/hook-claude.json`、`templates/hook-claude-pinned.json`、`templates/hook-codex.json`、`templates/hook-codex-global.json`：禁區攔截器兩家 AI 的接線範例（B1；Claude 側活讀與釘指紋二擇一、Codex 專案層與全域層二擇一），都只呼叫 `tools/forbidden-tools.js`：活讀那兩份（Claude 側活讀、Codex 專案層）從當下目錄所在的工作樹問根目錄（不靠當下目錄剛好是根），Codex 全域層與 Claude 側釘指紋完全不看當下目錄、讀固定複本；起不來退 2（前提：鉤子的環境沒被塞 SHELLOPTS 之類的變數，見 B1 列守不到欄）。全域層那份有三個佔位（複本路徑、檔案清單、指紋），由 `tools/guard-copy.js` 填，不要手填。Claude 側釘指紋那份有兩個佔位（檔案清單、指紋）、不含任何機器路徑，複本的位置固定是家目錄底下 `.local/share/ai-collab-kit/guard/<指紋>`，用 `node tools/guard-copy.js --claude-line` 印，不要手填；它另帶一組設定變更攔截（ConfigChange，只掛專案設定檔這一個來源，指令只有 exit 2）。
 - `templates/canary-install.md`：驗收攔截器用的測試鈕怎麼在兩家 AI 各登記一次、名字怎麼加進禁區清單（B1）。本體＝`tools/canary-server.js`，工具名 `mcp__guard_canary__ping`。
