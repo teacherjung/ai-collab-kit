@@ -78,7 +78,7 @@ const GLOSSARY_LEGEND = '版面約定';
 // 版面約定講的是規則書原文（RULES.md）的排法；這個網頁的規矩頁排得不一樣，規矩頁與名詞頁排版面約定時都先寫這一句
 const LEGEND_WEB_NOTE = '這個網頁上：條號不帶【】、放在每一條的左上角；標籤在「把關」那一行。';
 const GLOSSARY_TERM = /^\*\*([^*`\\]+)\*\*：(.*)$/u;
-// 名詞頁的行內多認條號：A〜K 加數字、後面不緊接半形英數字（前面也不緊接，另外看；看的是原文裡同一段字的前後）
+// 名詞頁、白話說明與優缺點的行內多認條號：A〜K 加數字、後面不緊接半形英數字（前面也不緊接，另外看；看的是原文裡同一段字的前後）
 const RULE_REF = /^[A-K]\d+(?![A-Za-z0-9])/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
@@ -88,7 +88,7 @@ const TEMPLATE_NOTE = {
 };
 
 /**
- * 排版那一套（設定頁、範本跳窗、套用頁、名詞頁共用；行內那一半案例頁也用）認不得某一行或某個行內記號時丟的例外。設定頁、套用頁、名詞頁、案例頁照樣整份停下；
+ * 排版那一套（設定頁、範本跳窗、套用頁、名詞頁、說明書手寫檔共用；行內那一半案例頁也用）認不得某一行或某個行內記號時丟的例外。設定頁、套用頁、名詞頁、案例頁、手寫檔照樣整份停下；
  * 範本跳窗只接這一種、改成照原始檔顯示——其他例外（程式自己的錯）一律往外丟，說明書不產生。
  */
 class LayoutError extends Error {}
@@ -436,7 +436,7 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
- * 行內排版（設定頁、範本跳窗、套用頁、案例頁、名詞頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
+ * 行內排版（設定頁、範本跳窗、套用頁、案例頁、名詞頁、白話說明與優缺點共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
  * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本、README 與案例是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
@@ -445,7 +445,7 @@ function parseTemplates(text, files, ruleIds) {
  * caseLinks（只有案例頁給：檔名 → 標題）：給了才多認兩種，其餘的「[」與「<」接半形字元照舊停——
  * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
  * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
- * ruleIds（名詞頁與白話說明給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
+ * ruleIds（名詞頁、白話說明與優缺點給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
  * 網址（http://、https://、ftp://、www. 開頭）到下一個空白或「<」之前，又出現 *、`、[ 或像條號的字：GitHub 會把它們算進網址，停（見 URL_START）；
  * 網址從哪裡算起：上一個空白、「<」，或上一個已經結束的灰底框、尖括號網址之後（案例連結前面若有網址，到「[」就停了）。
  */
@@ -562,7 +562,7 @@ const SETTINGS_TABLE_RULE = /^\|(?:---\|)+$/u;
 
 /**
  * 段落、標題、清單項、子項的字：開頭不能是空白或沒跳脫的半形標點（GitHub 會把它讀成別的區塊），結尾不能有空白。
- * leadingBold（套用頁、名詞頁打開）：開頭是 ** 而且後面緊接著不是空白、不是 * 的字＝粗體開頭，照收（GitHub 不會把它讀成別種區塊；粗體成不成對由行內排版再核）。
+ * leadingBold（套用頁、名詞頁、說明書手寫檔打開）：開頭是 ** 而且後面緊接著不是空白、不是 * 的字＝粗體開頭，照收（GitHub 不會把它讀成別種區塊；粗體成不成對由行內排版再核）。
  */
 function settingsText(text, where, leadingBold = false) {
   if (!text || /^\s|\s$/u.test(text)) throw new LayoutError(`${where}：字是空的、或頭尾有空白，說明書不排`);
@@ -578,7 +578,7 @@ function noClosingHash(title, where) {
 }
 
 /**
- * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁、範本跳窗、套用頁、名詞頁共用）。只認設定說明產生器今天產的這幾種行，
+ * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁、範本跳窗、套用頁、名詞頁、說明書手寫檔共用）。只認設定說明產生器今天產的這幾種行，
  * 其他一律丟 LayoutError（說明產生器的格式變了，要人先決定說明書怎麼排；範本則改成照原始檔顯示）：
  * 第一行「# 」大標題、「## 」節標題（前面空一行）、空行（真的空）、段落（一行一段）、表格（表頭、只准 |---| 的分隔列、
  * 每一列格數一樣；格子可以空，例如還沒驗過的日期）、「- 」清單、清單項底下兩格縮排、從 1 連號的「N. 」子項。
@@ -589,7 +589,7 @@ function noClosingHash(title, where) {
  * 寫 1＝停，GitHub 會把它們併成一串）、編號清單項底下的程式碼框（前面空一行，三個反引號＋可有可無的語言名，縮排剛好對齊那一項的字；
  * 框裡每一行至少縮排那麼多（多的照留）或是空行；去掉那個縮排之後以 0〜3 格空白加三個反引號開頭的行停（說明書不知道框到哪裡結束），
  * 多 4 格以上的照字面；收尾的三個反引號剛好對齊、後面要空一行；語言名跟三個反引號一樣是記號，不顯示）。
- * leadingBold＝只多認 readme 三種裡的第一種：開頭是粗體的字（名詞頁打開：用語對照表每一項都是粗體的名詞開頭）。
+ * leadingBold＝只多認 readme 三種裡的第一種：開頭是粗體的字（名詞頁打開：用語對照表每一項都是粗體的名詞開頭；說明書手寫檔打開：優缺點每一項都是粗體開頭）。
  */
 function parseDoc(md, name, opts = {}) {
   const { needSections = false, lineOffset = 0, readme = false, leadingBold = false } = opts;
@@ -1375,12 +1375,14 @@ const PLAIN_LISTS = ['優點', '缺點'];
 
 /**
  * 手寫的那兩塊（擁有者 2026-09-27：說明書只有「白話說明」與「優缺點」手寫）＝manual/plain.md。
- * 每一頁各一節（節名＝頁名、照頁的順序，總覽也算一頁），只收段落；再來優點、缺點各一節，只收一串「- 」條列（不收子項）。
- * 節多、少、重複、順序不對、空的、或寫成別種形狀，就停：手寫的字不會靜靜少一段或排到別頁。
+ * 大標題與開頭那一段給維護的人看、不上網頁；開頭不是剛好一段就停（多寫的字不知道該排到哪一頁）。
+ * 每一頁各一節（節名＝頁名、照頁的順序，總覽也算一頁），只收段落；再來優點、缺點各一節，只收一串「- 」條列（不收子項、後面不接別的）。
+ * 節多、少、重複、順序不對、空的，或寫成別種形狀，就停。
  */
 function parsePlain(md) {
   if (CONTROL_CHARS.test(md) || CASE_HIDDEN.test(md)) throw new LayoutError(`${PLAIN_FILE} 裡有 tab、控制字元或 U+2028／U+2029：網頁顯示不出原文，說明書不產生`);
   const doc = parseDoc(md, `${PLAIN_FILE} `, { needSections: true, leadingBold: true });
+  if (doc.intro.length !== 1 || doc.intro[0].kind !== 'p') throw new LayoutError(`${PLAIN_FILE} 大標題底下、第一節之前要剛好一段（給維護的人看的說明，不上網頁）：多寫的字不知道該排到哪一頁`);
   const want = [...PAGES.map((p) => p.name), ...PLAIN_LISTS];
   const got = doc.sections.map((sec) => sec.title);
   if (got.join('\n') !== want.join('\n')) throw new LayoutError(`${PLAIN_FILE} 的節要剛好是「${want.join('、')}」照這個順序；現在是「${got.join('、')}」`);
@@ -1407,7 +1409,7 @@ function overviewPage(plain, ruleIds) {
 <header class="page-head">
 <p class="eyebrow">整個套件</p>
 <h1>總覽</h1>
-<p class="page-sum">優點 ${plain.pros.length} 項、缺點 ${plain.cons.length} 項。這一頁的內容都是手寫的；其餘 ${PAGES.length - 1} 頁的內容從套件本身自動產生，只有每頁最上面那段白話說明是手寫的。</p>
+<p class="page-sum">優點 ${plain.pros.length} 項、缺點 ${plain.cons.length} 項。這一頁的內容是手寫的，出自 ${PLAIN_FILE}。</p>
 </header>
 ${list(PLAIN_LISTS[0], 'pros', plain.pros)}
 ${list(PLAIN_LISTS[1], 'cons', plain.cons)}
@@ -1513,9 +1515,9 @@ main{min-width:0;padding-inline:clamp(16px,5vw,56px);padding-block:36px 96px}
 h1{margin:0;font-family:var(--display);font-size:clamp(28px,4vw,36px);line-height:1.3;text-wrap:balance}
 .page-sum{margin:0;color:var(--muted);max-width:62ch}
 .plain{display:grid;gap:8px;max-width:62ch;margin:4px 0 2px;padding-left:14px;border-left:3px solid var(--accent)}
-.plain p{margin:0}
+.plain p{margin:0;white-space:pre-wrap}
 .pros-cons .items{max-width:62ch}
-.pros-cons .items li{margin:8px 0;line-height:1.75}
+.pros-cons .items li{margin:8px 0;line-height:1.75;white-space:pre-wrap}
 .overview{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:16px}
 .overview-note{margin:0;font-size:14px;line-height:1.7;color:var(--muted)}
 .bar{display:flex;gap:3px;height:12px}
@@ -1653,7 +1655,8 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 
 // 網頁上的互動。開跳窗時背後的頁面會捲回頂端（html、body 鎖住捲動），所以開的時候記下捲到哪、關掉時捲回去，
 // 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
-// 名詞頁的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
+// 網址指到頁裡的某個位置（例如 #rule-B1；網頁自己的連結只帶頁名，這種是手打或外面貼來的）：切到它所在的那一頁、捲到它；頁名、位置都不是＝總覽。
+// 名詞頁、白話說明與優缺點的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1663,8 +1666,14 @@ const JS = `
   var current = null;
   var pending = null;
   function pageName(p){ return p.getAttribute('data-page'); }
+  function spot(){
+    var id = (location.hash || '').slice(1);
+    if (!id || pages.some(function(p){ return pageName(p) === id; })) return null;
+    var el = document.getElementById(id);
+    return el && el.closest('[data-page]') ? el : null;
+  }
   function show(id){
-    if (!pages.some(function(p){ return pageName(p) === id; })) id = 'overview';
+    if (!pages.some(function(p){ return pageName(p) === id; })) { var at = spot(); id = at ? pageName(at.closest('[data-page]')) : 'overview'; }
     var changed = id !== current;
     current = id;
     pages.forEach(function(p){ p.hidden = pageName(p) !== id; });
@@ -1678,7 +1687,7 @@ const JS = `
     if (!modal.hidden) closeModal(false);
     var changed = show((location.hash || '').slice(1) || 'overview');
     if (pending) { var target = pending; pending = null; land(target); }
-    else if (changed) window.scrollTo(0, 0);
+    else { var at = spot(); if (at) land(at); else if (changed) window.scrollTo(0, 0); }
   });
 
   show((location.hash || '').slice(1) || 'overview');
@@ -1742,6 +1751,7 @@ const JS = `
     if (t === modal || t.closest('.close')) closeModal(true);
   });
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !modal.hidden) closeModal(true); });
+  var first = spot(); if (first) land(first);
 })();
 `;
 
