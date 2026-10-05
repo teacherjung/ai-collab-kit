@@ -196,6 +196,7 @@ test('①範本的形狀：兩組各剛好一組、佔位各一個、不含機�
 
 test('②--claude-line 只讀不寫、不需要 git；指紋三方互證；複本裡設定檔的位元組逐字釘住；沒提交的清單改動只改得到那一行', () => withScratch((scratch) => {
   const src = sourceRepo(scratch);
+  assert.deepEqual(['maintenance.auto', 'gc.auto'].map((k) => git(src, 'config', '--get', k).stdout.trim()), ['false', '0'], '前提：暫存倉庫關掉自動整理（提交後的背景打包會撞上下面的快照）');
   const home = fakeHome(scratch);
   const noGit = fs.mkdtempSync(path.join(scratch, 'empty-path-'));   // PATH 裡什麼都沒有：要 git 的話這裡就起不來
   const before = snapshot(src);
