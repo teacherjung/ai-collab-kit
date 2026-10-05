@@ -56,7 +56,7 @@ test('整份考卷帶著指向誘餌倉庫的 GIT_DIR 跑：全綠，而且誘�
     // 誘餌要是「主倉庫＋一棵連結工作樹」、GIT_DIR 指向那棵樹的 gitdir：事故就是這個形狀——git 看 GIT_DIR 結尾
     // 不是 .git 就猜它是裸倉庫，git init 於是把 bare = true 寫進**共用**的設定檔（指向 .git 本身反而不會）
     const g = (...a) => spawnSync('git', a, { cwd: decoy, env: { ...gitEnv(), GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' }, encoding: 'utf8' });
-    // 誘餌也關掉自動整理：提交後的背景打包會在前後兩次快照之間改到 .git（跟 tests/helpers/guard-rig.js 的 sourceRepo 同一個理由）
+    // 誘餌也關掉自動整理：提交後的背景打包可能在前後兩次快照之間改到 .git（跟 tests/helpers/guard-rig.js 的 sourceRepo 同一個理由）
     for (const step of [['init', '-q'], ['config', 'maintenance.auto', 'false'], ['config', 'gc.auto', '0'], ['commit', '-q', '--allow-empty', '-m', 'decoy'], ['worktree', 'add', '-q', '--detach', path.join(decoy, 'linked')]]) {
       const r = g(...step);
       assert.equal(r.status, 0, `前提：誘餌倉庫建得起來（git ${step[0]}：${r.stderr}）`);
