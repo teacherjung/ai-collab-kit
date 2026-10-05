@@ -16,17 +16,17 @@ const settingsBook = require('../tools/build-settings.js');
 
 const ROOT = path.join(__dirname, '..');
 
-// 擁有者列的九頁與順序（2026-09-30）；built＝這一支起有內容，其餘先放「準備中」。
+// 擁有者列的九頁與順序（2026-09-30）。
 const PAGES = [
-  { id: 'rules', name: '規矩', built: true },
-  { id: 'machines', name: '機器', built: true },
-  { id: 'tools', name: '工具', built: true },
-  { id: 'tests', name: '考題', built: true },
-  { id: 'templates', name: '範本', built: true },
-  { id: 'settings', name: '設定', built: true },
-  { id: 'adopt', name: '套用', built: true },
-  { id: 'glossary', name: '名詞', next: '用語對照表，名詞白話手冊併進來' },
-  { id: 'cases', name: '案例', built: true },
+  { id: 'rules', name: '規矩' },
+  { id: 'machines', name: '機器' },
+  { id: 'tools', name: '工具' },
+  { id: 'tests', name: '考題' },
+  { id: 'templates', name: '範本' },
+  { id: 'settings', name: '設定' },
+  { id: 'adopt', name: '套用' },
+  { id: 'glossary', name: '名詞' },
+  { id: 'cases', name: '案例' },
 ];
 
 const LABEL_HEADER = /^\| 標籤 \| 意思 \| 守不到的 \|$/u;
@@ -61,11 +61,23 @@ const CASE_RELATED = '相關';
 const CASE_SLUG = /^[a-z0-9-]+$/u;
 const CASE_DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const CASE_RULES = /^[A-Z]\d+(?:、[A-Z]\d+)*$/u;
-// 案例檔與索引說明裡不收的字：tab、控制字元、U+2028／U+2029（網頁上顯示不出原文）
+// 案例檔、索引說明與用語對照表裡不收的字：tab、控制字元、U+2028／U+2029（網頁上顯示不出原文）
 const CASE_HIDDEN = /[\t\u2028\u2029]/u;
 // 案例欄位今天有、只在案例頁多認的兩種行內寫法：指到別則案例的連結（字跟檔名一樣）、網址的自動連結（只有 https）
 const CASE_LINK = /^\[([a-z0-9-]+)\]\(([a-z0-9-]+)\.md\)/u;
 const CASE_AUTOLINK = /^<https:\/\/[^\s<>]+>/u;
+// GitHub 的網址自動連結（http://、https://、ftp://、www. 開頭）一路延伸到空白或「<」為止，中間的 *、`、[ 與像條號的字都算進網址、不排；
+// 說明書照字面印網址，碰到這種位置就說不準 GitHub 排不排，停。已經結束的灰底框、尖括號網址不算在那一段裡（GitHub 先排它們）
+const URL_START = /(?:https?|ftp):\/\/|www\./iu;
+const endsInUrl = (s) => URL_START.test(s.split(/[\s<]/u).pop());
+// 名詞頁：GLOSSARY.md「版面約定」那一節照規矩頁的讀法（parseLegend）讀；其餘一類名詞的一項＝「**名詞**：解釋」，
+// 名詞頁只認最簡單的名詞：不收 *、`、\
+const GLOSSARY_LEGEND = '版面約定';
+// 版面約定講的是規則書原文（RULES.md）的排法；這個網頁的規矩頁排得不一樣，規矩頁與名詞頁排版面約定時都先寫這一句
+const LEGEND_WEB_NOTE = '這個網頁上：條號不帶【】、放在每一條的左上角；標籤在「把關」那一行。';
+const GLOSSARY_TERM = /^\*\*([^*`\\]+)\*\*：(.*)$/u;
+// 名詞頁的行內多認條號：A〜K 加數字、後面不緊接半形英數字（前面也不緊接，另外看；看的是原文裡同一段字的前後）
+const RULE_REF = /^[A-K]\d+(?![A-Za-z0-9])/u;
 // 範本跳窗開頭那一句：這一份怎麼顯示
 const TEMPLATE_NOTE = {
   laid: '這一份照說明書的排法顯示（跟設定頁同一套）：只排標題、段落、表格、清單、灰底框、粗體，其他字照原文、不照 GitHub 的畫法（只有寫在符號前面、讓符號不被當成排版記號的「\\」不顯示）。',
@@ -74,7 +86,7 @@ const TEMPLATE_NOTE = {
 };
 
 /**
- * 排版那一套（設定頁、範本跳窗、套用頁共用；行內那一半案例頁也用）認不得某一行或某個行內記號時丟的例外。設定頁、套用頁、案例頁照樣整份停下；
+ * 排版那一套（設定頁、範本跳窗、套用頁、名詞頁共用；行內那一半案例頁也用）認不得某一行或某個行內記號時丟的例外。設定頁、套用頁、名詞頁、案例頁照樣整份停下；
  * 範本跳窗只接這一種、改成照原始檔顯示——其他例外（程式自己的錯）一律往外丟，說明書不產生。
  */
 class LayoutError extends Error {}
@@ -422,7 +434,7 @@ function parseTemplates(text, files, ruleIds) {
 }
 
 /**
- * 行內排版（設定頁、範本跳窗、套用頁、案例頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
+ * 行內排版（設定頁、範本跳窗、套用頁、案例頁、名詞頁共用；認不得就丟 LayoutError）。設定說明產生器（tools/build-settings.js）把值裡的半形標點全寫成「\標點」，
  * 沒跳脫的記號只會來自它程式裡寫死的說明句；範本、README 與案例是人寫的，同一套規則照用。只認下面幾種、其餘可能被 GitHub 當成排版的寫法一律停（寧可多停）：
  * 「\」＋半形標點＝那個標點本身；一對反引號＝灰底框（框裡照字面；空框、頭尾有空白、連續反引號都停）；
  * 一對 **＝粗體（** 緊貼的那一側要是字、不是空白或標點，否則停）；單獨的 *、後面緊接著字而可能開始斜體的 _、
@@ -431,12 +443,22 @@ function parseTemplates(text, files, ruleIds) {
  * caseLinks（只有案例頁給：檔名 → 標題）：給了才多認兩種，其餘的「[」與「<」接半形字元照舊停——
  * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
  * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
+ * ruleIds（只有名詞頁給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
+ * 網址（http://、https://、ftp://、www. 開頭）到下一個空白或「<」之前，又出現 *、`、[ 或像條號的字：GitHub 會把它們算進網址，停（見 URL_START）；
+ * 網址從哪裡算起：上一個空白、「<」，或上一個已經結束的灰底框、尖括號網址之後（案例連結前面若有網址，到「[」就停了）。
  */
-function settingsInline(text, where, caseLinks = null) {
+function settingsInline(text, where, caseLinks = null, ruleIds = null) {
+  return inlineParts(text, where, caseLinks, ruleIds).html;
+}
+
+/** settingsInline 的本體：另外回傳最後那一段字從哪裡算起（runFrom），粗體收尾時用它看網址有沒有延伸到收尾的「**」。 */
+function inlineParts(text, where, caseLinks, ruleIds) {
   let out = '';
   let i = 0;
   // 上一個照字面印出的「!」在哪（跳脫的「\!」不算）：緊接著連結就是 GitHub 的圖片
   let bang = null;
+  let runFrom = 0;
+  const urlHere = (k) => endsInUrl(text.slice(runFrom, k));
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1] || '';
@@ -444,6 +466,7 @@ function settingsInline(text, where, caseLinks = null) {
       out += esc(next);
       i += 2;
     } else if (ch === '`') {
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「\`」，GitHub 會把它算進網址、不排灰底框，說明書不排`);
       if (next === '`') throw new LayoutError(`${where}：連續的反引號，說明書不排`);
       const j = text.indexOf('`', i + 1);
       if (j < 0) throw new LayoutError(`${where}：反引號沒有成對，說明書不知道灰底框到哪裡結束`);
@@ -452,7 +475,9 @@ function settingsInline(text, where, caseLinks = null) {
       if (text[j + 1] === '`') throw new LayoutError(`${where}：連續的反引號，說明書不排`);
       out += `<code>${esc(code)}</code>`;
       i = j + 1;
+      runFrom = i;
     } else if (ch === '*') {
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「*」，GitHub 會把它算進網址、不排粗體，說明書不排`);
       if (next !== '*' || text[i + 2] === '*') throw new LayoutError(`${where}：單獨的「*」或連續三個以上，GitHub 可能當成斜體，說明書不排`);
       const j = text.indexOf('**', i + 2);
       if (j < 0) throw new LayoutError(`${where}：** 沒有成對，說明書不知道粗體到哪裡結束`);
@@ -460,7 +485,11 @@ function settingsInline(text, where, caseLinks = null) {
       if (!inner || /^[\s\p{P}\p{S}]|[\s\p{P}\p{S}]$/u.test(inner) || text[j + 2] === '*') {
         throw new LayoutError(`${where}：粗體的頭尾緊貼空白或標點（或連著三個 *），GitHub 不一定當成粗體，說明書不排`);
       }
-      out += `<strong>${settingsInline(inner, where, caseLinks)}</strong>`;
+      const sub = inlineParts(inner, where, caseLinks, ruleIds);
+      if (endsInUrl(inner.slice(sub.runFrom))) throw new LayoutError(`${where}：網址後面緊接著收尾的「**」，GitHub 會把它算進網址、不排粗體，說明書不排`);
+      out += `<strong>${sub.html}</strong>`;
+      // 粗體裡有已經結束的灰底框之類：外面那一段從它後面算起
+      if (sub.runFrom > 0) runFrom = i + 2 + sub.runFrom;
       i = j + 2;
     } else if (ch === '_' || ch === '~') {
       let k = i;
@@ -476,9 +505,11 @@ function settingsInline(text, where, caseLinks = null) {
       if (!auto) throw new LayoutError(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
       out += esc(auto[0]);
       i += auto[0].length;
+      runFrom = i;
     } else if (ch === '&' && /^[A-Za-z#]$/u.test(next)) {
       throw new LayoutError(`${where}：「&」後面接英文字母或 #，GitHub 可能當成字元代碼，說明書不排`);
     } else if (ch === '[') {
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「[」，GitHub 會把它算進網址，說明書不排`);
       const link = caseLinks ? text.slice(i).match(CASE_LINK) : null;
       if (!link) throw new LayoutError(`${where}：「[」GitHub 可能當成連結，說明書不排`);
       if (bang === i - 1) throw new LayoutError(`${where}：「![」GitHub 會當成圖片，說明書不排`);
@@ -487,13 +518,20 @@ function settingsInline(text, where, caseLinks = null) {
       // 用行內的連結、不用鈕：鈕是拆不開的一整塊，標題一長整顆被推到下一行，前一行留一大片空白、「、」掉到行首
       out += `<a href="#cases" class="case-link" data-case="${link[1]}">${esc(caseLinks.get(link[1]))}</a>`;
       i += link[0].length;
+    } else if (ruleIds && !/[A-Za-z0-9]/u.test(text[i - 1] || '') && RULE_REF.test(text.slice(i))) {
+      const id = text.slice(i).match(RULE_REF)[0];
+      if (urlHere(i)) throw new LayoutError(`${where}：網址裡有像條號的「${id}」，GitHub 會把它算進網址，說明書不知道它算不算條號`);
+      if (!ruleIds.includes(id)) throw new LayoutError(`${where}：條號 ${id} 不在規則資料裡`);
+      // 行內的連結、不用鈕：鈕前後都可以斷行，「、」會掉到行首（案例頁量過）
+      out += `<a href="#rules" class="rule-ref" data-goto="rule-${id}">${id}</a>`;
+      i += id.length;
     } else {
       if (ch === '!') bang = i;
       out += esc(ch);
       i += 1;
     }
   }
-  return out;
+  return { html: out, runFrom };
 }
 
 /** 表格的一列切成格：沒被反斜線跳脫的「|」才是分格（設定說明產生器把值裡的「|」寫成「\|」；範本裡要放「|」也這樣寫）。 */
@@ -522,7 +560,7 @@ const SETTINGS_TABLE_RULE = /^\|(?:---\|)+$/u;
 
 /**
  * 段落、標題、清單項、子項的字：開頭不能是空白或沒跳脫的半形標點（GitHub 會把它讀成別的區塊），結尾不能有空白。
- * leadingBold（只有套用頁打開）：開頭是 ** 而且後面緊接著不是空白、不是 * 的字＝粗體開頭，照收（GitHub 不會把它讀成別種區塊；粗體成不成對由行內排版再核）。
+ * leadingBold（套用頁、名詞頁打開）：開頭是 ** 而且後面緊接著不是空白、不是 * 的字＝粗體開頭，照收（GitHub 不會把它讀成別種區塊；粗體成不成對由行內排版再核）。
  */
 function settingsText(text, where, leadingBold = false) {
   if (!text || /^\s|\s$/u.test(text)) throw new LayoutError(`${where}：字是空的、或頭尾有空白，說明書不排`);
@@ -538,7 +576,7 @@ function noClosingHash(title, where) {
 }
 
 /**
- * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁、範本跳窗、套用頁共用）。只認設定說明產生器今天產的這幾種行，
+ * 一份 Markdown 整份讀成大標題、開頭、一節一節（設定頁、範本跳窗、套用頁、名詞頁共用）。只認設定說明產生器今天產的這幾種行，
  * 其他一律丟 LayoutError（說明產生器的格式變了，要人先決定說明書怎麼排；範本則改成照原始檔顯示）：
  * 第一行「# 」大標題、「## 」節標題（前面空一行）、空行（真的空）、段落（一行一段）、表格（表頭、只准 |---| 的分隔列、
  * 每一列格數一樣；格子可以空，例如還沒驗過的日期）、「- 」清單、清單項底下兩格縮排、從 1 連號的「N. 」子項。
@@ -549,11 +587,12 @@ function noClosingHash(title, where) {
  * 寫 1＝停，GitHub 會把它們併成一串）、編號清單項底下的程式碼框（前面空一行，三個反引號＋可有可無的語言名，縮排剛好對齊那一項的字；
  * 框裡每一行至少縮排那麼多（多的照留）或是空行；去掉那個縮排之後以 0〜3 格空白加三個反引號開頭的行停（說明書不知道框到哪裡結束），
  * 多 4 格以上的照字面；收尾的三個反引號剛好對齊、後面要空一行；語言名跟三個反引號一樣是記號，不顯示）。
+ * leadingBold＝只多認 readme 三種裡的第一種：開頭是粗體的字（名詞頁打開：用語對照表每一項都是粗體的名詞開頭）。
  */
 function parseDoc(md, name, opts = {}) {
-  const { needSections = false, lineOffset = 0, readme = false } = opts;
+  const { needSections = false, lineOffset = 0, readme = false, leadingBold = false } = opts;
   const at = (i) => `${name}第 ${i + 1 + lineOffset} 行`;
-  const text = (t, where) => settingsText(t, where, readme);
+  const text = (t, where) => settingsText(t, where, readme || leadingBold);
   if (/[\t\r]/u.test(md)) throw new LayoutError(`${name}裡有 tab 或 \\r，說明書不排`);
   const lines = md.split('\n');
   if (!lines[0].startsWith('# ')) throw new LayoutError(`${name}第一行應該是「# 」開頭的大標題`);
@@ -821,7 +860,7 @@ ${cards.join('\n')}
 <p class="overview-note">這三類只照每一條「把關」那一行列了哪些名字來分，不代表整條都有人守住：機器守到哪裡，看標籤冒號後面那一句；守不到什麼，點標籤看。規則書檔頭原文：${esc(data.preamble)}</p>
 </div>
 <nav class="jumps" aria-label="跳到某一節">${jumps}</nav>
-<details class="legend"><summary>規則書原文（RULES.md）的版面約定</summary><p class="muted">這個網頁上：條號不帶【】、放在每一條的左上角；標籤在「把關」那一行。</p><p>${mdInline(legend.lead)}</p><ul>${legend.bullets.map((b) => `<li>${mdInline(b)}</li>`).join('')}</ul></details>
+<details class="legend"><summary>規則書原文（RULES.md）的版面約定</summary><p class="muted">${LEGEND_WEB_NOTE}</p><p>${mdInline(legend.lead)}</p><ul>${legend.bullets.map((b) => `<li>${mdInline(b)}</li>`).join('')}</ul></details>
 ${sections.join('\n')}
 <p class="source-note">來源：套件的規則資料 rules.json（產生規則書的同一份）、MACHINES.md 的標籤表與「本文條目 → 機器」那張表（每條的機器表連結）、MACHINES.md「範本」那一節（每條的範本連結＝那一節的說明寫到這一條條號的範本）與 templates/ 底下的檔（範本全文）、GLOSSARY.md 的版面約定。</p>
 </section>`;
@@ -1223,6 +1262,112 @@ function renderCases(cases, ruleIds) {
   return casesPage(parseCases(cases, ruleIds));
 }
 
+/**
+ * GLOSSARY.md（用語對照表）→ 名詞頁要的形狀，照原文的順序。「## 版面約定」那一節照規矩頁那一套讀（parseLegend：開頭一段＋頂層條列，
+ * 開頭那一段可以換行），放回它原本的位置；其餘照設定頁那一套讀（parseDoc，另外認粗體開頭的字）——讀之前把版面約定那一節
+ * （從那一行到下一個「## 」）換成空行，行號照舊；後面又有一節同名的就停（規矩頁只讀第一節）。大標題底下、第一節之前不收東西。
+ * 其餘每一節要是「全是段落」（照原文排成說明）或「剛好一串清單、每一項都是 **名詞**：解釋」（排成一類名詞），
+ * 別的形狀（表格、子項、段落接清單、空的一節）都停。名詞結尾不能有空白（開頭的空白 parseDoc 先停）、結尾不能是網址、整份不能重複；
+ * 解釋不能是空的、開頭不能是空白。整份不收 tab、控制字元、U+2028／U+2029。
+ */
+function parseGlossary(md) {
+  if (CONTROL_CHARS.test(md) || CASE_HIDDEN.test(md)) throw new LayoutError('GLOSSARY.md 裡有 tab、控制字元或 U+2028／U+2029：網頁顯示不出原文，說明書不產生');
+  const lines = md.split('\n');
+  const at = lines.findIndex((line) => line.trim() === `## ${GLOSSARY_LEGEND}`);
+  let legend = null;
+  if (at >= 0) {
+    // 放回去的位置＝它前面有幾節（parseDoc 把每一個「## 」開頭的行都當成一節，不然就停）
+    legend = { ...parseLegend(md), index: lines.slice(0, at).filter((line) => line.startsWith('## ')).length };
+    const end = lines.findIndex((line, i) => i > at && line.startsWith('## '));
+    for (let i = at + 1; i < (end < 0 ? lines.length : end); i += 1) {
+      // parseLegend 把這些行收進開頭那一段；開頭是沒跳脫的半形標點（```、~~~、<!--、---…）GitHub 會讀成別種區塊，停（跟別節同一條）
+      if (lines[i].trim()) settingsText(lines[i].startsWith('- ') ? lines[i].slice(2) : lines[i], `GLOSSARY.md 第 ${i + 1} 行`, true);
+    }
+    for (let i = at; i < (end < 0 ? lines.length : end); i += 1) lines[i] = '';
+  }
+  const doc = parseDoc(lines.join('\n'), 'GLOSSARY.md ', { needSections: true, leadingBold: true });
+  if (doc.intro.length) throw new LayoutError('GLOSSARY.md 大標題底下、第一節之前有東西：名詞頁不知道它算哪一節');
+  if (doc.sections.some((sec) => sec.title === GLOSSARY_LEGEND)) throw new LayoutError(`GLOSSARY.md 有兩節「${GLOSSARY_LEGEND}」：規矩頁只排第一節，第二節哪一頁都不會排`);
+  const seen = new Set();
+  const sections = doc.sections
+    .map((sec) => {
+      const where = `GLOSSARY.md「${sec.title}」那一節`;
+      if (sec.blocks.length && sec.blocks.every((b) => b.kind === 'p')) return { title: sec.title, kind: 'prose', paras: sec.blocks.map((b) => b.text) };
+      if (sec.blocks.length !== 1 || sec.blocks[0].kind !== 'list') throw new LayoutError(`${where}要是「全是段落」或「剛好一串名詞清單」，名詞頁不知道怎麼排`);
+      const terms = sec.blocks[0].items.map((item, k) => {
+        const at = `${where}第 ${k + 1} 項`;
+        if (item.sub.length) throw new LayoutError(`${at}底下有子項，名詞頁不排`);
+        const m = item.text.match(GLOSSARY_TERM);
+        if (!m) throw new LayoutError(`${at}不是「**名詞**：解釋」的形狀（名詞裡不收 *、\`、\\），名詞頁不排`);
+        const [, term, def] = m;
+        if (/\s$/u.test(term)) throw new LayoutError(`${at}：名詞結尾有空白`);
+        if (endsInUrl(term)) throw new LayoutError(`${at}：名詞的結尾是網址，GitHub 會把收尾的 ** 算進網址、不排粗體，名詞頁不排`);
+        if (!def || /^\s/u.test(def)) throw new LayoutError(`${at}：「${term}」的解釋是空的、或開頭是空白`);
+        if (seen.has(term)) throw new LayoutError(`${at}：名詞「${term}」出現兩次`);
+        seen.add(term);
+        return { term, def };
+      });
+      return { title: sec.title, kind: 'terms', terms };
+    });
+  if (!sections.some((sec) => sec.kind === 'terms')) throw new LayoutError('GLOSSARY.md 裡沒有任何一類名詞');
+  if (legend) sections.splice(legend.index, 0, { kind: 'legend', title: GLOSSARY_LEGEND, lead: legend.lead, bullets: legend.bullets });
+  return { title: doc.title, sections };
+}
+
+/** 一節的內文：版面約定（跟規矩頁同一句網頁上的差別、開頭一段、條列）、說明（照原文段落）、一類名詞（名詞｜解釋）。 */
+function glossaryBody(sec, where, inline) {
+  if (sec.kind === 'legend') {
+    return `<p class="muted">${LEGEND_WEB_NOTE}</p>\n<p>${inline(sec.lead, `${where}開頭那一段`)}</p>\n<ul class="items">${sec.bullets.map((b, k) => `<li>${inline(b, `${where}第 ${k + 1} 條`)}</li>`).join('')}</ul>`;
+  }
+  if (sec.kind === 'prose') return sec.paras.map((p, k) => `<p>${inline(p, `${where}第 ${k + 1} 段`)}</p>`).join('\n');
+  return `<dl class="gloss">\n${sec.terms
+    .map((t, k) => {
+      const at = `${where}第 ${k + 1} 項「${t.term}」`;
+      return `<dt><strong>${inline(t.term, `${at}的名詞`)}</strong></dt><dd>${inline(t.def, `${at}的解釋`)}</dd>`;
+    })
+    .join('\n')}\n</dl>`;
+}
+
+/** 名詞頁：每一節一塊（照原文的順序），字照名詞頁的行內排版（條號點得到那一條規矩）；跳節鈕只列名詞的那幾類。 */
+function glossaryPage(gloss, ruleIds) {
+  const inline = (text, where) => settingsInline(text, where, null, ruleIds);
+  const groups = gloss.sections.filter((sec) => sec.kind === 'terms');
+  const total = groups.reduce((n, sec) => n + sec.terms.length, 0);
+  const blocks = gloss.sections.map((sec, i) => {
+    const where = `GLOSSARY.md「${sec.title}」那一節`;
+    const title = inline(sec.title, `${where}的標題`);
+    const body = glossaryBody(sec, where, inline);
+    const count = sec.kind === 'terms' ? `<span class="sec-count">${sec.terms.length} 個</span>` : '';
+    return { id: `gloss-${i + 1}`, sec, title, html: `<section class="block" id="gloss-${i + 1}" tabindex="-1">\n<h2>${title}${count}</h2>\n${body}\n</section>` };
+  });
+  const jumps = blocks
+    .filter((b) => b.sec.kind === 'terms')
+    .map((b) => {
+      const label = b.title.replace(/<[^>]+>/gu, '').replace(/（.*$/u, '').trim();
+      if (!label) throw new LayoutError(`GLOSSARY.md「${b.sec.title}」那一節的標題取不出跳節鈕的字（「（」前面是空的）`);
+      return `<button type="button" class="jump" data-jump="${b.id}">${label}</button>`;
+    })
+    .join('');
+  const html = `<section class="page" id="page-glossary" data-page="glossary" hidden>
+<header class="page-head">
+<p class="eyebrow">GLOSSARY.md 的名詞</p>
+<h1>${inline(gloss.title, 'GLOSSARY.md 的大標題')}</h1>
+<p class="page-sum">${total} 個名詞，分 ${groups.length} 類，照對照表的順序。寫到的條號，點了跳到那一條規矩。</p>
+</header>
+<nav class="jumps" aria-label="跳到某一類">${jumps}</nav>
+<div class="gloss-body">
+${blocks.map((b) => b.html).join('\n')}
+</div>
+<p class="source-note">來源：GLOSSARY.md 整份，照原文的順序：大標題；「${GLOSSARY_LEGEND}」照規矩頁讀它的那一套讀（開頭一段＋條列）；其餘每一節，全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞。這一頁不照 GitHub 的畫法：只排灰底框、粗體、條列，條號（灰底框以外、原文裡前後不緊接半形英數字的 A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與名詞後面那個「：」（名詞與解釋分成兩欄）不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號，或緊接在網址後面的排版記號），以及規則資料裡沒有的條號，會讓整份停下不產生。</p>
+</section>`;
+  return { html, terms: total, groups: groups.length };
+}
+
+/** GLOSSARY.md（原文）→ 名詞頁的 HTML 與數字；認不得的形狀、行內記號、不在規則資料裡的條號都在這裡停。 */
+function renderGlossary(md, ruleIds) {
+  return glossaryPage(parseGlossary(md), ruleIds);
+}
+
 /** 排得了的範本：大標題、開頭各塊、每一節（跳窗的標題是 h2，節標題用 h3）。 */
 function templateDocHtml(doc, name) {
   const parts = [`<p class="doc-title">${settingsInline(doc.title, `${name}的大標題`)}</p>`, settingsBlocksHtml(doc.intro, `${name}開頭`)];
@@ -1269,13 +1414,6 @@ function templatePopups(files, items) {
   return { data, laidOut };
 }
 
-function placeholderPage(page, index) {
-  return `<section class="page" id="page-${page.id}" data-page="${page.id}" hidden>
-<header class="page-head"><p class="eyebrow">第 ${index + 1} 頁</p><h1>${esc(page.name)}</h1></header>
-<div class="pending"><p class="pending-tag">準備中</p><p>這一頁會放：${esc(page.next)}。</p><p class="muted">說明書分幾支做，每支合併後更新這個連結。</p></div>
-</section>`;
-}
-
 const CSS = `
 /* 版面：左側目錄＋右側閱讀欄（手機改成頂端橫向目錄）；規矩像法規條文，條號是錨點，把關標籤像印章 */
 :root{
@@ -1308,7 +1446,6 @@ button{font:inherit;color:inherit}
   color:var(--ink);text-decoration:none;font-size:16px}
 .side nav a:hover{background:var(--bg)}
 .side nav a[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
-.soon{font-size:11px;color:var(--muted);letter-spacing:.06em}
 .stamp{margin:22px 10px 0;font-size:12px;color:var(--muted);line-height:1.6}
 main{min-width:0;padding-inline:clamp(16px,5vw,56px);padding-block:36px 96px}
 .page{max-width:780px}
@@ -1360,9 +1497,6 @@ h1{margin:0;font-family:var(--display);font-size:clamp(28px,4vw,36px);line-heigh
 strong.role{font-weight:700}
 code{font-family:var(--mono);font-size:.88em;background:var(--code-bg);padding:1px 5px;border-radius:3px;overflow-wrap:anywhere}
 .source-note{margin-top:40px;font-size:13px;color:var(--muted)}
-.pending{border:1px dashed var(--line);border-radius:8px;padding:20px;background:var(--surface)}
-.pending p{margin:4px 0}
-.pending-tag{font-size:13px;letter-spacing:.12em;color:var(--self)}
 .muted{color:var(--muted);font-size:15px}
 .modal{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:16px;background:var(--scrim)}
 .sheet{width:min(560px,100%);max-height:85vh;overflow:auto;overscroll-behavior:contain;background:var(--surface);color:var(--ink);border-radius:10px;border:1px solid var(--line);padding:18px 20px 22px}
@@ -1422,6 +1556,19 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 .case-link{border:0;background:none;padding:0;color:var(--accent);text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
 /* 案例的字與索引的說明照原文留空白：連續空白不合併（跟設定頁、範本跳窗同一條） */
 .case-def dd,[data-page="cases"] .block :is(h2,p){white-space:pre-wrap}
+/* 名詞頁：寬的螢幕一列一個名詞（名詞｜解釋）；900px 以下（平板直放、手機）改成名詞在上、解釋在下，解釋才不會擠在窄欄裡 */
+.gloss{display:grid;grid-template-columns:minmax(6em,11em) minmax(0,1fr);gap:0 18px;margin:8px 0 0}
+.gloss dt,.gloss dd{margin:0;padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.gloss-body .block{scroll-margin-top:16px}
+.gloss-body .block:focus{outline:none}
+.rule-ref{color:var(--accent);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+/* 名詞、解釋、說明與版面約定照原文留空白：連續空白不合併（跟設定頁、案例頁同一條） */
+.gloss :is(dt,dd),.gloss-body .block :is(h2,p,li){white-space:pre-wrap}
+@media (max-width:900px){
+  .gloss{grid-template-columns:minmax(0,1fr)}
+  .gloss dt{padding-bottom:0;border-bottom:0}
+  .gloss dd{padding-top:2px}
+}
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);background:none}
   .side{z-index:10;max-height:none;padding:10px 0 0;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -1429,9 +1576,9 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
   .brand small{display:inline;margin-left:8px}
   .side nav{flex-direction:row;overflow-x:auto;gap:4px;padding:0 12px 8px}
   .side nav a{flex:0 0 auto;padding:6px 12px}
-  .soon,.stamp{display:none}
+  .stamp{display:none}
   main{padding-block:24px 72px}
-  .rule,.rule-section,.mrow,.settings-body .block{scroll-margin-top:120px}
+  .rule,.rule-section,.mrow,.settings-body .block,.gloss-body .block{scroll-margin-top:120px}
   .label-def{grid-template-columns:minmax(0,1fr)}
   table.case-index th,table.case-index td{padding:6px 8px}
   table.case-index td:first-child{font-size:13px}
@@ -1443,6 +1590,7 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 
 // 網頁上的互動。開跳窗時背後的頁面會捲回頂端（html、body 鎖住捲動），所以開的時候記下捲到哪、關掉時捲回去，
 // 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
+// 名詞頁的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1525,7 +1673,7 @@ const JS = `
     var mach = t.closest('[data-machine]'); if (mach) { openMachine(mach.getAttribute('data-machine')); return; }
     var tp = t.closest('[data-template]'); if (tp) { openTemplate(tp.getAttribute('data-template')); return; }
     var cs = t.closest('[data-case]'); if (cs) { e.preventDefault(); openCase(cs.getAttribute('data-case')); return; }
-    var go = t.closest('[data-goto]'); if (go) { closeModal(false); goTo(go.getAttribute('data-goto')); return; }
+    var go = t.closest('[data-goto]'); if (go) { e.preventDefault(); closeModal(false); goTo(go.getAttribute('data-goto')); return; }
     var f = t.closest('[data-filter]'); if (f) { setFilter(f.getAttribute('data-filter')); return; }
     var j = t.closest('[data-jump]'); if (j) { var s = document.getElementById(j.getAttribute('data-jump')); if (s) reveal(s); return; }
     if (t === modal || t.closest('.close')) closeModal(true);
@@ -1581,10 +1729,10 @@ function build(sources, { stamp } = {}) {
   const settings = renderSettings(settingsMarkdown(sources.settingsTemplate));
   const adoptSections = parseAdopt(sources.readme);
   const adopt = adoptPage(adoptSections);
+  const glossary = renderGlossary(sources.glossary, ruleIds);
   const casebook = parseCases(sources.cases, ruleIds);
   const cases = casesPage(casebook);
-  const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span>${p.built ? '' : '<span class="soon">準備中</span>'}</a>`).join('');
-  const others = PAGES.map((p, i) => (p.built ? null : placeholderPage(p, i))).filter(Boolean);
+  const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span></a>`).join('');
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
   const machineJson = JSON.stringify(machines.machineData).replace(/</gu, '\\u003c');
   const templateJson = JSON.stringify(popups.data).replace(/</gu, '\\u003c');
@@ -1608,7 +1756,7 @@ ${tests}
 ${templates}
 ${settings}
 ${adopt}
-${others.join('\n')}
+${glossary.html}
 ${cases.html}
 </main>
 </div>
@@ -1633,6 +1781,7 @@ ${cases.html}
     templateItems: tpl.items.length,
     templatesLaidOut: popups.laidOut,
     adoptSections: adoptSections.length,
+    glossaryTerms: glossary.terms,
     cases: casebook.cases.length,
   };
 }
@@ -1657,11 +1806,11 @@ if (require.main === module) {
     const result = build(readSources(ROOT), { stamp: args.stamp });
     process.stdout.write(result.html);
     const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；案例 ${result.cases} 則）\n`);
+    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；名詞 ${result.glossaryTerms} 個；案例 ${result.cases} 則）\n`);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS,settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS, parseGlossary, renderGlossary, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
