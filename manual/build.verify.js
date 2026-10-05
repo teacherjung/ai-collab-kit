@@ -1,5 +1,9 @@
 'use strict';
-// 說明書網頁產生器的考題（manual/build.js；只在套件倉庫、不在共用路徑裡）。
+// 說明書網頁產生器的專屬考題（manual/build.js；只在套件倉庫、不在共用路徑裡）。
+// 不在日常的考卷裡：擁有者 2026-10-05 定說明書網頁只在他明確要求時更新，所以檔名刻意不是 node --test 會自動撿到的寫法
+// （*.test.js 那幾種；tests/manifest.test.js 守著），推送前、雲端三關、合併閘都不跑它。要更新網頁時才跑：
+//   node --test manual/build.verify.js
+// 步驟見 README「本倉庫自己怎麼合併」的「說明書網頁」那一項。
 // 守的：規矩頁的每一條（主句、子點的順序與層級與編號、把關那一行整行、機器表連結）、節標題、頁面上的數字、
 // 跳窗資料、版面約定逐條、檔頭原文；機器頁（標籤定義、那張表每一列的條號、移植狀態、跳窗四欄、重名列的完整標題）、
 // 工具頁與考題頁（每一支的檔頭第一句、寫到它的機器表列）、範本頁（每則說明、說明裡的條號、寫到它的機器表列）、
@@ -9,9 +13,7 @@
 // 名詞頁（GLOSSARY.md 每一節照原文的順序：版面約定、說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
-// 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
-// 實作者每一支用無畫面瀏覽器量一次、寫在 PR 說明。tests/filled-settings.test.js 與 git-env 的巢狀那兩輪
-// 不帶 manual/：這一支只在根目錄那一輪跑；它若開始讀 settings.json 或叫 git，要先把 manual/ 加進那兩輪。
+// 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -1731,7 +1733,7 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   assert.ok(caseData['designed-shapes-never-touched-a-real-platform'].html.includes('<strong>每一頁各印一個</strong>'), '粗體（寫死的樣本）');
   assert.ok(caseData['review-verdict-strings'].html.includes('「結論：&lt;你的結論&gt;」'), '「<」接中文照字面（寫死的樣本）');
   assert.ok(pageHtml.includes('<h2>不是事故、但值得記的方法</h2>\n<p>- 用算式重算對方回報的每一個數字：'), '索引末尾的小節照字面（寫死的樣本）');
-  // 互動接線（雲端考卷沒有瀏覽器，這裡只釘住程式在、PR 說明另外用瀏覽器量）與樣式
+  // 互動接線（這一支不開瀏覽器，這裡只釘住程式在、更新網頁時另外用瀏覽器量）與樣式
   const caseJson = html.match(/<script type="application\/json" id="case-data">([\s\S]*?)<\/script>/u)[1];
   assert.ok(!caseJson.includes('<') && caseJson.includes('\\u003c'), '案例的跳窗資料裡的「<」要寫成 \\u003c（不然一段字就能結束這個 script）');
   assert.ok(html.includes("var cases = JSON.parse(document.getElementById('case-data').textContent);"), '要讀案例的跳窗資料');
@@ -2042,7 +2044,7 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
   assert.ok(html.includes('<a href="#glossary" data-route="glossary"><span>名詞</span></a>'), '目錄上的名詞不該再標「準備中」');
   assert.ok(!html.includes('class="soon"') && !html.includes('class="pending"'), '九頁都有內容，不該再有「準備中」');
   assert.ok(html.includes('<p class="source-note">來源：GLOSSARY.md 整份，照原文的順序：大標題；「版面約定」照規矩頁讀它的那一套讀（開頭一段＋條列）；其餘每一節，全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞。這一頁不照 GitHub 的畫法：只排灰底框、粗體、條列，條號（灰底框以外、原文裡前後不緊接半形英數字的 A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與名詞後面那個「：」（名詞與解釋分成兩欄）不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號，或緊接在網址後面的排版記號），以及規則資料裡沒有的條號，會讓整份停下不產生。</p>'), '名詞頁的來源註記不對');
-  // 互動接線（雲端考卷沒有瀏覽器，這裡只釘住程式在、PR 說明另外用瀏覽器量）與樣式
+  // 互動接線（這一支不開瀏覽器，這裡只釘住程式在、更新網頁時另外用瀏覽器量）與樣式
   assert.ok(html.includes("var go = t.closest('[data-goto]'); if (go) { e.preventDefault(); closeModal(false); goTo(go.getAttribute('data-goto')); return; }"), '點條號連結不照它的網址走，切到規矩頁那一條');
   assert.match(css, /\n\.rule-ref\{[^}]*cursor:pointer[^}]*\}/u, '條號連結的樣式');
   assert.doesNotMatch(css, /\n\.rule-ref\{[^}]*font-weight/u, '條號連結的字重跟旁邊的字一樣（原文是一般的字）');
