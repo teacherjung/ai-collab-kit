@@ -1,6 +1,6 @@
 'use strict';
 // 套件說明書網頁的產生器。擁有者 2026-09-27 裁：內容從套件本身自動產生，只有「白話說明」與「優缺點」手寫；
-// 2026-09-30 裁：做成九頁、可以有跳窗、發成私人網頁連結（留痕在套件 #24）。
+// 2026-09-30 裁：做成九頁、可以有跳窗、發成私人網頁連結（留痕在套件 #24）；2026-10-05 裁 a：最前面再加一頁「總覽」放優缺點（留痕在套件 #40）。
 // 只給套件倉庫自己用：不在共用路徑裡（tools/kit-lock.js 的 SHARED_PATHS），不會被搬進使用專案。
 // 產生器不自己存檔（擁有者 2026-09-30 裁 a）：網頁印到標準輸出、摘要印到標準錯誤，存到哪裡由跑的人指定；
 // 產出不進版控＝跑的人要存到套件倉庫外（沒有機器擋，靠自覺）。什麼時候跑：只在擁有者明確要求更新網頁時（2026-10-05）——
@@ -17,8 +17,9 @@ const settingsBook = require('../tools/build-settings.js');
 
 const ROOT = path.join(__dirname, '..');
 
-// 擁有者列的九頁與順序（2026-09-30）。
+// 擁有者列的九頁與順序（2026-09-30），最前面加總覽（2026-10-05）：打開網頁先看到總覽。
 const PAGES = [
+  { id: 'overview', name: '總覽' },
   { id: 'rules', name: '規矩' },
   { id: 'machines', name: '機器' },
   { id: 'tools', name: '工具' },
@@ -849,7 +850,7 @@ ${cards.join('\n')}
   const jumps = data.sections
     .map((s) => `<button type="button" class="jump" data-jump="sec-${esc(s.letter)}"><b>${esc(s.letter)}</b>${esc(s.title.replace(/（.*）$/u, ''))}</button>`)
     .join('');
-  const html = `<section class="page" id="page-rules" data-page="rules">
+  const html = `<section class="page" id="page-rules" data-page="rules" hidden>
 <header class="page-head">
 <p class="eyebrow">規矩本文</p>
 <h1>${esc(data.title)}</h1>
@@ -1374,7 +1375,7 @@ const PLAIN_LISTS = ['優點', '缺點'];
 
 /**
  * 手寫的那兩塊（擁有者 2026-09-27：說明書只有「白話說明」與「優缺點」手寫）＝manual/plain.md。
- * 九頁各一節（節名＝頁名、照頁的順序），只收段落；再來優點、缺點各一節，只收一串「- 」條列（不收子項）。
+ * 每一頁各一節（節名＝頁名、照頁的順序，總覽也算一頁），只收段落；再來優點、缺點各一節，只收一串「- 」條列（不收子項）。
  * 節多、少、重複、順序不對、空的、或寫成別種形狀，就停：手寫的字不會靜靜少一段或排到別頁。
  */
 function parsePlain(md) {
@@ -1397,6 +1398,21 @@ function parsePlain(md) {
     }
   }
   return { pages, pros: lists[PLAIN_LISTS[0]], cons: lists[PLAIN_LISTS[1]] };
+}
+
+/** 總覽頁（擁有者 2026-10-05 裁 a）：開頭的白話說明照別頁的放法放（withPlain），底下是優點、缺點兩串條列；字全是手寫的。 */
+function overviewPage(plain, ruleIds) {
+  const list = (title, id, items) => `<section class="block pros-cons" id="${id}" tabindex="-1">\n<h2>${title}<span class="sec-count">${items.length} 項</span></h2>\n<ul class="items">${items.map((t, k) => `<li>${settingsInline(t, `${PLAIN_FILE}「${title}」第 ${k + 1} 項`, null, ruleIds)}</li>`).join('')}</ul>\n</section>`;
+  return `<section class="page" id="page-overview" data-page="overview">
+<header class="page-head">
+<p class="eyebrow">整個套件</p>
+<h1>總覽</h1>
+<p class="page-sum">優點 ${plain.pros.length} 項、缺點 ${plain.cons.length} 項。這一頁的內容都是手寫的；其餘 ${PAGES.length - 1} 頁的內容從套件本身自動產生，只有每頁最上面那段白話說明是手寫的。</p>
+</header>
+${list(PLAIN_LISTS[0], 'pros', plain.pros)}
+${list(PLAIN_LISTS[1], 'cons', plain.cons)}
+<p class="source-note">來源：${PLAIN_FILE} 的「${PLAIN_LISTS[0]}」「${PLAIN_LISTS[1]}」兩節。</p>
+</section>`;
 }
 
 /** 把一頁的白話說明放進那一頁的開頭（標題底下、自動產生的那一句上面），來源那一行補一句它是手寫的。 */
@@ -1497,7 +1513,9 @@ main{min-width:0;padding-inline:clamp(16px,5vw,56px);padding-block:36px 96px}
 h1{margin:0;font-family:var(--display);font-size:clamp(28px,4vw,36px);line-height:1.3;text-wrap:balance}
 .page-sum{margin:0;color:var(--muted);max-width:62ch}
 .plain{display:grid;gap:8px;max-width:62ch;margin:4px 0 2px;padding-left:14px;border-left:3px solid var(--accent)}
-.plain p{margin:0;font-size:16px;line-height:1.75}
+.plain p{margin:0}
+.pros-cons .items{max-width:62ch}
+.pros-cons .items li{margin:8px 0;line-height:1.75}
 .overview{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:8px;background:var(--surface);margin-bottom:16px}
 .overview-note{margin:0;font-size:14px;line-height:1.7;color:var(--muted)}
 .bar{display:flex;gap:3px;height:12px}
@@ -1646,7 +1664,7 @@ const JS = `
   var pending = null;
   function pageName(p){ return p.getAttribute('data-page'); }
   function show(id){
-    if (!pages.some(function(p){ return pageName(p) === id; })) id = 'rules';
+    if (!pages.some(function(p){ return pageName(p) === id; })) id = 'overview';
     var changed = id !== current;
     current = id;
     pages.forEach(function(p){ p.hidden = pageName(p) !== id; });
@@ -1658,12 +1676,12 @@ const JS = `
   }
   window.addEventListener('hashchange', function(){
     if (!modal.hidden) closeModal(false);
-    var changed = show((location.hash || '').slice(1) || 'rules');
+    var changed = show((location.hash || '').slice(1) || 'overview');
     if (pending) { var target = pending; pending = null; land(target); }
     else if (changed) window.scrollTo(0, 0);
   });
 
-  show((location.hash || '').slice(1) || 'rules');
+  show((location.hash || '').slice(1) || 'overview');
   var labels = JSON.parse(document.getElementById('label-data').textContent);
   var machines = JSON.parse(document.getElementById('machine-data').textContent);
   var templates = JSON.parse(document.getElementById('template-data').textContent);
@@ -1779,7 +1797,7 @@ function build(sources, { stamp } = {}) {
   const casebook = parseCases(sources.cases, ruleIds);
   const cases = casesPage(casebook);
   const plain = parsePlain(sources.plain);
-  const pageHtml = { rules: rules.html, machines: machines.html, tools, tests, templates, settings, adopt, glossary: glossary.html, cases: cases.html };
+  const pageHtml = { overview: overviewPage(plain, ruleIds), rules: rules.html, machines: machines.html, tools, tests, templates, settings, adopt, glossary: glossary.html, cases: cases.html };
   const main = PAGES.map((p) => withPlain(pageHtml[p.id], p, plain.pages.get(p.name), ruleIds)).join('\n');
   const nav = PAGES.map((p) => `<a href="#${p.id}" data-route="${p.id}"><span>${esc(p.name)}</span></a>`).join('');
   const labelJson = JSON.stringify(rules.labelData).replace(/</gu, '\\u003c');
@@ -1794,7 +1812,7 @@ function build(sources, { stamp } = {}) {
 <div class="app">
 <aside class="side">
 <div class="brand">協作套件<small>說明書</small></div>
-<nav aria-label="說明書的九頁">${nav}</nav>
+<nav aria-label="說明書的 ${PAGES.length} 頁">${nav}</nav>
 ${stamp ? `<p class="stamp">產生自套件 ${esc(stamp)}</p>` : ''}
 </aside>
 <main>
