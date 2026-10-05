@@ -67,9 +67,9 @@ const CASE_HIDDEN = /[\t\u2028\u2029]/u;
 const CASE_LINK = /^\[([a-z0-9-]+)\]\(([a-z0-9-]+)\.md\)/u;
 const CASE_AUTOLINK = /^<https:\/\/[^\s<>]+>/u;
 // GitHub 的網址自動連結（http://、https://、ftp://、www. 開頭）一路延伸到空白或「<」為止，中間的 *、`、[ 與像條號的字都算進網址、不排；
-// 說明書照字面印網址，碰到這種位置就說不準 GitHub 排不排，停
+// 說明書照字面印網址，碰到這種位置就說不準 GitHub 排不排，停。已經結束的灰底框、尖括號網址不算在那一段裡（GitHub 先排它們）
 const URL_START = /(?:https?|ftp):\/\/|www\./iu;
-const inUrl = (text, i) => URL_START.test(text.slice(0, i).split(/[\s<]/u).pop());
+const endsInUrl = (s) => URL_START.test(s.split(/[\s<]/u).pop());
 // 名詞頁：GLOSSARY.md「版面約定」那一節照規矩頁的讀法（parseLegend）讀；其餘一類名詞的一項＝「**名詞**：解釋」，
 // 名詞頁只認最簡單的名詞：不收 *、`、\
 const GLOSSARY_LEGEND = '版面約定';
@@ -444,13 +444,21 @@ function parseTemplates(text, files, ruleIds) {
  * 指到別則案例的連結 [檔名](檔名.md)（字跟檔名要一樣、那一則要在；前面緊接著沒跳脫的「!」＝GitHub 的圖片，停）排成行內的連結，
  * 字是那一則的標題、點了打開那一則；網址的自動連結 <https://…>（尖括號裡沒有空白與尖括號）照字面顯示、連尖括號，不變成連結。
  * ruleIds（只有名詞頁給：規則資料裡的條號）：灰底框外、原文裡前後不緊接半形英數字的「A〜K 加數字」排成點得到那一條規矩的行內連結，規則資料裡沒有的就停。
- * 網址（http://、https://、ftp://、www. 開頭）到下一個空白或「<」之前，又出現 *、`、[ 或像條號的字：GitHub 會把它們算進網址，停（見 URL_START）。
+ * 網址（http://、https://、ftp://、www. 開頭）到下一個空白或「<」之前，又出現 *、`、[ 或像條號的字：GitHub 會把它們算進網址，停（見 URL_START）；
+ * 網址從哪裡算起：上一個空白、「<」，或上一個已經結束的灰底框、尖括號網址之後（案例連結前面若有網址，到「[」就停了）。
  */
 function settingsInline(text, where, caseLinks = null, ruleIds = null) {
+  return inlineParts(text, where, caseLinks, ruleIds).html;
+}
+
+/** settingsInline 的本體：另外回傳最後那一段字從哪裡算起（runFrom），粗體收尾時用它看網址有沒有延伸到收尾的「**」。 */
+function inlineParts(text, where, caseLinks, ruleIds) {
   let out = '';
   let i = 0;
   // 上一個照字面印出的「!」在哪（跳脫的「\!」不算）：緊接著連結就是 GitHub 的圖片
   let bang = null;
+  let runFrom = 0;
+  const urlHere = (k) => endsInUrl(text.slice(runFrom, k));
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1] || '';
@@ -458,7 +466,7 @@ function settingsInline(text, where, caseLinks = null, ruleIds = null) {
       out += esc(next);
       i += 2;
     } else if (ch === '`') {
-      if (inUrl(text, i)) throw new LayoutError(`${where}：網址後面緊接著「\`」，GitHub 會把它算進網址、不排灰底框，說明書不排`);
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「\`」，GitHub 會把它算進網址、不排灰底框，說明書不排`);
       if (next === '`') throw new LayoutError(`${where}：連續的反引號，說明書不排`);
       const j = text.indexOf('`', i + 1);
       if (j < 0) throw new LayoutError(`${where}：反引號沒有成對，說明書不知道灰底框到哪裡結束`);
@@ -467,17 +475,21 @@ function settingsInline(text, where, caseLinks = null, ruleIds = null) {
       if (text[j + 1] === '`') throw new LayoutError(`${where}：連續的反引號，說明書不排`);
       out += `<code>${esc(code)}</code>`;
       i = j + 1;
+      runFrom = i;
     } else if (ch === '*') {
-      if (inUrl(text, i)) throw new LayoutError(`${where}：網址後面緊接著「*」，GitHub 會把它算進網址、不排粗體，說明書不排`);
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「*」，GitHub 會把它算進網址、不排粗體，說明書不排`);
       if (next !== '*' || text[i + 2] === '*') throw new LayoutError(`${where}：單獨的「*」或連續三個以上，GitHub 可能當成斜體，說明書不排`);
       const j = text.indexOf('**', i + 2);
       if (j < 0) throw new LayoutError(`${where}：** 沒有成對，說明書不知道粗體到哪裡結束`);
-      if (inUrl(text, j)) throw new LayoutError(`${where}：網址後面緊接著收尾的「**」，GitHub 會把它算進網址、不排粗體，說明書不排`);
       const inner = text.slice(i + 2, j);
       if (!inner || /^[\s\p{P}\p{S}]|[\s\p{P}\p{S}]$/u.test(inner) || text[j + 2] === '*') {
         throw new LayoutError(`${where}：粗體的頭尾緊貼空白或標點（或連著三個 *），GitHub 不一定當成粗體，說明書不排`);
       }
-      out += `<strong>${settingsInline(inner, where, caseLinks, ruleIds)}</strong>`;
+      const sub = inlineParts(inner, where, caseLinks, ruleIds);
+      if (endsInUrl(inner.slice(sub.runFrom))) throw new LayoutError(`${where}：網址後面緊接著收尾的「**」，GitHub 會把它算進網址、不排粗體，說明書不排`);
+      out += `<strong>${sub.html}</strong>`;
+      // 粗體裡有已經結束的灰底框之類：外面那一段從它後面算起
+      if (sub.runFrom > 0) runFrom = i + 2 + sub.runFrom;
       i = j + 2;
     } else if (ch === '_' || ch === '~') {
       let k = i;
@@ -493,10 +505,11 @@ function settingsInline(text, where, caseLinks = null, ruleIds = null) {
       if (!auto) throw new LayoutError(`${where}：「<」後面緊接著半形字元（英文、數字、標點），GitHub 可能當成 HTML、連結或信箱，說明書不排`);
       out += esc(auto[0]);
       i += auto[0].length;
+      runFrom = i;
     } else if (ch === '&' && /^[A-Za-z#]$/u.test(next)) {
       throw new LayoutError(`${where}：「&」後面接英文字母或 #，GitHub 可能當成字元代碼，說明書不排`);
     } else if (ch === '[') {
-      if (inUrl(text, i)) throw new LayoutError(`${where}：網址後面緊接著「[」，GitHub 會把它算進網址，說明書不排`);
+      if (urlHere(i)) throw new LayoutError(`${where}：網址後面緊接著「[」，GitHub 會把它算進網址，說明書不排`);
       const link = caseLinks ? text.slice(i).match(CASE_LINK) : null;
       if (!link) throw new LayoutError(`${where}：「[」GitHub 可能當成連結，說明書不排`);
       if (bang === i - 1) throw new LayoutError(`${where}：「![」GitHub 會當成圖片，說明書不排`);
@@ -507,7 +520,7 @@ function settingsInline(text, where, caseLinks = null, ruleIds = null) {
       i += link[0].length;
     } else if (ruleIds && !/[A-Za-z0-9]/u.test(text[i - 1] || '') && RULE_REF.test(text.slice(i))) {
       const id = text.slice(i).match(RULE_REF)[0];
-      if (inUrl(text, i)) throw new LayoutError(`${where}：網址裡有像條號的「${id}」，GitHub 會把它算進網址，說明書不知道它算不算條號`);
+      if (urlHere(i)) throw new LayoutError(`${where}：網址裡有像條號的「${id}」，GitHub 會把它算進網址，說明書不知道它算不算條號`);
       if (!ruleIds.includes(id)) throw new LayoutError(`${where}：條號 ${id} 不在規則資料裡`);
       // 行內的連結、不用鈕：鈕前後都可以斷行，「、」會掉到行首（案例頁量過）
       out += `<a href="#rules" class="rule-ref" data-goto="rule-${id}">${id}</a>`;
@@ -518,7 +531,7 @@ function settingsInline(text, where, caseLinks = null, ruleIds = null) {
       i += 1;
     }
   }
-  return out;
+  return { html: out, runFrom };
 }
 
 /** 表格的一列切成格：沒被反斜線跳脫的「|」才是分格（設定說明產生器把值裡的「|」寫成「\|」；範本裡要放「|」也這樣寫）。 */
@@ -1288,7 +1301,7 @@ function parseGlossary(md) {
         if (!m) throw new LayoutError(`${at}不是「**名詞**：解釋」的形狀（名詞裡不收 *、\`、\\），名詞頁不排`);
         const [, term, def] = m;
         if (/\s$/u.test(term)) throw new LayoutError(`${at}：名詞結尾有空白`);
-        if (inUrl(term, term.length)) throw new LayoutError(`${at}：名詞的結尾是網址，GitHub 會把收尾的 ** 算進網址、不排粗體，名詞頁不排`);
+        if (endsInUrl(term)) throw new LayoutError(`${at}：名詞的結尾是網址，GitHub 會把收尾的 ** 算進網址、不排粗體，名詞頁不排`);
         if (!def || /^\s/u.test(def)) throw new LayoutError(`${at}：「${term}」的解釋是空的、或開頭是空白`);
         if (seen.has(term)) throw new LayoutError(`${at}：名詞「${term}」出現兩次`);
         seen.add(term);
@@ -1577,7 +1590,7 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 
 // 網頁上的互動。開跳窗時背後的頁面會捲回頂端（html、body 鎖住捲動），所以開的時候記下捲到哪、關掉時捲回去，
 // 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
-// 名詞頁的條號是行內連結（<a>）：左鍵點、按 Enter 不照它的網址走，跟條號鈕一樣切到規矩頁、捲到那一條（中鍵、Cmd＋點照瀏覽器的做法，網址只帶到規矩頁）。
+// 名詞頁的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

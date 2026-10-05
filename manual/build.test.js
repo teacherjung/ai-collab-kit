@@ -6,7 +6,7 @@
 // 設定頁（設定說明產生器對空白範本的產出：每一節、段落、表格每一格、清單與子項）、範本全文跳窗（排得了的照設定頁那一套排、
 // 其餘照原始檔；規矩卡與範本頁的鈕對到哪一份）、套用頁（README 那兩節：每一節、每一段、編號清單每一步與底下的程式碼框、清單每一項）、
 // 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）、
-// 名詞頁（GLOSSARY.md「版面約定」以外的每一節：說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
+// 名詞頁（GLOSSARY.md 每一節照原文的順序：版面約定、說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——雲端考卷沒有瀏覽器；
@@ -2176,6 +2176,14 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
   assert.throws(() => manual.build({ ...src, glossary: src.glossary.replace('\n## 這份對照表怎麼用\n', '\n## 這份對照表怎麼用\n\n| a |\n|---|\n') }), /GLOSSARY\.md「這份對照表怎麼用」那一節要是「全是段落」或「剛好一串名詞清單」/u);
   assert.ok(!manual.renderSettings('# 標題\n\n## 一\n\n見 A1。\n').includes('rule-ref'), '設定頁不排條號連結');
   assert.throws(() => manual.renderSettings('# 標題\n\n## 一\n\n見 https://x.y/**a**。\n'), /網址後面緊接著「\*」/u, '設定頁也一樣：網址後面緊接著粗體記號就停');
+  // 網址從哪裡算起（r1 R1）：上一個空白、「<」，或上一個已經結束的灰底框、尖括號網址之後——框裡的網址、尖括號網址後面的記號照排
+  assert.equal(manual.renderSettings('# 標題\n\n## 一\n\n見 `https://example.com`，再看**說明**。\n').match(/<p>.*<\/p>/u)[0], '<p>見 <code>https://example.com</code>，再看<strong>說明</strong>。</p>', '設定頁：灰底框裡的網址後面，粗體照排');
+  assert.equal(manual.settingsInline('見 `https://x.y`與`框`、**粗`https://z.w`粗**`框`。', 't'), '見 <code>https://x.y</code>與<code>框</code>、<strong>粗<code>https://z.w</code>粗</strong><code>框</code>。', '灰底框裡的網址後面，灰底框照排；粗體裡的也一樣，粗體後面也一樣');
+  assert.equal(manual.settingsInline('見 <https://x.y>**粗**與[ab](ab.md)，[ab](ab.md)`框`。', 't', new Map([['ab', '乙']])), '見 &lt;https://x.y&gt;<strong>粗</strong>與<a href="#cases" class="case-link" data-case="ab">乙</a>，<a href="#cases" class="case-link" data-case="ab">乙</a><code>框</code>。', '案例頁：尖括號網址、案例連結後面，粗體、連結、灰底框照排');
+  assert.equal(manual.settingsInline('見 `https://x.y`、A4。', 't', null, ruleIds), `見 <code>https://x.y</code>、${ref('A4')}。`, '名詞頁：灰底框裡的網址後面，條號照連');
+  for (const [s, links, why] of [['見 `c` https://x.y**粗**。', null, /網址後面緊接著「\*」/u], ['見 <https://a.b> https://x.y`c`。', new Map(), /網址後面緊接著「`」/u], ['見 [ab](ab.md) https://x.y[ab](ab.md)。', new Map([['ab', '乙']]), /網址後面緊接著「\[」/u], ['見 **粗** https://x.y**粗**。', null, /網址後面緊接著「\*」/u]]) {
+    assert.throws(() => manual.settingsInline(s, 't', links), why, `${s}：灰底框、尖括號網址、案例連結、粗體後面另起的裸網址，後面緊接記號照停`);
+  }
   assert.ok(!manual.renderAdopt('# 套件\n\n## 搬進一個專案\n\n見 A1。\n\n## 專案裡改到套件的檔\n\n- 例外\n').includes('rule-ref'), '套用頁不排條號連結');
   assert.ok(!manual.templateView({ path: 'templates/t.md', text: '# 標題\n\n見 A1。\n' }).html.includes('rule-ref'), '範本跳窗不排條號連結');
 });
