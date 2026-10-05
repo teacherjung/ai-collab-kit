@@ -7,10 +7,11 @@
 // 守得到的：考題檔的集合不漂（多一支、少一支、改名都紅）。
 // 另一題守日常考卷不跑說明書（擁有者 2026-10-05：說明書網頁只在他明確要求時更新）：manual/ 底下沒有 node --test 會自動撿到的檔，
 //   產生器與專屬考題留著；檔名寫法跟這台機器的 node 實際撿不撿對過一次。
-//   只在套件倉庫跑，認的是根目錄 package.json 的名字、不是 manual/ 在不在：tests/ 會整批搬進使用專案，
-//   使用專案可能有自己的 manual/（#39 r1）。
+//   只在套件倉庫跑，套件身分只認根目錄 package.json 的名字、不拿 manual/ 或裡面哪個檔在不在來猜：tests/ 會整批搬進使用專案，
+//   使用專案可能有自己的 manual/，連檔名都可能跟套件的一樣（#39 r1、r2）。
 // ⚠️ 守不到的：兩支同時被刪；清單被一起改掉（那是看得見的，由複審者看）；套件倉庫的 package.json 改了名字、
-//   同時刪掉說明書的專屬考題（兩樣都改，說明書那題就跳過）；名字也叫 ai-collab-kit 的使用專案會被當成套件倉庫照查。
+//   或這支裡的套件名字寫錯（說明書那題就在套件倉庫也跳過——看得見的改動，靠複審）；名字也叫 ai-collab-kit 的使用專案
+//   會被當成套件倉庫照查；搭使用專案那一題在子行程裡自己跳過（不然會一直搭下去），它自己裡面寫的檢查不在那次回歸裡。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -61,30 +62,31 @@ test(GUARD, { skip: IN_KIT ? false : `不是套件倉庫（根目錄 package.jso
   }
 });
 
-test('使用專案有自己的 manual/（例如放文件、自己的考題）：上面那題跳過、不誤擋；同一個目錄換成套件的名字就照查（#39 r1）', () => {
-  // 名字要跟「有套件說明書的專屬考題」對得上：有那支考題卻沒認成套件＝名字寫錯，上面那題會靜靜跳過
-  if (fs.existsSync(path.join(MANUAL, 'build.verify.js'))) assert.ok(IN_KIT, `有套件說明書的專屬考題，根目錄 package.json 的名字卻不是 ${KIT_NAME}：上面那題會跳過`);
+test('使用專案有自己的 manual/（文件、自己的考題，連套件的檔名都有）：整支共用考題照綠、守門那題跳過；同一個目錄換成套件的名字就照查（#39 r1、r2）', { skip: process.env.KIT_MANIFEST_CHILD === '1' ? '子行程裡不再搭一次' : false }, () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-own-manual-'));
   try {
-    fs.mkdirSync(path.join(proj, 'tests'));
+    // 照使用專案的樣子搭：tests/ 整份搬過去（這支會跟著共用檔搬），manual/ 是專案自己的、連檔名都跟套件的撞
+    fs.cpSync(__dirname, path.join(proj, 'tests'), { recursive: true });
     fs.mkdirSync(path.join(proj, 'manual'));
-    fs.copyFileSync(__filename, path.join(proj, 'tests', path.basename(__filename)));
     fs.writeFileSync(path.join(proj, 'manual', 'README.md'), '# 專案自己的手冊\n');
-    fs.writeFileSync(path.join(proj, 'manual', 'own.test.js'), "require('node:test')('專案自己的考題', () => {});\n");
-    const run = (name) => {
-      fs.writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ name }));
-      const env = { ...process.env };
+    fs.writeFileSync(path.join(proj, 'manual', 'build.js'), '// 專案自己的產生器\n');
+    for (const name of ['own.test.js', 'build.verify.js']) fs.writeFileSync(path.join(proj, 'manual', name), "require('node:test')('專案自己的考題', () => {});\n");
+    const run = (pkg) => {
+      const at = path.join(proj, 'package.json');
+      if (pkg) fs.writeFileSync(at, JSON.stringify(pkg)); else fs.rmSync(at, { force: true });
+      const env = { ...process.env, KIT_MANIFEST_CHILD: '1' };
       delete env.NODE_TEST_CONTEXT;   // 不拿掉的話子行程的 node --test 不管紅不紅都退 0
-      // 只跑上面那一題：這一題的名字對不上，子行程裡不會再搭一次
-      const only = `--test-name-pattern=^${GUARD.split('：')[0]}`;
-      return spawnSync(process.execPath, ['--test', '--test-reporter=tap', only, path.join('tests', path.basename(__filename))], { cwd: proj, env, encoding: 'utf8' });
+      return spawnSync(process.execPath, ['--test', '--test-reporter=tap', path.join('tests', path.basename(__filename))], { cwd: proj, env, encoding: 'utf8' });
     };
-    const own = run('some-project');
-    assert.equal(own.status, 0, `使用專案有自己的 manual/ 就被擋：\n${own.stdout}${own.stderr}`);
-    assert.match(own.stdout, /^ok \d+ - 日常考卷不跑說明書[^\n]*# SKIP/mu, '使用專案裡那題要跳過');
-    const asKit = run(KIT_NAME);   // 對照組：只換名字＝當成套件倉庫，那題真的跑，這個 manual/ 沒有產生器所以紅
-    assert.equal(asKit.status, 1, `對照組：換成套件的名字，那題要照查而且紅：\n${asKit.stdout}${asKit.stderr}`);
-    assert.match(asKit.stdout, /^not ok \d+ - 日常考卷不跑說明書/mu, '對照組：紅的是那一題');
+    for (const pkg of [{ name: 'some-project' }, null]) {
+      const r = run(pkg);
+      const who = pkg ? `名字是 ${pkg.name}` : '沒有 package.json';
+      assert.equal(r.status, 0, `使用專案（${who}）有自己的 manual/，整支共用考題就紅：\n${r.stdout}${r.stderr}`);
+      assert.match(r.stdout, /^ok \d+ - 日常考卷不跑說明書[^\n]*# SKIP/mu, `使用專案（${who}）裡守門那題要跳過`);
+    }
+    const asKit = run({ name: KIT_NAME });   // 對照組：只換名字＝當成套件倉庫，守門那題真的跑；這個 manual/ 有會被自動撿到的考題所以紅
+    assert.equal(asKit.status, 1, `對照組：換成套件的名字，守門那題要照查而且紅：\n${asKit.stdout}${asKit.stderr}`);
+    assert.match(asKit.stdout, /^not ok \d+ - 日常考卷不跑說明書/mu, '對照組：紅的是守門那題');
   } finally {
     fs.rmSync(proj, { recursive: true, force: true });
   }
