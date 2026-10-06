@@ -1,0 +1,9 @@
+# 考題掃不到，被寫成規矩不適用
+
+- 日期：2026-09-22
+- 本文條號：J3、K4、E6
+- 發生什麼：實作者把各方共用、放在倉庫外的進度摘要改成英文檔名，理由寫的是裁示者指出、違反「檔名一律用英文」的慣例（裁示者那段後來標成實作者轉述）。掃描者說這句撐不住：寫下來的那條（檔名那條規矩加上守它的考題）只管倉庫裡被追蹤的路徑；材料撐得住的是「這條慣例掃不到它」，撐不住「它已經違反慣例」。實作者照收，改寫成「跟的是裁示者的慣例，不是那條規則的適用範圍」。下一輪複審者回原文查：規矩原文是「檔名只用英文字母、數字、半形符號」，沒有「只管被追蹤的路徑」這個限定；只看追蹤路徑的是守它的考題（它列檔用的是版本控制的追蹤清單）。考題掃不到，只說明這裡沒有機器守、要靠自覺，不說明規矩不管。實作者下一顆提交就撤回那句，改成照規矩辦、附上原文，射程只寫到考題掃不到、這裡靠自覺。另外量到：當時那個專案守這條的考題有兩支，機器清單登記的是後來加的那一支；掃描回覆、複審留言、實作者改的那一行都只提到較早、沒登記在機器清單上的那一支。兩支都只列追蹤清單，射程結論不變；登記的那一支，機器清單「守不到的」那一欄寫的就是「未追蹤的檔」。
+- 代價：錯句進了分支上的一顆提交，下一顆就撤回，沒有進主幹（合併後主幹那份檔裡零處）。複審第三輪三條裡兩條需修，這是其中一條。PR說明的掃描逐條判定裡，那一列沒跟著改：第四輪唯一一條需修點名的三處之一；第五輪再要那一列改回四種判定裡的「誤報」（紀錄格式瑕疵，不單獨阻擋）。第三到第五輪連三輪抓到同一族（說明裡的活文字沒同步），最後裁示者裁定整份PR說明重寫、各輪處置改成留言（那則裁示留痕是實作者轉述）；那一列是第四、五輪點名的位置之一，不是那一族的全部。
+- 教訓：機器守到哪，不等於規矩管到哪：考題、閘掃不到的地方，規矩照樣管，只是改成靠自覺。要寫某條規矩「不適用」「只管…」之前，先貼它的原文；原文沒有那個限定就不寫。別人（包括掃描者）這樣說，也先回原文查過再收；第四輪複審者寫的是「指出掃描意見有錯不免除實作者查原文的責任」。要說「守它的考題」是哪一支之前，先查機器清單登記的是哪幾支。
+- 來源：PFW #632（2026-09-22）第三輪複審 <https://github.com/teacherjung/personal-finance-webapp/pull/632#issuecomment-5764951301>、第四輪 <https://github.com/teacherjung/personal-finance-webapp/pull/632#issuecomment-5765079342>、第五輪 <https://github.com/teacherjung/personal-finance-webapp/pull/632#issuecomment-5765141919>、整份重寫的裁示留痕（實作者轉述）<https://github.com/teacherjung/personal-finance-webapp/pull/632#issuecomment-5770478503>、PR說明裡的掃描回覆原文與逐條判定 <https://github.com/teacherjung/personal-finance-webapp/pull/632>、撤回那顆提交時的機器清單（這條登記的考題與「守不到的」一欄）<https://github.com/teacherjung/personal-finance-webapp/blob/4197a730326d48c3b5dfae9e58fe91ff3b73189b/MACHINES.md>
+- 相關：[no-explicit-rule-vs-not-on-this-table](no-explicit-rule-vs-not-on-this-table.md)、[scan-finding-transcribed-backwards](scan-finding-transcribed-backwards.md)、[quote-rules-verbatim](quote-rules-verbatim.md)、[english-only-filenames](english-only-filenames.md)、[guard-claims-vs-evidence](guard-claims-vs-evidence.md)、[behavior-change-stale-prose](behavior-change-stale-prose.md)
