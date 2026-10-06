@@ -11,6 +11,7 @@
 // 其餘照原始檔；規矩卡與範本頁的鈕對到哪一份）、套用頁（README 那兩節：每一節、每一段、編號清單每一步與底下的程式碼框、清單每一項）、
 // 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）、
 // 名詞頁（GLOSSARY.md 每一節照原文的順序：版面約定、說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
+// 白話說明（manual/plain.md：每一頁開頭那一段、來源那一行補的那一句）與總覽頁（排第一、打開先看到它、優缺點每一項）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
 // 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
@@ -33,6 +34,43 @@ const strip = (html) => html.replace(/<[^>]+>/gu, '');
 const escT = (v) => String(v).replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;');
 // 分類的字寫死在這裡，不拿產生器的 KIND_TEXT 當答案（2026-09-30 自審：原本叫「機器把關」講得比標籤大）
 const KIND = { machine: '只列機器', mixed: '機器＋靠自覺', self: '只有靠自覺' };
+// 白話說明（manual/plain.md，手寫）：來源那一行補的句子寫死在這裡，不拿產生器的字當答案
+const PLAIN_NOTE = '最上面那段白話說明是手寫的（manual/plain.md）。';
+
+/** 考題自己讀 manual/plain.md（說明書一段只收一行）：每一節的標題、段落、「- 」條列。 */
+function ownPlain(md) {
+  const sections = [];
+  for (const line of md.replace(/\n$/u, '').split('\n').slice(1)) {
+    if (line.startsWith('## ')) sections.push({ title: line.slice(3), paras: [], items: [] });
+    else if (line && sections.length) {
+      const sec = sections[sections.length - 1];
+      if (line.startsWith('- ')) sec.items.push(line.slice(2));
+      else sec.paras.push(line);
+    }
+  }
+  return sections;
+}
+
+/**
+ * 拿掉每一頁的白話說明與來源那一行補的句子：各頁自己的考題只比自動產生的部分，白話說明由 ⑳ 逐頁逐段比。
+ * 拿之前先核：每一頁剛好各一個（多一個、少一個都紅，不會因為拿掉而看不見）。
+ */
+function withoutPlain(html) {
+  const BLOCK = /<div class="plain">(?:<p>[^\n]*?<\/p>)+<\/div>\n/gu;
+  const chunks = html.split('<section class="page" id="page-').slice(1);
+  assert.ok(chunks.length >= 1, '前提：這份網頁裡有頁');
+  for (const c of chunks) {
+    const id = c.slice(0, c.indexOf('"'));
+    assert.equal((c.match(BLOCK) || []).length, 1, `「${id}」頁要剛好一段白話說明`);
+    assert.equal(c.split(`${PLAIN_NOTE}</p>`).length - 1, 1, `「${id}」頁的來源那一行要剛好補一句白話說明是手寫的`);
+  }
+  return html.replace(BLOCK, '').split(`${PLAIN_NOTE}</p>`).join('</p>');
+}
+/** 產生整份網頁，交出拿掉白話說明的那一份（給只比自動產生部分的考題用）。 */
+const bare = (src, opts) => {
+  const built = manual.build(src, opts);
+  return { ...built, html: withoutPlain(built.html) };
+};
 
 /** 考題自己的對照：照規則資料的切法（規則書產生器的 tokenize＝資料契約）換成預期的 HTML。 */
 function expectHtml(value, roles) {
@@ -304,7 +342,7 @@ test('③ 頁面上的數字：篩選鈕、頁首總數、各節條數、卡片�
   const bar = [...html.matchAll(/class="bar-seg seg-(\w+)" style="flex-grow:(\d+)"/gu)].map((m) => [m[1], Number(m[2])]);
   assert.deepEqual(bar, [['machine', tally.machine], ['mixed', tally.mixed], ['self', tally.self]], '比例條三段的長短要等於三類的條數');
   assert.ok(html.includes(`<p class="page-sum">${total} 條，分 ${o.rules.sections.length} 節`), '頁首的總條數或節數不對');
-  assert.equal(html.match(/<section class="page" id="page-rules" data-page="rules">[\s\S]*?<h1>([^<]*)<\/h1>/u)[1], escT(o.rules.title), '規矩頁的大標題要是規則資料的標題');
+  assert.equal(html.match(/<section class="page" id="page-rules" data-page="rules" hidden>[\s\S]*?<h1>([^<]*)<\/h1>/u)[1], escT(o.rules.title), '規矩頁的大標題要是規則資料的標題');
   assert.deepEqual(manual.KIND_TEXT, KIND, '分類的字改了：要連這一題與 PR 說明一起改');
   assert.ok(html.includes('這三類只照每一條「把關」那一行列了哪些名字來分，不代表整條都有人守住'), '頁上講分類的那句不見了');
   for (const s of o.rules.sections) {
@@ -466,7 +504,7 @@ test('⑥ 跳脫與原文：尖括號以文字出現；版面約定逐條與開�
   assert.equal(manual.esc('"&<>'), '&quot;&amp;&lt;&gt;');
 });
 
-test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、[hidden] 一定藏得住、顏色都有深色版、九頁照擁有者列的順序', () => {
+test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、[hidden] 一定藏得住、顏色都有深色版、總覽在前、其餘九頁照擁有者列的順序', () => {
   const { html } = manual.build(sources(), { stamp: '測試' });
   assert.match(html.slice(0, 8192), /<title>[^<]+<\/title>/u);
   assert.doesNotMatch(html, /<!doctype|<html[\s>]|<body[\s>]/iu);
@@ -481,8 +519,8 @@ test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、
   for (const t of light) assert.ok(darkMedia.has(t) && darkAttr.has(t), `顏色 ${t} 沒有深色版`);
   assert.doesNotMatch(css.replace(/:root[^{]*\{[^}]*\}/gu, ''), /#[0-9a-f]{3,8}\b|rgba?\(/iu, '元件的顏色要用變數，不寫死');
   const routes = [...html.matchAll(/data-route="([a-z]+)"/gu)].map((x) => x[1]);
-  assert.deepEqual(routes, ['rules', 'machines', 'tools', 'tests', 'templates', 'settings', 'adopt', 'glossary', 'cases']);
-  assert.deepEqual(manual.PAGES.map((p) => p.name), ['規矩', '機器', '工具', '考題', '範本', '設定', '套用', '名詞', '案例']);
+  assert.deepEqual(routes, ['overview', 'rules', 'machines', 'tools', 'tests', 'templates', 'settings', 'adopt', 'glossary', 'cases']);
+  assert.deepEqual(manual.PAGES.map((p) => p.name), ['總覽', '規矩', '機器', '工具', '考題', '範本', '設定', '套用', '名詞', '案例']);
   for (const p of [manual.ROOT, os.homedir(), os.tmpdir()]) assert.ok(!html.includes(p), `產出裡有這台機器的路徑：${p}`);
   // 家目錄前綴的形狀：範本跳窗資料以外一個都不准有；範本跳窗資料的每一筆（鍵與所有欄位）出現的次數要跟那份範本檔一樣（公開檢查清單本來就拿這幾個前綴當例子）
   const tplJson = html.match(/id="template-data">([\s\S]*?)<\/script>/u)[1];
@@ -500,9 +538,9 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   const ok = run(['--stamp', '測試']);
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
-  assert.match(ok.stderr, /產好說明書：9 頁/u);
+  assert.match(ok.stderr, /產好說明書：10 頁/u);
   const laidOut = Object.values(JSON.parse(ok.stdout.match(/id="template-data">([\s\S]*?)<\/script>/u)[1])).filter((e) => e.html.includes('<div class="tpl-body">')).length;
-  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；名詞 ${ownGlossary(disk('GLOSSARY.md')).sections.reduce((n, s) => n + (s.terms ? s.terms.length : 0), 0)} 個；案例 ${ownCaseSources().files.length} 則）\n$`, 'u'));
+  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；名詞 ${ownGlossary(disk('GLOSSARY.md')).sections.reduce((n, s) => n + (s.terms ? s.terms.length : 0), 0)} 個；案例 ${ownCaseSources().files.length} 則；白話說明 ${ownPlain(disk('manual/plain.md')).filter((sec) => sec.paras.length).length} 頁）\n$`, 'u'));
   const out = run(['--out', 'x.html']);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /產生器不自己存檔/u);
@@ -516,7 +554,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   try {
     // 來源壞掉：在複本裡把版面約定拿掉再跑
     const kit = path.join(dir, 'kit');
-    for (const rel of ['manual/build.js', 'rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) {
+    for (const rel of ['manual/build.js', 'manual/plain.md', 'rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) {
       fs.mkdirSync(path.dirname(path.join(kit, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(kit, rel));
     }
@@ -657,10 +695,11 @@ test('⑪ 規矩頁的「機器表」連結：每一條列出的列＝機器表�
   assert.equal(new Set(titles).size, titles.length, '兩列機器的跳窗標題一樣，分不出是哪一列');
 });
 
-test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md、案例簿）', () => {
+test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md、案例簿、手寫的白話說明與優缺點）', () => {
   const src = sources();
   const o = own();
-  assert.deepEqual(Object.keys(src).sort(), ['cases', 'glossary', 'machines', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.deepEqual(Object.keys(src).sort(), ['cases', 'glossary', 'machines', 'plain', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.equal(src.plain, disk('manual/plain.md'), 'manual/plain.md 讀進來跟磁碟上的不一樣');
   const ownCases = ownCaseSources();
   assert.ok(ownCases.files.length >= 100, '考題自己列到的案例太少');
   assert.deepEqual(src.cases, ownCases, '案例簿（index.json、每一則的檔名、順序、原文）讀進來跟磁碟上的不一樣');
@@ -678,7 +717,7 @@ test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁�
 
 test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則；說明是檔頭第一句；列出的機器表列＝「原專案的實作」欄寫到它的列；清單跟資料夾對不上就停', () => {
   const src = sources();
-  const { html } = manual.build(src);
+  const { html } = bare(src);
   const tests = ownTests();
   const rows = ownMachineRows(disk('MACHINES.md'));
   const labels = ownRowLabels(rows);
@@ -769,7 +808,7 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
 test('⑭ 範本頁：MACHINES.md「範本」那一節每一則一張卡、照原文順序；檔名、說明、看全文的鈕、說明裡的條號、寫到它的機器表列都對；每一份範本剛好出現一次；形狀不對就停', () => {
   const src = sources();
   const o = own();
-  const { html } = manual.build(src);
+  const { html } = bare(src);
   const withTemplates = (...extra) => [...src.templates, ...extra.map((p) => ({ path: p, text: `${p}\n` }))].sort((a, b) => (a.path < b.path ? -1 : 1));
   const items = ownTemplates(o.machines);
   const rows = ownMachineRows(o.machines);
@@ -1069,7 +1108,7 @@ function ownDocCounts(doc) {
 
 test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節、每一段、表格每一格、清單與子項都照原文（跳脫的標點還原），整頁不多不少；認不得的形狀就停', () => {
   const src = sources();
-  const { html } = manual.build(src);
+  const { html } = bare(src);
   const md = require('../tools/build-settings.js').build(JSON.parse(disk('tests/helpers/unfilled-settings.json')));
   const doc = ownSettingsDoc(md);
   assert.equal(doc.sections.length, SETTINGS_JUMPS.length, '考題自己讀到的節數跟寫死的樣本不一樣（樣本要跟著設定說明產生器改）');
@@ -1208,7 +1247,10 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   assert.throws(() => manual.build({ ...src, settingsTemplate: '{}' }), /空白設定範本產生不出設定說明/u);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-settings-'));
   try {
-    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md']) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
+    }
     for (const d of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
     assert.doesNotThrow(() => manual.readSources(dir), '對照組：複本本身要讀得到');
     fs.rmSync(path.join(dir, 'tests', 'helpers', 'unfilled-settings.json'));
@@ -1255,7 +1297,7 @@ function checkLaidOut(body, md, where) {
 test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得了的 .md 照設定頁那一套排（逐塊、看得到的字、標籤個數都照原文），其餘照原始檔一字不差；規矩卡的「範本」鈕＝MACHINES.md 寫到那一條的範本；F2 點得到複審必驗清單', () => {
   const src = sources();
   const o = own();
-  const built = manual.build(src);
+  const built = bare(src);
   const { html } = built;
   const files = fs.readdirSync(path.join(manual.ROOT, 'templates')).map((f) => `templates/${f}`).sort();
   const items = ownTemplates(o.machines);
@@ -1454,7 +1496,7 @@ function checkAdoptPage(page, readme, where) {
 
 test('⑰ 套用頁：README.md「搬進一個專案」「專案裡改到套件的檔」兩節照說明書的排法排——每一節、每一段、編號清單每一步（含底下的程式碼框）、清單每一項都照原文，粗體與灰底框包住的字也對；整頁不多不少；認不得的形狀就停', () => {
   const src = sources();
-  const built = manual.build(src);
+  const built = bare(src);
   const { html } = built;
   const readme = disk('README.md');
   assert.deepEqual(manual.ADOPT_HEADINGS, ADOPT_HEADS, '套用頁取的節改了：要連這一題一起改');
@@ -1702,7 +1744,7 @@ function checkCasesPage({ html, caseData }, cases, where) {
 
 test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、條號），點開的跳窗每一欄照原文（灰底框、粗體、指到別則的連結、網址照字面）；索引的說明與末尾小節照原文；順序與標題跟 cases/README.md 一樣；認不得的形狀就停', () => {
   const src = sources();
-  const built = manual.build(src);
+  const built = bare(src);
   const { html } = built;
   const ruleIds = own().rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
   const caseData = JSON.parse(html.match(/<script type="application\/json" id="case-data">([\s\S]*?)<\/script>/u)[1]);
@@ -2018,7 +2060,7 @@ function checkGlossaryPage(html, md, where) {
 
 test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定照規矩頁的讀法；說明一段一段；一類名詞一節，每一個名詞與解釋照原文），寫到的條號點得到那一條規矩；整頁不多不少；認不得的形狀與不在規則資料裡的條號就停', () => {
   const src = sources();
-  const built = manual.build(src);
+  const built = bare(src);
   const { html } = built;
   const ruleIds = own().rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
   const pageHtml = html.match(/<section class="page" id="page-glossary" data-page="glossary" hidden>[\s\S]*?<p class="source-note">來源：GLOSSARY\.md [^<]*<\/p>\n<\/section>/u)[0];
@@ -2029,20 +2071,21 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
   assert.ok(g.sections.some((s) => s.paras), '前提：真的對照表裡有一節說明（才驗得到說明照段落排）');
   assert.ok(g.sections.some((s) => s.legend && s.legend.bullets.length >= 3), '前提：真的對照表裡有版面約定（才驗得到它排在這一頁）');
   assert.equal(built.glossaryTerms, total, '回傳的名詞數不對');
-  // 每一個條號連結都跳得到規矩頁的那一條；條號連結只有名詞頁有（別頁、跳窗資料照舊，樣式裡那一條除外）
+  // 每一個條號連結都跳得到規矩頁的那一條；條號連結只開給名詞頁與手寫的白話說明、優缺點（別頁自動產生的部分、跳窗資料照舊，樣式裡那一條除外）
   const refs = [...pageHtml.matchAll(/data-goto="rule-([A-K][0-9]+)"/gu)].map((m) => m[1]);
   assert.ok(refs.length >= 100, '前提：真的對照表裡的條號連結太少');
   for (const id of new Set(refs)) assert.ok(html.includes(`<article class="rule" id="rule-${id}"`), `條號連結 ${id} 在規矩頁找不到`);
   const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
   const n = (s) => s.split('rule-ref').length - 1;
-  assert.equal(n(html), n(pageHtml) + n(css), '條號連結只開給名詞頁');
+  const ov = html.slice(html.indexOf('<section class="page" id="page-overview"'), html.indexOf('<section class="page" id="page-rules"'));
+  assert.equal(n(html), n(pageHtml) + n(css) + n(ov), '條號連結只開給名詞頁與總覽的優缺點（這裡比的網頁已拿掉白話說明，白話說明的條號由 ⑳ 驗）');
   // 寫死的樣本：名詞裡的條號、灰底框照字面、解釋裡的角色粗體、版面約定裡的條號
   assert.ok(pageHtml.includes('<dt><strong>套件（<a href="#rules" class="rule-ref" data-goto="rule-F1">F1</a>）</strong></dt>'), '名詞裡的條號也點得到（寫死的樣本）');
   assert.ok(pageHtml.includes('<dt><strong>灰底框</strong></dt><dd>要一字不差照抄的字句，例如 <code>沒有</code>；尖括號裡是要換成實際內容的地方，例如 <code>未執行：&lt;原因&gt;</code>（版面約定）。</dd>'), '灰底框照字面（寫死的樣本）');
   assert.ok(pageHtml.includes('開一支 PR 請 <strong>複審者</strong> 複審'), '解釋裡的角色粗體（寫死的樣本）');
   assert.ok(pageHtml.includes('<li>條號用【】包在最前面；有子點的攤開，項目有固定個數時可以用編號（例如 <a href="#rules" class="rule-ref" data-goto="rule-E1">E1</a> 的四欄）；標籤獨立最後一行、以登記的名字開頭（例如「靠自覺」）</li>'), '版面約定也排在這一頁，條號點得到（寫死的樣本）');
   assert.ok(html.includes('<a href="#glossary" data-route="glossary"><span>名詞</span></a>'), '目錄上的名詞不該再標「準備中」');
-  assert.ok(!html.includes('class="soon"') && !html.includes('class="pending"'), '九頁都有內容，不該再有「準備中」');
+  assert.ok(!html.includes('class="soon"') && !html.includes('class="pending"'), '每一頁都有內容，不該再有「準備中」');
   assert.ok(html.includes('<p class="source-note">來源：GLOSSARY.md 整份，照原文的順序：大標題；「版面約定」照規矩頁讀它的那一套讀（開頭一段＋條列）；其餘每一節，全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞。這一頁不照 GitHub 的畫法：只排灰底框、粗體、條列，條號（灰底框以外、原文裡前後不緊接半形英數字的 A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與名詞後面那個「：」（名詞與解釋分成兩欄）不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號，或緊接在網址後面的排版記號），以及規則資料裡沒有的條號，會讓整份停下不產生。</p>'), '名詞頁的來源註記不對');
   // 互動接線（這一支不開瀏覽器，這裡只釘住程式在、更新網頁時另外用瀏覽器量）與樣式
   assert.ok(html.includes("var go = t.closest('[data-goto]'); if (go) { e.preventDefault(); closeModal(false); goTo(go.getAttribute('data-goto')); return; }"), '點條號連結不照它的網址走，切到規矩頁那一條');
@@ -2143,6 +2186,8 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
     ['網址後面緊接灰底框', ed('名詞裡的條號也連結。', '見 https://example.com/`x`。'), /「套件（F1）」的解釋：網址後面緊接著「`」/u],
     ['網址裡像條號的字', ed('名詞裡的條號也連結。', '見 https://example.com/A1。'), /「套件（F1）」的解釋：網址裡有像條號的「A1」/u],
     ['www 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 www.example.com/**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
+    ['http 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 http://example.com/x**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
+    ['ftp 網址後面緊接粗體', ed('名詞裡的條號也連結。', '見 ftp://example.com/x**粗**。'), /「套件（F1）」的解釋：網址後面緊接著「\*」/u],
     ['版面約定裡沒收尾的程式碼框', ed('開頭的續行接成同一段（B1 也連結）', '~~~'), /GLOSSARY\.md 第 6 行：開頭是沒跳脫的半形標點（~）/u],
     ['版面約定裡的分隔線', ed('開頭的續行接成同一段（B1 也連結）', '---'), /GLOSSARY\.md 第 6 行：開頭是沒跳脫的半形標點（-）/u],
     ['版面約定的條列開頭是記號', ed('- **條號**用【】', '- ```條號用【】'), /GLOSSARY\.md 第 8 行：開頭是沒跳脫的半形標點（`）/u],
@@ -2174,7 +2219,7 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
     assert.notEqual(x, RICH, `「${name}」這一發沒有改到來源`);
     assert.throws(() => manual.renderGlossary(x, ruleIds), why, `「${name}」應該停下、而且原因要對`);
   }
-  // 整份產生時也停；條號連結只開給名詞頁：設定頁、範本跳窗、套用頁、案例頁照舊
+  // 整份產生時也停；條號連結只開給名詞頁與手寫的白話說明、優缺點：設定頁、範本跳窗、套用頁、案例頁照舊
   assert.throws(() => manual.build({ ...src, glossary: src.glossary.replace('\n## 這份對照表怎麼用\n', '\n## 這份對照表怎麼用\n\n| a |\n|---|\n') }), /GLOSSARY\.md「這份對照表怎麼用」那一節要是「全是段落」或「剛好一串名詞清單」/u);
   assert.ok(!manual.renderSettings('# 標題\n\n## 一\n\n見 A1。\n').includes('rule-ref'), '設定頁不排條號連結');
   assert.throws(() => manual.renderSettings('# 標題\n\n## 一\n\n見 https://x.y/**a**。\n'), /網址後面緊接著「\*」/u, '設定頁也一樣：網址後面緊接著粗體記號就停');
@@ -2189,4 +2234,143 @@ test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定�
   }
   assert.ok(!manual.renderAdopt('# 套件\n\n## 搬進一個專案\n\n見 A1。\n\n## 專案裡改到套件的檔\n\n- 例外\n').includes('rule-ref'), '套用頁不排條號連結');
   assert.ok(!manual.templateView({ path: 'templates/t.md', text: '# 標題\n\n見 A1。\n' }).html.includes('rule-ref'), '範本跳窗不排條號連結');
+});
+
+test('⑳ 白話說明：manual/plain.md 每一頁各一節（總覽也算一頁），每一段照原文放進同名那一頁的開頭（標題底下、自動產生的那一句上面），來源那一行補一句它是手寫的；節多、少、重複、順序不對、空的、形狀不對、讀不到，都停', () => {
+  const src = sources();
+  const built = manual.build(src);
+  const { html } = built;
+  const base = disk('manual/plain.md');
+  const secs = ownPlain(base);
+  // 頁名與網址代號寫死在這裡，不拿產生器的 PAGES 當答案
+  const PAGE_IDS = [['總覽', 'overview'], ['規矩', 'rules'], ['機器', 'machines'], ['工具', 'tools'], ['考題', 'tests'], ['範本', 'templates'], ['設定', 'settings'], ['套用', 'adopt'], ['名詞', 'glossary'], ['案例', 'cases']];
+  assert.deepEqual(secs.map((sec) => sec.title), [...PAGE_IDS.map(([n]) => n), '優點', '缺點'], '前提：手寫檔的節（考題自己讀的）');
+  assert.equal(built.plainPages, PAGE_IDS.length, '回傳的白話說明頁數');
+  const chunks = html.split('<section class="page" id="page-').slice(1);
+  assert.equal(chunks.length, PAGE_IDS.length, '前提：網頁上的頁數');
+  PAGE_IDS.forEach(([name, id], k) => {
+    const sec = secs[k];
+    assert.ok(sec.paras.length && !sec.items.length, `前提：「${name}」那一節全是段落`);
+    // 真的白話說明照字面比；行內排版（粗體、灰底框、條號、要跳脫的字）由下面的對照組驗
+    for (const p of sec.paras) assert.doesNotMatch(p, /[*`<>&"\\]|[A-K][0-9]/u, `前提：「${name}」的白話說明沒有行內記號、要跳脫的字或條號（有的話這一題的預期要跟著改）`);
+    const page = chunks.find((c) => c.startsWith(`${id}"`));
+    assert.ok(page, `「${name}」頁不在網頁上`);
+    const head = page.slice(page.indexOf('<header class="page-head">'), page.indexOf('</header>'));
+    const want = `</h1>\n<div class="plain">${sec.paras.map((p) => `<p>${escT(p)}</p>`).join('')}</div>\n<p class="page-sum">`;
+    assert.ok(head.includes(want), `「${name}」頁：白話說明要在標題底下、自動那一句上面，每一段照原文`);
+    assert.equal(page.split('<div class="plain">').length - 1, 1, `「${name}」頁：白話說明剛好一段`);
+    const noteAt = page.indexOf('<p class="source-note">來源：');
+    const note = page.slice(noteAt, page.indexOf('</p>', noteAt));
+    assert.ok(noteAt >= 0 && note.endsWith(PLAIN_NOTE), `「${name}」頁：來源那一行的最後要補一句白話說明是手寫的`);
+    assert.equal(page.split(PLAIN_NOTE).length - 1, 1, `「${name}」頁：那一句剛好一次`);
+  });
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  assert.match(css, /\n\.plain\{[^}]*border-left:3px solid var\(--accent\)[^}]*\}/u, '白話說明的樣式（左邊一條主色的線）');
+  for (const sel of ['.plain', '.plain p', '.page-head']) {
+    const rule = css.match(new RegExp(`\\n${sel.replace(/\./gu, '\\.')}\\{([^}]*)\\}`, 'u'));
+    assert.ok(rule && !/font-size/u.test(rule[1]), `白話說明沒有另外設字級：「${sel}」那一條不寫 font-size（字有多大另外用瀏覽器量）`);
+  }
+  assert.match(css, /\n\.plain p\{margin:0;white-space:pre-wrap\}/u, '白話說明照原文留空白（連續空白不合併）');
+
+  // 對照組：段落裡的粗體、灰底框、條號（點得到那一條規矩）、要跳脫的字，照名詞頁那一套行內排版
+  const rich = base.replace(/(## 規矩\n\n)[^\n]*\n/u, (_, h) => `${h}**粗體** 與 \`灰底框\` 與 B1 條號 <一> & "二"\n`);
+  assert.notEqual(rich, base, '前提：對照組有改到來源');
+  const richHtml = manual.build({ ...src, plain: rich }).html;
+  assert.ok(richHtml.includes('<div class="plain"><p><strong>粗體</strong> 與 <code>灰底框</code> 與 <a href="#rules" class="rule-ref" data-goto="rule-B1">B1</a> 條號 &lt;一&gt; &amp; &quot;二&quot;</p><p>'), '白話說明的行內排版（寫死的樣本）');
+
+  // 停下的情況：每一發都要真的改到來源，而且是排版認不得的那一種例外、原因要對
+  const swapSec = (md, a, b) => {
+    const parts = md.split('\n## ');
+    const i = parts.findIndex((p) => p.startsWith(`${a}\n`));
+    const j = parts.findIndex((p) => p.startsWith(`${b}\n`));
+    [parts[i], parts[j]] = [parts[j], parts[i]];
+    return parts.join('\n## ');
+  };
+  const bad = [
+    ['少一節', base.replace(/\n## 範本\n\n[^\n]*\n/u, '\n'), /節要剛好是/u],
+    ['多一節', `${base}\n## 其他\n\n多出來的一段。\n`, /節要剛好是/u],
+    ['順序不對', swapSec(base, '工具', '考題'), /節要剛好是/u],
+    ['節名重複', base.replace('## 機器\n', '## 規矩\n'), /節要剛好是/u],
+    ['頁的那一節是空的', base.replace(/(## 範本\n\n)[^\n]*\n\n/u, (_, h) => h), /要是一段以上的段落/u],
+    ['頁的那一節寫成條列', base.replace(/(## 範本\n\n)([^\n]*)\n/u, (_, h, p) => `${h}- ${p}\n`), /要是一段以上的段落/u],
+    ['優點寫成段落', base.replace(/## 優點\n\n[\s\S]*?\n\n## 缺點/u, '## 優點\n\n一段段落。\n\n## 缺點'), /要剛好是一串「- 」條列/u],
+    ['優點的條列有子項', base.replace(/(## 優點\n\n- [^\n]*\n)/u, (_, a) => `${a}  1. 子項\n`), /子項/u],
+    ['一段寫成兩行', base.replace(/(## 規矩\n\n[^\n]*)\n/u, (_, a) => `${a}\n續寫的第二行\n`), /段落前面要空一行/u],
+    ['有 tab', base.replace('## 規矩\n\n', '## 規矩\n\n\t'), /tab、控制字元/u],
+    ['不存在的條號', base.replace('## 規矩\n\n', '## 規矩\n\n看 K99 這條。\n\n'), /條號 K99 不在規則資料裡/u],
+    ['開頭多一段', base.replace('\n## 總覽\n', '\n多寫的一段，原本想給總覽用。\n\n## 總覽\n'), /大標題底下、第一節之前要剛好一段/u],
+    ['優點的條列後面接一段', base.replace(/(## 優點\n\n(?:- [^\n]*\n)+)/u, (_, a) => `${a}\n多出來的一段。\n`), /要剛好是一串「- 」條列/u],
+    ['有控制字元', base.replace('## 規矩\n\n', `## 規矩\n\n${String.fromCharCode(1)}`), /tab、控制字元/u],
+    ['有 DEL', base.replace('## 規矩\n\n', `## 規矩\n\n${String.fromCharCode(0x7f)}`), /tab、控制字元/u],
+    ['有 U+2028', base.replace('## 規矩\n\n', `## 規矩\n\n${String.fromCharCode(0x2028)}`), /tab、控制字元/u],
+  ];
+  for (const [name, text, why] of bad) {
+    assert.notEqual(text, base, `「${name}」這一發沒有改到來源`);
+    assert.throws(() => manual.build({ ...src, plain: text }), (err) => err instanceof manual.LayoutError && why.test(err.message), `「${name}」應該停下（LayoutError）、而且原因要對`);
+  }
+  // 頁的形狀不對就停：開頭那一句或來源那一行不是剛好一個，白話說明不知道放哪裡（今天的十頁都是剛好一個，所以直接餵壞的形狀）
+  const shape = (body) => `<section class="page"><header class="page-head"><h1>X</h1>${body}</section>`;
+  assert.throws(() => manual.withPlain(shape('<p class="page-sum">一</p><p class="page-sum">二</p></header><p class="source-note">來源：x。</p>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '兩個開頭說明要停');
+  assert.throws(() => manual.withPlain(shape('<p class="page-sum">一</p></header>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '沒有來源那一行要停');
+  assert.equal(manual.withPlain(shape('<p class="page-sum">一</p></header><p class="source-note">來源：x。</p>'), { name: 'X' }, ['段'], []), shape(`<div class="plain"><p>段</p></div>\n<p class="page-sum">一</p></header><p class="source-note">來源：x。${PLAIN_NOTE}</p>`), '對照組：形狀對就照放');
+  assert.throws(() => manual.withPlain(shape('</header><p class="source-note">來源：x。</p>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '沒有開頭說明要停');
+  assert.throws(() => manual.withPlain(shape('<p class="page-sum">一</p></header><p class="source-note">來源：x。</p><p class="source-note">來源：y。</p>'), { name: 'X' }, ['段'], []), (err) => err instanceof manual.LayoutError && /開頭說明或來源那一行不是剛好一個/u.test(err.message), '兩個來源那一行要停');
+  // 白話說明裡的 $&、$' 照字面（放進頁面時不能被當成取代記號展開）
+  const dollar = base.replace(/(## 規矩\n\n)[^\n]*\n/u, (_, h) => `${h}價錢 $& 與 $' 照字面。\n`);
+  assert.ok(manual.build({ ...src, plain: dollar }).html.includes("<div class=\"plain\"><p>價錢 $&amp; 與 $' 照字面。</p><p>"), '白話說明裡的 $&、$\' 照字面');
+  // 讀不到手寫檔就停
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-plain-'));
+  try {
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md']) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
+    }
+    for (const d of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
+    assert.doesNotThrow(() => manual.readSources(dir), '對照組：複本本身要讀得到');
+    fs.rmSync(path.join(dir, 'manual', 'plain.md'));
+    assert.throws(() => manual.readSources(dir), /讀不到 manual\/plain\.md/u);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('㉑ 總覽頁：排在最前面、打開網頁先看到它（只有它沒藏起來；網址沒指定或指到不存在的頁都回總覽）；優點、缺點照 manual/plain.md 每一項的原文排成兩串條列（粗體開頭照排），頁首的項數對得上', () => {
+  const { html } = manual.build(sources());
+  const secs = ownPlain(disk('manual/plain.md'));
+  const pros = secs.find((sec) => sec.title === '優點').items;
+  const cons = secs.find((sec) => sec.title === '缺點').items;
+  assert.ok(pros.length >= 3 && cons.length >= 3, '前提：考題自己讀到的優缺點');
+  // 打開先看到總覽：各頁裡只有總覽沒有 hidden；它排第一
+  const opens = [...html.matchAll(/<section class="page" id="page-([a-z]+)" data-page="\1"( hidden)?>/gu)].map((m) => [m[1], Boolean(m[2])]);
+  assert.equal(opens.length, 10, '前提：讀到十頁');
+  assert.equal(opens[0][0], 'overview', '總覽排第一');
+  assert.deepEqual(opens.filter(([, hidden]) => !hidden).map(([id]) => id), ['overview'], '打開網頁只看得到總覽');
+  assert.equal(html.split("|| 'overview')").length - 1, 2, '切頁：網址沒指定時去總覽（載入時與網址改變時兩處）');
+  assert.ok(html.includes("if (!pages.some(function(p){ return pageName(p) === id; })) { var at = spot(); id = at ? pageName(at.closest('[data-page]')) : 'overview'; }"), '切頁：網址不是頁名時，指到頁裡某個位置就切到那一頁，都不是就回總覽');
+  assert.ok(html.includes("    if (!id || pages.some(function(p){ return pageName(p) === id; })) return null;\n    var el = document.getElementById(id);\n    return el && el.closest('[data-page]') ? el : null;"), '切頁：位置要在某一頁裡面才算');
+  assert.ok(html.includes('    else { var at = spot(); if (at) land(at); else if (changed) window.scrollTo(0, 0); }'), '網址改成頁裡的位置：捲到它');
+  assert.ok(html.includes('  var first = spot(); if (first) land(first);\n})();'), '一打開網址就指到頁裡的位置：捲到它（等互動都接好才做）');
+  assert.doesNotMatch(html, /\|\| 'rules'\)|id = 'rules';/u, '切頁不該再預設規矩頁');
+  assert.ok(html.includes('<nav aria-label="說明書的 10 頁"><a href="#overview" data-route="overview"><span>總覽</span></a><a href="#rules"'), '目錄第一個是總覽');
+  // 每一項的預期由考題自己排：開頭的 **…** 是粗體，其餘照字面（真的優缺點沒有別的行內記號；有的話這一題要跟著改）
+  const item = (t) => {
+    const m = t.match(/^\*\*([^*]+)\*\*(.*)$/u);
+    assert.ok(m, `前提：「${t.slice(0, 12)}…」是粗體開頭`);
+    assert.doesNotMatch(m[1] + m[2], /[*`<>&"\\]|[A-K][0-9]/u, `前提：「${m[1]}」那一項沒有別的行內記號、要跳脫的字或條號`);
+    return `<li><strong>${escT(m[1])}</strong>${escT(m[2])}</li>`;
+  };
+  const block = (title, id, items) => `<section class="block pros-cons" id="${id}" tabindex="-1">\n<h2>${title}<span class="sec-count">${items.length} 項</span></h2>\n<ul class="items">${items.map(item).join('')}</ul>\n</section>`;
+  const page = html.slice(html.indexOf('<section class="page" id="page-overview"'), html.indexOf('<section class="page" id="page-rules"'));
+  assert.ok(page.includes(`<p class="page-sum">優點 ${pros.length} 項、缺點 ${cons.length} 項。這一頁的內容是手寫的，出自 manual/plain.md。</p>`), '總覽頁頁首（項數與那一句）');
+  assert.ok(page.includes(`</header>\n${block('優點', 'pros', pros)}\n${block('缺點', 'cons', cons)}\n<p class="source-note">來源：manual/plain.md 的「優點」「缺點」兩節。${PLAIN_NOTE}</p>\n</section>`), '優點、缺點兩串條列與來源那一行（照原文、粗體開頭、順序）');
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  assert.match(css, /\n\.pros-cons \.items li\{margin:8px 0;line-height:1\.75;white-space:pre-wrap\}/u, '優缺點條列的行距；照原文留空白（連續空白不合併）');
+  // 對照組：優缺點每一項照名詞頁那一套行內排版（粗體、灰底框、條號、要跳脫的字、連續空白）；認不得的寫法停
+  const base = disk('manual/plain.md');
+  const withPro = (text) => base.replace(/(## 優點\n\n)- [^\n]*\n/u, (_, h) => `${h}- ${text}\n`);
+  const rich = manual.build({ ...sources(), plain: withPro('**粗** 與 `框` 與 B1 條號 <一> & "二" 兩  格') }).html;
+  assert.ok(rich.includes('<ul class="items"><li><strong>粗</strong> 與 <code>框</code> 與 <a href="#rules" class="rule-ref" data-goto="rule-B1">B1</a> 條號 &lt;一&gt; &amp; &quot;二&quot; 兩  格</li>'), '優缺點的行內排版（寫死的樣本）');
+  for (const [name, text, why] of [['不存在的條號', '看 K99 這條', /條號 K99 不在規則資料裡/u], ['連結的寫法', '見 [連結](x)', /「\[」GitHub 可能當成連結/u], ['HTML', '見 <b>x</b>', /「<」後面緊接著半形字元/u], ['斜體', '見 _斜_', /「_」後面緊接著字/u]]) {
+    assert.throws(() => manual.build({ ...sources(), plain: withPro(text) }), (err) => err instanceof manual.LayoutError && why.test(err.message), `優缺點「${name}」應該停下（LayoutError）、而且原因要對`);
+  }
 });
