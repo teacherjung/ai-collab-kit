@@ -43,7 +43,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | 三關的實際命令、執行環境版本、稽核等級（或唯一設定檔位置） | E2、E3 | settings\.json 的 checks：只有 node \-\-test 一關（套件零相依，沒有型別與風格兩關）；雲端＝\.github\/workflows\/ci\.yml 的「三關」job 呼叫 tools\/run\-checks\.js；執行環境版本＝\.node\-version；本機推送前鉤子：套件倉庫沒裝（core\.hooksPath 沒設），E2 在本倉庫靠自覺 |
 | 必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單） | E3、H3 | 正本在 GitHub：main 分支保護的 required\_status\_checks（唯讀重讀：gh api repos\/teacherjung\/ai\-collab\-kit\/branches\/main\/protection\/required\_status\_checks）；檢查名逐字對應 \.github\/workflows\/ci\.yml 與 \.github\/workflows\/collab\-fields\.yml 的 job 名；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集） |
 | 合併步驟登記正本（閘登記對帳題讀它） | H1 | settings\.json 的 gates（登記；每筆＝name／rules／command／args／state）；各閘腳本＝tools\/gates\/\*\.js；對帳考題＝tests\/settings\.test\.js（磁碟上的閘 vs 登記的閘）；合併指令 tools\/merge\.js 只跑登記為已啟用的閘、任一非零就停 |
-| 「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭） | A5 | 靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；本支還沒回的待裁＝node tools\/pending\-rulings\.js 列出、掛在本支的那幾題；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests\/helpers\/unfilled\-settings\.json 的 forbidden 那一塊與禁區攔截器 tools\/forbidden\-tools\.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列） |
+| 「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭） | A5 | 本支還沒回的待裁＝合併指令裡的待裁閘擋（tools\/gates\/check\-pending\-rulings\.js；只認照範本貼在本支的 ❓，對話裡問了沒貼的看不見）；開工時看全部還沒回的＝node tools\/pending\-rulings\.js。另外兩種靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests\/helpers\/unfilled\-settings\.json 的 forbidden 那一塊與禁區攔截器 tools\/forbidden\-tools\.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列） |
 | 合併後驗收分級與動作的正本（路徑家族表＋各級動作） | H6 | 未啟用：套件倉庫沒有畫面與部署，acceptance 維持未設定；改動在同步進使用專案那一支照該專案的分級驗收 |
 | 「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份） | K6 | 根目錄 AGENTS\.md 的「擁有者的常設指示」那一節。不建 CLAUDE\.md（也不建 CLAUDE\.local\.md、\.claude\/CLAUDE\.md）：只要有它，Claude 就只讀它、不讀 AGENTS\.md；Codex 只自動讀 AGENTS\.md 前約 32 KB，所以那份要保持短 |
 | 「進度摘要」放在哪、已結束的留幾天（各方共用一份） | J5 | 主目錄的上一層、檔名 progress\-summary\.md，跟使用專案 personal\-finance\-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）。已結束的留七天（擁有者 2026\-09\-21 對 personal\-finance\-webapp 裁的天數；2026\-10\-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺。清理目前靠更新的那一方順手做（靠自覺），本倉庫沒有排程或背景程式在清（2026\-10\-05 在主幹搜過；倉庫外、這台機器上有沒有別的，沒查過） |
@@ -170,11 +170,12 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 | 順序 | 閘 | 規矩 | 指令 | 狀態 |
 |---|---|---|---|---|
-| 1 | 複審結論聯集（有沒有未撤銷的阻擋、有沒有對目前版本的通過） | A2、F4、F5 | node tools\/gates\/check\-review\-verdicts\.js | 已啟用 |
-| 2 | 協作欄位（四欄齊全、實作者不等於複審者） | A2、E1 | node tools\/gates\/check\-collab\-fields\.js | 已啟用 |
-| 3 | 堆疊（底是主幹、上面沒有疊別支） | H2 | node tools\/gates\/check\-stacked\.js | 已啟用 |
-| 4 | 真考卷（必要檢查最新場次真的跑過且成功） | H3 | node tools\/gates\/check\-checks\-really\-ran\.js | 已啟用 |
-| 5 | 跨PR試合併（與每支以主幹為底的開著PR真合起來跑三關） | H4 | node tools\/gates\/check\-cross\-merge\.js | 已啟用 |
+| 1 | 待裁（本支貼的 ❓ 都配到 ⚖️ 或 🚫） | A5 | node tools\/gates\/check\-pending\-rulings\.js | 已啟用 |
+| 2 | 複審結論聯集（有沒有未撤銷的阻擋、有沒有對目前版本的通過） | A2、F4、F5 | node tools\/gates\/check\-review\-verdicts\.js | 已啟用 |
+| 3 | 協作欄位（四欄齊全、實作者不等於複審者） | A2、E1 | node tools\/gates\/check\-collab\-fields\.js | 已啟用 |
+| 4 | 堆疊（底是主幹、上面沒有疊別支） | H2 | node tools\/gates\/check\-stacked\.js | 已啟用 |
+| 5 | 真考卷（必要檢查最新場次真的跑過且成功） | H3 | node tools\/gates\/check\-checks\-really\-ran\.js | 已啟用 |
+| 6 | 跨PR試合併（與每支以主幹為底的開著PR真合起來跑三關） | H4 | node tools\/gates\/check\-cross\-merge\.js | 已啟用 |
 
 全綠之後執行的合併指令：gh pr merge \{change\} \-R \{project\} \-\-squash \-\-delete\-branch \-\-match\-head\-commit \{sha\} \-\-body \"Reviewed\-By\: \{reviewer\}\\nMerged\-By\: \{merger\}\"
 
@@ -211,5 +212,6 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | 範本存在與固定小標考題 | E1、G3 | 已啟用 | 2026\-09\-13 |
 | 路標考題（帶記號的引號路標要指得到） | K3 | 已啟用 | 2026\-09\-13 |
 | 待裁清單工具（掃整個專案的留言；只列不擋） | D1 | 已啟用 | 2026\-09\-27 |
+| 待裁閘（本支貼的 ❓ 還沒配到 ⚖️ 或 🚫 就不放行；判斷用待裁清單工具那一份） | A5 | 已啟用 | 2026\-10\-07 |
 | 風險分級工具（合併前依檔案算風險級別、印出複審與掃描分級表那一列，只算不擋） | D4 | 已啟用 | 2026\-10\-04 |
 | 舊文字掃描（列出這支刪掉或改掉的字串還出現在哪，只列不擋） | K5 | 已啟用 | 2026\-10\-04 |

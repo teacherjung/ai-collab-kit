@@ -5,6 +5,7 @@
   "check-checks-really-ran.test.js",
   "check-collab-fields.test.js",
   "check-cross-merge.test.js",
+  "check-pending-rulings.test.js",
   "check-review-verdicts.test.js",
   "check-stacked.test.js",
   "claude-pin.test.js",
