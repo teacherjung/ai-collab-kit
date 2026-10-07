@@ -6,7 +6,8 @@
 // 條件到了的由實作者問裁示者要不要併進手上這支或另開；2026-10-07 裁第 2 批的三台提前做，這是第三台。
 // 不併進待裁清單工具：那一支是 D1 的清單腳本，一支工具講兩條規矩，機器表那一列就要講兩件事。
 //
-// 「這一支改到的檔」＝跟基準版本（預設 origin 上的主幹）的三點差異，加上還沒提交的改動與沒追蹤的檔（開工時多半還沒提交）。
+// 「這一支改到的檔」＝跟基準版本（預設 origin 上的主幹）的三點差異，加上還沒提交的改動與沒追蹤的檔（開工時多半還沒提交）；
+// 「這支自己新加或改寫的」＝分岔點那一版的同一節裡沒有一模一樣的那幾條。
 // 「提到」＝那一條的整段文字裡出現那個檔的路徑或它的上層資料夾（寫成「tools/」這種，結尾帶斜線），前後不能再接路徑字元：
 // settings.json 不會命中 unfilled-settings.json。
 //
@@ -32,7 +33,6 @@ function git(cwd, args) {
   if (r.status !== 0) throw new TouchError(`git ${args.join(' ')} 退 ${r.status === null ? '（被殺掉）' : r.status}：${(r.stderr || '').trim() || '（沒有訊息）'}`);
   return r.stdout;
 }
-const lines = (s) => s.split('\n').map((l) => l.trim()).filter(Boolean);
 
 /**
  * 待辦那一節的每一條：從那一節的標題行到下一個同級或更高的標題為止，每個第一層的「- 」開一條，
@@ -62,9 +62,12 @@ function namesOf(p) {
   return out;
 }
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-/** 文字裡有沒有整個提到這個名字（前面不能接路徑字元；後面接的不能是路徑字元，資料夾名字自己帶斜線結尾）。 */
+/**
+ * 文字裡有沒有整個提到這個名字：前後都不能再接路徑字元。資料夾名字自己帶斜線結尾，所以「tools/」後面接 a.js、
+ * 接 .cache/ 都是更深的路徑、不算提到整個 tools/（#50 r1 R4：點也是路徑字元）。
+ */
 function mentions(text, name) {
-  return new RegExp(`(?<!${PATH_CHAR})${esc(name)}(?!${name.endsWith('/') ? '[A-Za-z0-9_-]' : PATH_CHAR})`, 'u').test(text);
+  return new RegExp(`(?<!${PATH_CHAR})${esc(name)}(?!${PATH_CHAR})`, 'u').test(text);
 }
 
 /** 純判斷層：每一條待辦對上了哪幾個改到的檔。 */
@@ -93,18 +96,23 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
     }
     const ok = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { cwd: root, env: gitEnv(), encoding: 'utf8' });
     if (ok.error || ok.status !== 0) throw new TouchError(`基準版本 ${base} 找不到（先 git fetch，或用 --base 指定）`);
+    // 檔名一律用 -z（NUL 分隔、不加引號）：可讀輸出會把含引號或反斜線的檔名包引號再跳脫，拿去比就配不到（#50 r1 R3）
+    const nul = (out) => out.split('\0').filter(Boolean);
     const changed = [...new Set([
-      ...lines(git(root, ['diff', '--name-only', '--no-renames', `${base}...HEAD`])),
-      ...lines(git(root, ['diff', '--name-only', '--no-renames', 'HEAD'])),
-      ...lines(git(root, ['ls-files', '--others', '--exclude-standard'])),
+      ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames', `${base}...HEAD`])),
+      ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames', 'HEAD'])),
+      ...nul(git(root, ['ls-files', '-z', '--others', '--exclude-standard'])),
     ])].sort();
     let text;
     try { text = fs.readFileSync(path.join(root, b.file), 'utf8'); } catch (e) { throw new TouchError(`讀不到待辦檔 ${b.file}（${e.code || e.message}）`); }
     const items = itemsOf(text, b.section);
     if (items === null) throw new TouchError(`${b.file} 裡找不到「${b.section}」那一節`);
-    // 這一支自己新加的那幾條不列：那是實作者自己剛寫的（基準那一版沒有這一段文字）；基準那一版沒有待辦檔或那一節＝全部算新的
-    const show = spawnSync('git', ['show', `${base}:${b.file}`], { cwd: root, env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    const before = show.status === 0 ? (itemsOf(show.stdout, b.section) || []) : [];
+    // 這一支自己新加或改寫的那幾條不列：那是實作者自己剛寫的。比的是**分岔點**那一版（跟三點差異同一個起點）：
+    // 拿主幹最新那一版比，主幹分岔後改過字的舊待辦會被錯認成這支新加的而藏起來（#50 r1 R2）。
+    // 分岔點那一版確實沒有待辦檔或那一節＝全部算新的；讀的時候 git 出錯＝列不了，不可以當成「沒有舊的」（#50 r1 R1）
+    const forkPoint = git(root, ['merge-base', base, 'HEAD']).trim();
+    const listed = git(root, ['ls-tree', '-z', '--name-only', forkPoint, '--', b.file]);
+    const before = nul(listed).includes(b.file) ? (itemsOf(git(root, ['show', `${forkPoint}:${b.file}`]), b.section) || []) : [];
     const old = new Set(before.map((it) => it.text));
     const hitsAll = match(items, changed);
     const hits = hitsAll.filter((h) => old.has(h.text));

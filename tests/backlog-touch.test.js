@@ -3,9 +3,10 @@
 // 守得到的：
 //   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
 //   ②「提到」：整個路徑、或它的上層資料夾寫成帶結尾斜線的樣子；前後接路徑字元的不算（settings.json 不命中 unfilled-settings.json、
-//     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/）；寫在反引號裡照算；
-//   ③真的倉庫裡跑：這一支跟基準的三點差異、還沒提交的改動、沒追蹤的檔都算改到；這支自己新加或改寫的那幾條不列、照實說幾條；
-//     基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
+//     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/… 不算提到整個 tools/）；寫在反引號裡照算；
+//   ③真的倉庫裡跑：這一支跟基準的三點差異、還沒提交的改動、沒追蹤的檔都算改到（檔名有引號、反斜線照原名）；
+//     這支自己新加或改寫的那幾條不列、照實說幾條（跟分岔點那一版比：主幹後來改過字的舊待辦照列；待辦檔是這支新建的＝全部算新的）；
+//     讀分岔點那一版時 git 出錯＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
 //   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；
 //   ⑤git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑥空白設定的複本裡跑指令入口＝退 2。
 // ⚠️ 守不到的：只寫檔名、或用說法（「說明書的換頁程式」）寫的待辦配不到；列出來之後有沒有人看、條件是不是真的到了。
@@ -80,6 +81,8 @@ test('②「提到」：整個路徑或帶結尾斜線的上層資料夾；前�
   assert.equal(mentions('整個 tools/ 資料夾', 'tools/'), true);
   assert.equal(mentions('tools/gates/ 底下', 'tools/'), false, '更深一層的資料夾不算提到上層（tools/ 根上的檔不在 tools/gates/ 底下）');
   assert.equal(mentions('tools/gates/ 底下', 'tools/gates/'), true);
+  assert.equal(mentions('只改 tools/.cache/config.json 那份', 'tools/'), false, '隱藏子目錄底下的完整路徑不算提到整個 tools/（#50 r1 R4）');
+  assert.deepEqual(match(itemsOf('## 待辦\n- 只改 tools/.cache/config.json 那份。\n', '## 待辦'), ['tools/a.js']), []);
   const items = itemsOf(BACKLOG, '## 待辦');
   const got = match(items, ['settings.json', 'tools/review-launch.js', 'docs/guide.md', 'lib/a.js']);
   const by = Object.fromEntries(got.map((h) => [h.text.slice(10, 13), h.hit]));
@@ -169,6 +172,8 @@ test('⑤git 那一族環境變數指向別的倉庫，照樣看這一個（E4�
     const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(res.changed, ['settings.json'], '看的是這一個倉庫，不是誘餌');
+    // 讀分岔點那一版的待辦也要讀這一個倉庫：讀到誘餌（或讀不到）就會把（甲）當成這支新加的而不列（#50 r1 R5）
+    assert.deepEqual(res.hits.map((h) => h.line), [5], `（甲）要照列：\n${res.lines.join('\n')}`);
   } finally {
     if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
     r.cleanup(); decoy.cleanup();
@@ -180,4 +185,75 @@ test('⑥真的跑一遍指令（空白設定的複本，不讀本倉庫那份�
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout, /列不了/u);
   assert.equal(runInCopy('tools/backlog-touch.js', ['--oops']).status, 2);
+});
+
+test('③讀分岔點那一版的待辦時 git 出錯＝退 2，不可以當成「沒有舊的」把該列的藏起來（#50 r1 R1）', () => {
+  const r = repo();
+  try {
+    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.g('switch', '-q', '-c', 'topic');
+    r.write({ 'settings.json': '{"a":1}\n', 'BACKLOG.md': `${BACKLOG}\n` });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
+    assert.equal(run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] }).hits.length, 1, '對照組：好好的時候（甲）照列');
+    // 只弄壞分岔點那一版的待辦內容（樹還在、所以看得出那一版有這個檔）
+    const blob = r.g('rev-parse', 'origin-main:BACKLOG.md');
+    fs.rmSync(path.join(r.dir, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res.code, 2, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /git show/u, '說是讀舊版那一步出錯');
+  } finally { r.cleanup(); }
+});
+
+test('③主幹在分岔後改過某條待辦的字、這一支沒碰它：照列，不當成這支新加的（#50 r1 R2）', () => {
+  const r = repo();
+  try {
+    const one = '# 待辦\n\n## 待辦\n\n- 2026-10-01（甲）工具那一支要補考題／tools/a.js／下一支動到它時。\n';
+    r.write({ 'BACKLOG.md': one, 'tools/a.js': 'a\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.g('switch', '-q', '-c', 'topic');
+    r.write({ 'tools/a.js': 'topic\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
+    r.g('switch', '-q', 'origin-main');
+    r.write({ 'BACKLOG.md': one.replace('要補考題', '要補考題（主幹後來補了一句）') });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'main edits the item');
+    r.g('switch', '-q', 'topic');
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.deepEqual(res.hits.map((h) => h.hit), [['tools/a.js']], `這一支沒碰那一條，要照列：\n${res.lines.join('\n')}`);
+    assert.doesNotMatch(res.lines[0], /另有/u, '不可以說它是這支自己新加的');
+  } finally { r.cleanup(); }
+});
+
+test('③檔名有雙引號或反斜線也照樣配得到（git 的可讀輸出會加引號跳脫；#50 r1 R3）', () => {
+  const r = repo();
+  try {
+    const items = '# 待辦\n\n## 待辦\n\n- 2026-10-01（甲）一般的／tools/a.js／之後。\n- 2026-10-01（乙）有引號的／quote".js／之後。\n- 2026-10-01（丙）有反斜線的／slash\\.js／之後。\n';
+    r.write({ 'BACKLOG.md': items, 'tools/a.js': 'a\n', 'quote".js': 'q\n', 'slash\\.js': 's\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.write({ 'tools/a.js': 'a2\n', 'quote".js': 'q2\n', 'slash\\.js': 's2\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.deepEqual(res.changed, ['quote".js', 'slash\\.js', 'tools/a.js'], '改到的檔要是原本的檔名，不是 git 加過引號的寫法');
+    assert.equal(res.hits.length, 3, res.lines.join('\n'));
+  } finally { r.cleanup(); }
+});
+
+test('③待辦檔是這一支才新建的（分岔點那一版沒有這個檔）：全部算這支新加的、不列，照樣退 0', () => {
+  const r = repo();
+  try {
+    r.write({ 'settings.json': '{}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{"a":1}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic adds backlog');
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.equal(res.hits.length, 0);
+    assert.match(res.lines[0], /另有 1 條是這支自己新加或改寫的，不列/u);
+  } finally { r.cleanup(); }
 });
