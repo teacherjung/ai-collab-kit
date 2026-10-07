@@ -1,7 +1,7 @@
 // 守開工印待辦（規矩 F6 的「放在哪裡」）：列出待辦清單裡提到這一支改到的檔的那幾條；只列不擋。
 //
 // 守得到的：
-//   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題（兩種都單獨驗）；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
+//   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題（兩種都單獨驗；標題前 0〜3 個空白也算標題、4 個就不是）；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
 //   ②「提到」：整個路徑、或它的上層資料夾寫成帶結尾斜線的樣子；前後接路徑字元的不算（settings.json 不命中 unfilled-settings.json、
 //     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/…、tools/@scope/… 這類更深的路徑不算提到整個 tools/）；
 //     寫在反引號或引號裡照算；
@@ -9,7 +9,7 @@
 //     改了又暫存、再把工作檔改回去的照算）；這支自己剛寫進待辦的也照列、待辦檔是這支新建的也照列（擁有者 2026-10-07 裁 a：不去版本控制找舊版比）；
 //     待辦檔只從磁碟讀：設定寫 ./BACKLOG.md 一樣，檔名冒號開頭、指到倉庫內的捷徑檔、大小寫別名（磁碟不分大小寫時）都照讀——
 //     這幾種曾是四輪複審抓到的反例；寫到倉庫外＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
-//   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；
+//   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；列改到的檔那幾步 git 出錯＝退 2、不當成沒改到；
 //   ⑤git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑥空白設定的複本裡跑指令入口＝退 2。
 // ⚠️ 守不到的：只寫檔名、或用說法（「說明書的換頁程式」）寫的待辦配不到；列出來之後有沒有人看、條件是不是真的到了。
 'use strict';
@@ -75,6 +75,16 @@ test('①待辦那一節：標題到下一個同級標題；第一層「- 」一
   // 更高一層的標題也要停（#50 r3 R2：原本的樣本只有同級停、較低層不停）
   const higher = itemsOf('## 待辦\n\n- 甲／a.js／之後。\n\n# 另一份文件\n\n- 乙／b.js／之後。\n', '## 待辦');
   assert.deepEqual(higher.map((i) => i.text.slice(0, 1)), ['甲'], '更高一層的標題之後不算');
+  // 標題前 0〜3 個空白仍是標題（#50 r5 R1：原本只認欄首的 #，「 ## 做完的」被接成續行、做完的那幾條全算進待辦）
+  for (const pad of [' ', '  ', '   ']) {
+    const same = itemsOf(`## 待辦\n\n- 甲／a.js／之後。\n\n${pad}## 做完的\n\n- 乙／a.js／已完成。\n`, '## 待辦');
+    assert.deepEqual(same.map((i) => i.text.slice(0, 1)), ['甲'], `${pad.length} 個空白的同級標題也要結束那一節`);
+    const up = itemsOf(`## 待辦\n\n- 甲／a.js／之後。\n\n${pad}# 另一份\n\n- 乙／a.js／之後。\n`, '## 待辦');
+    assert.deepEqual(up.map((i) => i.text.slice(0, 1)), ['甲'], `${pad.length} 個空白的更高層標題也要結束那一節`);
+  }
+  const four = itemsOf('## 待辦\n\n- 甲／a.js／之後。\n    ## 這是續行不是標題\n- 乙／b.js／之後。\n', '## 待辦');
+  assert.deepEqual(four.map((i) => i.text.slice(0, 1)), ['甲', '乙'], '4 個空白就不是標題（Markdown 當程式碼／續行）');
+  assert.match(four[0].text, /這是續行不是標題/u);
   assert.deepEqual(itemsOf('## 待辦\n', '## 待辦'), []);
 });
 
@@ -168,6 +178,24 @@ test('④設定沒填、待辦檔讀不到、那一節找不到、基準找不�
     }
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-touch-out-'));
     try { assert.equal(run({ settings: SETTINGS, cwd: outside, argv: ['--base', 'HEAD'] }).code, 2, '不在倉庫裡'); } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+  } finally { r.cleanup(); }
+});
+
+test('④列改到的檔那幾步 git 出錯＝退 2、說是哪一步，不當成「沒改到」（#50 r5 R2）', () => {
+  const r = repo();
+  try {
+    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.write({ 'settings.json': '{"a":1}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
+    assert.equal(run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] }).hits.length, 1, '對照組：好好的時候（甲）照列');
+    // 弄壞這一支最新那一版的樹物件：找根目錄、核基準都還行，列改到的檔那一步 git 會退 128
+    const tree = r.g('rev-parse', 'HEAD^{tree}');
+    fs.rmSync(path.join(r.dir, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res.code, 2, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /git diff .*退 128/u, '說是列改到的檔那一步出錯');
   } finally { r.cleanup(); }
 });
 

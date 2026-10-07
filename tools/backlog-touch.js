@@ -42,7 +42,7 @@ function git(cwd, args) {
 }
 
 /**
- * 待辦那一節的每一條：從那一節的標題行到下一個同級或更高的標題為止，每個第一層的「- 」開一條，
+ * 待辦那一節的每一條：從那一節的標題行到下一個同級或更高的標題為止（標題前 0〜3 個空白也算標題），每個第一層的「- 」開一條，
  * 縮排的續行算在同一條裡。回 [{ line（第幾行，從 1 起）, text }]。找不到那一節＝null。
  */
 function itemsOf(markdown, heading) {
@@ -53,7 +53,7 @@ function itemsOf(markdown, heading) {
   const items = [];
   for (let i = start + 1; i < all.length; i += 1) {
     const l = all[i];
-    const h = /^(#+)\s/u.exec(l);
+    const h = /^ {0,3}(#+)\s/u.exec(l);   // 標題前 0〜3 個空白仍是標題（Markdown 的規則；#50 r5 R1：寫成「 ## 做完的」時原本被當成續行、下一節全算進來）
     if (h && h[1].length <= level) break;
     if (/^- /u.test(l)) items.push({ line: i + 1, text: l.slice(2) });
     else if (items.length && /^\s+\S/u.test(l)) items[items.length - 1].text += `\n${l.trim()}`;
