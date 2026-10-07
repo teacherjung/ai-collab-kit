@@ -300,10 +300,14 @@ function lockedTrees(root) {
   return out;
 }
 
-/** 暫存區第一層比開樹晚的（只列、不刪）。自己那一層與它的上層不算：放樹的資料夾在暫存區裡時，上層的修改時間會跟著變。 */
+/**
+ * 暫存區第一層比開樹晚的（只列、不刪），每個暫存區一組、新的排前面。自己那一層與它的上層不算：放樹的資料夾在暫存區裡時，上層的修改時間會跟著變。
+ * 分組是因為系統暫存區平常就有別的程式在寫，混成一張表時複審者留在 /tmp 的東西會被擠到收合那一行裡（#49 r1 收樹時看到的）。
+ */
 function freshEntries(roots, folder, since, re) {
   const seen = new Set();
   const fresh = [];
+  const groups = [];
   const unreadable = [];
   const mine = fs.realpathSync(folder);
   for (const r of roots) {
@@ -313,13 +317,17 @@ function freshEntries(roots, folder, since, re) {
     seen.add(real);
     let names;
     try { names = fs.readdirSync(real); } catch { unreadable.push(real); continue; }
+    const group = [];
     for (const n of names) {
       const p = path.join(real, n);
       if (p === mine || mine.startsWith(`${p}${path.sep}`) || re.test(n)) continue;
-      try { if (fs.lstatSync(p).mtimeMs >= since) fresh.push(p); } catch { /* 讀的當下被刪了 */ }
+      try { const t = fs.lstatSync(p).mtimeMs; if (t >= since) group.push({ p, t }); } catch { /* 讀的當下被刪了 */ }
     }
+    group.sort((a, b) => b.t - a.t || (a.p < b.p ? -1 : 1));
+    if (group.length) groups.push({ root: real, paths: group.map((x) => x.p) });
+    fresh.push(...group.map((x) => x.p));
   }
-  return { fresh, unreadable };
+  return { fresh, groups, unreadable };
 }
 
 /**
@@ -389,12 +397,12 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
     rec.closedAt = new Date().toISOString();
     save();
     lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
-    const { fresh, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+    const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
     for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-    if (fresh.length) {
-      lines.push(`  暫存區第一層比開樹晚的 ${fresh.length} 筆（只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
-      for (const p of fresh.slice(0, 20)) lines.push(`    ${p}`);
-      if (fresh.length > 20) lines.push(`    另有 ${fresh.length - 20} 筆沒列`);
+    for (const g of groups) {
+      lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
+      for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+      if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
     }
   }
   return { code: refused ? 1 : 0, lines };

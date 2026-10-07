@@ -295,6 +295,7 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
   const r = repo();
   const dir = tmp('review-launch-out-');
   const leftovers = tmp('review-launch-left-');
+  const ndRoot = tmp('review-launch-nd-');
   try {
     const s = settingsFor();
     const open = () => launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE });
@@ -315,7 +316,7 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
     assert.equal(res.code, 1); assert.match(res.lines.join('\n'), /審查樹不見了.*git 還登記著/u, '樹被搬走、git 還登記著：照實說不見了、不收');
     fs.renameSync(path.join(folder, 'tree-moved'), path.join(folder, 'tree'));
     fs.writeFileSync(path.join(leftovers, 'reviewer-made.json'), '{}');
-    const notDir = path.join(tmp('review-launch-nd-'), 'not-a-dir.txt');
+    const notDir = path.join(ndRoot, 'not-a-dir.txt');
     fs.writeFileSync(notDir, 'x');
     res = close('7', { settings: s, dir, leftoverRoots: [leftovers, notDir] });
     assert.equal(res.code, 0, res.lines.join('\n'));
@@ -326,14 +327,14 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
     const text = res.lines.join('\n');
     const planted = path.join(fs.realpathSync(leftovers), 'reviewer-made.json');
     assert.ok(res.lines.includes(`    ${planted}`), `比開樹晚的要逐筆列出來（整行比，#49 r1 R4）：\n${text}`);
-    assert.match(text, /比開樹晚的 1 筆/u);
+    assert.ok(res.lines.includes(`  ${fs.realpathSync(leftovers)} 第一層比開樹晚的 1 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`), `每個暫存區一組、寫出筆數：\n${text}`);
     assert.ok(res.lines.includes(`  ⚠️ 讀不了 ${fs.realpathSync(notDir)}，那裡比開樹晚的沒列`), '讀不了的那一處照實說、其餘照列（不在收到一半時崩掉）');
     assert.ok(fs.existsSync(planted), '只列、不刪');
     const none = main(['--close', '7'], { settings: s, dir });
     assert.equal(none.code, 2); assert.match(none.lines.join('\n'), /找不到.*沒有收/u, '收過的不再收；找不到＝退 2');
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
-    for (const d of [dir, leftovers, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+    for (const d of [dir, leftovers, ndRoot, r.dir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
 
@@ -407,6 +408,13 @@ test('⑥暫存區清單：比開樹晚的列出、早的不列；自己那一�
     assert.ok(!got.fresh.includes(real(base)), '上層（放樹的資料夾）不列：它的修改時間跟著變');
     assert.ok(!got.fresh.includes(real(folder)), '自己那一層不列');
     assert.deepEqual(got.unreadable, [real(notDir)], '讀不了的分開回報；不在的不算讀不了');
+    const newer = path.join(root, 'zz-newer');   // 名字照字母排在後面、時間比較新：排錯順序才看得出來
+    fs.mkdirSync(newer);
+    fs.utimesSync(made, new Date(since + 1000), new Date(since + 1000));
+    fs.utimesSync(newer, new Date(since + 5000), new Date(since + 5000));
+    const again = freshEntries([root], folder, since, re);
+    assert.deepEqual(again.groups.map((g) => g.root), [real(root)], '一個暫存區一組');
+    assert.deepEqual(again.groups[0].paths.slice(0, 2), [real(newer), real(made)], '新的排前面');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
