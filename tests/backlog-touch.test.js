@@ -1,12 +1,13 @@
 // 守開工印待辦（規矩 F6 的「放在哪裡」）：列出待辦清單裡提到這一支改到的檔的那幾條；只列不擋。
 //
 // 守得到的：
-//   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
+//   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題（兩種都單獨驗）；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
 //   ②「提到」：整個路徑、或它的上層資料夾寫成帶結尾斜線的樣子；前後接路徑字元的不算（settings.json 不命中 unfilled-settings.json、
 //     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/…、tools/@scope/… 這類更深的路徑不算提到整個 tools/）；
 //     寫在反引號或引號裡照算；
 //   ③真的倉庫裡跑：這一支跟基準的三點差異、已暫存與沒暫存的改動、沒追蹤的檔都算改到（四個來源的檔名有引號、反斜線都照原名；
-//     改了又暫存、再把工作檔改回去的照算）；待辦檔設定寫 ./BACKLOG.md 一樣、寫到倉庫外＝退 2；
+//     改了又暫存、再把工作檔改回去的照算）；待辦檔設定寫 ./BACKLOG.md 一樣；設定的檔名劃界：每一段只收英數與「._-」、
+//     不在倉庫外，其餘（冒號開頭、萬用字元這類 git 會當成路徑語法的）＝退 2；
 //     這支自己新加或改寫的那幾條不列、照實說幾條（跟分岔點那一版比：主幹後來改過字的舊待辦照列；待辦檔是這支新建的＝全部算新的）；
 //     讀分岔點那一版時 git 出錯＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
 //   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；
@@ -72,6 +73,9 @@ test('①待辦那一節：標題到下一個同級標題；第一層「- 」一
   assert.ok(items.some((i) => i.text.includes('（戊）')), '更低一級的小標不會切斷那一節');
   assert.ok(!items.some((i) => i.text.includes('排定那一節')), '下一個同級標題之後不算');
   assert.equal(itemsOf(BACKLOG, '## 沒有這一節'), null);
+  // 更高一層的標題也要停（#50 r3 R2：原本的樣本只有同級停、較低層不停）
+  const higher = itemsOf('## 待辦\n\n- 甲／a.js／之後。\n\n# 另一份文件\n\n- 乙／b.js／之後。\n', '## 待辦');
+  assert.deepEqual(higher.map((i) => i.text.slice(0, 1)), ['甲'], '更高一層的標題之後不算');
   assert.deepEqual(itemsOf('## 待辦\n', '## 待辦'), []);
 });
 
@@ -89,7 +93,10 @@ test('②「提到」：整個路徑或帶結尾斜線的上層資料夾；前�
   for (const deeper of ['tools/@scope/config.js', 'tools/[name]/config.js', 'tools/+internal/config.js', 'tools/~old/x.js']) {
     assert.equal(mentions(`只改 ${deeper} 那份`, 'tools/'), false, `${deeper} 不算提到整個 tools/`);
   }
-  assert.equal(mentions('寫成 "tools/" 或 \'tools/\' 也算', 'tools/'), true, '用引號框起來的照算');
+  // 兩種引號各自單獨驗（#50 r3 R2：放在同一句只證明得了其中一種）
+  assert.equal(mentions('寫成 "tools/" 也算', 'tools/'), true, '雙引號框起來的照算');
+  assert.equal(mentions("寫成 'tools/' 也算", 'tools/'), true, '單引號框起來的照算');
+  assert.equal(mentions('寫成 `tools/` 也算', 'tools/'), true, '反引號框起來的照算');
   const items = itemsOf(BACKLOG, '## 待辦');
   const got = match(items, ['settings.json', 'tools/review-launch.js', 'docs/guide.md', 'lib/a.js']);
   const by = Object.fromEntries(got.map((h) => [h.text.slice(10, 13), h.hit]));
@@ -261,11 +268,14 @@ test('③設定的待辦檔寫成 ./BACKLOG.md 也一樣（正規化成從根目
     assert.equal(dotted.code, 0, dotted.lines.join('\n'));
     assert.deepEqual(dotted.hits.map((h) => h.line), [5], `（甲）要照列：\n${dotted.lines.join('\n')}`);
     assert.doesNotMatch(dotted.lines[0], /另有/u, '不可以把舊待辦當成這支新加的');
-    for (const bad of ['../BACKLOG.md', '/etc/BACKLOG.md']) {
+    // 劃界（#50 r3 R1；F10）：git 會當成路徑語法的寫法（冒號開頭、萬用字元）、倉庫外、只有「.」，一律退 2 說清楚，不猜
+    for (const bad of ['../BACKLOG.md', '/etc/BACKLOG.md', ':BACKLOG.md', './:BACKLOG.md', 'BACK*.md', 'BACK?LOG.md', '[B]ACKLOG.md', 'dir/../../x.md', '.', '有中文.md', 'a b.md']) {
       const res = run({ settings: { ...SETTINGS, backlog: { file: bad, section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
       assert.equal(res.code, 2, bad);
-      assert.match(res.lines.join('\n'), /要寫成從倉庫根目錄算起、在倉庫裡面的路徑/u, bad);
+      assert.match(res.lines.join('\n'), /只收從倉庫根目錄算起、在倉庫裡面、每一段只用英數與「\._-」的路徑/u, bad);
     }
+    const nested = run({ settings: { ...SETTINGS, backlog: { file: 'docs/../BACKLOG.md', section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(nested.code, 0, '正規化之後在倉庫裡面、每一段都合格的照收');
   } finally { r.cleanup(); }
 });
 

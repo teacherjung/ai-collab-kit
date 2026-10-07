@@ -94,9 +94,13 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
   try {
     const b = settings.backlog || {};
     if (!b.file || b.file === UNSET || !b.section || b.section === UNSET) throw new TouchError('專案設定的 backlog（待辦檔在哪、哪一節）還沒填');
-    // 待辦檔一律正規化成從根目錄算起的寫法再用：git 回的是「BACKLOG.md」，設定寫「./BACKLOG.md」拿去比就對不上（#50 r2 R2）
+    // 待辦檔名劃界：正規化（./BACKLOG.md＝BACKLOG.md；#50 r2 R2）之後，每一段只收英數與「._-」、不在倉庫外。
+    // 為什麼不照收任何寫法：這個名字要拿去問 git 分岔點那一版，git 會把冒號開頭、萬用字元這類寫法當成路徑語法
+    // （#50 r1 R1、r2 R2、r3 R1 同一族連三輪；F10 自問表的結論是劃界、不再一種一種補）。設定寫怪是手誤，說清楚就好。
     const file = path.posix.normalize(String(b.file));
-    if (path.posix.isAbsolute(file) || file === '..' || file.startsWith('../')) throw new TouchError(`專案設定的 backlog.file「${b.file}」要寫成從倉庫根目錄算起、在倉庫裡面的路徑`);
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(file) || file.split('/').some((seg) => seg === '..' || seg === '.')) {
+      throw new TouchError(`專案設定的 backlog.file「${b.file}」只收從倉庫根目錄算起、在倉庫裡面、每一段只用英數與「._-」的路徑`);
+    }
     const root = git(cwd, ['rev-parse', '--show-toplevel']).trim();
     if (base === undefined) {
       if (!settings.mainBranch || settings.mainBranch === UNSET) throw new TouchError('專案設定的主幹分支名沒填，也沒給 --base');
