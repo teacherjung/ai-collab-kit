@@ -312,7 +312,7 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
     sh(path.join(folder, 'mutation'), 'checkout', '-q', '--detach', r.head);
     fs.renameSync(path.join(folder, 'tree'), path.join(folder, 'tree-moved'));
     res = close('7', { settings: s, dir, leftoverRoots: [leftovers] });
-    assert.equal(res.code, 1); assert.match(res.lines.join('\n'), /審查樹不見了/u, '樹被搬走或刪掉：照實說不見了、不收');
+    assert.equal(res.code, 1); assert.match(res.lines.join('\n'), /審查樹不見了.*git 還登記著/u, '樹被搬走、git 還登記著：照實說不見了、不收');
     fs.renameSync(path.join(folder, 'tree-moved'), path.join(folder, 'tree'));
     fs.writeFileSync(path.join(leftovers, 'reviewer-made.json'), '{}');
     const notDir = path.join(tmp('review-launch-nd-'), 'not-a-dir.txt');
@@ -440,6 +440,16 @@ test('⑥收樹：上了鎖的不動；收到一半照實記下哪一棵收了�
     assert.match(res.lines.join('\n'), /先前已收：審查樹/u, '重跑只收剩下的那一棵');
     assert.ok(!fs.existsSync(mutation));
     assert.equal(calls, 2);
+    // 照「沒收」的提示自己 git worktree remove 掉一棵之後，重跑要能收完剩下的，不可以一直說不見了
+    launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { comments: [verdict('Beta', 1, r.head, '需修改後再審')] })), cwd: r.dir, dir, template: TEMPLATE });
+    const folder2 = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r2');
+    fs.writeFileSync(path.join(folder2, 'mutation', 'a.txt'), 'reviewer left this\n');
+    assert.equal(close('7', { settings: s, dir, leftoverRoots: [] }).code, 1, '副本被留了改動＝不收');
+    sh(r.dir, 'worktree', 'remove', '--force', path.join(folder2, 'mutation'));
+    res = close('7', { settings: s, dir, leftoverRoots: [] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /突變副本已經不在、git 也沒登記：當作收過/u);
+    assert.ok(!fs.existsSync(path.join(folder2, 'tree')), '剩下的審查樹照樣收');
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });

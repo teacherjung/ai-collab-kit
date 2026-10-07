@@ -354,7 +354,12 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
     const locks = lockedTrees(rec.root);
     const problems = [];
     for (const [what, t] of todo) {
-      if (!fs.existsSync(t)) { problems.push(`${what}不見了（${t}）`); continue; }
+      if (!fs.existsSync(t)) {
+        // 目錄不在、git 也沒登記＝已經有人收過了（照上面的提示手動收的那一棵）；目錄不在但 git 還登記著＝被搬走或刪掉，要人看
+        if (!locks.has(t)) { rec.removed.push(t); save(); lines.push(`  r${rec.round} 的${what}已經不在、git 也沒登記：當作收過。`); continue; }
+        problems.push(`${what}不見了（${t}），git 還登記著`);
+        continue;
+      }
       if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
       const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
       if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
@@ -369,7 +374,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
       continue;
     }
     let failed = null;
-    for (const [what, t] of todo) {
+    for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
       const why = remove(rec.root, t);
       if (why) { failed = `${what}移除失敗：${why}`; break; }
       rec.removed.push(t);
