@@ -9,21 +9,26 @@
 //
 // 查什麼：
 //   ①「進行中的線」每一則：標題四段（專案三選一、狀態六選一、誰・資料夾有「・」）、八欄齊全且依序、每欄非空、
-//     每一行都是清單（舊的五欄寫法沒有清單記號，抓得到）；
+//     每一行都是清單（舊的五欄寫法沒有清單記號，抓得到）；第一則之前的內容、縮排或井號數不對的標題，列出來、不靜靜丟掉；
+//     同名的節出現兩次＝查不了，後一節不可以蓋掉前一節；
 //   ②時間欄：整理與核實都要有「月/日 時:分」，核實不可以晚於整理；
-//   ③證據欄引的「附件第 N 條」在附件裡找得到（已結束那一節引的也查；「45〜47」這種範圍會展開）；
+//   ③證據欄引的「附件第 N 條」在附件裡找得到（已結束那一節引的也查）；「45〜47」「1 〜 3」這種範圍會展開；
+//     拆不開、倒過來、不是 1〜MAX_REF 的整數的條號列成問題，不會卡住；
 //   ④到哪一步寫了「已合併」：引到的附件裡要找得到 PR（完整網址，或 --repos 登記過的「套件 #N」這種寫法），
 //     而且問得到平台時至少一支真的合併了；狀態是施工中或等複審、到哪一步沒寫已合併、引到的 PR 卻全部合併了＝可能過期；
+//     平台的答案只認布林 true／false，別的形狀＝核不了，不當成證據；
 //   ⑤已結束那一節：每一行的形狀、滿 30 天該刪；本週成果那一節：日期超過七天該刪。
-// 平台只問一件事：那支 PR 合併了沒（gh api）；答案可以用 --pr-states <json 檔> 代替（考題與離線用）；
-// --offline＝不問平台，④只查引不引得到 PR。
+// 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
+// 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
+// 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
 // ⚠️ 守不到的：內容真不真（「他要的」是不是他要的、核實時間有沒有真的核）；「已驗收」對不對（平台上沒有固定形狀可查）；
-//   跨年的先後（只比月日，未來的日期當成還沒到）；附件以外的網址；有沒有人跑它。
-// 退出碼：0＝查完了（有沒有問題都是 0；--strict 時有問題＝1）／2＝查不了（檔讀不到、少了要查的節、參數不對）。
+//   跨年的先後（只比月日，未來的日期當成還沒到）；附件以外的網址；github.com 以外的平台；有沒有人跑它；平台回的答案是不是真的。
+// 退出碼：0＝查完了（有沒有問題都是 0；--strict 時有問題＝1）／2＝查不了（檔讀不到、少了要查的節、同名的節重複、參數不對）。
 'use strict';
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('./git-env.js');
+const { parseInstant } = require('./time-point.js');
 
 const PROJECTS = ['套件', '理財', '共用'];
 const STATES = ['施工中', '等複審', '等驗收', '等裁示', '暫停中', '已結束'];
@@ -31,11 +36,17 @@ const FIELDS = ['他要的', '做了什麼', '到哪一步', '現在誰在動', 
 const SECTIONS = { active: '## 進行中的線', week: '## 本週成果', done: '## 已結束', attachments: '## 附件' };
 const DONE_DAYS = 30;
 const WEEK_DAYS = 7;
+// 附件條號的上限：真的摘要到 2026-10-07 是 69 條；超過這個數字的幾乎一定是寫壞的（例如把留言編號寫成條號）
+const MAX_REF = 100000;
+// 一個範圍最多展開幾條：防「1〜100000」這種把整份附件引進來的寫法
+const MAX_RANGE = 200;
 const STAMP = /(\d{2})\/(\d{2}) (\d{2}):(\d{2})/u;
 const PR_URL = /github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/gu;
 const BARE_PR = /(\S+?)\s*#(\d+)/gu;
 const ATTACHMENT_REF = /附件第\s*([0-9０-９、，,〜~\-－\s]+?)\s*條/gu;
 const OLD_FIELD = /^(到哪一步|下一步是|狀態說明|動哪些檔|證據)：/u;
+const LOOKS_LIKE_HEADING = /^\s*#{1,6}\s/u;
+const HOST = 'github.com';
 
 /** 月/日 時:分 → 可以直接比大小的字串；讀不出＝null。 */
 function stamp(text) {
@@ -43,21 +54,33 @@ function stamp(text) {
   return m ? `${m[1]}/${m[2]} ${m[3]}:${m[4]}` : null;
 }
 
-/** 「45〜47」「12、13」「16、23、55」都展開成數字清單；展不開的段落丟掉。 */
-function expandRefs(text) {
-  const out = [];
+/**
+ * 證據欄的附件條號：「45〜47」「12、13」「1 〜 3」都展開成 numbers；條號要是 1〜MAX_REF 的整數、範圍最多 MAX_RANGE 條。
+ * 拆不開、倒過來、超出範圍的段落放進 bad（照原字），不悄悄丟掉：r1 R3 超出安全整數的範圍讓迴圈停不下來、R4 帶空白的範圍被拆成兩個端點。
+ */
+function parseRefs(text) {
+  const numbers = [];
+  const bad = [];
   for (const m of String(text).matchAll(ATTACHMENT_REF)) {
-    const normalized = m[1].replace(/[０-９]/gu, (d) => String(d.charCodeAt(0) - 0xff10));
+    const normalized = m[1]
+      .replace(/[０-９]/gu, (d) => String(d.charCodeAt(0) - 0xff10))
+      .replace(/\s*[〜~\-－]\s*/gu, '〜');
     for (const part of normalized.split(/[、，,\s]+/u).filter(Boolean)) {
-      const range = /^(\d+)\s*[〜~\-－]\s*(\d+)$/u.exec(part);
-      if (range) {
-        const [a, b] = [Number(range[1]), Number(range[2])];
-        if (b >= a && b - a <= 200) for (let i = a; i <= b; i += 1) out.push(i);
-      } else if (/^\d+$/u.test(part)) out.push(Number(part));
+      const range = /^(\d+)〜(\d+)$/u.exec(part);
+      if (!range && !/^\d+$/u.test(part)) { bad.push(part); continue; }
+      const nums = range ? [Number(range[1]), Number(range[2])] : [Number(part)];
+      // 上限本身就擋掉超出安全整數的值（MAX_REF 遠小於 2^53），不另外驗 isSafeInteger
+      if (nums.some((n) => n < 1 || n > MAX_REF)) { bad.push(part); continue; }
+      if (!range) { numbers.push(nums[0]); continue; }
+      const [a, b] = nums;
+      if (b < a || b - a > MAX_RANGE) { bad.push(part); continue; }
+      for (let i = a; i <= b; i += 1) numbers.push(i);
     }
   }
-  return out;
+  return { numbers, bad };
 }
+
+const expandRefs = (text) => parseRefs(text).numbers;
 
 /** 從一段文字裡找 PR：完整網址，加上 --repos 登記過的「套件 #45」這種寫法。回「owner/repo#n」的集合。 */
 function prRefs(text, repos = {}) {
@@ -73,21 +96,23 @@ function prRefs(text, repos = {}) {
   return out;
 }
 
-/** 把檔案切成節：每個 ## 標題起、到下一個 ## 標題前。回 { 標題行: [行…] }，標題行只比開頭。節與節之間的分隔線（---）不算內容。 */
+/** 換行先統一成 LF：CRLF 的摘要照 \n 切會留下 \r，欄位與附件的正則全部對不上（r1 R2）。 */
+const normalize = (text) => String(text).replace(/\r\n?/gu, '\n');
+
+/** 把檔案切成節：每個 ## 標題起、到下一個 ## 標題前，照出現順序排成陣列（同名的節不合併、不覆蓋）。節與節之間的分隔線（---）不算內容。 */
 function splitSections(text) {
-  const sections = {};
-  let current = null;
-  for (const line of String(text).split('\n')) {
-    if (line.startsWith('## ')) { current = line; sections[current] = []; continue; }
+  const sections = [];
+  for (const line of normalize(text).split('\n')) {
+    if (line.startsWith('## ')) { sections.push({ heading: line, lines: [] }); continue; }
     if (/^-{3,}\s*$/u.test(line)) continue;
-    if (current) sections[current].push(line);
+    if (sections.length) sections[sections.length - 1].lines.push(line);
   }
   return sections;
 }
 
-function findSection(sections, heading) {
-  const key = Object.keys(sections).find((k) => k.startsWith(heading));
-  return key ? sections[key] : null;
+/** 標題以 heading 開頭的那幾節（可能不只一節：那是查不了的理由，由呼叫端判）。 */
+function findSections(sections, heading) {
+  return sections.filter((s) => s.heading.startsWith(heading));
 }
 
 /** 附件：編號 → 那一條的全文（含接在後面、沒有編號的續行）。 */
@@ -102,14 +127,16 @@ function parseAttachments(lines) {
   return out;
 }
 
-/** 進行中的線：每一則＝標題行＋到下一則之前的行。 */
+/** 進行中的線：每一則＝標題行＋到下一則之前的行；第一則之前的非空行是 stray，要列出來（r1 R1：縮排的標題以前被靜靜丟掉）。 */
 function parseEntries(lines) {
   const entries = [];
+  const stray = [];
   for (const line of lines) {
     if (line.startsWith('### ')) { entries.push({ title: line.slice(4), body: [] }); continue; }
     if (entries.length) entries[entries.length - 1].body.push(line);
+    else if (line.trim()) stray.push(line);
   }
-  return entries;
+  return { entries, stray };
 }
 
 /** 天數差：now 減 date（都只有月日；年用 now 的年）。未來的日期回負數。 */
@@ -117,6 +144,12 @@ function daysBefore(now, month, day) {
   const a = Date.UTC(now.year, now.month - 1, now.day);
   const b = Date.UTC(now.year, month - 1, day);
   return Math.round((a - b) / 86400000);
+}
+
+/** 平台對這支的答案：只認布林；沒有答案、或形狀不對（字串、物件、null）＝null（核不了），不當成證據（r1 R5）。 */
+function answerOf(prStates, pr) {
+  const s = prStates[pr];
+  return s && typeof s === 'object' && (s.merged === true || s.merged === false) ? s.merged : null;
 }
 
 function checkEntry(entry, ctx) {
@@ -135,6 +168,7 @@ function checkEntry(entry, ctx) {
   for (const raw of entry.body) {
     if (!raw.trim()) continue;
     if (OLD_FIELD.test(raw)) { say(`「${raw.split('：')[0]}」是舊的五欄寫法（沒有清單記號、少了八欄）`); continue; }
+    if (LOOKS_LIKE_HEADING.test(raw)) { say(`有一行像是寫壞的標題（縮排或井號數不對，沒有被當成一則）：「${raw.trim().slice(0, 30)}」`); continue; }
     if (!/^(\s*)- /u.test(raw)) { say(`有一行不是清單：「${raw.trim().slice(0, 30)}」`); continue; }
     const m = /^- ([^：]+)：(.*)$/u.exec(raw);
     if (!m) continue;
@@ -160,25 +194,25 @@ function checkEntry(entry, ctx) {
   else if (!verified) say('「核實」後面要有一個月/日 時:分（沿用舊紀錄就寫那份紀錄的時間）');
   if (edited && verified && verified > edited) say(`核實時間（${verified}）晚於整理時間（${edited}）：核實之後改了字就要更新整理時間`);
 
-  const refs = expandRefs(fields.get('證據') || '');
-  if (fields.has('證據') && refs.length === 0) say('證據欄沒有引到任何「附件第 N 條」');
-  for (const n of refs) if (!ctx.attachments.has(n)) say(`證據引的附件第 ${n} 條不存在`);
+  const refs = parseRefs(fields.get('證據') || '');
+  for (const b of refs.bad) say(`證據欄的附件條號寫法不對，認不出「${b}」（要寫成「附件第 N 條」或「附件第 N〜M 條」，N、M 是 1〜${MAX_REF} 的整數、一個範圍最多 ${MAX_RANGE} 條）`);
+  if (fields.has('證據') && refs.numbers.length === 0 && refs.bad.length === 0) say('證據欄沒有引到任何「附件第 N 條」');
+  for (const n of refs.numbers) if (!ctx.attachments.has(n)) say(`證據引的附件第 ${n} 條不存在`);
 
   const step = fields.get('到哪一步') || '';
   const cited = new Set();
-  for (const n of refs) for (const pr of prRefs(ctx.attachments.get(n) || '', ctx.repos)) cited.add(pr);
+  for (const n of refs.numbers) for (const pr of prRefs(ctx.attachments.get(n) || '', ctx.repos)) cited.add(pr);
   const claimsMerged = /已合併/u.test(step);
   if (claimsMerged) {
     if (cited.size === 0) say('到哪一步寫「已合併」，但引到的附件裡找不到任何 PR（完整網址或登記過的寫法），核不了');
     else if (!ctx.offline) {
-      const states = [...cited].map((pr) => ctx.prStates[pr]);
-      const unknown = [...cited].filter((pr) => !ctx.prStates[pr] || ctx.prStates[pr].merged === null);
-      if (unknown.length) say(`問不到平台，核不了：${unknown.join('、')}`);
-      else if (!states.some((s) => s.merged)) say(`到哪一步寫「已合併」，但引到的 PR 在平台上沒有一支合併了（${[...cited].join('、')}）`);
+      const answers = [...cited].map((pr) => [pr, answerOf(ctx.prStates, pr)]);
+      const unknown = answers.filter(([, a]) => a === null).map(([pr]) => pr);
+      if (unknown.length) say(`問不到平台、或平台的答案形狀不對，核不了：${unknown.join('、')}`);
+      else if (!answers.some(([, a]) => a === true)) say(`到哪一步寫「已合併」，但引到的 PR 在平台上沒有一支合併了（${[...cited].join('、')}）`);
     }
   } else if (['施工中', '等複審'].includes(state) && cited.size && !ctx.offline) {
-    const states = [...cited].map((pr) => ctx.prStates[pr]);
-    if (states.every((s) => s && s.merged)) say(`狀態是${state}、到哪一步沒寫已合併，引到的 PR 卻全部合併了（${[...cited].join('、')}）：可能過期`);
+    if ([...cited].every((pr) => answerOf(ctx.prStates, pr) === true)) say(`狀態是${state}、到哪一步沒寫已合併，引到的 PR 卻全部合併了（${[...cited].join('、')}）：可能過期`);
   }
   return { problems, cited: [...cited] };
 }
@@ -191,7 +225,9 @@ function checkDone(lines, ctx) {
     if (!m) { problems.push(`已結束：「${line.slice(4, 40)}」不合形狀（專案｜事情｜已結束 月/日｜已留：附件第 N 條 或 無永久決定）`); continue; }
     const age = daysBefore(ctx.now, Number(m[3]), Number(m[4]));
     if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS}），該刪`);
-    for (const n of expandRefs(m[5])) if (!ctx.attachments.has(n)) problems.push(`已結束：「${m[2]}」引的附件第 ${n} 條不存在`);
+    const refs = parseRefs(m[5]);
+    for (const b of refs.bad) problems.push(`已結束：「${m[2]}」的附件條號寫法不對，認不出「${b}」`);
+    for (const n of refs.numbers) if (!ctx.attachments.has(n)) problems.push(`已結束：「${m[2]}」引的附件第 ${n} 條不存在`);
   }
   return problems;
 }
@@ -214,52 +250,72 @@ function checkWeek(lines, ctx) {
  */
 function evaluate(text, { now, prStates = {}, repos = {}, offline = false } = {}) {
   const sections = splitSections(text);
-  const active = findSection(sections, SECTIONS.active);
-  const attachmentLines = findSection(sections, SECTIONS.attachments);
-  if (!active) return { unsure: `找不到「${SECTIONS.active}」那一節` };
-  if (!attachmentLines) return { unsure: `找不到「${SECTIONS.attachments}」那一節` };
+  const actives = findSections(sections, SECTIONS.active);
+  const attachmentSections = findSections(sections, SECTIONS.attachments);
+  if (actives.length === 0) return { unsure: `找不到「${SECTIONS.active}」那一節` };
+  if (attachmentSections.length === 0) return { unsure: `找不到「${SECTIONS.attachments}」那一節` };
+  for (const [name, found] of [[SECTIONS.active, actives], [SECTIONS.attachments, attachmentSections]]) {
+    if (found.length > 1) return { unsure: `「${name}」那一節出現 ${found.length} 次，分不出哪一節算數` };
+  }
   if (!now || !(now.year >= 2000) || !(now.month >= 1 && now.month <= 12) || !(now.day >= 1 && now.day <= 31)) return { unsure: '今天的日期讀不出來' };
-  const attachments = parseAttachments(attachmentLines);
+  const attachments = parseAttachments(attachmentSections[0].lines);
   const ctx = { now, prStates, repos, offline, attachments };
-  const entries = parseEntries(active);
+  const { entries, stray } = parseEntries(actives[0].lines);
   const problems = [];
+  for (const line of stray) {
+    const why = LOOKS_LIKE_HEADING.test(line) ? '像是縮排或井號數不對的標題，沒有被當成一則' : '不是任何一則的內容';
+    problems.push(`進行中的線：第一則之前有不屬於任何一則的內容（${why}）：「${line.trim().slice(0, 30)}」`);
+  }
   const cited = new Set();
   for (const entry of entries) {
     const r = checkEntry(entry, ctx);
     problems.push(...r.problems);
     for (const pr of r.cited) cited.add(pr);
   }
-  const done = findSection(sections, SECTIONS.done);
-  if (done) problems.push(...checkDone(done, ctx));
-  const week = findSection(sections, SECTIONS.week);
-  if (week) problems.push(...checkWeek(week, ctx));
+  const done = findSections(sections, SECTIONS.done);
+  for (const s of done) problems.push(...checkDone(s.lines, ctx));
+  const week = findSections(sections, SECTIONS.week);
+  for (const s of week) problems.push(...checkWeek(s.lines, ctx));
   return { unsure: null, problems, entries: entries.length, attachments: attachments.size, cited: [...cited] };
 }
 
-/** 問平台「這支合併了沒」。runner 可換（考題用）；問不到＝merged: null、附原因。 */
+/** 問平台用的環境：清掉 GIT_ 那一族（E4）之外，再清選主機、選倉庫的變數——證據網址是 github.com，查詢不可以被環境變數導去別的主機（r1 R7）。 */
+function ghEnv(env = process.env) {
+  const out = gitEnv(env);
+  for (const key of ['GH_HOST', 'GH_REPO', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete out[key];
+  return out;
+}
+
+/**
+ * 問平台「這支合併了沒」。runner 可換（考題用）；固定問 github.com。
+ * 問不到＝merged: null、附原因；答案要是物件、要有 merged_at：null＝沒合併、合法的時間＝合併了，其餘形狀都＝null（核不了），不猜（r1 R5）。
+ */
 function fetchPrStates(prs, runner = runGh) {
   const out = {};
   for (const pr of prs) {
     const m = /^([^/]+)\/([^#]+)#(\d+)$/u.exec(pr);
     if (!m) { out[pr] = { merged: null, why: '寫法認不得' }; continue; }
-    const r = runner(['api', `repos/${m[1]}/${m[2]}/pulls/${m[3]}`]);
+    const r = runner(['api', '--hostname', HOST, `repos/${m[1]}/${m[2]}/pulls/${m[3]}`]);
     if (r.status !== 0) { out[pr] = { merged: null, why: (r.stderr || '').trim().split('\n')[0] || `退出碼 ${r.status}` }; continue; }
-    try {
-      const data = JSON.parse(r.stdout);
-      out[pr] = { merged: Boolean(data.merged_at), state: data.state };
-    } catch { out[pr] = { merged: null, why: '平台回的不是 JSON' }; }
+    let data;
+    try { data = JSON.parse(r.stdout); } catch { out[pr] = { merged: null, why: '平台回的不是 JSON' }; continue; }
+    if (!data || typeof data !== 'object' || Array.isArray(data) || !('merged_at' in data)) { out[pr] = { merged: null, why: '平台回的形狀不對（沒有 merged_at）' }; continue; }
+    if (data.merged_at === null) out[pr] = { merged: false, state: data.state };
+    else if (parseInstant(data.merged_at) !== null) out[pr] = { merged: true, state: data.state };
+    else out[pr] = { merged: null, why: 'merged_at 不是合法的時間' };
   }
   return out;
 }
 
 function runGh(args) {
-  const r = spawnSync('gh', args, { encoding: 'utf8', env: gitEnv(), maxBuffer: 16 * 1024 * 1024 });
+  const r = spawnSync('gh', args, { encoding: 'utf8', env: ghEnv(), maxBuffer: 16 * 1024 * 1024 });
   if (r.error) return { status: 127, stdout: '', stderr: String(r.error.message) };
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
 function parseArgs(argv) {
-  const opts = { file: null, now: null, offline: false, strict: false, prStatesFile: null, repos: {} };
+  // 別名表不帶原型：登記什麼名字（連 __proto__）都只是自有的鍵，不會改到別的東西（r1 R8）
+  const opts = { file: null, now: null, offline: false, strict: false, prStatesFile: null, repos: Object.create(null) };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => { i += 1; if (i >= argv.length) throw new Error(`${a} 後面要接值`); return argv[i]; };
@@ -301,6 +357,7 @@ function run(argv, { fetch = fetchPrStates } = {}) {
   let prStates = {};
   if (opts.prStatesFile) {
     try { prStates = JSON.parse(fs.readFileSync(opts.prStatesFile, 'utf8')); } catch (e) { return { code: 2, lines: [`進度摘要檢查：--pr-states 讀不到或不是 JSON（${e.code || e.message}）`] }; }
+    if (!prStates || typeof prStates !== 'object' || Array.isArray(prStates)) return { code: 2, lines: ['進度摘要檢查：--pr-states 要是一個物件（owner/repo#n → { merged: true|false }）'] };
   }
   // 先離線跑一次，只為了知道要問平台哪幾支；再帶著答案真的判。
   const dry = evaluate(text, { now, repos: opts.repos, offline: true });
@@ -320,4 +377,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, fetchPrStates, expandRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, DONE_DAYS, WEEK_DAYS };
+module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, DONE_DAYS, WEEK_DAYS, MAX_REF, MAX_RANGE };
