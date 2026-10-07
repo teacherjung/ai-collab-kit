@@ -317,7 +317,7 @@
    "command": "codex exec -m {model} -c model_reasoning_effort='\"{effort}\"' -c approval_policy='\"never\"' -s workspace-write -c sandbox_workspace_write.network_access=true -C {reviewTree} - < {promptFile} > {outFile} 2>&1",
    "machine": "幾乎沒有：審查樹與系統暫存區都寫得進；使用者層放行規則命中的指令在沙箱外跑；樣板帶 approval_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准）",
    "promptOnly": "唯讀、不轉正式、不合併、只貼一則留言，全靠提示；退出 0 不代表通過、也不代表留言已貼成功（啟動失敗會退非零），發審的一方要自己去 PR 看留言在不在；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 --add-dir 突變副本（2026-10-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀",
-   "verified": "2026-10-03 本倉庫 #30 兩輪"
+   "verified": "2026-10-03 本倉庫 #30 兩輪；2026-10-07 #49 r1 用產生器印的指令（帶 approval_policy＝never）跑一輪，日誌印 approval: never，結論照常貼上"
   }
  ],
  "reviewLaunch": {
