@@ -165,6 +165,11 @@ test('④證據：引的附件條號不存在；範圍展開（含帶空白的�
   // r2 R2：含小數點或文字的引用以前根本進不了清單，另有一個正常引用就全綠
   assert.deepEqual(parseRefs('附件第 1 條、附件第 2.5 條'), { numbers: [1], bad: ['2.5'] });
   assert.deepEqual(parseRefs('附件第 xxx 條'), { numbers: [], bad: ['xxx'] });
+  // r3 R2：長清單不可以因為字數就整段消失
+  const long = `附件第 ${Array.from({ length: 25 }, (_, i) => i + 1).join('、')} 條`;
+  assert.equal(parseRefs(long).numbers.length, 25, '25 條的合法清單要全部解析');
+  const longMissing = problemsOf(doc({ entries: [entry({ fields: { 證據: `附件第 1 條、${long}。` } })] }));
+  assert.ok(longMissing.some((p) => p.includes('附件第 25 條不存在')), longMissing.join('\n'));
   const decimal = problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 1 條、附件第 2.5 條。' } })] }));
   assert.ok(decimal.some((p) => p.includes('條號寫法') && p.includes('2.5')), decimal.join('\n'));
   const none = problemsOf(doc({ entries: [entry({ fields: { 證據: '見對話。' } })] }));
@@ -219,6 +224,16 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.deepEqual([...prRefs('https://github.com/acme/kit/pulls/41')], [], '路徑不是 /pull/N 的不認');
   const fakeHost = problemsOf(doc({ attachments: ['1. https://notgithub.com/acme/kit/pull/41 合併了。'] }));
   assert.ok(fakeHost.some((p) => p.includes('核不了')), fakeHost.join('\n'));
+  // r3 R3：網址裡的字不可以冒充裸別名
+  assert.deepEqual([...prRefs('https://example.org/套件#41', { 套件: 'acme/kit' })], []);
+  assert.deepEqual([...prRefs('https://example.org/x?a=套件#41 與 套件 #42', { 套件: 'acme/kit' })], ['acme/kit#42'], '網址挖掉後，網址外的裸別名照認');
+  const urlAlias = problemsOf(doc({ attachments: ['1. https://example.org/套件#41 合併了。'] }), { repos: { 套件: 'acme/kit' } });
+  assert.ok(urlAlias.some((p) => p.includes('核不了')), urlAlias.join('\n'));
+  // r3 R4：Markdown 的包裝（反引號、引號、連結語法）要先剝掉，裡面的合法網址照認
+  for (const wrapped of ['`https://github.com/acme/kit/pull/41`', '[看](https://github.com/acme/kit/pull/41)', '"https://github.com/acme/kit/pull/41"', '（https://github.com/acme/kit/pull/41）']) {
+    assert.deepEqual([...prRefs(wrapped)], ['acme/kit#41'], wrapped);
+  }
+  assert.deepEqual(problemsOf(doc({ attachments: ['1. 套件 #41＝`https://github.com/acme/kit/pull/41`。'] })), [], '反引號包住的網址當證據');
   // r1 R8：保留字當別名也要登記得進去、認得出來
   const proto = parseArgs(['--file', 'x.md', '--repos', '__proto__=acme/kit']);
   assert.ok(Object.hasOwn(proto.repos, '__proto__'), '__proto__ 要變成自有的鍵');
@@ -228,7 +243,7 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
 
 test('⑥已結束的形狀與 30 天；本週成果七天；未來的日期不算過期', () => {
   const bad = problemsOf(doc({ done: ['### 套件｜某事｜已結束｜附件第 1 條'] }));
-  assert.ok(bad.some((p) => p.includes('不合形狀')), bad.join('\n'));
+  assert.ok(bad.some((p) => p.includes('不是合法的紀錄') && p.includes('某事')), bad.join('\n'));
   const ok = problemsOf(doc({ done: ['### 套件｜某事｜已結束 09/10｜已留：附件第 1 條', '### 理財｜別事｜已結束 10/01｜無永久決定'] }));
   assert.deepEqual(ok, []);
   const old = problemsOf(doc({ done: ['### 套件｜某事｜已結束 09/06｜已留：附件第 1 條'] }));
@@ -237,7 +252,17 @@ test('⑥已結束的形狀與 30 天；本週成果七天；未來的日期不�
   assert.ok(dangling.some((p) => p.includes('附件第 7 條不存在')), dangling.join('\n'));
   // r2 R1：已結束那一節縮排一格的紀錄以前會跳過全部檢查；r2 R2／R5：「已留」要有解析得出的條號，寫壞的要列
   const indentedDone = problemsOf(doc({ done: [' ### 套件｜舊工作｜已結束 09/01｜已留：附件第 999 條'] }));
-  assert.ok(indentedDone.some((p) => p.includes('已結束') && p.includes('像是寫壞的標題') && p.includes('舊工作')), indentedDone.join('\n'));
+  assert.ok(indentedDone.some((p) => p.includes('已結束') && p.includes('不是合法的紀錄') && p.includes('舊工作')), indentedDone.join('\n'));
+  assert.ok(!indentedDone.some((p) => p.includes('附件第 999 條不存在')), '縮排的那一行不是紀錄，不再往下查附件（它整行已經被列出來）');
+  // r3 R1（同族第三輪，換做法）：已結束那一節只認一種形狀，其餘非空行一律列出——不再枚舉「哪些壞法算壞」
+  for (const bad of ['###套件｜舊工作｜已結束 09/01｜已留：附件第 999 條', '####### 套件｜舊工作｜已結束 09/01｜已留：附件第 999 條', '  ### 套件｜舊工作｜已結束 09/01｜已留：附件第 999 條', '舊工作 09/01 結束了，見附件第 999 條']) {
+    const r = problemsOf(doc({ done: [bad] }));
+    assert.ok(r.some((p) => p.includes('已結束') && p.includes('不是合法的紀錄') && p.includes('舊工作')), `${bad}：${r.join('\n')}`);
+  }
+  // 本週成果同樣只認「- 月/日」與縮排的子項目
+  const weekProse = problemsOf(doc({ week: ['- 10/07', '  - 套件：甲', '09/01 乙（沒有清單記號、躲過七天）', '- 09/02 丙'] }));
+  assert.ok(weekProse.some((p) => p.includes('本週成果') && p.includes('09/01 乙')), weekProse.join('\n'));
+  assert.ok(weekProse.some((p) => p.includes('本週成果') && p.includes('09/02 丙')), '「- 月/日 字」不是日期行也不是子項目，要列');
   const badDoneRef = problemsOf(doc({ done: ['### 套件｜舊工作｜已結束 10/01｜已留：附件第 xxx 條'] }));
   assert.ok(badDoneRef.some((p) => p.includes('條號寫法不對') && p.includes('xxx')), badDoneRef.join('\n'));
   assert.ok(badDoneRef.some((p) => p.includes('沒有一個解析得出的附件條號')), badDoneRef.join('\n'));

@@ -17,7 +17,9 @@
 //   ④到哪一步寫了「已合併」：引到的附件裡要找得到 PR（github.com 的完整網址——主機與路徑都要對，別站網址裡夾著 github.com 不算；
 //     或 --repos 登記過的「套件 #N」這種寫法，別名要整個對上、不可以被較短的別名搶走），而且問得到平台時至少一支真的合併了；
 //     狀態是施工中或等複審、到哪一步沒寫已合併、引到的 PR 卻全部合併了＝可能過期；平台的答案只認布林 true／false，別的形狀＝核不了；
-//   ⑤已結束那一節：每一行的形狀（縮排或井號數不對的也點名）、「已留」要有解析得出的附件條號、滿 30 天該刪；本週成果那一節：日期超過七天該刪。
+//   ⑤已結束那一節：只認「### 專案｜事情｜已結束 月/日｜已留：附件第 N 條」「…｜無永久決定」一種形狀，其餘非空行一律列出
+//     （不枚舉壞法：r1〜r3 連三輪補了縮排、四個井號、兩個井號、缺空白、七個井號，追不完，改成只認一種、其餘全列）；
+//     「已留」要有解析得出的附件條號、滿 30 天該刪；本週成果那一節：只認「- 月/日」與縮排的子項目，其餘列出，日期超過七天該刪。
 // 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
 // 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
 // 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
@@ -44,15 +46,23 @@ const MAX_REF = 100000;
 // 一個範圍最多展開幾條（閉區間，1〜200 是 200 條）：防「1〜100000」這種把整份附件引進來的寫法
 const MAX_RANGE = 200;
 const STAMP = /(\d{2})\/(\d{2}) (\d{2}):(\d{2})/u;
-// 網址的候選：從 https?:// 起、到空白或中文標點前；主機與路徑再用 URL 解析核對
-const URL_CANDIDATE = /https?:\/\/[^\s<>「」（）()。，、；：！？]+/gu;
+// 網址的候選：從 https?:// 起、到空白、中文標點、Markdown 的定界字元（反引號、引號、方括號、圓括號）前；主機與路徑再用 URL 解析核對
+const URL_CANDIDATE = /https?:\/\/[^\s<>「」（）()。，、；：！？`'"[\]]+/gu;
+// 任何網址整段（含後面的片段號）：掃裸別名之前先把它挖掉，網址裡的字不可以冒充「套件 #N」（r3 R3）
+const ANY_URL = /https?:\/\/\S+/gu;
 const PR_PATH = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:\/|$)/u;
 const GITHUB_HOSTS = ['github.com', 'www.github.com'];
 const BARE_PR = /(\S+?)\s*#(\d+)/gu;
-// 「附件第 … 條」先整段抓起來，裡面每一段再驗合不合法（r2 R2：只抓數字的話，「2.5」這種寫壞的根本進不了清單）
-const ATTACHMENT_REF = /附件第\s*([^條\n]{1,60}?)\s*條/gu;
+// 「附件第 … 條」先整段抓起來，裡面每一段再驗合不合法（r2 R2：只抓數字的話，「2.5」這種寫壞的根本進不了清單）；
+// 不設長度上限（r3 R2：60 字的上限讓 25 條的合法清單整段消失），到同一行最近的「條」為止
+const ATTACHMENT_REF = /附件第\s*([^條\n]+?)\s*條/gu;
 const OLD_FIELD = /^(到哪一步|下一步是|狀態說明|動哪些檔|證據)：/u;
 const LOOKS_LIKE_HEADING = /^\s*#{1,6}\s/u;
+// 已結束那一節每一筆的形狀：只認這一種；不合的非空行一律列出，不再枚舉「哪些壞法算壞」（F10 第三輪：縮排→四個井號→兩個井號→缺空白／七個井號，枚舉追不完）
+const DONE_RECORD = /^### (套件|理財|共用)｜(.+?)｜已結束 (\d{2})\/(\d{2})｜(已留：附件第[^｜]+條.*|無永久決定.*)$/u;
+// 本週成果那一節只認兩種行：「- 月/日」與它底下縮排的「- …」子項目
+const WEEK_DAY = /^- (\d{2})\/(\d{2})\s*$/u;
+const WEEK_ITEM = /^\s+- \S/u;
 const HOST = 'github.com';
 
 /** 月/日 時:分 → 可以直接比大小的字串；讀不出＝null。 */
@@ -108,7 +118,7 @@ function prRefs(text, repos = {}) {
   }
   const names = Object.keys(repos);
   if (names.length) {
-    for (const m of String(text).matchAll(BARE_PR)) {
+    for (const m of String(text).replace(ANY_URL, ' ').matchAll(BARE_PR)) {
       const word = m[1];
       const hits = names.filter((n) => word === n || (word.endsWith(n) && !/[\p{L}\p{N}]/u.test(word.charAt(word.length - n.length - 1))));
       if (hits.length) {
@@ -245,13 +255,9 @@ function checkDone(lines, ctx) {
   const problems = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    if (!line.startsWith('### ')) {
-      // 縮排一格、或井號數不對的已結束紀錄，以前會跳過形狀、保留天數與附件的檢查（r2 R1）
-      if (LOOKS_LIKE_HEADING.test(line)) problems.push(`已結束：有一行像是寫壞的標題（縮排或井號數不對，沒有被當成一筆）：「${line.trim().slice(0, 30)}」`);
-      continue;
-    }
-    const m = /^### (套件|理財|共用)｜(.+?)｜已結束 (\d{2})\/(\d{2})｜(已留：附件第[^｜]+條.*|無永久決定.*)$/u.exec(line);
-    if (!m) { problems.push(`已結束：「${line.slice(4, 40)}」不合形狀（專案｜事情｜已結束 月/日｜已留：附件第 N 條 或 無永久決定）`); continue; }
+    // 只認一種形狀；其餘非空行（縮排、少空白、井號數不對、散文）一律列出，沒有任何一行可以不被看到（r1〜r3 R1 同族，F10 換做法）
+    const m = DONE_RECORD.exec(line);
+    if (!m) { problems.push(`已結束：有一行不是合法的紀錄（只認「### 專案｜事情｜已結束 月/日｜已留：附件第 N 條」或「…｜無永久決定」，井號三個、後面一個空白）：「${line.trim().slice(0, 40)}」`); continue; }
     const age = daysBefore(ctx.now, Number(m[3]), Number(m[4]));
     if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS}），該刪`);
     if (m[5].startsWith('已留')) {
@@ -267,8 +273,13 @@ function checkDone(lines, ctx) {
 function checkWeek(lines, ctx) {
   const problems = [];
   for (const line of lines) {
-    const m = /^- (\d{2})\/(\d{2})\s*$/u.exec(line);
-    if (!m) continue;
+    if (!line.trim()) continue;
+    const m = WEEK_DAY.exec(line);
+    if (!m) {
+      // 同樣只認兩種行：日期行與縮排的子項目；其餘列出（本週成果裡沒有日期的成果，會躲過七天的檢查）
+      if (!WEEK_ITEM.test(line)) problems.push(`本週成果：有一行不是「- 月/日」也不是縮排的子項目：「${line.trim().slice(0, 40)}」`);
+      continue;
+    }
     const age = daysBefore(ctx.now, Number(m[1]), Number(m[2]));
     if (age > WEEK_DAYS) problems.push(`本週成果：${m[1]}/${m[2]} 已經是 ${age} 天前（只留 ${WEEK_DAYS} 天），該刪`);
   }
