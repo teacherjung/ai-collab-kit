@@ -90,6 +90,12 @@ test('①標題：五段（舊格式）、專案不在三選一、狀態不在�
   assert.ok(indented.problems.some((p) => p.includes('不屬於任何一則') && p.includes('隔離驗證')), indented.problems.join('\n'));
   const fourHash = problemsOf(doc({ entries: [entry(), entry({ title: '#### 套件｜四個井號｜施工中｜Claude・x' })] }));
   assert.ok(fourHash.some((p) => p.includes('像是寫壞的標題') && p.includes('四個井號')), fourHash.join('\n'));
+  // r2 R1：寫成兩個井號的標題會變成一節、從所有檢查裡消失；檔頭沒規定的節都要列出來
+  const twoHash = evaluate(doc({ entries: [entry({ title: '## 套件｜兩個井號｜等驗收｜Codex・review', fields: { 做了什麼: undefined } })] }), { now: NOW, prStates: MERGED });
+  assert.equal(twoHash.unsure, null);
+  assert.ok(twoHash.problems.some((p) => p.includes('多了一節') && p.includes('兩個井號') && p.includes('整則沒有被檢查')), twoHash.problems.join('\n'));
+  const extraSection = problemsOf(doc().replace('## 待辦', '## 我自己加的一節\n\n略\n\n## 待辦'));
+  assert.ok(extraSection.some((p) => p.includes('多了一節') && p.includes('我自己加的一節')), extraSection.join('\n'));
 });
 
 test('②八欄：逐欄少一欄、逐欄空一欄、順序錯、寫兩次、舊的五欄寫法、不是清單的行', () => {
@@ -153,6 +159,14 @@ test('④證據：引的附件條號不存在；範圍展開（含帶空白的�
   assert.equal(huge.status, 0, `子行程沒有正常結束（${huge.signal || huge.stderr}）`);
   assert.deepEqual(JSON.parse(huge.stdout), { numbers: [], bad: ['9007199254740992〜9007199254740992'] });
   assert.deepEqual(parseRefs('附件第 100001 條').bad, ['100001'], '超過上限的條號列成寫壞的');
+  // r2 R5：一個範圍最多 200 條是閉區間
+  assert.equal(parseRefs('附件第 1〜200 條').numbers.length, 200);
+  assert.deepEqual(parseRefs('附件第 1〜201 條'), { numbers: [], bad: ['1〜201'] });
+  // r2 R2：含小數點或文字的引用以前根本進不了清單，另有一個正常引用就全綠
+  assert.deepEqual(parseRefs('附件第 1 條、附件第 2.5 條'), { numbers: [1], bad: ['2.5'] });
+  assert.deepEqual(parseRefs('附件第 xxx 條'), { numbers: [], bad: ['xxx'] });
+  const decimal = problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 1 條、附件第 2.5 條。' } })] }));
+  assert.ok(decimal.some((p) => p.includes('條號寫法') && p.includes('2.5')), decimal.join('\n'));
   const none = problemsOf(doc({ entries: [entry({ fields: { 證據: '見對話。' } })] }));
   assert.ok(none.some((p) => p.includes('沒有引到任何')), none.join('\n'));
 });
@@ -182,6 +196,29 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.ok(problemsOf(bare).some((p) => p.includes('核不了')), '沒登記 --repos 時「套件 #41」不算 PR');
   assert.deepEqual(problemsOf(bare, { repos: REPOS }), [], '登記了就認得「套件 #41」');
   assert.deepEqual([...prRefs('理財 #667、PFW #641 與 https://github.com/acme/kit/pull/41#issuecomment-1', REPOS)].sort(), ['acme/kit#41', 'acme/money#667']);
+  // r2 R3：別名互為字尾時不可以被較短的搶走，也跟登記順序無關
+  const twoWays = [{ 套件: 'acme/old', 新套件: 'acme/new' }, { 新套件: 'acme/new', 套件: 'acme/old' }];
+  for (const repos of twoWays) {
+    assert.deepEqual([...prRefs('新套件 #41', repos)], ['acme/new#41'], JSON.stringify(repos));
+    assert.deepEqual([...prRefs('套件 #41', repos)], ['acme/old#41']);
+    assert.deepEqual([...prRefs('只在要求時更新＝套件 #39', repos)], ['acme/old#39'], '前面接標點的別名算對上');
+    assert.deepEqual([...prRefs('舊套件 #41', repos)], [], '前面接字的不算（沒登記「舊套件」就核不了，不可以猜成「套件」）');
+  }
+  const collide = doc({ attachments: ['1. 新套件 #41 合併了。'] });
+  const collideStates = { 'acme/new#41': { merged: false }, 'acme/old#41': { merged: true } };
+  for (const repos of twoWays) {
+    const r = problemsOf(collide, { repos, prStates: collideStates });
+    assert.ok(r.some((p) => p.includes('沒有一支合併了') && p.includes('acme/new#41')), `${JSON.stringify(repos)}：${r.join('\n')}`);
+  }
+  // r2 R4：別站網址裡夾著 github.com、查詢字串裡的 github.com、沒帶 https:// 的，都不是證據
+  assert.deepEqual([...prRefs('https://notgithub.com/acme/kit/pull/41')], []);
+  assert.deepEqual([...prRefs('https://example.org/?back=github.com/acme/kit/pull/41')], []);
+  assert.deepEqual([...prRefs('https://github.com.evil.test/acme/kit/pull/41')], []);
+  assert.deepEqual([...prRefs('github.com/acme/kit/pull/41')], [], '沒帶 https:// 的不認（檔頭寫明）');
+  assert.deepEqual([...prRefs('見 https://www.github.com/acme/kit/pull/41/files 與 https://github.com/acme/kit/pull/42#issuecomment-9 。')].sort(), ['acme/kit#41', 'acme/kit#42']);
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pulls/41')], [], '路徑不是 /pull/N 的不認');
+  const fakeHost = problemsOf(doc({ attachments: ['1. https://notgithub.com/acme/kit/pull/41 合併了。'] }));
+  assert.ok(fakeHost.some((p) => p.includes('核不了')), fakeHost.join('\n'));
   // r1 R8：保留字當別名也要登記得進去、認得出來
   const proto = parseArgs(['--file', 'x.md', '--repos', '__proto__=acme/kit']);
   assert.ok(Object.hasOwn(proto.repos, '__proto__'), '__proto__ 要變成自有的鍵');
@@ -198,6 +235,12 @@ test('⑥已結束的形狀與 30 天；本週成果七天；未來的日期不�
   assert.ok(old.some((p) => p.includes(`上限 ${DONE_DAYS}`)), old.join('\n'));
   const dangling = problemsOf(doc({ done: ['### 套件｜某事｜已結束 10/01｜已留：附件第 7 條'] }));
   assert.ok(dangling.some((p) => p.includes('附件第 7 條不存在')), dangling.join('\n'));
+  // r2 R1：已結束那一節縮排一格的紀錄以前會跳過全部檢查；r2 R2／R5：「已留」要有解析得出的條號，寫壞的要列
+  const indentedDone = problemsOf(doc({ done: [' ### 套件｜舊工作｜已結束 09/01｜已留：附件第 999 條'] }));
+  assert.ok(indentedDone.some((p) => p.includes('已結束') && p.includes('像是寫壞的標題') && p.includes('舊工作')), indentedDone.join('\n'));
+  const badDoneRef = problemsOf(doc({ done: ['### 套件｜舊工作｜已結束 10/01｜已留：附件第 xxx 條'] }));
+  assert.ok(badDoneRef.some((p) => p.includes('條號寫法不對') && p.includes('xxx')), badDoneRef.join('\n'));
+  assert.ok(badDoneRef.some((p) => p.includes('沒有一個解析得出的附件條號')), badDoneRef.join('\n'));
   const week = problemsOf(doc({ week: ['- 10/07', '  - 套件：甲', '- 09/29', '  - 理財：乙'] }));
   assert.ok(week.some((p) => p.includes('09/29') && p.includes(`只留 ${WEEK_DAYS} 天`)), week.join('\n'));
   assert.deepEqual(problemsOf(doc({ week: ['- 10/01', '  - 甲'], done: ['### 套件｜某事｜已結束 12/01｜無永久決定'] })), [], '七天內與未來的日期都不列');
@@ -226,6 +269,22 @@ test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀�
   fs.writeFileSync(stringFalse, JSON.stringify({ 'acme/kit#41': { merged: 'false' } }));
   const sf = cli('--file', good, '--now', '10/07', '--pr-states', stringFalse, '--strict');
   assert.equal(sf.status, 1, 'r1 R5：答案檔寫字串 "false" 不可以印沒有問題'); assert.match(sf.stdout, /核不了/u);
+  for (const top of ['[]', 'null', 'true', '"x"']) {
+    const f = path.join(dir, 'top.json');
+    fs.writeFileSync(f, top);
+    assert.equal(cli('--file', good, '--now', '10/07', '--pr-states', f).status, 2, `r2 R5：答案檔頂層是 ${top} 要退 2`);
+  }
+  // r2 R5：正式的呼叫點真的用清過的環境、固定主機——放一支假的 gh 在 PATH 最前面，記下它收到的參數與環境
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const record = path.join(dir, 'gh-record.json');
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\nnode -e 'require("fs").writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(1), env: process.env }))' -- "$@"\nprintf '%s' '{"state":"open","merged_at":null}'\n`, { mode: 0o755 });
+  const viaFakeGh = spawnSync(process.execPath, [TOOL, '--file', good, '--now', '10/07', '--strict'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GH_HOST: 'review-only.invalid', GH_REPO: 'x/y', GIT_DIR: '/nowhere' } });
+  assert.equal(viaFakeGh.status, 1, viaFakeGh.stdout + viaFakeGh.stderr);
+  assert.match(viaFakeGh.stdout, /沒有一支合併了/u, '假的 gh 回沒合併，正式路徑要用上它的答案');
+  const recorded = JSON.parse(fs.readFileSync(record, 'utf8'));
+  assert.deepEqual(recorded.args, ['api', '--hostname', 'github.com', 'repos/acme/kit/pulls/41']);
+  assert.equal(recorded.env.GH_HOST, undefined); assert.equal(recorded.env.GH_REPO, undefined); assert.equal(recorded.env.GIT_DIR, undefined);
   assert.equal(cli('--file', path.join(dir, 'nope.md'), '--now', '10/07').status, 2);
   const noSection = path.join(dir, 'no-section.md');
   fs.writeFileSync(noSection, doc().replace('## 附件（證據位置）', '## 證據'));
