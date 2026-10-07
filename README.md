@@ -77,30 +77,13 @@
 
 - **誰**：實作者、複審者照「PR說明」的協作欄位；沒指定時照專案設定的預設分工（A1）。識別值與預設分工都在 `settings.json`（`PROJECT-SETTINGS.md` 第一節）。
 - **雲端**：已開 PR 的分支每次更新跑兩個 job（主幹每次更新只跑三關；只改「PR說明」只重跑協作欄位；還沒開 PR 的分支推送不跑）——「三關」（`.github/workflows/ci.yml`，照 `settings.json` 的 checks 跑；套件零相依，三關只有 `node --test` 一關，沒有型別與風格兩關）與「協作欄位（實作者 ≠ 複審者）」（`.github/workflows/collab-fields.yml`）。兩個 job 名要在平台的分支保護設成必過檢查，名字逐字相同（E3、H3）。改 job 名的那一支：新名字的檢查在那一支最新版本上跑綠之後、合併之前，由擁有者把分支保護的必過檢查換成新名（來源維持 GitHub Actions）。沒換＝那一支永遠等不到舊名字、合不了；換了以後，還沒改名的其他開著的 PR 反過來等不到新名字（推論，沒在平台上實跑）。用傳統分支保護規則（classic branch protection rule）、不要用規則集（ruleset）：登記的 requiredChecks 指令只讀傳統規則那一組端點，規則集讀不到、真考卷閘會一直退 2（推論，沒實測規則集）；勾「對管理員一樣生效」（不勾＝對唯一的那個帳號無效）、審核人數 0（三方共用一個帳號，設 1 就永遠合不了）、不勾「要跟上最新主幹」。套件倉庫是私有的：雲端檢查用 Actions 分鐘數，草稿也跑、改說明也跑，兩份設定檔都沒有設時間上限（GitHub 對單一 job 的預設上限 360 分鐘＝推論，依官方文件）。
-- **送審**：送審前先跑 `node tools/risk-tier.js <編號>`（D4：依檔案算風險級別、印出分級表那一列，填送審提示的「風險級別」「本輪範圍」）與 `node tools/stale-text.js`（K5：列出這支刪掉或改掉的字串還出現在哪，逐條看、不用改的在「PR說明」寫一行理由）。送審提示照 `templates/review-request.md`，實作者只填事實（F3）；模型、推理、不開的自動模式照 `PROJECT-SETTINGS.md` 第十一節（F11）。實作者先備兩份固定在受審版本的工作資料夾（樹），都放在系統暫存區：審查樹、突變副本（F1）；每輪審完由實作者收（`git worktree remove`；突變副本裡有改過的檔，要加 `--force`）。指令裡的模型名照第十一節填，換模型時只改那一節。
+- **送審**：送審前先跑 `node tools/risk-tier.js <編號>`（D4：依檔案算風險級別、印出分級表那一列）與 `node tools/stale-text.js`（K5：列出這支刪掉或改掉的字串還出現在哪，逐條看、不用改的在「PR說明」寫一行理由）。再跑送審產生器 `node tools/review-launch.js <編號> --reviewer <複審者的識別值>`：它照 `templates/review-request.md` 的格子填好事實（F3）、在系統暫存區開兩棵固定在受審版本的樹（審查樹、突變副本；F1）、印出整行啟動指令（模型、推理照 `PROJECT-SETTINGS.md` 第十一節；F11），實作者整行複製去跑。風險級別它只印分級腳本照檔案算的那一級：實作者往重調、裁示者改級，自己改提示那一格。每輪審完跑 `node tools/review-launch.js --close <編號>`：兩棵都乾淨、HEAD 沒變才收；不乾淨就兩棵都留著，看完自己 `git worktree remove`（突變副本有改過的檔要加 `--force`）。啟動指令的正本是 `settings.json` 每位複審者的 command（第十一節第三張表），換模型只改那一節的模型欄、換寫法只改樣板；產生器只換記號，路徑有空白就不產生（樣板自己寫了引號）。
 
-  ```bash
-  git -C <本機套件倉庫> fetch
-  git -C <本機套件倉庫> worktree add --detach <審查樹> <受審版本>
-  git -C <本機套件倉庫> worktree add --detach <突變副本> <受審版本>
-  ```
+  Codex 當複審者（工作目錄＝審查樹；2026-10-03 #30 兩輪用過）。它的沙箱准寫審查樹與系統暫存區，所以突變副本放在暫存區就改得到；唯讀與不合併全靠提示（第十一節）。樣板帶 `approval_policy` 設成 never：2026-10-07 這台機器的 Codex 設定檔是「有需要才問」加自動核准（那一輪的日誌開頭印 `approval: on-request`），不帶就等於申請提權會被自動准。2026-10-07 實測（codex 0.157.1，玩具樹）唯讀沙箱配 `--add-dir <突變副本>`：審查樹、突變副本、/tmp、系統暫存區都寫不進，也連不上網——貼不了結論、要建暫存資料夾的考題全部失敗，所以不能拿它讓審查樹唯讀。退出 0 不代表通過、也不代表留言已貼成功（啟動失敗時會退非零，#31 複審者實測），跑完要自己去 PR 看結論留言在不在。
 
-  Codex 當複審者（工作目錄＝審查樹；2026-10-03 #30 兩輪用過）。它的沙箱准寫審查樹與系統暫存區，所以突變副本放在暫存區就改得到；唯讀與不合併全靠提示（第十一節）。退出 0 不代表通過、也不代表留言已貼成功（啟動失敗時會退非零，#31 複審者實測），跑完要自己去 PR 看結論留言在不在：
+  Claude 當複審者（工作目錄＝審查樹；放行清單是 2026-10-03 在玩具資料夾實測的寫法換成本倉庫的考題指令，本倉庫沒實跑過，`gh pr comment` 那一條也沒測過）。兩個路徑都寫絕對路徑，`Edit(/<突變副本>/**)` 展開後開頭是兩條斜線，那是絕對路徑的寫法。帶 `--setting-sources user,project` 是為了不讀主目錄的本機設定檔（它會跟進工作資料夾）。助手被拒時最後的輸出看不到，要在輸出檔逐筆搜 `has been denied`。
 
-  ```bash
-  codex exec -m <第十一節的最強模型> -c model_reasoning_effort='"<第十一節的最高推理>"' -s workspace-write -c sandbox_workspace_write.network_access=true -C <審查樹> - < <送審提示檔>
-  ```
-
-  Claude 當複審者（工作目錄＝審查樹；放行清單是 2026-10-03 在玩具資料夾實測的寫法換成本倉庫的考題指令，本倉庫沒實跑過，`gh pr comment` 那一條也沒測過）。兩個路徑都寫絕對路徑，`Edit(/<突變副本>/**)` 展開後開頭是兩條斜線，那是絕對路徑的寫法。帶 `--setting-sources user,project` 是為了不讀主目錄的本機設定檔（它會跟進工作資料夾）。助手被拒時最後的輸出看不到，要在輸出檔逐筆搜 `has been denied`：
-
-  ```bash
-  cd <審查樹> && claude -p "$(cat <送審提示檔>)" --model <第十一節的最強模型> --effort <第十一節的最高推理> --permission-mode dontAsk --setting-sources user,project --add-dir <突變副本> --verbose --output-format json \
-    --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(npm --prefix <突變副本> test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(git -C <突變副本> rev-parse HEAD),Bash(git -C <突變副本> status --porcelain),Bash(git -C <突變副本> diff),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Bash(gh pr comment <編號> *),Edit(/<突變副本>/**),Workflow' \
-    --disallowedTools 'Write,NotebookEdit,WebFetch,WebSearch,Edit(/<審查樹>/**),Bash(gh pr merge *),Bash(gh pr edit *),Bash(gh pr close *),Bash(gh pr review *),Bash(gh pr ready *),Bash(git push *),Bash(git commit *),Bash(git checkout *),Bash(git switch *),Bash(git stash *),Bash(git worktree *),Bash(git fetch *),Bash(npm install *),Bash(npm ci *),Bash(npx *),Bash(node -e *)' \
-    < /dev/null > <輸出檔>
-  ```
-
-  在突變副本裡跑考題要用 `npm --prefix <突變副本> test -- <考題檔>`：用絕對路徑 `node --test <突變副本>/tests/…` 時工作目錄還在審查樹，靠工作目錄找檔的考題會跑到審查樹那一份、假綠（2026-10-03 實測）。這一句是送審提示「在副本裡跑考題」那一格的事實。
+  在突變副本裡跑考題要用 `npm --prefix <突變副本> test -- <考題檔>`（`settings.json` 的 reviewLaunch.copyTest）：用絕對路徑 `node --test <突變副本>/tests/…` 時工作目錄還在審查樹，靠工作目錄找檔的考題會跑到審查樹那一份、假綠（2026-10-03 實測）。
 - **複審結論**：由複審者自己貼成 PR 底下的一般留言（`gh pr comment`；不要用 `gh pr review`——結論聯集閘只讀 PR 的一般留言），第一行照 `templates/verdict-header.md` 逐字，來源字串照 `PROJECT-SETTINGS.md` 第二節（F4、F5）；「通過」那一則還要有兩個固定小標（F7）。
 - **掃描**：套件倉庫沒有掃描者與隔離盒；每支在「### 複審後掃」下逐字寫「未執行：本專案無掃描者」（低風險的改寫「未執行：低風險，表定不掃」；G1），轉正式由實作者做（`settings.json` 的 scanner；G3、G4）。
 - **合併**：由實作者跑合併指令（A4；按之前不用問裁示者，A5 列的三種情況除外）。在 HEAD 等於受審版本的工作資料夾（樹）根目錄（實作者自己的常設樹即可；不要在突變副本），先 `git fetch`（跨PR試合併那道閘要看得到其他開著的 PR 的版本），再跑 `node tools/merge.js <編號> --merger <實作者的識別值>`（H1）。先轉正式：`gh pr ready <編號> -R teacherjung/ai-collab-kit`（平台介面的 markReady 刻意封住，這一步手動做；G4）。退非零時先用 `gh pr view <編號> -R teacherjung/ai-collab-kit --json state` 看是不是其實已經合了，不要重跑：合併指令對任何非零都回 1，平台可能已經合了、後面那一步（例如刪遠端分支）才失敗。本倉庫的合併指令帶 `-R`，不碰本機分支：合併後本機分支與工作資料夾（樹）要自己清。合併後，合併的那一方把桌面主目錄更新到最新（擁有者 2026-10-03 選「A」：主目錄不會自己更新，曾一路落後 14 版沒人發現，在那裡工作的 AI 讀到舊規矩）：只在它乾淨時做、只往前追、不覆蓋任何東西——`git -C <桌面主目錄> status --porcelain` 沒有輸出，才跑 `git -C <桌面主目錄> pull --ff-only`；有輸出就停下來告訴擁有者。⚠️ 第 1 批（把 A4 改成實作者按的那一支）自己照合併當時主幹上的舊 A4 合：由審過它的那一方跑合併指令。
