@@ -84,7 +84,7 @@
   {
    "item": "「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭）",
    "rules": "A5",
-   "where": "靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；本支還沒回的待裁＝node tools/pending-rulings.js 列出、掛在本支的那幾題；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests/helpers/unfilled-settings.json 的 forbidden 那一塊與禁區攔截器 tools/forbidden-tools.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列）"
+   "where": "本支還沒回的待裁＝合併指令裡的待裁閘擋（tools/gates/check-pending-rulings.js；只認照範本貼在本支的 ❓，對話裡問了沒貼的看不見）；開工時看全部還沒回的＝node tools/pending-rulings.js。另外兩種靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests/helpers/unfilled-settings.json 的 forbidden 那一塊與禁區攔截器 tools/forbidden-tools.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列）"
   },
   {
    "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）",
@@ -344,6 +344,15 @@
  },
  "gates": [
   {
+   "name": "待裁（本支貼的 ❓ 都配到 ⚖️ 或 🚫）",
+   "rules": "A5",
+   "command": "node",
+   "args": [
+    "tools/gates/check-pending-rulings.js"
+   ],
+   "state": "已啟用"
+  },
+  {
    "name": "複審結論聯集（有沒有未撤銷的阻擋、有沒有對目前版本的通過）",
    "rules": "A2、F4、F5",
    "command": "node",
@@ -555,6 +564,12 @@
    "rules": "D1",
    "state": "已啟用",
    "verified": "2026-09-27"
+  },
+  {
+   "name": "待裁閘（本支貼的 ❓ 還沒配到 ⚖️ 或 🚫 就不放行；判斷用待裁清單工具那一份）",
+   "rules": "A5",
+   "state": "已啟用",
+   "verified": "2026-10-07"
   },
   {
    "name": "風險分級工具（合併前依檔案算風險級別、印出複審與掃描分級表那一列，只算不擋）",

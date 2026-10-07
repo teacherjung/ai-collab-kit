@@ -394,6 +394,15 @@
  },
  "gates": [
   {
+   "name": "待裁（本支貼的 ❓ 都配到 ⚖️ 或 🚫）",
+   "rules": "A5",
+   "command": "node",
+   "args": [
+    "tools/gates/check-pending-rulings.js"
+   ],
+   "state": "已安裝未啟用"
+  },
+  {
    "name": "複審結論聯集（有沒有未撤銷的阻擋、有沒有對目前版本的通過）",
    "rules": "A2、F4、F5",
    "command": "node",
@@ -591,6 +600,12 @@
   {
    "name": "待裁清單工具（掃整個專案的留言；只列不擋）",
    "rules": "D1",
+   "state": "已安裝未啟用",
+   "verified": ""
+  },
+  {
+   "name": "待裁閘（本支貼的 ❓ 還沒配到 ⚖️ 或 🚫 就不放行；判斷用待裁清單工具那一份）",
+   "rules": "A5",
    "state": "已安裝未啟用",
    "verified": ""
   },
