@@ -2,7 +2,8 @@
 //
 // 守得到的：
 //   ①本支有沒回的 ❓＝擋（退 1）、點名是哪一題；本支沒有 ❓、或每題都配上了＝放行；
-//   ②只看問在本支的題：別支沒回的不擋這一支；編號整個相等（7 不會被 17 的題擋到）；比的是平台給的正式編號（用 #7、分支名問也擋得到）；
+//   ②只看問在本支的題：別支沒回的不擋這一支、別支已裁或已撤回的不列進本支（看題問在哪，不看答或撤回貼在哪）；
+//     編號整個相等（7 不會被 17 的題擋到）；比的是平台給的正式編號（用 #7、分支名問也擋得到）；
 //   ③答在別支的 ⚖️ 照樣配得上（掃整個專案的留言，不是只掃本支）；合規撤回也算收口；
 //   ④疑似只印不擋；
 //   ⑤判斷跟清單工具是同一份：同一批留言，閘擋下的題＝清單工具列在「還沒回」裡、掛在本支的那幾題；
@@ -97,6 +98,25 @@ test('②比的是平台給的正式編號：用「#7」或分支名問，照樣
   }
   const missing = gateRun('9999', { settings, platform: fakePlatform([q], { 9999: new PlatformError('找不到這一支') }) });
   assert.equal(missing.code, 2, '不存在的編號不可以當成「沒有題」放行');
+});
+
+test('②別支已裁、已撤回的題不列進本支；本支的題答在別支、撤回貼在別支照樣列', () => {
+  const otherRuled = ask('別支已裁', { change: '17' });
+  const otherWithdrawn = ask('別支已撤回', { change: '17' });
+  const mineRuled = ask('本支答在別支');
+  const mineWithdrawn = ask('本支撤回貼在別支');
+  const r = gate([
+    otherRuled, otherWithdrawn, mineRuled, mineWithdrawn,
+    ruling(otherRuled.id, { change: '17' }), withdraw(otherWithdrawn.id, { change: '17' }),
+    ruling(mineRuled.id, { change: '9' }), withdraw(mineWithdrawn.id, { change: '9' }),
+  ]);
+  assert.equal(r.code, 0, r.lines.join('\n'));
+  const text = r.lines.join('\n');
+  assert.match(text, /已裁：1 則/u, text);
+  assert.match(text, /已撤回：1 則/u, text);
+  assert.match(text, new RegExp(`留言 ${mineRuled.id}(?![0-9A-Za-z])`, 'u'), '本支的題答在別支要列');
+  assert.match(text, new RegExp(`留言 ${mineWithdrawn.id}(?![0-9A-Za-z])`, 'u'), '本支的題撤回貼在別支要列');
+  for (const q of [otherRuled, otherWithdrawn]) assert.doesNotMatch(text, new RegExp(`留言 ${q.id}(?![0-9A-Za-z])`, 'u'), `別支的題 ${q.title} 不可以列進本支`);
 });
 
 test('③答在別支的 ⚖️ 照樣配得上；⚖️ 不是裁示者帳號貼的不算答', () => {
