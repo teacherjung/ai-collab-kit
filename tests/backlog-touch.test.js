@@ -3,8 +3,10 @@
 // 守得到的：
 //   ①待辦那一節怎麼切：從那一節的標題到下一個同級或更高的標題；每個第一層「- 」一條，縮排的續行算同一條；行號從 1 起；找不到那一節＝null；
 //   ②「提到」：整個路徑、或它的上層資料夾寫成帶結尾斜線的樣子；前後接路徑字元的不算（settings.json 不命中 unfilled-settings.json、
-//     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/… 不算提到整個 tools/）；寫在反引號裡照算；
-//   ③真的倉庫裡跑：這一支跟基準的三點差異、還沒提交的改動、沒追蹤的檔都算改到（檔名有引號、反斜線照原名）；
+//     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/…、tools/@scope/… 這類更深的路徑不算提到整個 tools/）；
+//     寫在反引號或引號裡照算；
+//   ③真的倉庫裡跑：這一支跟基準的三點差異、已暫存與沒暫存的改動、沒追蹤的檔都算改到（四個來源的檔名有引號、反斜線都照原名；
+//     改了又暫存、再把工作檔改回去的照算）；待辦檔設定寫 ./BACKLOG.md 一樣、寫到倉庫外＝退 2；
 //     這支自己新加或改寫的那幾條不列、照實說幾條（跟分岔點那一版比：主幹後來改過字的舊待辦照列；待辦檔是這支新建的＝全部算新的）；
 //     讀分岔點那一版時 git 出錯＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
 //   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；
@@ -83,6 +85,11 @@ test('②「提到」：整個路徑或帶結尾斜線的上層資料夾；前�
   assert.equal(mentions('tools/gates/ 底下', 'tools/gates/'), true);
   assert.equal(mentions('只改 tools/.cache/config.json 那份', 'tools/'), false, '隱藏子目錄底下的完整路徑不算提到整個 tools/（#50 r1 R4）');
   assert.deepEqual(match(itemsOf('## 待辦\n- 只改 tools/.cache/config.json 那份。\n', '## 待辦'), ['tools/a.js']), []);
+  // 同一族一次處理：半形可見字元（扣掉反引號與兩種引號）都算路徑字元（#50 r2 R3）
+  for (const deeper of ['tools/@scope/config.js', 'tools/[name]/config.js', 'tools/+internal/config.js', 'tools/~old/x.js']) {
+    assert.equal(mentions(`只改 ${deeper} 那份`, 'tools/'), false, `${deeper} 不算提到整個 tools/`);
+  }
+  assert.equal(mentions('寫成 "tools/" 或 \'tools/\' 也算', 'tools/'), true, '用引號框起來的照算');
   const items = itemsOf(BACKLOG, '## 待辦');
   const got = match(items, ['settings.json', 'tools/review-launch.js', 'docs/guide.md', 'lib/a.js']);
   const by = Object.fromEntries(got.map((h) => [h.text.slice(10, 13), h.hit]));
@@ -227,6 +234,41 @@ test('③主幹在分岔後改過某條待辦的字、這一支沒碰它：照�
   } finally { r.cleanup(); }
 });
 
+test('③改了又暫存、再把工作檔改回原樣：已暫存的改動照算（#50 r2 R1）', () => {
+  const r = repo();
+  try {
+    r.write({ 'BACKLOG.md': '# 待辦\n\n## 待辦\n\n- 2026-10-01（甲）／tools/a.js／之後。\n', 'tools/a.js': 'original\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.write({ 'tools/a.js': 'staged\n' });
+    r.g('add', 'tools/a.js');
+    r.write({ 'tools/a.js': 'original\n' });
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'HEAD'] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.deepEqual(res.changed, ['tools/a.js'], '索引裡還有下一次提交會帶進去的改動');
+    assert.equal(res.hits.length, 1);
+  } finally { r.cleanup(); }
+});
+
+test('③設定的待辦檔寫成 ./BACKLOG.md 也一樣（正規化成從根目錄算起再比；#50 r2 R2）；寫到倉庫外＝退 2', () => {
+  const r = repo();
+  try {
+    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
+    r.g('branch', 'origin-main');
+    r.write({ 'settings.json': '{"a":1}\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
+    const dotted = run({ settings: { ...SETTINGS, backlog: { file: './BACKLOG.md', section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(dotted.code, 0, dotted.lines.join('\n'));
+    assert.deepEqual(dotted.hits.map((h) => h.line), [5], `（甲）要照列：\n${dotted.lines.join('\n')}`);
+    assert.doesNotMatch(dotted.lines[0], /另有/u, '不可以把舊待辦當成這支新加的');
+    for (const bad of ['../BACKLOG.md', '/etc/BACKLOG.md']) {
+      const res = run({ settings: { ...SETTINGS, backlog: { file: bad, section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
+      assert.equal(res.code, 2, bad);
+      assert.match(res.lines.join('\n'), /要寫成從倉庫根目錄算起、在倉庫裡面的路徑/u, bad);
+    }
+  } finally { r.cleanup(); }
+});
+
 test('③檔名有雙引號或反斜線也照樣配得到（git 的可讀輸出會加引號跳脫；#50 r1 R3）', () => {
   const r = repo();
   try {
@@ -240,6 +282,18 @@ test('③檔名有雙引號或反斜線也照樣配得到（git 的可讀輸出�
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(res.changed, ['quote".js', 'slash\\.js', 'tools/a.js'], '改到的檔要是原本的檔名，不是 git 加過引號的寫法');
     assert.equal(res.hits.length, 3, res.lines.join('\n'));
+    // 另外三個來源各自也要拿原名（#50 r2 R4）：已暫存、沒暫存、沒追蹤各放一個特殊檔名，其餘都回到基準
+    r.g('reset', '-q', '--hard', 'origin-main');
+    const more = `${items}- 2026-10-01（丁）暫存的／st"aged.js／之後。\n- 2026-10-01（戊）沒暫存的／un\\staged.js／之後。\n- 2026-10-01（己）沒追蹤的／new"\\file.js／之後。\n`;
+    r.write({ 'BACKLOG.md': more, 'st"aged.js': 's\n', 'un\\staged.js': 'u\n' });
+    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base2');
+    r.g('branch', '-f', 'origin-main');
+    r.write({ 'st"aged.js': 's2\n' }); r.g('add', 'st"aged.js');
+    r.write({ 'un\\staged.js': 'u2\n', 'new"\\file.js': 'n\n' });
+    const res2 = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
+    assert.equal(res2.code, 0, res2.lines.join('\n'));
+    assert.deepEqual(res2.changed, ['new"\\file.js', 'st"aged.js', 'un\\staged.js'], '三個來源都要是原名');
+    assert.deepEqual(res2.hits.map((h) => h.hit[0]).sort(), ['new"\\file.js', 'st"aged.js', 'un\\staged.js']);
   } finally { r.cleanup(); }
 });
 

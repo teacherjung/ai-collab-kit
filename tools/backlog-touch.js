@@ -11,7 +11,8 @@
 // 「提到」＝那一條的整段文字裡出現那個檔的路徑或它的上層資料夾（寫成「tools/」這種，結尾帶斜線），前後不能再接路徑字元：
 // settings.json 不會命中 unfilled-settings.json。
 //
-// ⚠️ 守不到的：只寫檔名不寫路徑的、寫「那些檔」「說明書的換頁程式」這類說法的，都配不到；換了路徑寫法（例如 ./tools/x.js）也配不到；
+// ⚠️ 守不到的：只寫檔名不寫路徑的、寫「那些檔」「說明書的換頁程式」這類說法的，都配不到；換了路徑寫法（例如 ./tools/x.js）、
+//   路徑緊接半形標點（半形括號、逗號）的也配不到；
 //   列出來之後有沒有人看、條件是不是真的到了，全靠人判斷——這支不判斷值不值得做，也不寫任何東西。
 // 退出碼：0＝列完了（有沒有命中都是 0）／2＝列不了（設定沒填、待辦檔或那一節找不到、基準找不到、git 出錯、參數不對）。⚠️ 不是閘。
 'use strict';
@@ -23,7 +24,11 @@ const { gitEnv } = require('./git-env.js');
 
 const UNSET = '未設定';
 const USAGE = '用法：node tools/backlog-touch.js [--base <基準版本>]';
-const PATH_CHAR = '[A-Za-z0-9_./-]';
+/**
+ * 路徑字元＝半形可見字元扣掉反引號與兩種引號（E6 准檔名用任何半形符號，所以 @、[、+ 這些也可能是路徑的一部分；#50 r2 R3）。
+ * 扣掉的那三個是待辦裡常拿來框路徑的。代價：路徑緊接半形標點（例如半形括號、逗號）的寫法配不到。
+ */
+const PATH_CHAR = '[!#-&(-_a-~]';
 
 class TouchError extends Error {}
 
@@ -89,6 +94,9 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
   try {
     const b = settings.backlog || {};
     if (!b.file || b.file === UNSET || !b.section || b.section === UNSET) throw new TouchError('專案設定的 backlog（待辦檔在哪、哪一節）還沒填');
+    // 待辦檔一律正規化成從根目錄算起的寫法再用：git 回的是「BACKLOG.md」，設定寫「./BACKLOG.md」拿去比就對不上（#50 r2 R2）
+    const file = path.posix.normalize(String(b.file));
+    if (path.posix.isAbsolute(file) || file === '..' || file.startsWith('../')) throw new TouchError(`專案設定的 backlog.file「${b.file}」要寫成從倉庫根目錄算起、在倉庫裡面的路徑`);
     const root = git(cwd, ['rev-parse', '--show-toplevel']).trim();
     if (base === undefined) {
       if (!settings.mainBranch || settings.mainBranch === UNSET) throw new TouchError('專案設定的主幹分支名沒填，也沒給 --base');
@@ -98,26 +106,29 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
     if (ok.error || ok.status !== 0) throw new TouchError(`基準版本 ${base} 找不到（先 git fetch，或用 --base 指定）`);
     // 檔名一律用 -z（NUL 分隔、不加引號）：可讀輸出會把含引號或反斜線的檔名包引號再跳脫，拿去比就配不到（#50 r1 R3）
     const nul = (out) => out.split('\0').filter(Boolean);
+    // 還沒提交的分兩段看：已暫存（索引對 HEAD）與沒暫存（工作檔對索引）。只看工作檔對 HEAD 的淨差異，
+    // 改了又暫存、再把工作檔改回去的那一種會互相抵消、看不見（#50 r2 R1）
     const changed = [...new Set([
       ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames', `${base}...HEAD`])),
-      ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames', 'HEAD'])),
+      ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames', '--cached'])),
+      ...nul(git(root, ['diff', '--name-only', '-z', '--no-renames'])),
       ...nul(git(root, ['ls-files', '-z', '--others', '--exclude-standard'])),
     ])].sort();
     let text;
-    try { text = fs.readFileSync(path.join(root, b.file), 'utf8'); } catch (e) { throw new TouchError(`讀不到待辦檔 ${b.file}（${e.code || e.message}）`); }
+    try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch (e) { throw new TouchError(`讀不到待辦檔 ${file}（${e.code || e.message}）`); }
     const items = itemsOf(text, b.section);
-    if (items === null) throw new TouchError(`${b.file} 裡找不到「${b.section}」那一節`);
+    if (items === null) throw new TouchError(`${file} 裡找不到「${b.section}」那一節`);
     // 這一支自己新加或改寫的那幾條不列：那是實作者自己剛寫的。比的是**分岔點**那一版（跟三點差異同一個起點）：
     // 拿主幹最新那一版比，主幹分岔後改過字的舊待辦會被錯認成這支新加的而藏起來（#50 r1 R2）。
     // 分岔點那一版確實沒有待辦檔或那一節＝全部算新的；讀的時候 git 出錯＝列不了，不可以當成「沒有舊的」（#50 r1 R1）
     const forkPoint = git(root, ['merge-base', base, 'HEAD']).trim();
-    const listed = git(root, ['ls-tree', '-z', '--name-only', forkPoint, '--', b.file]);
-    const before = nul(listed).includes(b.file) ? (itemsOf(git(root, ['show', `${forkPoint}:${b.file}`]), b.section) || []) : [];
+    const listed = git(root, ['ls-tree', '-z', '--name-only', forkPoint, '--', file]);
+    const before = nul(listed).includes(file) ? (itemsOf(git(root, ['show', `${forkPoint}:${file}`]), b.section) || []) : [];
     const old = new Set(before.map((it) => it.text));
     const hitsAll = match(items, changed);
     const hits = hitsAll.filter((h) => old.has(h.text));
     const mine = hitsAll.length - hits.length;
-    const out = [`開工印待辦｜這支（${base}...HEAD，加上還沒提交與沒追蹤的）改到 ${changed.length} 個檔；${b.file}「${b.section}」那一節 ${items.length} 條，提到這些檔的 ${hits.length} 條${mine ? `（另有 ${mine} 條是這支自己新加或改寫的，不列）` : ''}（只列不擋）`];
+    const out = [`開工印待辦｜這支（${base}...HEAD，加上還沒提交與沒追蹤的）改到 ${changed.length} 個檔；${file}「${b.section}」那一節 ${items.length} 條，提到這些檔的 ${hits.length} 條${mine ? `（另有 ${mine} 條是這支自己新加或改寫的，不列）` : ''}（只列不擋）`];
     for (const h of hits) {
       const first = h.text.split('\n')[0];
       out.push(`  ・第 ${h.line} 行（${h.hit.join('、')}）：${first.length > 90 ? `${first.slice(0, 90)}…` : first}`);
