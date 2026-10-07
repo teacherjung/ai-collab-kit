@@ -2,7 +2,7 @@
 //
 // 守得到的：
 //   ①本支有沒回的 ❓＝擋（退 1）、點名是哪一題；本支沒有 ❓、或每題都配上了＝放行；
-//   ②只看問在本支的題：別支沒回的不擋這一支；編號整個相等（7 不會被 17 的題擋到）；
+//   ②只看問在本支的題：別支沒回的不擋這一支；編號整個相等（7 不會被 17 的題擋到）；比的是平台給的正式編號（用 #7、分支名問也擋得到）；
 //   ③答在別支的 ⚖️ 照樣配得上（掃整個專案的留言，不是只掃本支）；合規撤回也算收口；
 //   ④疑似只印不擋；
 //   ⑤判斷跟清單工具是同一份：同一批留言，閘擋下的題＝清單工具列在「還沒回」裡、掛在本支的那幾題；
@@ -29,14 +29,19 @@ const ask = (title = '要不要做', over = {}) => c(`## ❓ 待裁（2026-10-07
 const ruling = (askId, over = {}) => c(`## ⚖️ Boss 裁示（2026-10-07）：選 a\n原話（對話中，Alpha 轉述）：**「a」**\n落點：https://x/pull/7#issuecomment-${askId}`, { author: 'boss-acct', ...over });
 const withdraw = (askId, over = {}) => c(`## 🚫 撤回（2026-10-07）：不用問了\n撤回理由：題目依附的東西沒了（那支變更已關）\nAlpha 撤回、Boss 未回；他隨時可以要我重問\nhttps://x/pull/7#issuecomment-${askId}`, over);
 
-/** 假平台：只答 allComments，並記下被問了什麼。 */
-function fakePlatform(answer) {
+/** 假平台：allComments 回 answer；change 回那一支的正式編號（ids：問的寫法 → 正式編號，沒列的照原字），並記下被問了什麼。 */
+function fakePlatform(answer, ids = {}) {
   const asked = [];
   return {
     asked,
     ask(op, args) {
       asked.push([op, args]);
       if (answer instanceof Error) throw answer;
+      if (op === 'change') {
+        const id = Object.hasOwn(ids, args.change) ? ids[args.change] : args.change;
+        if (id instanceof Error) throw id;
+        return { id, headSha: 'abc' };
+      }
       if (op !== 'allComments') throw new PlatformError(`測試沒給 ${op} 的答案`);
       return answer;
     },
@@ -53,7 +58,7 @@ test('①本支有沒回的 ❓＝擋（退 1），點名是哪一題', () => {
   assert.match(text, /第 2 批要不要提前/u, '要點名是哪一題');
   assert.match(text, new RegExp(`留言 ${q.id}(?![0-9A-Za-z])`, 'u'), '要附那則 ❓ 的編號');
   assert.match(text, /不能按合併鍵/u);
-  assert.deepEqual(platform.asked, [['allComments', {}]], '掃整個專案的留言，只問這一個動作');
+  assert.deepEqual(platform.asked, [['change', { change: '7' }], ['allComments', {}]], '先問這一支的正式編號，再掃整個專案的留言');
 });
 
 test('①本支沒有 ❓、或每題都配上了＝放行（退 0）', () => {
@@ -81,6 +86,17 @@ test('②只看問在本支的題：別支沒回的不擋；編號整個相等�
   assert.equal(r.code, 0, r.lines.join('\n'));
   assert.equal(gate([other], '17').code, 1, '對照組：換成問 17 那一支就該擋');
   assert.equal(gate([ask('一位數', { change: '1' })], '17').code, 0, '1 的題不擋 17');
+});
+
+test('②比的是平台給的正式編號：用「#7」或分支名問，照樣擋到問在 7 的題；問不到這一支＝退 2', () => {
+  const q = ask();
+  for (const how of ['#7', 'topic-branch']) {
+    const r = gateRun(how, { settings, platform: fakePlatform([q], { [how]: '7' }) });
+    assert.equal(r.code, 1, `${how}：${r.lines.join('\n')}`);
+    assert.match(r.lines.join('\n'), /待裁閘｜變更 7（/u, '印的是正式編號');
+  }
+  const missing = gateRun('9999', { settings, platform: fakePlatform([q], { 9999: new PlatformError('找不到這一支') }) });
+  assert.equal(missing.code, 2, '不存在的編號不可以當成「沒有題」放行');
 });
 
 test('③答在別支的 ⚖️ 照樣配得上；⚖️ 不是裁示者帳號貼的不算答', () => {

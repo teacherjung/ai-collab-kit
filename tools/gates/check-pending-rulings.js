@@ -33,8 +33,11 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   if (!changeId) return { code: 2, lines: ['用法：node tools/gates/check-pending-rulings.js <變更編號>'] };
   const decider = deciderOf(settings);
   if (!decider) return { code: 2, lines: ['待裁閘：專案設定裡的裁示者識別值或貼文帳號還沒填——分不出誰的裁示算數，查不清楚就不放行。'] };
+  // 先問平台這一支的正式編號再比對：平台認得「#48」、分支名這類寫法，其他閘照跑，這裡若拿原字去比就一題都對不上、放行
+  let id;
   let comments;
   try {
+    id = platform.ask('change', { change: String(changeId) }, { settings }).id;
     comments = platform.ask('allComments', {}, { settings });
   } catch (e) {
     if (e instanceof PlatformError || (e && e.name === 'PlatformError')) {
@@ -44,8 +47,8 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   }
   const result = evaluate(comments, decider);
   if (result.unsure) return { code: 2, lines: [`待裁閘：${result.unsure}——先後判不了，查不清楚就不放行。`] };
-  const mine = onlyThisChange(result, changeId);
-  const lines = [`待裁閘｜變更 ${changeId}（掃了整個專案 ${comments.length} 則留言，只看問在這一支的題）`, ...render(mine)];
+  const mine = onlyThisChange(result, id);
+  const lines = [`待裁閘｜變更 ${id}（掃了整個專案 ${comments.length} 則留言，只看問在這一支的題）`, ...render(mine)];
   if (mine.near.length) lines.push('疑似那幾則只印不擋：真的是在問裁示者的，照 templates/ruling-record.md 的形狀另貼一則 ❓（不編輯舊的）。');
   if (mine.open.length) {
     lines.push(`這一支還有 ${mine.open.length} 題沒回：照規矩 A5 不能按合併鍵。等裁示者回、照範本貼 ⚖️（或合規撤回 🚫）之後，合併指令從頭再跑。`);
