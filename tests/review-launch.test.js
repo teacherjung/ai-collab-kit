@@ -3,11 +3,13 @@
 // 守得到的：
 //   ①範本的格子跟產生器的表一一對上（範本加、刪、換一格就紅）；同一個字樣在不同位置填不同的值（複審者與實作者）；只留 <三選一>；
 //   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；
-//   ③第 2 輪起：輪次＝這一位最大的輪次＋1、上一輪結論與上一輪之後的差異指到那一則、別位的結論不算；相關裁示列問在本支、配到的 ⚖️；
-//   ④本輪範圍照分級表那一列與輪次（上一輪是通過＝照「通過後回頭改」那一格）；讀不懂＝不產生；
+//   ③第 2 輪起：輪次＝這一位最大的輪次＋1、上一輪結論與上一輪之後的差異指到那一則、別位的結論不算；同一位＝角色＋來源字串；
+//     相關裁示列問在本支、配到的 ⚖️；
+//   ④本輪範圍照分級表那一列與輪次（上一輪是算數的通過＝照「通過後回頭改」那一格；缺固定小標的通過不算）；讀不懂＝不產生；
 //   ⑤設定沒填或不對、PR說明指定的複審者不是這一位、平台問不到、本機沒有受審版本、路徑有空白、這一輪的資料夾已經在＝退 2，
-//     而且**一棵樹都沒開、一個檔都沒寫**；開到一半失敗＝剛開的樹收回去；
-//   ⑥收樹：兩棵都乾淨、HEAD 沒變才收；有一棵不乾淨或 HEAD 變了＝退 1、兩棵都留著；找不到＝退 2；暫存區比開樹晚的只列不刪；
+//     而且**一棵樹都沒開、一個檔都沒寫**；開到一半失敗＝只收這一次開成的樹，別棵（登記了、目錄暫時不在）的登記保住；
+//   ⑥收樹：兩棵都在、乾淨、HEAD 沒變、沒上鎖才收；有一棵不對＝退 1、都留著；收到一半＝照實說收了哪一棵、記進紀錄、重跑只收剩下的；
+//     找不到＝退 2；暫存區比開樹晚的逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的。
 'use strict';
@@ -18,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, fill, promptPart, scopeOf, parseArgs, templateProblems, FILL } = require('../tools/review-launch.js');
+const { main, launch, close, fill, promptPart, scopeOf, roundsOf, parseArgs, templateProblems, freshEntries, FILL } = require('../tools/review-launch.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -119,6 +121,38 @@ test('①範本的格子跟產生器的表一一對上；同一個字樣在不�
   assert.ok(part.includes('<三選一>'));
   const missing = values(); delete missing.base;
   assert.throws(() => fill(TEMPLATE, missing), /沒有值/u, '少一個值不可以留空格送出去');
+});
+
+test('③同一位＝角色＋來源：同一個角色換了來源，它的輪次與結論不算這一位的（#49 r1 R2）', () => {
+  const roles = ['Boss', 'Alpha', 'Beta'];
+  const cli = verdict('Beta', 1, 'a'.repeat(40), '需修改後再審');
+  const desk = { ...verdict('Beta', 7, 'b'.repeat(40), '通過'), body: verdict('Beta', 7, 'b'.repeat(40), '通過').body.replace('來源：beta CLI', '來源：Beta desktop') };
+  const got = roundsOf([cli, desk], 'Beta', 'beta CLI', roles);
+  assert.equal(got.round, 2);
+  assert.equal(got.previous.c.id, cli.id);
+  assert.equal(roundsOf([cli, desk], 'Beta', '  beta   CLI ', roles).round, 2, '來源字串的空白照結論閘的讀法收攏');
+  assert.equal(roundsOf([cli, desk], 'Beta', 'Beta desktop', roles).round, 8, '對照組：換成那個來源就是它的輪次');
+});
+
+test('④缺兩個固定小標的「通過」不算數，不可以把這一輪縮成「通過後回頭改」那一格（#49 r1 R3）', () => {
+  const r = repo();
+  const dir = tmp('review-launch-out-');
+  try {
+    const s = settingsFor({ risk: { families: [{ pattern: '^lib/', tier: '中' }], raise: [] } });
+    const files = [{ path: 'lib/x.js', status: 'modified', previousPath: null }];
+    const r1 = verdict('Beta', 1, r.base, '需修改後再審');
+    const bare = { ...verdict('Beta', 2, r.base, '通過'), body: `🤖 Beta｜來源：beta CLI｜審 \`${r.base.slice(0, 7)}\`｜r2｜結論：通過\n\n沒有固定小標` };
+    const one = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare] })), cwd: r.dir, dir, template: TEMPLATE });
+    assert.match(one.prompt, /輪次：r3\n/u);
+    assert.match(one.prompt, /本輪範圍：全審（/u, '缺小標的通過不算：照中風險第 3 輪＝全審');
+    close('7', { settings: s, dir, leftoverRoots: [] });
+    const good = verdict('Beta', 3, r.base, '通過');
+    const two = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, good] })), cwd: r.dir, dir, template: TEMPLATE });
+    assert.match(two.prompt, new RegExp(`本輪範圍：${TIERS.中.afterPassFix}（`, 'u'), '對照組：合格的通過之後照「通過後回頭改」那一格');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
+  }
 });
 
 test('④本輪範圍照分級表那一列與輪次；上一輪是通過＝照「通過後回頭改」那一格；讀不懂＝null', () => {
@@ -249,7 +283,9 @@ test('⑤開到一半失敗：剛開的那一棵收回去、資料夾不留', ()
     const res = main(['7', '--reviewer', 'Beta'], { settings: settingsFor(), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE });
     assert.equal(res.code, 2, res.lines.join('\n'));
     assert.ok(!fs.existsSync(folder), '資料夾要收掉');
-    assert.ok(!sh(r.dir, 'worktree', 'list').includes(path.join(folder, 'tree')), '已經開好的審查樹要收回去');
+    const list = sh(r.dir, 'worktree', 'list', '--porcelain');
+    assert.ok(!list.includes(path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1', 'tree')), '已經開好的審查樹要收回去');
+    assert.ok(list.includes(path.join(folder, 'mutation')), '不是這一次開的那一棵（登記了、目錄暫時不在）的登記要保住：不可以整個倉庫 prune（#49 r1 R1）');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
   }
@@ -274,19 +310,25 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
     res = close('7', { settings: s, dir, leftoverRoots: [leftovers] });
     assert.equal(res.code, 1); assert.match(res.lines.join('\n'), /突變副本的 HEAD 是/u, 'HEAD 變了也不收');
     sh(path.join(folder, 'mutation'), 'checkout', '-q', '--detach', r.head);
+    fs.renameSync(path.join(folder, 'tree'), path.join(folder, 'tree-moved'));
+    res = close('7', { settings: s, dir, leftoverRoots: [leftovers] });
+    assert.equal(res.code, 1); assert.match(res.lines.join('\n'), /審查樹不見了/u, '樹被搬走或刪掉：照實說不見了、不收');
+    fs.renameSync(path.join(folder, 'tree-moved'), path.join(folder, 'tree'));
     fs.writeFileSync(path.join(leftovers, 'reviewer-made.json'), '{}');
-    // 放樹的資料夾的上層也當一個暫存區來掃：資料夾本身（上層的子項）修改時間一定比開樹晚，不可以被當成複審者另建的
-    res = close('7', { settings: s, dir, leftoverRoots: [leftovers, path.dirname(fs.realpathSync(dir)), path.join(leftovers, 'reviewer-made.json')] });
+    const notDir = path.join(tmp('review-launch-nd-'), 'not-a-dir.txt');
+    fs.writeFileSync(notDir, 'x');
+    res = close('7', { settings: s, dir, leftoverRoots: [leftovers, notDir] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     for (const t of ['tree', 'mutation']) assert.ok(!fs.existsSync(path.join(folder, t)), `${t} 要收掉`);
     assert.ok(!sh(r.dir, 'worktree', 'list').includes(folder), 'git 那邊也要移除登記');
     assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8')).closedAt, '紀錄標成收過');
     assert.ok(fs.existsSync(path.join(folder, 'prompt.md')), '提示與輸出檔留著');
     const text = res.lines.join('\n');
-    assert.ok(text.includes(path.join(fs.realpathSync(leftovers), 'reviewer-made.json')), '比開樹晚的要列出來');
-    assert.ok(!text.split('\n').some((l) => l.trim() === fs.realpathSync(dir) || l.trim() === folder), `自己那一層與它的上層不算：\n${text}`);
-    assert.ok(fs.existsSync(path.join(leftovers, 'reviewer-made.json')), '只列、不刪');
-    assert.match(text, /⚠️ 讀不了 .*reviewer-made\.json/u, '有一個讀不了的地方照實說、其餘照列（不在收到一半時崩掉）');
+    const planted = path.join(fs.realpathSync(leftovers), 'reviewer-made.json');
+    assert.ok(res.lines.includes(`    ${planted}`), `比開樹晚的要逐筆列出來（整行比，#49 r1 R4）：\n${text}`);
+    assert.match(text, /比開樹晚的 1 筆/u);
+    assert.ok(res.lines.includes(`  ⚠️ 讀不了 ${fs.realpathSync(notDir)}，那裡比開樹晚的沒列`), '讀不了的那一處照實說、其餘照列（不在收到一半時崩掉）');
+    assert.ok(fs.existsSync(planted), '只列、不刪');
     const none = main(['--close', '7'], { settings: s, dir });
     assert.equal(none.code, 2); assert.match(none.lines.join('\n'), /找不到.*沒有收/u, '收過的不再收；找不到＝退 2');
   } finally {
@@ -342,4 +384,64 @@ test('⑨設定裡填了的樣板逐一核：記號都認得、啟動指令帶�
   assert.match(got, /reviewLaunch\.changeLink 有認不得的記號：comment/u);
   const noSource = settingsFor({ reviewers: [{ ...s.reviewers[0], source: '未設定' }] });
   assert.match(templateProblems(noSource).join('\n'), /「Beta」的 source 還沒填/u, '登記了的複審者少一格要看得出來');
+});
+
+test('⑥暫存區清單：比開樹晚的列出、早的不列；自己那一層與它的上層不算；讀不了的分開回報（#49 r1 R4）', () => {
+  const root = tmp('review-launch-fresh-');
+  try {
+    const since = Date.now() - 60_000;
+    const base = path.join(root, 'base');
+    const folder = path.join(base, 'review-acme-kit-7-r1');
+    fs.mkdirSync(folder, { recursive: true });
+    const old = path.join(root, 'old.txt');
+    fs.writeFileSync(old, 'x');
+    fs.utimesSync(old, new Date(since - 60_000), new Date(since - 60_000));
+    const made = path.join(root, 'reviewer-made');
+    fs.mkdirSync(made);
+    const notDir = path.join(root, 'old.txt');
+    const re = /^review-acme-kit-7-r(\d+)$/u;
+    const got = freshEntries([root, base, notDir, path.join(root, '沒有這個')], folder, since, re);
+    const real = (p) => fs.realpathSync(p);
+    assert.ok(got.fresh.includes(real(made)), '比開樹晚的要列');
+    assert.ok(!got.fresh.includes(real(old)), '比開樹早的不列');
+    assert.ok(!got.fresh.includes(real(base)), '上層（放樹的資料夾）不列：它的修改時間跟著變');
+    assert.ok(!got.fresh.includes(real(folder)), '自己那一層不列');
+    assert.deepEqual(got.unreadable, [real(notDir)], '讀不了的分開回報；不在的不算讀不了');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('⑥收樹：上了鎖的不動；收到一半照實記下哪一棵收了，重跑只收剩下的（#49 r1 R5）', () => {
+  const r = repo();
+  const dir = tmp('review-launch-out-');
+  try {
+    const s = settingsFor();
+    launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE });
+    const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+    const tree = path.join(folder, 'tree');
+    const mutation = path.join(folder, 'mutation');
+    sh(r.dir, 'worktree', 'lock', mutation);
+    let res = close('7', { settings: s, dir, leftoverRoots: [] });
+    assert.equal(res.code, 1, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /突變副本上了鎖/u);
+    assert.ok(fs.existsSync(tree) && fs.existsSync(mutation), '上了鎖就一棵都不動');
+    sh(r.dir, 'worktree', 'unlock', mutation);
+    let calls = 0;
+    const flaky = (root, t) => { calls += 1; if (t === mutation) return '假的失敗'; return spawnSync('git', ['worktree', 'remove', t], { cwd: root, env: gitEnv() }).status === 0 ? null : '真的失敗'; };
+    res = close('7', { settings: s, dir, leftoverRoots: [], remove: flaky });
+    assert.equal(res.code, 1, res.lines.join('\n'));
+    const text = res.lines.join('\n');
+    assert.match(text, /收到一半.*已收 審查樹；突變副本移除失敗：假的失敗/u, '已經收了的要照實說，不可以說成沒收');
+    assert.ok(!fs.existsSync(tree) && fs.existsSync(mutation));
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8')).removed, [tree], '紀錄記下收了哪一棵');
+    res = close('7', { settings: s, dir, leftoverRoots: [] });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /先前已收：審查樹/u, '重跑只收剩下的那一棵');
+    assert.ok(!fs.existsSync(mutation));
+    assert.equal(calls, 2);
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
+  }
 });

@@ -18,7 +18,7 @@
 //   ③風險級別只印分級腳本照檔案算的那一級；實作者往重調、裁示者改級，要自己改提示那一格；
 //   ④「相關裁示」只列問在本支、配到的 ⚖️（判斷用待裁清單工具那一份），對話裡講過、沒貼留痕的列不到；
 //   ⑤收樹只核兩棵樹（狀態不看被忽略的檔）；複審者在暫存區另建的東西只列出比開樹晚的第一層、不刪，也不保證列齊（別的程式同時寫的也會被列進來）。
-// 退出碼：0＝做好了；1＝收樹時核到樹不乾淨或 HEAD 變了，沒收（要人看）；2＝做不了（設定沒填、平台問不到、git 出錯、路徑不安全、範本對不上、參數不對）。⚠️ 不是閘。
+// 退出碼：0＝做好了；1＝收樹時核到樹不乾淨、HEAD 變了或上了鎖而沒收，或收到一半（要人看）；2＝做不了（設定沒填、平台問不到、git 出錯、路徑不安全、範本對不上、參數不對）。⚠️ 不是閘。
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -29,7 +29,7 @@ const { read: readSettings } = require('./settings-data.js');
 const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./gates/check-collab-fields.js');
-const { headerOf } = require('./gates/check-review-verdicts.js');
+const { headerOf, missingHeadings } = require('./gates/check-review-verdicts.js');
 const { evaluate: evaluateRulings, deciderOf } = require('./pending-rulings.js');
 const { run: riskRun } = require('./risk-tier.js');
 
@@ -116,10 +116,14 @@ function scopeOf(row, round, previousPassed) {
   return full ? '全審' : '只核差異';
 }
 
-/** 這一位已經在這支貼過的結論：取輪次最大的那則（同輪次取晚貼的）；沒有＝第 1 輪。 */
-function roundsOf(comments, reviewer, roles) {
+/**
+ * 這一位已經在這支貼過的結論：取輪次最大的那則（同輪次取晚貼的）；沒有＝第 1 輪。
+ * 同一位＝角色和來源字串都一樣（F5；跟結論閘同一個讀法）：同一個角色換了來源就是另一位，它的輪次與通過不算這一位的（#49 r1 R2）。
+ */
+function roundsOf(comments, reviewer, source, roles) {
   const time = (c) => { const v = parseInstant(c.createdAt); return v === null ? -Infinity : v; };
-  const mine = comments.map((c) => ({ c, h: headerOf(c.body, roles) })).filter((x) => x.h && x.h.role === reviewer);
+  const want = String(source).trim().replace(/\s+/gu, ' ');
+  const mine = comments.map((c) => ({ c, h: headerOf(c.body, roles) })).filter((x) => x.h && x.h.role === reviewer && x.h.source === want);
   if (!mine.length) return { round: 1, previous: null };
   const last = mine.reduce((a, b) => ((b.h.round > a.h.round || (b.h.round === a.h.round && time(b.c) > time(a.c))) ? b : a));
   return { round: last.h.round + 1, previous: last };
@@ -214,8 +218,10 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   const risk = riskRun(id, { settings, platform });
   if (risk.code !== 0) throw new LaunchError(`風險級別算不出來：${risk.lines.join(' ')}`);
   const tier = risk.result.level;
-  const { round, previous } = roundsOf(comments, reviewer, usable);
-  const scope = scopeOf((settings.reviewTiers || {})[tier], round, previous && previous.h.verdict === '通過');
+  const { round, previous } = roundsOf(comments, reviewer, entry.source, usable);
+  // 缺兩個固定小標的「通過」結論閘不算數（F7），不可以拿它把這一輪縮成「通過後回頭改」那一格（#49 r1 R3）
+  const passed = Boolean(previous) && previous.h.verdict === '通過' && missingHeadings(previous.c.body).length === 0;
+  const scope = scopeOf((settings.reviewTiers || {})[tier], round, passed);
   if (!scope) throw new LaunchError(`複審與掃描分級表「${tier}」那一列讀不出第 ${round} 輪該全審還是只核差異`);
   const commentLink = (changeId, comment) => substitute(rl.commentLink, { project, change: changeId, comment }, '留言網址樣板').text;
   const related = rulings.ruled.filter((x) => String(x.ask.change) === String(id)).map((x) => commentLink(x.by.change, x.by.id));
@@ -250,9 +256,12 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
 
   const record = { change: id, reviewer, round, head, base, root, tree, mutation, promptFile, outFile, startedAt: now().toISOString() };
   fs.mkdirSync(folder, { recursive: true });
+  const created = [];
   try {
     git(root, ['worktree', 'add', '--detach', '-q', tree, head]);
+    created.push(tree);
     git(root, ['worktree', 'add', '--detach', '-q', mutation, head]);
+    created.push(mutation);
     for (const t of [tree, mutation]) {
       const got = git(t, ['rev-parse', 'HEAD']);
       if (got !== head) throw new LaunchError(`${t} 開出來是 ${got}，不是受審版本 ${head}`);
@@ -260,9 +269,10 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
     fs.writeFileSync(promptFile, prompt);
     fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
   } catch (e) {
-    // 開到一半失敗：剛開的樹與資料夾收回去，不留半套（下一次才不會被「已經在了」擋住）。刪掉資料夾再清登記＝兩棵都收乾淨
+    // 開到一半失敗：只收這一次自己開成的樹與資料夾，不留半套（下一次才不會被「已經在了」擋住）。
+    // 不用整個倉庫的 git worktree prune：別棵暫時不在原位的樹（例如外接碟沒接上）會被一起清掉登記與索引（#49 r1 R1）
+    for (const t of created) gitOk(root, ['worktree', 'remove', '--force', t]);
     fs.rmSync(folder, { recursive: true, force: true });
-    gitOk(root, ['worktree', 'prune']);
     throw e;
   }
   const lines = [
@@ -280,8 +290,49 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   return { code: 0, lines, record, command, prompt };
 }
 
-/** 收樹：兩棵都在、HEAD 沒變、狀態乾淨才收；有一棵不對就兩棵都留著給人看。 */
-function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'] } = {}) {
+/** 這個倉庫登記的每一棵樹 → 有沒有上鎖（git worktree list --porcelain；路徑照登記的原字串）。 */
+function lockedTrees(root) {
+  const out = new Map();
+  let cur = null;
+  for (const l of git(root, ['worktree', 'list', '--porcelain']).split('\n')) {
+    if (l.startsWith('worktree ')) { cur = l.slice(9); out.set(cur, false); } else if (cur && (l === 'locked' || l.startsWith('locked '))) out.set(cur, true);
+  }
+  return out;
+}
+
+/** 暫存區第一層比開樹晚的（只列、不刪）。自己那一層與它的上層不算：放樹的資料夾在暫存區裡時，上層的修改時間會跟著變。 */
+function freshEntries(roots, folder, since, re) {
+  const seen = new Set();
+  const fresh = [];
+  const unreadable = [];
+  const mine = fs.realpathSync(folder);
+  for (const r of roots) {
+    let real;
+    try { real = fs.realpathSync(r); } catch { continue; }
+    if (seen.has(real)) continue;
+    seen.add(real);
+    let names;
+    try { names = fs.readdirSync(real); } catch { unreadable.push(real); continue; }
+    for (const n of names) {
+      const p = path.join(real, n);
+      if (p === mine || mine.startsWith(`${p}${path.sep}`) || re.test(n)) continue;
+      try { if (fs.lstatSync(p).mtimeMs >= since) fresh.push(p); } catch { /* 讀的當下被刪了 */ }
+    }
+  }
+  return { fresh, unreadable };
+}
+
+/**
+ * 收樹：還沒收的每一棵都在、HEAD 沒變、狀態乾淨、沒上鎖才動手；有一棵不對就全部留著給人看。
+ * 一棵一棵移除，每收好一棵就記進紀錄：收到一半失敗時照實說哪一棵收了、哪一棵沒有，重跑只處理還沒收的（#49 r1 R5）。
+ */
+/** 移除一棵樹；回 null＝成功，否則回原因。考題換掉它，才考得到「第二棵移除失敗」那一條路。 */
+function removeTree(root, t) {
+  const r = spawnSync('git', ['worktree', 'remove', t], { cwd: root, env: gitEnv(), encoding: 'utf8' });
+  return r.error || r.status !== 0 ? ((r.error && r.error.message) || (r.stderr || '').trim() || `退 ${r.status}`) : null;
+}
+
+function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
@@ -295,44 +346,46 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
   const lines = [];
   let refused = false;
   for (const folder of open) {
-    const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+    const recFile = path.join(folder, 'launch.json');
+    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
+    rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
+    const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
+    const locks = lockedTrees(rec.root);
     const problems = [];
-    for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+    for (const [what, t] of todo) {
       if (!fs.existsSync(t)) { problems.push(`${what}不見了（${t}）`); continue; }
+      if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
       const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
       if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
       const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
       if (st === null) problems.push(`${what}的狀態讀不出`);
       else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
     }
+    const already = rec.removed.length ? `（先前已收：${rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本')).join('、')}）` : '';
     if (problems.length) {
       refused = true;
-      lines.push(`沒收 r${rec.round}（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  兩棵都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。');
+      lines.push(`沒收 r${rec.round}（${folder}）${already}：`, ...problems.map((p) => `  ・${p}`), `  還沒收的${todo.map(([w]) => w).join('、')}都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。`);
       continue;
     }
-    git(rec.root, ['worktree', 'remove', rec.tree]);
-    git(rec.root, ['worktree', 'remove', rec.mutation]);
-    rec.closedAt = new Date().toISOString();
-    fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(rec, null, 1)}\n`);
-    lines.push(`收好 r${rec.round}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
-    const since = Date.parse(rec.startedAt);
-    const seen = new Set();
-    const fresh = [];
-    for (const r of leftoverRoots) {
-      let real;
-      try { real = fs.realpathSync(r); } catch { continue; }
-      if (seen.has(real)) continue;
-      seen.add(real);
-      const mine = fs.realpathSync(folder);
-      let names;
-      try { names = fs.readdirSync(real); } catch { lines.push(`  ⚠️ 讀不了 ${real}，那裡比開樹晚的沒列`); continue; }
-      for (const n of names) {
-        const p = path.join(real, n);
-        // 自己那一層與它的上層（放樹的資料夾在暫存區裡時，上層的修改時間會跟著變）不算
-        if (p === mine || mine.startsWith(`${p}${path.sep}`) || re.test(n)) continue;
-        try { if (fs.lstatSync(p).mtimeMs >= since) fresh.push(p); } catch { /* 讀的當下被刪了 */ }
-      }
+    let failed = null;
+    for (const [what, t] of todo) {
+      const why = remove(rec.root, t);
+      if (why) { failed = `${what}移除失敗：${why}`; break; }
+      rec.removed.push(t);
+      save();
     }
+    if (failed) {
+      refused = true;
+      const done = rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本'));
+      lines.push(`收到一半 r${rec.round}（${folder}）：${done.length ? `已收 ${done.join('、')}；` : ''}${failed}。紀錄已記下收了哪幾棵，排除原因後重跑只會收剩下的。`);
+      continue;
+    }
+    rec.closedAt = new Date().toISOString();
+    save();
+    lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
+    const { fresh, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+    for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
     if (fresh.length) {
       lines.push(`  暫存區第一層比開樹晚的 ${fresh.length} 筆（只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
       for (const p of fresh.slice(0, 20)) lines.push(`    ${p}`);
@@ -380,4 +433,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { main, launch, close, fill, promptPart, substitute, scopeOf, roundsOf, parseArgs, templateProblems, FILL, SAFE, COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, fill, promptPart, substitute, scopeOf, roundsOf, parseArgs, templateProblems, freshEntries, lockedTrees, FILL, SAFE, COMMAND_TOKENS, LaunchError };
