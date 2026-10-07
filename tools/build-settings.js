@@ -183,6 +183,13 @@ function build(data) {
   for (const r of reviewers) out.push(`| ${rv(r, 'participant', '識別值')} | ${rv(r, 'strongest', '最強模型')} | ${rv(r, 'second', '次強模型')} | ${rv(r, 'maxEffort', '最高推理')} | ${rv(r, 'autoMode', '自動模式')} |`);
   out.push('', '| 複審者 | 怎麼起（含放行哪些考題指令） | 機器擋得住的 | 只靠提示的、已知缺口 | 驗過的日期 |', '|---|---|---|---|---|');
   for (const r of reviewers) out.push(`| ${rv(r, 'participant', '識別值')} | ${rv(r, 'launch', '啟動方式')} | ${rv(r, 'machine', '機器擋得住的')} | ${rv(r, 'promptOnly', '只靠提示的')} | ${rv(r, 'verified', '驗過的日期', { allowEmpty: true })} |`);
+  // 送審產生器（tools/review-launch.js）讀這兩格與下面那一塊；記號的意思跟著它的檔頭，這裡只排版
+  out.push('', '| 複審者 | 結論標頭的來源字串 | 啟動指令樣板（送審產生器替換記號後印出） |', '|---|---|---|');
+  for (const r of reviewers) out.push(`| ${rv(r, 'participant', '識別值')} | ${rv(r, 'source', '來源字串')} | ${rv(r, 'command', '啟動指令樣板')} |`);
+  const rl = data.reviewLaunch || {};
+  const rlv = (k, what) => plain(rl[k] === undefined ? '未設定' : rl[k], `送審產生器的${what}`);
+  out.push('', `送審產生器另外要的：PR 網址樣板 ${rlv('changeLink', 'PR 網址樣板')}；留言網址樣板 ${rlv('commentLink', '留言網址樣板')}；`
+    + `複審者貼結論的指令 ${rlv('postComment', '貼結論的指令')}；在突變副本裡跑考題 ${rlv('copyTest', '副本跑考題指令')}`);
   out.push('');
   out.push('## 十二、忽略清單登記（規矩 B4、E7；考題比對每一份的生效樣式）', '');
   for (const l of (data.ignoreLists || [])) out.push(`- ${plain(l.file, '忽略檔')}：${plain(joinList(l.patterns), '忽略樣式')}`);

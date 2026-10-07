@@ -363,12 +363,20 @@
    "second": "未設定",
    "maxEffort": "未設定",
    "autoMode": "未設定",
+   "source": "未設定",
    "launch": "未設定",
+   "command": "未設定",
    "machine": "未設定",
    "promptOnly": "未設定",
    "verified": ""
   }
  ],
+ "reviewLaunch": {
+  "changeLink": "未設定",
+  "commentLink": "未設定",
+  "postComment": "未設定",
+  "copyTest": "未設定"
+ },
  "ignoreLists": [
   {
    "file": ".gitignore",
