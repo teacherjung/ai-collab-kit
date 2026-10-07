@@ -71,6 +71,7 @@ function fakeFilled({ log, box, zones }) {
   s.acceptance = { tiers: [{ id: '重', action: '重啟' }, { id: '輕', action: '看一眼' }], families: [{ pattern: '^lib/', tier: '重' }, { pattern: '^docs/', tier: '輕' }], unknownTier: '重' };
   s.risk = { families: [{ pattern: '^lib/', tier: '高' }, { pattern: '^docs/', tier: '低' }], raise: ['假的升級條件'] };
   s.reviewers = [{ participant: 'Beta', strongest: '假的最強', second: '假的次強', maxEffort: '最高', autoMode: '假的自動模式', source: '假的 CLI', launch: '假的啟動方式', command: '假的指令 {model} {effort} {reviewTree}', machine: '假的', promptOnly: '假的', verified: '2026-09-15' }];
+  s.backlog = { file: '假的待辦.md', section: '## 假的待辦' };
   s.reviewLaunch = { changeLink: 'https://x.invalid/{project}/{change}', commentLink: 'https://x.invalid/{project}/{change}#{comment}', postComment: '假的貼法 {change}', copyTest: '假的考法 {mutationCopy}' };
   s.checks = { prepareWorktree: recorder(log, 'prepare'), commands: [recorder(log, 'check')], mainWorktree: '一般工作樹', indexAnchors: ['README.md'] };   // 準備指令也填成有動作的（r1 T1：填「無」＝這一格沒考到）；兩個選填登記也填成登記了的樣子
   s.gates = s.gates.map((g) => ({ ...g, state: '已啟用' }));

@@ -84,6 +84,8 @@ function build(data) {
   for (const l of data.locations) {
     out.push(`| ${plain(l.item, '項目')} | ${plain(l.rules, '規矩條號')} | ${plain(l.where, '位置')} |`);
   }
+  const backlog = data.backlog || {};
+  out.push('', `待辦清單（開工印待辦 tools/backlog-touch.js 讀它；規矩 F6）：${plain(backlog.file === undefined ? '未設定' : backlog.file, '待辦檔')} 的「${plain(backlog.section === undefined ? '未設定' : backlog.section, '待辦那一節的標題')}」那一節`);
   out.push('', `主幹分支名（原閘寫死 main，規矩 H2、H3、H4）：${plain(data.mainBranch, '主幹分支名')}`, '');
   out.push('## 四、掃描發射者（規矩 A1、G1、G4）', '');
   out.push(`- 掃描者：${plain(data.scanner.tool, '掃描者')}（沒有掃描者＝照風險級別要掃的那幾支，掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式；表定不掃的照規矩 G1）`);

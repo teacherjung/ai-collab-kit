@@ -14,6 +14,7 @@
 1. **讀 [RULES.md](RULES.md) 全文**：協作規矩的正本。
 2. **以 GitHub 上的最新版為準**：桌面這一份是主目錄，不會自己更新，也不在這裡施工（D2）。先 `git fetch`，從 `origin/main` 開分支，在自己的常設工作樹做（Claude 的是同層的 `ai-collab-kit-claude`）。
 3. **看有沒有還沒回的待裁**：`node tools/pending-rulings.js`（D1）。
+4. **看待辦裡有沒有提到這支要改的檔**：`node tools/backlog-touch.js`（只列不擋；開工時多半還沒改檔，送審前再跑一次）。條件到了的，問裁示者要不要併進手上這支或另開。
 
 ## 東西在哪
 
