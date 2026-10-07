@@ -6,13 +6,15 @@
 // 條件到了的由實作者問裁示者要不要併進手上這支或另開；2026-10-07 裁第 2 批的三台提前做，這是第三台。
 // 不併進待裁清單工具：那一支是 D1 的清單腳本，一支工具講兩條規矩，機器表那一列就要講兩件事。
 //
-// 「這一支改到的檔」＝跟基準版本（預設 origin 上的主幹）的三點差異，加上還沒提交的改動與沒追蹤的檔（開工時多半還沒提交）；
-// 「這支自己新加或改寫的」＝分岔點那一版的同一節裡沒有一模一樣的那幾條。
+// 「這一支改到的檔」＝跟基準版本（預設 origin 上的主幹）的三點差異，加上還沒提交的改動與沒追蹤的檔（開工時多半還沒提交）。
+// 待辦檔只從磁碟上現在那一份讀，設定的檔名不拿去問版本控制：曾做過「這支自己剛加的待辦不列」（要拿檔名去找分岔點那一版來比），
+// #50 四輪複審各抓到一種檔名在磁碟與版本控制裡身分對不上的情形（讀失敗、./、冒號開頭、大小寫別名、捷徑檔），每一種都把該列的
+// 舊待辦藏起來還退 0；擁有者 2026-10-07 裁 a 拿掉。代價：送審前跑會多印實作者自己剛寫的那幾條（量到 0〜2 條），開工時沒有。
 // 「提到」＝那一條的整段文字裡出現那個檔的路徑或它的上層資料夾（寫成「tools/」這種，結尾帶斜線），前後不能再接路徑字元：
 // settings.json 不會命中 unfilled-settings.json。
 //
 // ⚠️ 守不到的：只寫檔名不寫路徑的、寫「那些檔」「說明書的換頁程式」這類說法的，都配不到；換了路徑寫法（例如 ./tools/x.js）、
-//   路徑緊接半形標點（半形括號、逗號）的也配不到；
+//   路徑緊接半形標點（半形括號、逗號）的也配不到；這支自己剛寫進待辦的那幾條也會列（見上）；
 //   列出來之後有沒有人看、條件是不是真的到了，全靠人判斷——這支不判斷值不值得做，也不寫任何東西。
 // 退出碼：0＝列完了（有沒有命中都是 0）／2＝列不了（設定沒填、待辦檔或那一節找不到、基準找不到、git 出錯、參數不對）。⚠️ 不是閘。
 'use strict';
@@ -94,13 +96,9 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
   try {
     const b = settings.backlog || {};
     if (!b.file || b.file === UNSET || !b.section || b.section === UNSET) throw new TouchError('專案設定的 backlog（待辦檔在哪、哪一節）還沒填');
-    // 待辦檔名劃界：正規化（./BACKLOG.md＝BACKLOG.md；#50 r2 R2）之後，每一段只收英數與「._-」、不在倉庫外。
-    // 為什麼不照收任何寫法：這個名字要拿去問 git 分岔點那一版，git 會把冒號開頭、萬用字元這類寫法當成路徑語法
-    // （#50 r1 R1、r2 R2、r3 R1 同一族連三輪；F10 自問表的結論是劃界、不再一種一種補）。設定寫怪是手誤，說清楚就好。
+    // 待辦檔名正規化成從根目錄算起的寫法（./BACKLOG.md＝BACKLOG.md），要在倉庫裡面；這個名字只用在磁碟上，不經過版本控制的路徑解讀
     const file = path.posix.normalize(String(b.file));
-    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(file) || file.split('/').some((seg) => seg === '..' || seg === '.')) {
-      throw new TouchError(`專案設定的 backlog.file「${b.file}」只收從倉庫根目錄算起、在倉庫裡面、每一段只用英數與「._-」的路徑`);
-    }
+    if (path.posix.isAbsolute(file) || file === '..' || file.startsWith('../')) throw new TouchError(`專案設定的 backlog.file「${b.file}」要寫成從倉庫根目錄算起、在倉庫裡面的路徑`);
     const root = git(cwd, ['rev-parse', '--show-toplevel']).trim();
     if (base === undefined) {
       if (!settings.mainBranch || settings.mainBranch === UNSET) throw new TouchError('專案設定的主幹分支名沒填，也沒給 --base');
@@ -122,17 +120,8 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [] } = {})
     try { text = fs.readFileSync(path.join(root, file), 'utf8'); } catch (e) { throw new TouchError(`讀不到待辦檔 ${file}（${e.code || e.message}）`); }
     const items = itemsOf(text, b.section);
     if (items === null) throw new TouchError(`${file} 裡找不到「${b.section}」那一節`);
-    // 這一支自己新加或改寫的那幾條不列：那是實作者自己剛寫的。比的是**分岔點**那一版（跟三點差異同一個起點）：
-    // 拿主幹最新那一版比，主幹分岔後改過字的舊待辦會被錯認成這支新加的而藏起來（#50 r1 R2）。
-    // 分岔點那一版確實沒有待辦檔或那一節＝全部算新的；讀的時候 git 出錯＝列不了，不可以當成「沒有舊的」（#50 r1 R1）
-    const forkPoint = git(root, ['merge-base', base, 'HEAD']).trim();
-    const listed = git(root, ['ls-tree', '-z', '--name-only', forkPoint, '--', file]);
-    const before = nul(listed).includes(file) ? (itemsOf(git(root, ['show', `${forkPoint}:${file}`]), b.section) || []) : [];
-    const old = new Set(before.map((it) => it.text));
-    const hitsAll = match(items, changed);
-    const hits = hitsAll.filter((h) => old.has(h.text));
-    const mine = hitsAll.length - hits.length;
-    const out = [`開工印待辦｜這支（${base}...HEAD，加上還沒提交與沒追蹤的）改到 ${changed.length} 個檔；${file}「${b.section}」那一節 ${items.length} 條，提到這些檔的 ${hits.length} 條${mine ? `（另有 ${mine} 條是這支自己新加或改寫的，不列）` : ''}（只列不擋）`];
+    const hits = match(items, changed);
+    const out = [`開工印待辦｜這支（${base}...HEAD，加上還沒提交與沒追蹤的）改到 ${changed.length} 個檔；${file}「${b.section}」那一節 ${items.length} 條，提到這些檔的 ${hits.length} 條（只列不擋）`];
     for (const h of hits) {
       const first = h.text.split('\n')[0];
       out.push(`  ・第 ${h.line} 行（${h.hit.join('、')}）：${first.length > 90 ? `${first.slice(0, 90)}…` : first}`);

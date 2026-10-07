@@ -6,10 +6,9 @@
 //     tools/x.js 不命中 tools/x.json、tools/ 不命中 mytools/、tools/.cache/…、tools/@scope/… 這類更深的路徑不算提到整個 tools/）；
 //     寫在反引號或引號裡照算；
 //   ③真的倉庫裡跑：這一支跟基準的三點差異、已暫存與沒暫存的改動、沒追蹤的檔都算改到（四個來源的檔名有引號、反斜線都照原名；
-//     改了又暫存、再把工作檔改回去的照算）；待辦檔設定寫 ./BACKLOG.md 一樣；設定的檔名劃界：每一段只收英數與「._-」、
-//     不在倉庫外，其餘（冒號開頭、萬用字元這類 git 會當成路徑語法的）＝退 2；
-//     這支自己新加或改寫的那幾條不列、照實說幾條（跟分岔點那一版比：主幹後來改過字的舊待辦照列；待辦檔是這支新建的＝全部算新的）；
-//     讀分岔點那一版時 git 出錯＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
+//     改了又暫存、再把工作檔改回去的照算）；這支自己剛寫進待辦的也照列、待辦檔是這支新建的也照列（擁有者 2026-10-07 裁 a：不去版本控制找舊版比）；
+//     待辦檔只從磁碟讀：設定寫 ./BACKLOG.md 一樣，檔名冒號開頭、指到倉庫內的捷徑檔、大小寫別名（磁碟不分大小寫時）都照讀——
+//     這幾種曾是四輪複審抓到的反例；寫到倉庫外＝退 2；基準之後主幹自己動的檔不算這一支改到的；沒有命中也退 0；
 //   ④設定沒填、待辦檔讀不到、那一節找不到、基準找不到、主幹沒填又沒給 --base、參數不對＝退 2；
 //   ⑤git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑥空白設定的複本裡跑指令入口＝退 2。
 // ⚠️ 守不到的：只寫檔名、或用說法（「說明書的換頁程式」）寫的待辦配不到；列出來之後有沒有人看、條件是不是真的到了。
@@ -107,7 +106,7 @@ test('②「提到」：整個路徑或帶結尾斜線的上層資料夾；前�
   assert.deepEqual(by['（戊）'], ['lib/a.js']);
 });
 
-test('③真的倉庫裡跑：三點差異＋沒提交＋沒追蹤都算；這支自己新加或改寫的不列；主幹自己動的不算；沒命中也退 0', () => {
+test('③真的倉庫裡跑：三點差異＋沒提交＋沒追蹤都算；這支自己剛加或改寫的也照列；主幹自己動的不算；沒命中也退 0', () => {
   const r = repo();
   try {
     r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n', 'lib/a.js': 'a\n', 'docs/guide.md': 'g\n', 'tests/helpers/unfilled-settings.json': '{}\n' });
@@ -115,7 +114,7 @@ test('③真的倉庫裡跑：三點差異＋沒提交＋沒追蹤都算；這�
     r.g('branch', 'origin-main');
     r.g('switch', '-q', '-c', 'topic');
     r.write({ 'settings.json': '{"a":1}\n' });
-    // 這支自己新加一條提到 settings.json 的待辦、改寫（甲）以外的（戊）：都不列
+    // 這支自己新加一條提到 settings.json 的待辦、改寫（戊）：都照列（裁 a）
     r.write({ 'BACKLOG.md': BACKLOG.replace('- 2026-10-01（丁）', '- 2026-10-07（新）這支自己記的／settings.json／之後。\n- 2026-10-01（丁）').replace('（戊）小標底下還是待辦那一節／lib/a.js', '（戊）改寫過、改提到／settings.json') });
     r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
     r.write({ 'docs/guide.md': '還沒提交\n', 'tools/new.js': '沒追蹤\n' });
@@ -125,9 +124,10 @@ test('③真的倉庫裡跑：三點差異＋沒提交＋沒追蹤都算；這�
     const text = res.lines.join('\n');
     assert.match(text, /第 5 行（settings\.json）：2026-10-01（甲）/u);
     assert.match(text, /第 7 行（tools\/new\.js、docs\/guide\.md）|第 7 行（docs\/guide\.md、tools\/new\.js）/u, '沒提交、沒追蹤的也算');
-    assert.doesNotMatch(text, /（新）/u, '這支自己新加的不列');
-    assert.doesNotMatch(text, /（戊）/u, '這支改寫過的不列');
-    assert.match(text, /另有 2 條是這支自己新加或改寫的，不列/u);
+    assert.match(text, /（新）這支自己記的/u, '這支自己剛加的也照列（裁 a）');
+    assert.match(text, /（戊）改寫過、改提到/u, '這支改寫過的也照列');
+    assert.match(text, /提到這些檔的 4 條/u, '甲、丙、新、戊');
+    assert.doesNotMatch(text, /另有/u, '不再分「這支自己新加的」');
     assert.match(text, /只列不擋/u);
     // 主幹在基準之後自己動了 lib/a.js：不算這一支改到的
     r.g('switch', '-q', 'origin-main');
@@ -186,7 +186,7 @@ test('⑤git 那一族環境變數指向別的倉庫，照樣看這一個（E4�
     const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(res.changed, ['settings.json'], '看的是這一個倉庫，不是誘餌');
-    // 讀分岔點那一版的待辦也要讀這一個倉庫：讀到誘餌（或讀不到）就會把（甲）當成這支新加的而不列（#50 r1 R5）
+    // 列出的也要是這一個倉庫的：讀到誘餌的話改到的檔是空的、一條都不會列
     assert.deepEqual(res.hits.map((h) => h.line), [5], `（甲）要照列：\n${res.lines.join('\n')}`);
   } finally {
     if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
@@ -201,26 +201,7 @@ test('⑥真的跑一遍指令（空白設定的複本，不讀本倉庫那份�
   assert.equal(runInCopy('tools/backlog-touch.js', ['--oops']).status, 2);
 });
 
-test('③讀分岔點那一版的待辦時 git 出錯＝退 2，不可以當成「沒有舊的」把該列的藏起來（#50 r1 R1）', () => {
-  const r = repo();
-  try {
-    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
-    r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
-    r.g('branch', 'origin-main');
-    r.g('switch', '-q', '-c', 'topic');
-    r.write({ 'settings.json': '{"a":1}\n', 'BACKLOG.md': `${BACKLOG}\n` });
-    r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
-    assert.equal(run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] }).hits.length, 1, '對照組：好好的時候（甲）照列');
-    // 只弄壞分岔點那一版的待辦內容（樹還在、所以看得出那一版有這個檔）
-    const blob = r.g('rev-parse', 'origin-main:BACKLOG.md');
-    fs.rmSync(path.join(r.dir, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
-    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
-    assert.equal(res.code, 2, res.lines.join('\n'));
-    assert.match(res.lines.join('\n'), /git show/u, '說是讀舊版那一步出錯');
-  } finally { r.cleanup(); }
-});
-
-test('③主幹在分岔後改過某條待辦的字、這一支沒碰它：照列，不當成這支新加的（#50 r1 R2）', () => {
+test('③主幹在分岔後改過某條待辦的字、這一支沒碰它：照列（曾是 #50 r1 R2 的反例；只從磁碟讀之後自然成立，留著當回歸）', () => {
   const r = repo();
   try {
     const one = '# 待辦\n\n## 待辦\n\n- 2026-10-01（甲）工具那一支要補考題／tools/a.js／下一支動到它時。\n';
@@ -256,29 +237,31 @@ test('③改了又暫存、再把工作檔改回原樣：已暫存的改動照�
   } finally { r.cleanup(); }
 });
 
-test('③設定的待辦檔寫成 ./BACKLOG.md 也一樣（正規化成從根目錄算起再比；#50 r2 R2）；寫到倉庫外＝退 2', () => {
+test('③待辦檔只從磁碟讀：設定寫 ./BACKLOG.md、檔名冒號開頭、指到倉庫內的捷徑檔、大小寫別名都照讀（曾是 #50 r2〜r4 的反例）；寫到倉庫外＝退 2', () => {
   const r = repo();
   try {
-    r.write({ 'BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
+    r.write({ 'BACKLOG.md': BACKLOG, 'notes/tasks.md': BACKLOG, ':BACKLOG.md': BACKLOG, 'settings.json': '{}\n' });
+    fs.symlinkSync('notes/tasks.md', path.join(r.dir, 'LINK.md'));
     r.g('add', '-A'); r.g('commit', '-q', '-m', 'base');
     r.g('branch', 'origin-main');
     r.write({ 'settings.json': '{"a":1}\n' });
     r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic');
-    const dotted = run({ settings: { ...SETTINGS, backlog: { file: './BACKLOG.md', section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
-    assert.equal(dotted.code, 0, dotted.lines.join('\n'));
-    assert.deepEqual(dotted.hits.map((h) => h.line), [5], `（甲）要照列：\n${dotted.lines.join('\n')}`);
-    assert.doesNotMatch(dotted.lines[0], /另有/u, '不可以把舊待辦當成這支新加的');
-    // 劃界（#50 r3 R1；F10）：git 會當成路徑語法的寫法（冒號開頭、萬用字元）、倉庫外、只有「.」，一律退 2 說清楚，不猜
-    for (const bad of ['../BACKLOG.md', '/etc/BACKLOG.md', ':BACKLOG.md', './:BACKLOG.md', 'BACK*.md', 'BACK?LOG.md', '[B]ACKLOG.md', 'dir/../../x.md', '.', '有中文.md', 'a b.md']) {
+    const names = ['./BACKLOG.md', 'docs/../BACKLOG.md', ':BACKLOG.md', './:BACKLOG.md', 'LINK.md'];
+    // 大小寫別名只在不分大小寫的磁碟上存在（這台 Mac 是）；分大小寫的磁碟上讀不到＝退 2，不在這一題
+    if (fs.existsSync(path.join(r.dir, 'backlog.md'))) names.push('backlog.md');
+    for (const file of names) {
+      const res = run({ settings: { ...SETTINGS, backlog: { file, section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
+      assert.equal(res.code, 0, `${file}：${res.lines.join('\n')}`);
+      assert.deepEqual(res.hits.map((h) => h.line), [5], `${file}：（甲）要照列：\n${res.lines.join('\n')}`);
+      assert.doesNotMatch(res.lines[0], /另有/u, file);
+    }
+    for (const bad of ['../BACKLOG.md', '/etc/BACKLOG.md', 'dir/../../x.md']) {
       const res = run({ settings: { ...SETTINGS, backlog: { file: bad, section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
       assert.equal(res.code, 2, bad);
-      assert.match(res.lines.join('\n'), /只收從倉庫根目錄算起、在倉庫裡面、每一段只用英數與「\._-」的路徑/u, bad);
+      assert.match(res.lines.join('\n'), /要寫成從倉庫根目錄算起、在倉庫裡面的路徑/u, bad);
     }
-    const nested = run({ settings: { ...SETTINGS, backlog: { file: 'docs/../BACKLOG.md', section: '## 待辦' } }, cwd: r.dir, argv: ['--base', 'origin-main'] });
-    assert.equal(nested.code, 0, '正規化之後在倉庫裡面、每一段都合格的照收');
   } finally { r.cleanup(); }
 });
-
 test('③檔名有雙引號或反斜線也照樣配得到（git 的可讀輸出會加引號跳脫；#50 r1 R3）', () => {
   const r = repo();
   try {
@@ -307,7 +290,7 @@ test('③檔名有雙引號或反斜線也照樣配得到（git 的可讀輸出�
   } finally { r.cleanup(); }
 });
 
-test('③待辦檔是這一支才新建的（分岔點那一版沒有這個檔）：全部算這支新加的、不列，照樣退 0', () => {
+test('③待辦檔是這一支才新建的：照列（裁 a：不再把它當成「這支自己新加的」藏起來）', () => {
   const r = repo();
   try {
     r.write({ 'settings.json': '{}\n' });
@@ -317,7 +300,7 @@ test('③待辦檔是這一支才新建的（分岔點那一版沒有這個檔�
     r.g('add', '-A'); r.g('commit', '-q', '-m', 'topic adds backlog');
     const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--base', 'origin-main'] });
     assert.equal(res.code, 0, res.lines.join('\n'));
-    assert.equal(res.hits.length, 0);
-    assert.match(res.lines[0], /另有 1 條是這支自己新加或改寫的，不列/u);
+    assert.deepEqual(res.hits.map((h) => h.line), [5]);
+    assert.doesNotMatch(res.lines[0], /另有/u);
   } finally { r.cleanup(); }
 });
