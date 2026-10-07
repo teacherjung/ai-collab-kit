@@ -48,8 +48,9 @@ const MAX_RANGE = 200;
 const STAMP = /(\d{2})\/(\d{2}) (\d{2}):(\d{2})/u;
 // 網址的候選：從 https?:// 起、到空白、中文標點、Markdown 的定界字元（反引號、引號、方括號、圓括號）前；主機與路徑再用 URL 解析核對
 const URL_CANDIDATE = /https?:\/\/[^\s<>「」（）()。，、；：！？`'"[\]]+/gu;
-// 任何網址整段（含後面的片段號）：掃裸別名之前先把它挖掉，網址裡的字不可以冒充「套件 #N」（r3 R3）
-const ANY_URL = /https?:\/\/\S+/gu;
+// 掃裸別名之前先把網址挖掉，網址裡的字不可以冒充「套件 #N」（r3 R3）；挖的範圍跟上面的候選一樣（到定界字元為止），
+// 不可以一路吃到空白——「[說明](https://example.org/a)、套件 #41」的頓號與別名不是網址的一部分（r4 R1）
+const ANY_URL = URL_CANDIDATE;
 const PR_PATH = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:\/|$)/u;
 const GITHUB_HOSTS = ['github.com', 'www.github.com'];
 const BARE_PR = /(\S+?)\s*#(\d+)/gu;

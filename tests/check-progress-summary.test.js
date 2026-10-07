@@ -229,6 +229,15 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.deepEqual([...prRefs('https://example.org/x?a=套件#41 與 套件 #42', { 套件: 'acme/kit' })], ['acme/kit#42'], '網址挖掉後，網址外的裸別名照認');
   const urlAlias = problemsOf(doc({ attachments: ['1. https://example.org/套件#41 合併了。'] }), { repos: { 套件: 'acme/kit' } });
   assert.ok(urlAlias.some((p) => p.includes('核不了')), urlAlias.join('\n'));
+  // r4 R1：挖網址只挖到定界字元為止，網址後面緊接的標點與別名要留下來
+  assert.deepEqual([...prRefs('[說明](https://example.org/a)、套件 #41', { 套件: 'acme/kit' })], ['acme/kit#41']);
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41、套件 #42', { 套件: 'acme/kit' })].sort(), ['acme/kit#41', 'acme/kit#42']);
+  const twoPrs = problemsOf(doc({ entries: [entry({ fields: { 到哪一步: '已測試' } })], attachments: ['1. https://github.com/acme/kit/pull/41、套件 #42'] }), { repos: { 套件: 'acme/kit' }, prStates: { 'acme/kit#41': { merged: true }, 'acme/kit#42': { merged: false } } });
+  assert.deepEqual(twoPrs, [], '兩支裡還有一支沒合併，不可以報可能過期');
+  // r4 R3：「幾個別名都對上取最長」要真的有兩個候選才驗得到（「新-套件」前面接的是連字號，「套件」也對上）
+  for (const repos of [{ 套件: 'acme/old', '新-套件': 'acme/new' }, { '新-套件': 'acme/new', 套件: 'acme/old' }]) {
+    assert.deepEqual([...prRefs('新-套件 #41', repos)], ['acme/new#41'], JSON.stringify(repos));
+  }
   // r3 R4：Markdown 的包裝（反引號、引號、連結語法）要先剝掉，裡面的合法網址照認
   for (const wrapped of ['`https://github.com/acme/kit/pull/41`', '[看](https://github.com/acme/kit/pull/41)', '"https://github.com/acme/kit/pull/41"', '（https://github.com/acme/kit/pull/41）']) {
     assert.deepEqual([...prRefs(wrapped)], ['acme/kit#41'], wrapped);
