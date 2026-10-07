@@ -5,9 +5,11 @@
 //   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；
 //   ③第 2 輪起：輪次＝這一位最大的輪次＋1、上一輪結論與上一輪之後的差異指到那一則、別位的結論不算；同一位＝角色＋來源字串；
 //     相關裁示列問在本支、配到的 ⚖️；
-//   ④本輪範圍照分級表那一列與輪次（上一輪是算數的通過＝照「通過後回頭改」那一格；缺固定小標的通過不算）；讀不懂＝不產生；
+//   ④本輪範圍照分級表那一列與輪次（上一輪是算數的通過＝照「通過後回頭改」那一格；算不算照結論閘：缺固定小標的不算、
+//     同一輪相反結論或對不同版本各給結論＝衝突不算、最近貼的那一輪不算數就不縮）；讀不懂＝不產生；印的提醒說改級時範圍要一起改；
 //   ⑤設定沒填或不對、PR說明指定的複審者不是這一位、平台問不到、本機沒有受審版本、路徑有空白、這一輪的資料夾已經在＝退 2，
-//     而且**一棵樹都沒開、一個檔都沒寫**；開到一半失敗＝只收這一次開成的樹，別棵（登記了、目錄暫時不在）的登記保住；
+//     而且**一棵樹都沒開、一個檔都沒寫**；開到一半失敗＝只收這一次開的樹（含 add 建好樹才因掛鉤失敗的那一棵），
+//     開樹前就登記著的（登記了、目錄暫時不在）保住，排除原因後重跑送得出去；
 //   ⑥收樹：兩棵都在、乾淨、HEAD 沒變、沒上鎖才收；有一棵不對＝退 1、都留著；收到一半＝照實說收了哪一棵、記進紀錄、重跑只收剩下的；
 //     找不到＝退 2；暫存區比開樹晚的逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2。
@@ -132,6 +134,11 @@ test('③同一位＝角色＋來源：同一個角色換了來源，它的輪�
   assert.equal(got.previous.c.id, cli.id);
   assert.equal(roundsOf([cli, desk], 'Beta', '  beta   CLI ', roles).round, 2, '來源字串的空白照結論閘的讀法收攏');
   assert.equal(roundsOf([cli, desk], 'Beta', 'Beta desktop', roles).round, 8, '對照組：換成那個來源就是它的輪次');
+  // 角色那一半也要單獨成立：不同角色共用同一個來源字串時，別位的輪次不算（#49 r2 R4；設定與結論閘都允許共用來源）
+  const alphaSameSource = { ...verdict('Alpha', 5, 'c'.repeat(40), '通過'), body: verdict('Alpha', 5, 'c'.repeat(40), '通過').body.replace('來源：alpha CLI', '來源：beta CLI') };
+  const mix = roundsOf([cli, alphaSameSource], 'Beta', 'beta CLI', roles);
+  assert.equal(mix.round, 2, '同一個來源、別的角色：不算這一位的');
+  assert.equal(mix.previous.c.id, cli.id);
 });
 
 test('④缺兩個固定小標的「通過」不算數，不可以把這一輪縮成「通過後回頭改」那一格（#49 r1 R3）', () => {
@@ -146,9 +153,28 @@ test('④缺兩個固定小標的「通過」不算數，不可以把這一輪�
     assert.match(one.prompt, /輪次：r3\n/u);
     assert.match(one.prompt, /本輪範圍：全審（/u, '缺小標的通過不算：照中風險第 3 輪＝全審');
     close('7', { settings: s, dir, leftoverRoots: [] });
+    fs.rmSync(path.join(dir, 'review-acme-kit-7-r3'), { recursive: true, force: true });
+    // 更早的一輪有合格的通過、最近貼的那一輪的通過缺小標：最近那一輪不算數，就不當成「通過後回頭改」（保守：照常分級）
+    const okEarlier = verdict('Beta', 1, r.base, '通過');
+    const mixed = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [okEarlier, bare] })), cwd: r.dir, dir, template: TEMPLATE });
+    assert.match(mixed.prompt, /輪次：r3\n/u);
+    assert.match(mixed.prompt, /本輪範圍：全審（/u, '最近貼的那一輪不算數：照中風險第 3 輪＝全審');
+    close('7', { settings: s, dir, leftoverRoots: [] });
     const good = verdict('Beta', 3, r.base, '通過');
     const two = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, good] })), cwd: r.dir, dir, template: TEMPLATE });
     assert.match(two.prompt, new RegExp(`本輪範圍：${TIERS.中.afterPassFix}（`, 'u'), '對照組：合格的通過之後照「通過後回頭改」那一格');
+    close('7', { settings: s, dir, leftoverRoots: [] });
+    // 同一輪先擋後過、或同一輪對兩個版本各給通過：結論閘判衝突（算阻擋），不可以縮範圍（#49 r2 R1）
+    for (const [what, third] of [
+      ['同一輪先擋後過', [verdict('Beta', 4, r.base, '需修改後再審'), verdict('Beta', 4, r.base, '通過')]],
+      ['同一輪對兩個版本各給通過', [verdict('Beta', 4, r.base, '通過'), verdict('Beta', 4, r.head, '通過')]],
+    ]) {
+      const res = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, good, ...third] })), cwd: r.dir, dir, template: TEMPLATE });
+      assert.match(res.prompt, /輪次：r5\n/u, what);
+      assert.match(res.prompt, /本輪範圍：全審（/u, `${what}：衝突不算通過，照中風險第 5 輪＝全審`);
+      close('7', { settings: s, dir, leftoverRoots: [] });
+      fs.rmSync(path.join(dir, 'review-acme-kit-7-r5'), { recursive: true, force: true });   // 收樹刻意留提示與輸出檔；兩個情形都是第 5 輪
+    }
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
@@ -458,6 +484,42 @@ test('⑥收樹：上了鎖的不動；收到一半照實記下哪一棵收了�
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.match(res.lines.join('\n'), /突變副本已經不在、git 也沒登記：當作收過/u);
     assert.ok(!fs.existsSync(path.join(folder2, 'tree')), '剩下的審查樹照樣收');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
+  }
+});
+
+test('⑤git worktree add 已經建好樹才因掛鉤失敗退非零：那一棵的登記也收掉，排除原因後重跑能送（#49 r2 R2）', () => {
+  for (const which of ['tree', 'mutation']) {
+    const r = repo();
+    const dir = tmp('review-launch-out-');
+    const hooks = tmp('review-launch-hooks-');
+    try {
+      const hook = path.join(hooks, 'post-checkout');
+      fs.writeFileSync(hook, `#!/bin/sh\ncase "$PWD" in */${which}) exit 42;; esac\nexit 0\n`, { mode: 0o755 });
+      sh(r.dir, 'config', 'core.hooksPath', hooks);
+      const opts = { settings: settingsFor(), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE };
+      const res = main(['7', '--reviewer', 'Beta'], opts);
+      assert.equal(res.code, 2, `${which}：${res.lines.join('\n')}`);
+      assert.ok(!sh(r.dir, 'worktree', 'list', '--porcelain').includes('review-acme-kit-7-r1'), `${which}：掛鉤失敗的那一棵的登記也要收掉`);
+      assert.deepEqual(fs.readdirSync(dir), [], `${which}：資料夾不留`);
+      fs.rmSync(hook);
+      const again = main(['7', '--reviewer', 'Beta'], opts);
+      assert.equal(again.code, 0, `${which}：排除原因後重跑要送得出去：${again.lines.join('\n')}`);
+    } finally {
+      spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+      for (const d of [dir, hooks, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  }
+});
+
+test('③改級的提醒：印出來的那一行說風險級別與本輪範圍兩格要一起改（#49 r2 R3）', () => {
+  const r = repo();
+  const dir = tmp('review-launch-out-');
+  try {
+    const out = launch('7', 'Beta', { settings: settingsFor(), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE });
+    assert.ok(out.lines.some((l) => l.includes('風險級別與本輪範圍兩格要一起照分級表改')), out.lines.join('\n'));
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });

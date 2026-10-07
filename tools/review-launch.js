@@ -15,7 +15,7 @@
 // ⚠️ 守不到的：
 //   ①不擋也不驗：印出來之後有沒有照用、提示有沒有再被手改、複審者實際用的模型與推理（只有它自報）都看不到——F1、F3、F11 仍靠自覺；
 //   ②印的事實是平台與 git 那一刻給的：之後又推了新版本，印出來的就過期（收樹時核 HEAD 沒變，但不會重新產生）；
-//   ③風險級別只印分級腳本照檔案算的那一級；實作者往重調、裁示者改級，要自己改提示那一格；
+//   ③風險級別只印分級腳本照檔案算的那一級；實作者往重調、裁示者改級，要自己改提示的風險級別與本輪範圍兩格（範圍照分級表跟著級別重查）；
 //   ④「相關裁示」只列問在本支、配到的 ⚖️（判斷用待裁清單工具那一份），對話裡講過、沒貼留痕的列不到；
 //   ⑤收樹只核兩棵樹（狀態不看被忽略的檔）；複審者在暫存區另建的東西只列出比開樹晚的第一層、不刪，也不保證列齊（別的程式同時寫的也會被列進來）。
 // 退出碼：0＝做好了；1＝收樹時核到樹不乾淨、HEAD 變了或上了鎖而沒收，或收到一半（要人看）；2＝做不了（設定沒填、平台問不到、git 出錯、路徑不安全、範本對不上、參數不對）。⚠️ 不是閘。
@@ -29,7 +29,7 @@ const { read: readSettings } = require('./settings-data.js');
 const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./gates/check-collab-fields.js');
-const { headerOf, missingHeadings } = require('./gates/check-review-verdicts.js');
+const { headerOf, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
 const { evaluate: evaluateRulings, deciderOf } = require('./pending-rulings.js');
 const { run: riskRun } = require('./risk-tier.js');
 
@@ -219,8 +219,12 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   if (risk.code !== 0) throw new LaunchError(`風險級別算不出來：${risk.lines.join(' ')}`);
   const tier = risk.result.level;
   const { round, previous } = roundsOf(comments, reviewer, entry.source, usable);
-  // 缺兩個固定小標的「通過」結論閘不算數（F7），不可以拿它把這一輪縮成「通過後回頭改」那一格（#49 r1 R3）
-  const passed = Boolean(previous) && previous.h.verdict === '通過' && missingHeadings(previous.c.body).length === 0;
+  // 上一輪算不算「通過」照結論閘的判斷，不另寫一套：缺固定小標的通過不算（F7；#49 r1 R3），同一輪相反結論或對不同版本各給結論＝衝突、算阻擋（#49 r2 R1）。
+  // 閘合併後這一位最新的有效狀態要正好是最近貼的那一輪、而且不是阻擋，才照「通過後回頭改」那一格縮範圍。
+  const verdicts = evaluateVerdicts(comments, head, reviewer, usable);
+  if (verdicts.unsure) throw new LaunchError('這一支有結論留言的時間讀不出來：上一輪判不了');
+  const state = previous ? verdicts.reviewers[`${reviewer}（${previous.h.source}）`] : null;
+  const passed = Boolean(state) && !state.blocking && state.round === previous.h.round;
   const scope = scopeOf((settings.reviewTiers || {})[tier], round, passed);
   if (!scope) throw new LaunchError(`複審與掃描分級表「${tier}」那一列讀不出第 ${round} 輪該全審還是只核差異`);
   const commentLink = (changeId, comment) => substitute(rl.commentLink, { project, change: changeId, comment }, '留言網址樣板').text;
@@ -255,6 +259,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的樹還沒收（先跑 --close ${id}），或這一輪已經送過`);
 
   const record = { change: id, reviewer, round, head, base, root, tree, mutation, promptFile, outFile, startedAt: now().toISOString() };
+  const before = new Set(lockedTrees(root).keys());
   fs.mkdirSync(folder, { recursive: true });
   const created = [];
   try {
@@ -269,15 +274,19 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
     fs.writeFileSync(promptFile, prompt);
     fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
   } catch (e) {
-    // 開到一半失敗：只收這一次自己開成的樹與資料夾，不留半套（下一次才不會被「已經在了」擋住）。
+    // 開到一半失敗：只收這一次自己開的樹與資料夾，不留半套（下一次才不會被「已經在了」或「已登記但不見了」擋住）。
+    // 「這一次開的」＝開樹前沒有、現在登記在這個資料夾底下的每一棵：也收得到 git worktree add 已經建好樹、
+    // 卻因為掛鉤失敗而退非零的那一棵（#49 r2 R2）；開樹前就登記著的（就算路徑在這底下）不是這一次的，不動。
     // 不用整個倉庫的 git worktree prune：別棵暫時不在原位的樹（例如外接碟沒接上）會被一起清掉登記與索引（#49 r1 R1）
-    for (const t of created) gitOk(root, ['worktree', 'remove', '--force', t]);
+    let registered = created;
+    try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* 讀不到登記就只收確定開成的那幾棵 */ }
+    for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
     fs.rmSync(folder, { recursive: true, force: true });
     throw e;
   }
   const lines = [
     `送審產生器｜變更 ${id}｜複審者 ${reviewer}（來源 ${entry.source}）｜r${round}｜受審 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
-    `  風險級別：${tier}（照表算的；要往重調或裁示者改級，自己改提示那一格）；本輪範圍：${scope}`,
+    `  風險級別：${tier}（照表算的；要往重調或裁示者改級，提示的風險級別與本輪範圍兩格要一起照分級表改）；本輪範圍：${scope}`,
     `  上一輪的結論：${values.previous}；相關裁示：${values.rulings}`,
     `  審查樹：${tree}（HEAD ${head.slice(0, 7)}）`,
     `  突變副本：${mutation}（HEAD ${head.slice(0, 7)}）`,
