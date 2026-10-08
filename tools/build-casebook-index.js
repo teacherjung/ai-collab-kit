@@ -16,6 +16,12 @@
 //   ⚠️ 代價照實說：索引裡的散文因此是純文字，不能用粗體或反引號之類的排版。
 //
 // 索引裡不是表格的那幾段（開頭說明、末尾的方法示例）住在 cases/index.json。
+//
+// 另產一份 cases/DIGEST.md（每條規矩為什麼存在的摘要；擁有者 2026-10-07 第 10 題裁「做。（建議）」）：
+// 不帶案例簿的專案（套件私有、案例可能含私人紀錄）讀得到規矩「要這樣做」、讀不到「為什麼」；這一份每條規矩一行，
+// 跟用語對照表同待遇：不算 K2 字數、跟規矩一起搬進每個專案（不帶案例簿的也帶這一份，共用檔清單釘著它）。
+// 每條只列**最早**指著它的那一則（日期、檔名比字碼）——那一則多半就是它訂下來的原因；教訓只取第一個「；」或「。」之前。
+// ⚠️ 代價：一條規矩若後來的案例比最早那一則更貼切，摘要看不到；它也不判斷那一則撐不撐得住那條規矩（字面引用≠事件支撐，同案例簿考題）。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,6 +31,8 @@ const root = path.join(__dirname, '..');
 const casesDir = path.join(root, 'cases');
 const notesFile = path.join(casesDir, 'index.json');
 const outFile = path.join(casesDir, 'README.md');
+const digestFile = path.join(casesDir, 'DIGEST.md');
+const NOT_CASES = new Set(['README.md', 'DIGEST.md']);
 
 const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '來源'];
 
@@ -56,6 +64,13 @@ function declaration(machines, casesPresent) {
   }
   return { run: true, problem: `「${MACHINE}」只能登記已啟用（帶案例簿）或未移植（不帶），現在是「${state}」：這一列是開關，不只是紀錄` };
 }
+/**
+ * 「cases/ 在不在」＝底下有摘要以外的東西。不帶案例簿的專案也帶 cases/DIGEST.md（共用檔清單釘著），
+ * 只有那一份不算帶了案例簿；不然那種專案的登記（未移植）永遠對不上。
+ */
+function casebookPresent(dir = casesDir) {
+  return fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f !== 'DIGEST.md');
+}
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const EDGE_SPACE = /^\s|\s$|\t/u;
 const hasNul = (s) => String(s).includes('\u0000');
@@ -75,7 +90,7 @@ function checkPlain(value, what) {
 function caseFiles() {
   return fs
     .readdirSync(casesDir)
-    .filter((f) => f.endsWith('.md') && f !== 'README.md')
+    .filter((f) => f.endsWith('.md') && !NOT_CASES.has(f))
     .sort();
 }
 
@@ -133,9 +148,35 @@ function build() {
   return out.join('\n');
 }
 
-if (require.main === module) {
-  fs.writeFileSync(outFile, build(), 'utf8');
-  process.stdout.write(`寫好 cases/README.md：${caseFiles().length} 則\n`);
+/** 比字碼（不跟著機器的語系走：同一份輸入在每台機器都排成一樣）。 */
+const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * 由案例檔、index.json 與規矩資料檔產生摘要的完整內容：本文每一條一行，照本文的順序。
+ * 有一條規矩沒有任何案例指著＝丟例外（案例簿考題的進門規則同一件事；不產生缺行的摘要）。
+ */
+function buildDigest({ rules = require('./build-rules.js').read(), rows = caseFiles().map(readCase), notes = JSON.parse(fs.readFileSync(notesFile, 'utf8')) } = {}) {
+  const d = notes.digest || {};
+  const out = [`# ${literal(checkPlain(d.title, '摘要標題'))}`, ''];
+  for (const line of d.intro || []) out.push(literal(checkPlain(line, '摘要導言')), '');
+  for (const section of rules.sections) {
+    for (const rule of section.rules) {
+      const id = `${section.letter}${rule.n}`;
+      const hit = rows.filter((r) => r['本文條號'].split('、').includes(id)).sort((a, b) => byCode(a.日期, b.日期) || byCode(a.slug, b.slug));
+      if (!hit.length) throw new Error(`本文 ${id} 沒有任何案例指著：摘要產不出那一行`);
+      const first = hit[0];
+      const lesson = checkPlain(first.教訓, `${first.slug} 的教訓`).split(/[；。]/u)[0].trim();
+      out.push(`- ${id}｜${literal(first.標題)}（${first.日期}）——${literal(checkPlain(lesson, `${first.slug} 的教訓前半句`))}`);
+    }
+  }
+  out.push('');
+  return out.join('\n');
 }
 
-module.exports = { build, outFile, notesFile, caseFiles, readCase, parseCase, checkPlain, FIELDS, MACHINE, NOT_CARRIED_REASON, declaration };
+if (require.main === module) {
+  fs.writeFileSync(outFile, build(), 'utf8');
+  fs.writeFileSync(digestFile, buildDigest(), 'utf8');
+  process.stdout.write(`寫好 cases/README.md：${caseFiles().length} 則；cases/DIGEST.md：本文每條一行\n`);
+}
+
+module.exports = { build, buildDigest, casebookPresent, outFile, digestFile, notesFile, caseFiles, readCase, parseCase, checkPlain, FIELDS, MACHINE, NOT_CARRIED_REASON, declaration };

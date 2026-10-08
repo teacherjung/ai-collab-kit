@@ -32,7 +32,7 @@ const LOCK_FILE = 'kit-lock.json';
 /** 機器表那一列的名字（settings.json 的 machines；考題拿它決定帶不帶）。 */
 const MACHINE = '共用檔清單（釘住套件版本；專案改到套件的檔要記例外）';
 /** 共用檔＝README「搬進一個專案」第 1 步要取的路徑。README 那一步另列了一份給人看，兩份沒有考題比對：改一邊要同一支改另一邊。 */
-const SHARED_PATHS = ['tools', 'tests', 'templates', 'rules.json', 'RULES.md', 'MACHINES.md', 'GLOSSARY.md', 'docs/money-guard-two-pattern-tables.md'];
+const SHARED_PATHS = ['tools', 'tests', 'templates', 'rules.json', 'RULES.md', 'MACHINES.md', 'GLOSSARY.md', 'docs/money-guard-two-pattern-tables.md', 'cases/DIGEST.md'];
 /** 進錢的攔截器指紋的共用檔＝guard-copy.js 的 COPY_FILES 扣掉 settings.json（那份是專案自己的值、不在清單）。 */
 const FINGERPRINT_SHARED = COPY_FILES.filter((p) => underShared(p));
 /** Codex 全域層的接線範本：改了要照 guard-copy.js 檔頭⓪〜⑥重抽、重按信任（它不進指紋，所以另列）；跟 guard-copy.js 的 TEMPLATE_REL 同一個，考題釘著。 */
