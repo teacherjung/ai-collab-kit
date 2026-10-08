@@ -15,7 +15,8 @@
 //   ③證據欄引的「附件第 N 條」在附件裡找得到（已結束那一節引的也查）；「45〜47」「1 〜 3」這種範圍會展開；
 //     「附件第 … 條」裡拆不開、倒過來、不是 1〜MAX_REF 的整數、一個範圍超過 MAX_RANGE 條的，列成問題、不會卡住；
 //   ④到哪一步寫了「已合併」：引到的附件裡要找得到 PR（github.com 的完整網址——主機與路徑都要對，別站網址裡夾著 github.com 不算；
-//     或 --repos 登記過的「套件 #N」這種寫法，別名要整個對上、不可以被較短的別名搶走），而且問得到平台時至少一支真的合併了；
+//     或 --repos 登記過的「套件 #N」這種寫法，別名要整個對上、不可以被較短的別名搶走、它所在那一段（用空白或中文標點切開）不可以含「://」——
+//     網址裡的字、黏著網址沒隔開的字都不算），而且問得到平台時至少一支真的合併了；
 //     狀態是施工中或等複審、到哪一步沒寫已合併、引到的 PR 卻全部合併了＝可能過期；平台的答案只認布林 true／false，別的形狀＝核不了；
 //   ⑤已結束那一節：只認「### 專案｜事情｜已結束 月/日｜已留：附件第 N 條」「…｜無永久決定」一種形狀，其餘非空行一律列出
 //     （不枚舉壞法：r1〜r3 連三輪補了縮排、四個井號、兩個井號、缺空白、七個井號，追不完，改成只認一種、其餘全列）；
@@ -49,9 +50,12 @@ const MAX_RANGE = 200;
 const STAMP = /(\d{2})\/(\d{2}) (\d{2}):(\d{2})/u;
 // 網址的候選：從 https?:// 起、到空白、中文標點、Markdown 的定界字元（反引號、引號、方括號、圓括號）前；主機與路徑再用 URL 解析核對
 const URL_CANDIDATE = /https?:\/\/[^\s<>「」（）()。，、；：！？`'"[\]]+/gu;
-// 掃裸別名之前先把網址挖掉，網址裡的字不可以冒充「套件 #N」（r3 R3）；挖的範圍跟上面的候選一樣（到定界字元為止），
-// 不可以一路吃到空白——「[說明](https://example.org/a)、套件 #41」的頓號與別名不是網址的一部分（r4 R1）
-const ANY_URL = URL_CANDIDATE;
+// 裸別名跟網址怎麼分（r3 R3 → r4 R1 → r5 R1 同族第三輪，F10 換做法）：不再「把網址挖掉」——挖到空白太寬（吃掉網址後面的頓號與別名）、
+// 挖到定界字元太短（網址裡有括號，後半段漏出來冒充別名）；網址在散文裡到哪裡結束本來就說不準，所以不量它。改看別名自己所在的那一段：
+// 用空白或中文標點切開（ASCII 的括號、引號、反引號不切，它們可以是網址的一部分），那一段裡只要有「://」就不認——
+// 網址裡的字、黏著網址沒隔開的字一律不當證據（拿不準往「核不了」倒，不往「當證據」倒）；用空白或中文標點隔開的別名照認
+const TOKEN_BREAK = /[\s「」『』（）《》〈〉【】。，、；：！？｜]/u;
+const SCHEME = '://';
 const PR_PATH = /^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)(?:\/|$)/u;
 const GITHUB_HOSTS = ['github.com', 'www.github.com'];
 const BARE_PR = /(\S+?)\s*#(\d+)/gu;
@@ -106,14 +110,24 @@ function parseRefs(text) {
 
 const expandRefs = (text) => parseRefs(text).numbers;
 
+/** 從 [start, end) 往左、往右各走到空白或中文標點為止，回那一段文字（別名所在的「一段」）。 */
+function tokenAround(s, start, end) {
+  let i = start;
+  let j = end;
+  while (i > 0 && !TOKEN_BREAK.test(s.charAt(i - 1))) i -= 1;
+  while (j < s.length && !TOKEN_BREAK.test(s.charAt(j))) j += 1;
+  return s.slice(i, j);
+}
+
 /**
  * 從一段文字裡找 PR：github.com 的完整網址（主機要是 github.com、路徑要是 /owner/repo/pull/N；別站網址裡夾著 github.com 不算，r2 R4），
  * 加上 --repos 登記過的「套件 #45」這種寫法：別名要整個對上，或前面接的是標點、不是字母數字；幾個別名都對上時取最長的那一個，
- * 跟登記順序無關（r2 R3：「新套件 #41」不可以被「套件」搶走）。回「owner/repo#n」的集合。
+ * 跟登記順序無關（r2 R3：「新套件 #41」不可以被「套件」搶走）；別名所在那一段含「://」的不認（r5 R1）。回「owner/repo#n」的集合。
  */
 function prRefs(text, repos = {}) {
   const out = new Set();
-  for (const m of String(text).matchAll(URL_CANDIDATE)) {
+  const s = String(text);
+  for (const m of s.matchAll(URL_CANDIDATE)) {
     let url;
     try { url = new URL(m[0]); } catch { continue; }
     if (!GITHUB_HOSTS.includes(url.hostname.toLowerCase())) continue;
@@ -122,13 +136,15 @@ function prRefs(text, repos = {}) {
   }
   const names = Object.keys(repos);
   if (names.length) {
-    for (const m of String(text).replace(ANY_URL, ' ').matchAll(BARE_PR)) {
+    for (const m of s.matchAll(BARE_PR)) {
       const word = m[1];
       const hits = names.filter((n) => word === n || (word.endsWith(n) && !/[\p{L}\p{N}]/u.test(word.charAt(word.length - n.length - 1))));
-      if (hits.length) {
-        const name = hits.sort((x, y) => y.length - x.length)[0];
-        out.add(`${repos[name]}#${m[2]}`);
-      }
+      if (!hits.length) continue;
+      const name = hits.sort((x, y) => y.length - x.length)[0];
+      // 別名所在的那一段含「://」＝它在網址裡、或黏著網址沒隔開，不認（r5 R1）
+      const aliasStart = m.index + word.length - name.length;
+      if (tokenAround(s, aliasStart, aliasStart + name.length).includes(SCHEME)) continue;
+      out.add(`${repos[name]}#${m[2]}`);
     }
   }
   return out;
