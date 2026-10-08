@@ -174,7 +174,7 @@ function build(data) {
     const cell = (k, what) => plain(row[k] || '未設定', `${t}風險的${what}`);
     out.push(`| ${t} | ${cell('full', '全審')} | ${cell('diffOnly', '只核差異')} | ${cell('afterPassFix', '通過後那一輪')} | ${cell('scan', '掃描')} |`);
   }
-  out.push('', '## 十一、複審者的模型與怎麼起（規矩 F1、F11；每個 AI 一列，換新模型只改這裡）', '');
+  out.push('', '## 十一、複審者的模型與怎麼起（規矩 F1、F11；每個 AI 一列，換新模型改這裡——有釘值題的專案連釘值題一起改，套件倉庫自己的是 kit-only/settings-pin.test.js）', '');
   const reviewers = data.reviewers || [{}];
   const ids = (data.participants || []).map((p) => p.id);
   for (const r of reviewers) {
