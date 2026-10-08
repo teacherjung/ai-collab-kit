@@ -26,6 +26,7 @@ function onlyThisChange(result, changeId) {
     ruled: result.ruled.filter((x) => mine(x.ask)),
     withdrawn: result.withdrawn.filter((x) => mine(x.ask)),
     near: result.near.filter(mine),
+    accepted: (result.accepted || []).filter(mine),
   };
 }
 
