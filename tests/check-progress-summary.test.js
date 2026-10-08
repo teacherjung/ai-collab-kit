@@ -8,8 +8,8 @@
 //   ④證據欄引的附件條號不存在；範圍「45〜47」「1 〜 3」都會展開（r1 R4）；拆不開、倒過來、超出安全整數或上限的條號列成問題、不會卡住（r1 R3）；證據欄一條都沒引也列；
 //   ⑤已合併：引到的附件沒有 PR＝核不了；離線只查這一點；平台答案不是布林（字串、物件）＝核不了，不當成已合併（r1 R5）；
 //     有答案時沒有一支合併＝列；施工中或等複審、沒寫已合併、引到的全合併了＝可能過期；「套件 #45」這種寫法要 --repos 登記才算，`__proto__` 也登記得進去（r1 R8）；
-//     切段只看空白、不看任何標點（擁有者 2026-10-08 裁）：一段裡第一個不是 GitHub PR 的網址出現後，那一段後面的全部不算（外站網址裡夾的字、
-//     夾的 GitHub 網址都不當證據，r5 R1、r6 R1）；「套件 #N」所在那一段含 :// 的不算——黏在網址後面沒空白的別名核不了、不問平台；
+//     切段只看空白、不看任何標點（擁有者 2026-10-08 裁）：一段裡第一個「://」不是 http(s) 的 GitHub PR 網址（大小寫不分、ftp 這類也算網址），那一段後面的全部不算
+//     （外站網址裡夾的字、夾的 GitHub 網址都不當證據，r5〜r7 R1）；「套件 #N」從別名到編號所在那一段含 :// 的不算——兩端黏著網址都核不了、不問平台；
 //   ⑥已結束那一節的形狀與 30 天；本週成果那一節的七天，而且每個子項目上面都要有合法的「- 月/日」（孤立的子項目、縮排的日期行都列；r4 R2）；未來的日期不算過期；
 //   ⑦指令入口：有問題也退 0、--strict 才退 1、沒問題退 0；檔讀不到、少了節、參數不對、--now 寫法錯＝退 2；--pr-states 的檔當平台的答案；
 //   ⑧問平台：固定問 github.com、環境裡的選主機變數先清掉（r1 R7）；gh 退非零、回的不是 JSON、形狀不對、merged_at 不是時間＝那一支 merged: null（核不了），不猜；
@@ -253,6 +253,21 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.deepEqual([...prRefs('(套件 #41)', paren)], ['acme/kit#41'], 'ASCII 括號包住的別名照認');
   assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41 （套件 #42）', paren)].sort(), ['acme/kit#41', 'acme/kit#42'], '用空白隔開再包全形括號的別名照認');
   assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41（套件 #42）', paren)], ['acme/kit#41'], '全形括號沒有空白＝跟網址同一段，別名不認');
+  // r7 R1 入口 A：「套件 #N」的編號那一端黏著網址也不算——整段從別名到編號都要跟網址隔開
+  assert.deepEqual([...prRefs('套件 #41https://example.org/a', paren)], [], '編號後面直接接網址＝黏著網址，不認');
+  assert.deepEqual([...prRefs('[套件 #41](https://example.org/a)', paren)], [], '別名當連結文字、目的地是外站＝黏著網址，不認');
+  assert.deepEqual([...prRefs('套件 #41 https://example.org/a', paren)], ['acme/kit#41'], '編號跟網址之間有空白才認');
+  // r7 R1 入口 B：外層網址的 scheme 大寫、或不是 http(s)，一樣是「第一個網址」，後面夾的 GitHub 網址不算；GitHub 網址自己寫大寫照認
+  assert.deepEqual([...prRefs('[外站](HTTPS://example.org/a?back=(https://github.com/acme/kit/pull/41))', paren)], [], '外層 HTTPS:// 不可以被跳過');
+  assert.deepEqual([...prRefs('ftp://example.org/(https://github.com/acme/kit/pull/41)', paren)], [], 'ftp 也是網址，後面夾的不算');
+  assert.deepEqual([...prRefs('xhttps://github.com/acme/kit/pull/41', paren)], [], 'scheme 不是 http(s) 的怪寫法不認');
+  assert.deepEqual([...prRefs('HTTPS://github.com/acme/kit/pull/41', paren)], ['acme/kit#41'], 'GitHub 網址 scheme 大寫照認');
+  const gluedDoc = doc({ attachments: ['1. [套件 #41](https://example.org/a)'] });
+  const gluedRun = evaluate(gluedDoc, { now: NOW, repos: paren, prStates: { 'acme/kit#41': { merged: true } } });
+  assert.deepEqual(gluedRun.cited, [], '黏著外站網址的「套件 #41」不會拿去問平台');
+  assert.ok(gluedRun.problems.some((p) => p.includes('核不了')), gluedRun.problems.join('\n'));
+  const upperRun = evaluate(doc({ attachments: ['1. [外站](HTTPS://example.org/a?back=(https://github.com/acme/kit/pull/41))'] }), { now: NOW, repos: paren, prStates: { 'acme/kit#41': { merged: true } } });
+  assert.deepEqual(upperRun.cited, [], '外層大寫 HTTPS 的外站網址裡夾的 GitHub 網址不會拿去問平台');
   const parenDoc = doc({ attachments: ['1. [外站](https://example.org/（套件#41）)'] });
   const parenRun = evaluate(parenDoc, { now: NOW, repos: paren, prStates: { 'acme/kit#41': { merged: true } } });
   assert.deepEqual(parenRun.cited, [], '沒有引到任何 PR，不會拿 acme/kit#41 去問平台');
@@ -266,6 +281,10 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   const parenCli = spawnSync(process.execPath, [TOOL, '--file', path.join(parenDir, 'paren.md'), '--now', '10/07', '--repos', '套件=acme/kit', '--pr-states', path.join(parenDir, 'states.json'), '--strict'], { encoding: 'utf8' });
   assert.equal(parenCli.status, 1, `正式 CLI 要退 1：${parenCli.stdout}${parenCli.stderr}`);
   assert.match(parenCli.stdout, /引到 0 支 PR/u);
+  fs.writeFileSync(path.join(parenDir, 'glued.md'), gluedDoc);
+  const gluedCli = spawnSync(process.execPath, [TOOL, '--file', path.join(parenDir, 'glued.md'), '--now', '10/07', '--repos', '套件=acme/kit', '--pr-states', path.join(parenDir, 'states.json'), '--strict'], { encoding: 'utf8' });
+  assert.equal(gluedCli.status, 1, `r7 入口 A 的正式 CLI 要退 1：${gluedCli.stdout}${gluedCli.stderr}`);
+  assert.match(gluedCli.stdout, /引到 0 支 PR/u);
   // r4 R3：「幾個別名都對上取最長」要真的有兩個候選才驗得到（「新-套件」前面接的是連字號，「套件」也對上）
   for (const repos of [{ 套件: 'acme/old', '新-套件': 'acme/new' }, { '新-套件': 'acme/new', 套件: 'acme/old' }]) {
     assert.deepEqual([...prRefs('新-套件 #41', repos)], ['acme/new#41'], JSON.stringify(repos));
