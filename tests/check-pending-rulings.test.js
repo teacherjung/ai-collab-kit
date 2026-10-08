@@ -153,8 +153,9 @@ test('⑤判斷跟清單工具同一份：閘擋下的題＝清單工具還沒�
   assert.equal(r.code, 1);
   assert.equal(listedHere.length, 1, listed.lines.join('\n'));
   assert.ok(r.lines.includes(listedHere[0]), `閘點名的題要跟清單工具印的那一行一字不差：\n${r.lines.join('\n')}`);
-  const picked = onlyThisChange({ open: [q1, q3], ruled: [], withdrawn: [], near: [] }, '7');
+  const picked = onlyThisChange({ open: [q1, q3], ruled: [], withdrawn: [], near: [], accepted: [{ ...q1, id: 'a7' }, { ...q3, id: 'a8' }] }, '7');
   assert.deepEqual(picked.open.map((x) => x.id), [q1.id]);
+  assert.deepEqual(picked.accepted.map((x) => x.id), ['a7'], '驗收留痕也只留本支的');
 });
 
 test('⑥平台問不到＝退 2，絕不是退 0；平台以外的錯照樣炸出去', () => {
