@@ -216,6 +216,14 @@ function parseEntries(lines) {
 }
 
 /** 天數差：now 減 date（都只有月日；年用 now 的年）。未來的日期回負數。 */
+/** 時間欄裡「整理」「核實」各自那一段：從標籤起、到另一個標籤前為止（順序不拘）；沒有那個標籤＝null。 */
+function timeParts(time) {
+  const i = time.indexOf('整理');
+  const j = time.indexOf('核實');
+  const seg = (at, other) => (at < 0 ? null : time.slice(at, other > at ? other : undefined));
+  return { edited: seg(i, j), verified: seg(j, i) };
+}
+
 function daysBefore(now, month, day) {
   const a = Date.UTC(now.year, now.month - 1, now.day);
   const b = Date.UTC(now.year, month - 1, day);
@@ -262,8 +270,10 @@ function checkEntry(entry, ctx) {
   if (expected.some((f, i) => order[i] !== f)) say(`八欄的順序要照檔頭（${FIELDS.join('／')}）`);
 
   const time = fields.get('時間') || '';
-  const edited = stamp(/整理[^核]*/u.exec(time)?.[0]);
-  const verifiedPart = /核實[\s\S]*$/u.exec(time)?.[0];
+  // 整理、核實各取自己那一段，缺的時間不可以借另一段的（r8 R1：「核實：未核；整理 10/07 18:26」以前把整理的時間當成核實的）
+  const parts = timeParts(time);
+  const edited = stamp(parts.edited);
+  const verifiedPart = parts.verified;
   const verified = stamp(verifiedPart);
   if (!edited) say('時間欄缺「整理 月/日 時:分」');
   if (!verifiedPart) say('時間欄缺「核實」');

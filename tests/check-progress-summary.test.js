@@ -4,7 +4,7 @@
 //   ①標題四段：五段（舊格式的確認時間還在）、專案不在三選一、狀態不在六選一、第四段沒有「・」都列出來；
 //     縮排或井號數不對的標題不會被靜靜丟掉（第一則之前的內容、則裡像標題的行都列）；同名的節出現兩次＝查不了（r1 R1）；
 //   ②八欄：少一欄（八欄逐欄各試一次，清單寫死在本檔、不用工具匯出的那一份；r1 R6）、空一欄、順序錯、同一欄寫兩次、舊的五欄寫法（沒有清單記號）、不是清單的行都列出來；
-//   ③時間欄：缺整理、缺核實、核實沒有月/日 時:分、核實晚於整理；相等不算；
+//   ③時間欄：缺整理、缺核實、核實沒有月/日 時:分、核實晚於整理；相等不算；整理、核實各讀自己那一段，缺的不借另一段的時間（r8 R1）；
 //   ④證據欄引的附件條號不存在；範圍「45〜47」「1 〜 3」都會展開（r1 R4）；拆不開、倒過來、超出安全整數或上限的條號列成問題、不會卡住（r1 R3）；證據欄一條都沒引也列；
 //   ⑤已合併：引到的附件沒有 PR＝核不了；離線只查這一點；平台答案不是布林（字串、物件）＝核不了，不當成已合併（r1 R5）；
 //     有答案時沒有一支合併＝列；施工中或等複審、沒寫已合併、引到的全合併了＝可能過期；「套件 #45」這種寫法要 --repos 登記才算，`__proto__` 也登記得進去（r1 R8）；
@@ -138,6 +138,15 @@ test('③時間欄：缺整理、缺核實、核實沒有時間、核實晚於�
   assert.ok(reversed.some((p) => p.includes('晚於整理')), reversed.join('\n'));
   const equal = problemsOf(doc({ entries: [entry({ fields: { 時間: '整理 10/07 18:18；核實 10/07 18:18（核了 GitHub）' } })] }));
   assert.deepEqual(equal, []);
+  // r8 R1：整理、核實各讀自己那一段，缺的時間不可以借另一段的——「核實：未核；整理 10/07 18:26」以前會把整理的時間當成核實的、判成合格
+  const borrowed = problemsOf(doc({ entries: [entry({ fields: { 時間: '核實：未核；整理 10/07 18:26' } })] }));
+  assert.ok(borrowed.some((p) => p.includes('「核實」後面要有一個')), borrowed.join('\n'));
+  assert.ok(!borrowed.some((p) => p.includes('缺「整理')), `整理的時間還是讀得到：${borrowed.join('\n')}`);
+  const borrowedBack = problemsOf(doc({ entries: [entry({ fields: { 時間: '整理：今天；核實 10/07 18:18' } })] }));
+  assert.ok(borrowedBack.some((p) => p.includes('缺「整理')), borrowedBack.join('\n'));
+  assert.ok(!borrowedBack.some((p) => p.includes('「核實」後面要有一個')), `核實的時間還是讀得到：${borrowedBack.join('\n')}`);
+  const swapped = problemsOf(doc({ entries: [entry({ fields: { 時間: '核實 10/07 18:18；整理 10/07 18:26' } })] }));
+  assert.deepEqual(swapped, [], '順序顛倒但兩個時間都在＝合格（不要求排列）');
 });
 
 test('④證據：引的附件條號不存在；範圍展開（含帶空白的）；拆不開、倒過來、超出範圍的條號列成問題而且不卡住；一條都沒引', () => {
@@ -358,8 +367,15 @@ test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀�
   const b = cli('--file', bad, '--now', '10/07', '--pr-states', states);
   assert.equal(b.status, 0, '只列不擋'); assert.match(b.stdout, /少了「他要的」/u); assert.match(b.stdout, /只列不擋/u);
   assert.equal(cli('--file', bad, '--now', '10/07', '--pr-states', states, '--strict').status, 1, '--strict 才擋');
-  assert.equal(cli('--file', good, '--now', '10/07', '--offline').status, 0);
-  assert.match(cli('--file', good, '--now', '10/07', '--offline').stdout, /離線/u);
+  // r8 R2：離線要真的傳進判斷層——有合法 PR 網址的摘要，離線加 --strict 要退 0、問題 0 條（接線改壞會報核不了、退 1）
+  const off = cli('--file', good, '--now', '10/07', '--offline', '--strict');
+  assert.equal(off.status, 0, `離線加 --strict 要退 0：${off.stdout}${off.stderr}`);
+  assert.match(off.stdout, /離線/u); assert.match(off.stdout, /問題 0 條/u);
+  // r8 R1 的正式 CLI：核實借用整理的時間要列出來、--strict 退 1
+  const borrow = path.join(dir, 'borrow.md');
+  fs.writeFileSync(borrow, doc({ entries: [entry({ fields: { 時間: '核實：未核；整理 10/07 18:26' } })] }));
+  const bo = cli('--file', borrow, '--now', '10/07', '--pr-states', states, '--strict');
+  assert.equal(bo.status, 1, `核實沒有時間要退 1：${bo.stdout}${bo.stderr}`); assert.match(bo.stdout, /「核實」後面要有一個/u);
   const notMerged = path.join(dir, 'not-merged.json');
   fs.writeFileSync(notMerged, JSON.stringify({ 'acme/kit#41': { merged: false } }));
   assert.match(cli('--file', good, '--now', '10/07', '--pr-states', notMerged).stdout, /沒有一支合併了/u);
