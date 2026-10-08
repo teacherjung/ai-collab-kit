@@ -88,9 +88,9 @@ function readCase(file) {
   FIELDS.forEach((name, i) => {
     const line = lines[i + 2];
     const head = `- ${name}：`;
-    assert.ok(line.startsWith(head), `${file} 第 ${i + 3} 行應該是「${head}…」，實際是：${line.slice(0, 24)}`);
+    assert.ok(line.startsWith(head), `${file} 第 ${i + 3} 行應該是「${head}…」，實際是：${line.slice(0, 24)}。六欄依序各一行（日期、本文條號、發生什麼、代價、教訓、來源），照 cases/ 裡任一則的形狀寫，改完跑 node tools/build-casebook-index.js`);
     const value = line.slice(head.length).trim();
-    assert.notEqual(value, '', `${file} 的「${name}」欄是空的`);
+    assert.notEqual(value, '', `${file} 的「${name}」欄是空的：每一欄都要有字，寫不出來就不要立這一則；改完跑 node tools/build-casebook-index.js`);
     fields[name] = value;
   });
   if (lines.length === FIELDS.length + 3) {

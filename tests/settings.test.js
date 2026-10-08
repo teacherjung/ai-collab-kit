@@ -255,11 +255,11 @@ test('⑨b 空白設定跟 settings.json 在套件共用的欄位逐字相同（
   // 閘的順序各專案可以不同（合併指令照登記順序跑），所以排序後比。
   const a = read();
   const u = unfilled();
-  assert.deepEqual(u.machines.map((m) => [m.name, m.rules]), a.machines.map((m) => [m.name, m.rules]), '機器表的名字或條號兩份不一樣：改了一份要一起改另一份');
+  assert.deepEqual(u.machines.map((m) => [m.name, m.rules]), a.machines.map((m) => [m.name, m.rules]), '機器表的名字或條號兩份不一樣：要改請兩份一起改（settings.json 與 tests/helpers/unfilled-settings.json），再跑 node tools/build-settings.js');
   const gateKey = (g) => JSON.stringify([g.name, g.rules, g.command, g.args]);
-  assert.deepEqual(u.gates.map(gateKey).sort(), a.gates.map(gateKey).sort(), '閘的名字、條號或指令兩份不一樣');
-  assert.deepEqual(u.locations.map((l) => [l.item, l.rules]), a.locations.map((l) => [l.item, l.rules]), '位置表的項目或條號兩份不一樣');
-  assert.equal(u.accountRule, a.accountRule, '貼文帳號資格兩份不一樣');
+  assert.deepEqual(u.gates.map(gateKey).sort(), a.gates.map(gateKey).sort(), '閘的名字、條號或指令兩份不一樣：要改請兩份一起改（settings.json 與 tests/helpers/unfilled-settings.json），再跑 node tools/build-settings.js');
+  assert.deepEqual(u.locations.map((l) => [l.item, l.rules]), a.locations.map((l) => [l.item, l.rules]), '位置表的項目或條號兩份不一樣：要改請兩份一起改（settings.json 與 tests/helpers/unfilled-settings.json），再跑 node tools/build-settings.js');
+  assert.equal(u.accountRule, a.accountRule, '貼文帳號資格兩份不一樣：要改請兩份一起改（settings.json 與 tests/helpers/unfilled-settings.json），再跑 node tools/build-settings.js');
 });
 
 test('設定的倉庫身分要跟這棵樹的遠端倉庫對得上（照舊習慣抄了套件根目錄那份設定卡＝紅）', (t) => {

@@ -179,7 +179,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 ## 十二、忽略清單登記（規矩 B4、E7；考題比對每一份的生效樣式）
 
-- \.gitignore：node\_modules\/、\.DS\_Store
+- \.gitignore：node\_modules\/、\.DS\_Store、\.env、\.env\.local
 
 ## 十三、合併步驟登記（規矩 H1；合併指令照這個順序跑，任一道紅就停）
 
