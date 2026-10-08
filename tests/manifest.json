@@ -12,6 +12,7 @@
   "check-stacked.test.js",
   "claude-pin.test.js",
   "data-contract.test.js",
+  "downstream-lag.test.js",
   "file-names.test.js",
   "filled-settings.test.js",
   "forbidden-defaults.test.js",

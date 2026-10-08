@@ -302,5 +302,5 @@ test('照 GitHub 範本填完平台動作與合併指令，設定說明書照樣
   // 說明書把 ASCII 標點一律跳脫（字面編碼），所以比對跳脫後的樣子
   assert.ok(line.includes('Reviewed\\-By'), `說明書那一行要看得到 Reviewed-By：${line}`);
   assert.ok(line.includes('\\\\n'), '換行在說明書裡寫成看得見的 \\n（跳脫後是兩個反斜線加 n）');
-  assert.ok(md.includes('allComments'), '十個動作都排得出來');
+  assert.ok(md.includes('allComments') && md.includes('repoFile'), '十二個動作都排得出來');
 });
