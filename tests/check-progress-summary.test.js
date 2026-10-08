@@ -8,7 +8,8 @@
 //   ④證據欄引的附件條號不存在；範圍「45〜47」「1 〜 3」都會展開（r1 R4）；拆不開、倒過來、超出安全整數或上限的條號列成問題、不會卡住（r1 R3）；證據欄一條都沒引也列；
 //   ⑤已合併：引到的附件沒有 PR＝核不了；離線只查這一點；平台答案不是布林（字串、物件）＝核不了，不當成已合併（r1 R5）；
 //     有答案時沒有一支合併＝列；施工中或等複審、沒寫已合併、引到的全合併了＝可能過期；「套件 #45」這種寫法要 --repos 登記才算，`__proto__` 也登記得進去（r1 R8）；
-//     別名所在那一段（用空白或中文標點切開）含 :// 的不算——網址裡有括號、別名黏在網址後面沒隔開，都是核不了、不問平台（r5 R1）；
+//     切段只看空白、不看任何標點（擁有者 2026-10-08 裁）：一段裡第一個不是 GitHub PR 的網址出現後，那一段後面的全部不算（外站網址裡夾的字、
+//     夾的 GitHub 網址都不當證據，r5 R1、r6 R1）；「套件 #N」所在那一段含 :// 的不算——黏在網址後面沒空白的別名核不了、不問平台；
 //   ⑥已結束那一節的形狀與 30 天；本週成果那一節的七天，而且每個子項目上面都要有合法的「- 月/日」（孤立的子項目、縮排的日期行都列；r4 R2）；未來的日期不算過期；
 //   ⑦指令入口：有問題也退 0、--strict 才退 1、沒問題退 0；檔讀不到、少了節、參數不對、--now 寫法錯＝退 2；--pr-states 的檔當平台的答案；
 //   ⑧問平台：固定問 github.com、環境裡的選主機變數先清掉（r1 R7）；gh 退非零、回的不是 JSON、形狀不對、merged_at 不是時間＝那一支 merged: null（核不了），不猜；
@@ -230,22 +231,34 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.deepEqual([...prRefs('https://example.org/x?a=套件#41 與 套件 #42', { 套件: 'acme/kit' })], ['acme/kit#42'], '網址外、用空白隔開的裸別名照認');
   const urlAlias = problemsOf(doc({ attachments: ['1. https://example.org/套件#41 合併了。'] }), { repos: { 套件: 'acme/kit' } });
   assert.ok(urlAlias.some((p) => p.includes('核不了')), urlAlias.join('\n'));
-  // r4 R1：網址後面緊接的標點與別名要留下來（中文標點把別名跟網址隔開）
-  assert.deepEqual([...prRefs('[說明](https://example.org/a)、套件 #41', { 套件: 'acme/kit' })], ['acme/kit#41']);
-  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41、套件 #42', { 套件: 'acme/kit' })].sort(), ['acme/kit#41', 'acme/kit#42']);
-  const twoPrs = problemsOf(doc({ entries: [entry({ fields: { 到哪一步: '已測試' } })], attachments: ['1. https://github.com/acme/kit/pull/41、套件 #42'] }), { repos: { 套件: 'acme/kit' }, prStates: { 'acme/kit#41': { merged: true }, 'acme/kit#42': { merged: false } } });
+  // r4 R1 的案例在擁有者 2026-10-08 裁「只認用空白隔開的寫法」之後：網址後面用空白隔開的別名照認；只隔一個頓號、沒有空白的，跟網址算同一段，不認
+  assert.deepEqual([...prRefs('[說明](https://example.org/a) 、套件 #41', { 套件: 'acme/kit' })], ['acme/kit#41']);
+  assert.deepEqual([...prRefs('[說明](https://example.org/a)、套件 #41', { 套件: 'acme/kit' })], [], '頓號後沒有空白＝黏著網址，不認（要認就加空白）');
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41 、套件 #42', { 套件: 'acme/kit' })].sort(), ['acme/kit#41', 'acme/kit#42']);
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41、套件 #42', { 套件: 'acme/kit' })], ['acme/kit#41'], '沒空白的別名不認，網址本身照認');
+  const twoPrs = problemsOf(doc({ entries: [entry({ fields: { 到哪一步: '已測試' } })], attachments: ['1. https://github.com/acme/kit/pull/41 、套件 #42'] }), { repos: { 套件: 'acme/kit' }, prStates: { 'acme/kit#41': { merged: true }, 'acme/kit#42': { merged: false } } });
   assert.deepEqual(twoPrs, [], '兩支裡還有一支沒合併，不可以報可能過期');
-  // r5 R1（r3 R3 → r4 R1 → r5 R1 同族第三輪，F10 換做法）：不再挖網址，改看別名自己所在那一段（用空白或中文標點切開）有沒有 ://——
-  // 網址裡有括號、別名黏在網址後面沒隔開，都不認（核不了、不拿去問平台）；用空白或中文標點隔開的照認
+  // r5 R1 → r6 R1（r3 R3 起同族第四輪；擁有者 2026-10-08 裁「只認用空白隔開的寫法」）：切段只看空白、不看任何標點——
+  // 網址裡有半形或全形括號、外站網址的查詢字串裡夾 GitHub 網址、別名黏在網址後面沒空白，都不認（核不了、不拿去問平台）；用空白隔開的照認
   const paren = { 套件: 'acme/kit' };
-  assert.deepEqual([...prRefs('[外站](https://example.org/(套件#41))', paren)], [], '網址裡的括號不可以把後半段放出來冒充別名');
+  assert.deepEqual([...prRefs('[外站](https://example.org/(套件#41))', paren)], [], '網址裡的半形括號不可以把後半段放出來冒充別名');
   assert.deepEqual([...prRefs('[外站](https://example.org/a?x=(套件#41))', paren)], []);
-  assert.deepEqual([...prRefs('[說明](https://example.org/a)套件 #41', paren)], [], '黏著網址、沒有空白或標點隔開的別名不認（拿不準往核不了倒）');
+  assert.deepEqual([...prRefs('[外站](https://example.org/（套件#41）)', paren)], [], 'r6：全形括號也一樣，標點不切段');
+  assert.deepEqual([...prRefs('https://example.org/a?x=（套件#41）', paren)], []);
+  assert.deepEqual([...prRefs('[外站](https://example.org/a?back=(https://github.com/acme/kit/pull/41))', paren)], [], 'r6：外站網址裡夾的 GitHub 網址不算——第一個外站網址之後整段不算');
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/actions/runs/1、https://github.com/acme/kit/pull/41', paren)], [], '第一個不是 PR 的 GitHub 網址之後也整段不算');
+  assert.deepEqual([...prRefs('https://example.org/a https://github.com/acme/kit/pull/41', paren)], ['acme/kit#41'], '外站網址只擋它自己那一段，空白之後的另一段照認');
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41、https://github.com/acme/kit/pull/42', paren)].sort(), ['acme/kit#41', 'acme/kit#42'], '同一段裡接連的 GitHub PR 網址都算');
+  assert.deepEqual([...prRefs('[說明](https://example.org/a)套件 #41', paren)], [], '黏著網址、沒有空白隔開的別名不認（拿不準往核不了倒）');
   assert.deepEqual([...prRefs('(套件 #41)', paren)], ['acme/kit#41'], 'ASCII 括號包住的別名照認');
-  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41（套件 #42）', paren)].sort(), ['acme/kit#41', 'acme/kit#42'], '全形括號隔開的別名照認');
-  const parenDoc = doc({ attachments: ['1. [外站](https://example.org/(套件#41))'] });
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41 （套件 #42）', paren)].sort(), ['acme/kit#41', 'acme/kit#42'], '用空白隔開再包全形括號的別名照認');
+  assert.deepEqual([...prRefs('https://github.com/acme/kit/pull/41（套件 #42）', paren)], ['acme/kit#41'], '全形括號沒有空白＝跟網址同一段，別名不認');
+  const parenDoc = doc({ attachments: ['1. [外站](https://example.org/（套件#41）)'] });
   const parenRun = evaluate(parenDoc, { now: NOW, repos: paren, prStates: { 'acme/kit#41': { merged: true } } });
   assert.deepEqual(parenRun.cited, [], '沒有引到任何 PR，不會拿 acme/kit#41 去問平台');
+  const nestedRun = evaluate(doc({ attachments: ['1. [外站](https://example.org/a?back=(https://github.com/acme/kit/pull/41))'] }), { now: NOW, repos: paren, prStates: { 'acme/kit#41': { merged: true } } });
+  assert.deepEqual(nestedRun.cited, [], '外站網址裡夾的 GitHub 網址也不會拿去問平台');
+  assert.ok(nestedRun.problems.some((p) => p.includes('核不了')), nestedRun.problems.join('\n'));
   assert.ok(parenRun.problems.some((p) => p.includes('核不了')), parenRun.problems.join('\n'));
   const parenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'summary-paren-'));
   fs.writeFileSync(path.join(parenDir, 'paren.md'), parenDoc);
