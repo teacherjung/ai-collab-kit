@@ -106,6 +106,17 @@
   "file": "BACKLOG.md",
   "section": "## 待辦"
  },
+ "downstream": {
+  "projects": [
+   {
+    "name": "理財",
+    "repo": "teacherjung/personal-finance-webapp",
+    "branch": "main",
+    "versionWithoutLock": "0820c4d28839ff5c923c069462156f6005e61252",
+    "versionWithoutLockFrom": "理財 PROJECT.md 記的套件版本（2026-09-28 那一版＝套件 #19；2026-09-29 理財 #645 同步）；理財裝了 kit-lock.json 之後改讀它，這兩格就不再用"
+   }
+  ]
+ },
  "mainBranch": "main",
  "scanner": {
   "tool": "無（套件倉庫沒有隔離盒；掃描者與隔離綁在使用專案）",
@@ -186,6 +197,20 @@
     "repos/{project}/git/ref/heads/{branch}",
     "--jq",
     "{sha:.object.sha}"
+   ],
+   "repoTree": [
+    "gh",
+    "api",
+    "repos/{repo}/git/trees/{ref}?recursive=1",
+    "--jq",
+    "if .truncated then error(\"平台把檔案清單截斷了\") else [.tree[]|select(.type==\"blob\")|{path:.path,sha:.sha}] end"
+   ],
+   "repoFile": [
+    "gh",
+    "api",
+    "repos/{repo}/contents/{path}?ref={ref}",
+    "--jq",
+    "{content:(.content|@base64d)}"
    ],
    "markReady": [
     "node",
@@ -434,7 +459,7 @@
  },
  "machines": [
   {
-   "name": "平台介面（閘與待裁清單問平台的十個動作，答案形狀不合就不放行）",
+   "name": "平台介面（閘、待裁清單與下游落後問平台的十二個動作，答案形狀不合就不放行）",
    "rules": "E5、H1",
    "state": "已啟用",
    "verified": "2026-09-13"
@@ -618,6 +643,12 @@
    "rules": "J5",
    "state": "已啟用",
    "verified": "2026-10-09"
+  },
+  {
+   "name": "下游落後（套件這一邊印出登記的使用專案落後幾支、哪些共用檔不同、設定少哪些欄位與機器列，只列不擋）",
+   "rules": "K1",
+   "state": "已啟用",
+   "verified": "2026-10-08"
   }
  ]
 }

@@ -50,6 +50,9 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 待辦清單（開工印待辦 tools/backlog-touch.js 讀它；規矩 F6）：BACKLOG\.md 的「\#\# 待辦」那一節
 
+使用這個套件的專案（下游落後 tools/downstream-lag.js 讀它、開工時手動跑、只列不擋；只有套件倉庫要填，使用專案留空）：
+- 理財：teacherjung\/personal\-finance\-webapp 的 main；還沒裝 kit-lock.json 時用的版本 0820c4d28839ff5c923c069462156f6005e61252（出處：理財 PROJECT\.md 記的套件版本（2026\-09\-28 那一版＝套件 \#19；2026\-09\-29 理財 \#645 同步）；理財裝了 kit\-lock\.json 之後改讀它，這兩格就不再用）
+
 主幹分支名（原閘寫死 main，規矩 H2、H3、H4）：main
 
 ## 四、掃描發射者（規矩 A1、G1、G4）
@@ -89,6 +92,8 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | checks | 讀某一顆版本上跑過的檢查場次（⚠️ 必須是全部，分頁要在這條指令裡處理完） | gh api \-\-paginate repos\/\{project\}\/commits\/\{sha\}\/check\-runs\?per\_page\=100 \-\-jq \"\[\.check\_runs\[\]\|\{name\:\.name\,status\:\.status\,conclusion\:\.conclusion\,completedAt\:\.completed\_at\,producer\:\(if \.app then \(\.app\.id\|tostring\) else null end\)\}\]\" |
 | requiredChecks | 讀主幹設了哪些必過檢查（名單的正本在平台上，不另抄一份會漂的） | gh api repos\/\{project\}\/branches\/\{branch\}\/protection\/required\_status\_checks \-\-jq \"\[\.checks\[\]\|\{name\:\.context\,producer\:\(if \(\.app\_id \/\/ \-1\) \< 0 then null else \(\.app\_id\|tostring\) end\)\}\]\" |
 | branchSha | 讀一個分支現在指到哪一顆 | gh api repos\/\{project\}\/git\/ref\/heads\/\{branch\} \-\-jq \{sha\:\.object\.sha\} |
+| repoTree | 讀別的倉庫某一條分支上的每一個檔（路徑與內容雜湊；⚠️ 必須是全部，平台把清單截斷時這條指令要失敗） | gh api repos\/\{repo\}\/git\/trees\/\{ref\}\?recursive\=1 \-\-jq \"if \.truncated then error\(\\\"平台把檔案清單截斷了\\\"\) else \[\.tree\[\]\|select\(\.type\=\=\\\"blob\\\"\)\|\{path\:\.path\,sha\:\.sha\}\] end\" |
+| repoFile | 讀別的倉庫某一條分支上一個檔的內容（原文） | gh api repos\/\{repo\}\/contents\/\{path\}\?ref\=\{ref\} \-\-jq \{content\:\(\.content\|\@base64d\)\} |
 | markReady | 把一支PR從草稿轉成正式 | node \-e \"process\.stderr\.write\(\'實跑：這個平台動作刻意封住，合併一律走 mergeCommand\\\\n\'\)\;process\.exit\(97\)\" \{change\} |
 | merge | 按下合併鍵 | node \-e \"process\.stderr\.write\(\'實跑：這個平台動作刻意封住，合併一律走 mergeCommand\\\\n\'\)\;process\.exit\(97\)\" \{change\} |
 
@@ -197,7 +202,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 | 機器 | 規矩 | 狀態 | 驗過的日期 |
 |---|---|---|---|
-| 平台介面（閘與待裁清單問平台的十個動作，答案形狀不合就不放行） | E5、H1 | 已啟用 | 2026\-09\-13 |
+| 平台介面（閘、待裁清單與下游落後問平台的十二個動作，答案形狀不合就不放行） | E5、H1 | 已啟用 | 2026\-09\-13 |
 | 合併指令（依序跑完登記的閘，任一道紅就停） | H1 | 已啟用 | 2026\-09\-12 |
 | 協作欄位閘（四欄齊全、實作者不等於複審者） | A2、D3、E1 | 已啟用 | 2026\-09\-27 |
 | 結論聯集閘（阻擋只有同一位能解除、放行只認指定那一位對目前版本的通過） | F4、F5、F7 | 已啟用 | 2026\-09\-27 |
@@ -228,3 +233,4 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | 開工印待辦（列出待辦清單裡提到這支改到的檔的那幾條，只列不擋） | F6 | 已啟用 | 2026\-10\-07 |
 | 進度摘要檢查（摘要每則的形狀、兩個時間、附件條號、已合併對不對得上平台，只列不擋） | J5 | 已啟用 | 2026\-10\-07 |
 | 本週成果產生器（最近七天合併進主幹的 PR 照日期列成摘要那一節，\-\-write 才換掉那一節） | J5 | 已啟用 | 2026\-10\-09 |
+| 下游落後（套件這一邊印出登記的使用專案落後幾支、哪些共用檔不同、設定少哪些欄位與機器列，只列不擋） | K1 | 已啟用 | 2026\-10\-08 |
