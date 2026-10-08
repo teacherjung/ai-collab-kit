@@ -8,7 +8,7 @@
 //   ④證據欄引的附件條號不存在；範圍「45〜47」「1 〜 3」都會展開（r1 R4）；拆不開、倒過來、超出安全整數或上限的條號列成問題、不會卡住（r1 R3）；證據欄一條都沒引也列；
 //   ⑤已合併：引到的附件沒有 PR＝核不了；離線只查這一點；平台答案不是布林（字串、物件）＝核不了，不當成已合併（r1 R5）；
 //     有答案時沒有一支合併＝列；施工中或等複審、沒寫已合併、引到的全合併了＝可能過期；「套件 #45」這種寫法要 --repos 登記才算，`__proto__` 也登記得進去（r1 R8）；
-//   ⑥已結束那一節的形狀與 30 天；本週成果那一節的七天；未來的日期不算過期；
+//   ⑥已結束那一節的形狀與 30 天；本週成果那一節的七天，而且每個子項目上面都要有合法的「- 月/日」（孤立的子項目、縮排的日期行都列；r4 R2）；未來的日期不算過期；
 //   ⑦指令入口：有問題也退 0、--strict 才退 1、沒問題退 0；檔讀不到、少了節、參數不對、--now 寫法錯＝退 2；--pr-states 的檔當平台的答案；
 //   ⑧問平台：固定問 github.com、環境裡的選主機變數先清掉（r1 R7）；gh 退非零、回的不是 JSON、形狀不對、merged_at 不是時間＝那一支 merged: null（核不了），不猜；
 //   ⑨CRLF 換行的摘要判得跟 LF 一樣（r1 R2）。
@@ -250,7 +250,7 @@ test('⑤已合併：附件沒有 PR＝核不了；離線只查這點；答案�
   assert.equal(Object.getPrototypeOf(proto.repos), null, '別名表不帶原型，登記什麼名字都不會改到別的東西');
 });
 
-test('⑥已結束的形狀與 30 天；本週成果七天；未來的日期不算過期', () => {
+test('⑥已結束的形狀與 30 天；本週成果七天、子項目要有日期父項；未來的日期不算過期', () => {
   const bad = problemsOf(doc({ done: ['### 套件｜某事｜已結束｜附件第 1 條'] }));
   assert.ok(bad.some((p) => p.includes('不是合法的紀錄') && p.includes('某事')), bad.join('\n'));
   const ok = problemsOf(doc({ done: ['### 套件｜某事｜已結束 09/10｜已留：附件第 1 條', '### 理財｜別事｜已結束 10/01｜無永久決定'] }));
@@ -278,6 +278,19 @@ test('⑥已結束的形狀與 30 天；本週成果七天；未來的日期不�
   const week = problemsOf(doc({ week: ['- 10/07', '  - 套件：甲', '- 09/29', '  - 理財：乙'] }));
   assert.ok(week.some((p) => p.includes('09/29') && p.includes(`只留 ${WEEK_DAYS} 天`)), week.join('\n'));
   assert.deepEqual(problemsOf(doc({ week: ['- 10/01', '  - 甲'], done: ['### 套件｜某事｜已結束 12/01｜無永久決定'] })), [], '七天內與未來的日期都不列');
+  // r4 R2（同族第四輪；擁有者 2026-10-08 裁 a「守結構」）：子項目要屬於上面某個合法的「- 月/日」，不然它的保留天數核不了——
+  // 只剩子項目（沒有任何日期行）、整組多縮排兩格（日期行也縮了）以前都退 0，七天的檢查就消失
+  const orphan = problemsOf(doc({ week: ['  - 套件：完成重要成果'] }));
+  assert.ok(orphan.some((p) => p.includes('本週成果') && p.includes('沒有合法的「- 月/日」父項') && p.includes('完成重要成果')), orphan.join('\n'));
+  const shifted = problemsOf(doc({ week: ['  - 09/01', '    - 套件：完成重要成果'] }));
+  assert.ok(shifted.some((p) => p.includes('本週成果') && p.includes('日期行') && p.includes('縮排') && p.includes('09/01')), shifted.join('\n'));
+  assert.ok(shifted.some((p) => p.includes('沒有合法的「- 月/日」父項') && p.includes('完成重要成果')), shifted.join('\n'));
+  // 縮在合法日期底下的日期行也要點名：它底下的成果會被算成上一個日期（10/07）的，09/01 的舊成果就躲過七天
+  const nested = problemsOf(doc({ week: ['- 10/07', '  - 套件：甲', '  - 09/01', '    - 理財：舊成果'] }));
+  assert.ok(nested.some((p) => p.includes('日期行') && p.includes('09/01') && p.includes('10/07')), nested.join('\n'));
+  assert.ok(!nested.some((p) => p.includes('沒有合法的「- 月/日」父項')), `上面有合法日期的子項目不算孤立：${nested.join('\n')}`);
+  // 對照：一個日期底下好幾個子項目（含更深一層）、再接下一個日期，一條都不列——父項要一直記到下一個日期行為止
+  assert.deepEqual(problemsOf(doc({ week: ['- 10/07', '  - 套件：甲', '  - 理財：乙', '    - 乙的細項', '- 10/06', '  - 共用：丙'] })), [], '有日期父項的子項目都不列');
 });
 
 test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀不到、少節、參數錯、--now 寫法錯＝退 2；--pr-states 當平台答案', () => {
