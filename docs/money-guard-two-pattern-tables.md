@@ -162,6 +162,10 @@ verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器
   拿掉新動詞回放行）；新名詞在前、既有動詞在後（`get_wallet_create_time`、`get_payee_update_history`、`get_loan_close_date`，
   拿掉新名詞回放行）；狀態字 open／draft 接新名詞（`get_open_payments`、`get_draft_payments`，拿掉新名詞回放行）。2026-09-27 逐一實測。
   既有代價（加字前就擋、不算本次新帳）：`list_open_positions`、`get_closed_positions`。
+  ⚠️ 上面「拿掉哪一邊就回放行」的歸因是 2026-09-27 那一版的；**2026-10-08 再削一刀之後**，名字裡有族字單獨成詞的 10 個拿掉新字也照擋
+  （改由 `patternsReadSafe` 的轉帳提款那一條擋）：`get_transfer_instructions`、`get_deposit_instructions`、`get_wire_instructions`、
+  `list_wire_instructions`、`list_closed_transfers`、`get_position_transfer_status`、`get_fund_transfer_history`、`get_crypto_withdrawal_fee`、
+  `get_open_payments`、`get_draft_payments`；其餘照舊（2026-10-08 逐一實測）。
   今天沒有真工具長這樣（276＋32 個真名字 0 翻轉）；代價在券商新增這種唯讀工具、要加進 `allowlist` 時才付：家族網蓋過白名單
   （`tools/forbidden-tools.js` 檔頭），而考題不准專案少任何一個預設字——要放行得先改套件範本並裁示（一輪對話的代價）。
   **給裁示者的便宜選項**（調查原話「要不要削一刀」）：拿掉 `wire`、`deposit` 兩個動詞可救回 `get_deposit_instructions`、
@@ -169,6 +173,8 @@ verbs、nouns 那 24 項，`safeServers` 考題不比、但不補＝那台機器
   （`get_transfer_instructions` 仍擋，transfer 還在）；代價＝`view_wire_money`、`download_deposit_funds` 這種「唯讀前綴＋錢名詞」
   的動錢形狀回到放行（`wire_funds`、`deposit_cash`、`wire_transfer`、`deposit_to_wallet` 仍由 `patterns` 擋）。
   調查的判斷是不削（電匯最不可逆）；裁示者 2026-09-27 裁不削（「全照建議」）。
+  ⚠️ 2026-10-08 再削一刀之後這個選項只救得回 `get_deposited_cash`：其餘五個與 `view_wire_money`、`download_deposit_funds`、
+  `wire_funds` 那幾個，拿掉兩個動詞也改由 `patternsReadSafe` 的轉帳提款那一條擋（逐一實測）。
 
 **刻意不加的字**（各有實測代價撐著，不是憑感覺）：
 - `exchange` 當動詞 ⇒ 擋掉整族 `get_exchange_traded_funds`／`list_exchange_traded_funds`（ETF 拼全稱）——投資專案不值得。
