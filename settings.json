@@ -74,7 +74,7 @@
   {
    "item": "必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單）",
    "rules": "E3、H3",
-   "where": "正本在 GitHub：main 分支保護的 required_status_checks（唯讀重讀：gh api repos/teacherjung/ai-collab-kit/branches/main/protection/required_status_checks）；檢查名逐字對應 .github/workflows/ci.yml 與 .github/workflows/collab-fields.yml 的 job 名；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集）"
+   "where": "正本在 GitHub：main 分支保護的 required_status_checks（唯讀重讀：gh api repos/teacherjung/ai-collab-kit/branches/main/protection/required_status_checks）；檢查名逐字對應 .github/workflows/ci.yml 與 .github/workflows/collab-fields.yml 的 job 名；怎麼設（傳統分支保護規則、勾哪幾格）見 README「本倉庫自己怎麼合併」的雲端那一項"
   },
   {
    "item": "合併步驟登記正本（閘登記對帳題讀它）",
@@ -84,7 +84,7 @@
   {
    "item": "「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭）",
    "rules": "A5",
-   "where": "本支還沒回的待裁＝合併指令裡的待裁閘擋（tools/gates/check-pending-rulings.js；只認照範本貼在本支的 ❓，對話裡問了沒貼的看不見）；開工時看全部還沒回的＝node tools/pending-rulings.js。另外兩種靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests/helpers/unfilled-settings.json 的 forbidden 那一塊與禁區攔截器 tools/forbidden-tools.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列）"
+   "where": "本支還沒回的待裁＝合併指令裡的待裁閘（tools/gates/check-pending-rulings.js）；開工時看全部還沒回的＝node tools/pending-rulings.js。另外兩種靠自覺：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭——空白範本 tests/helpers/unfilled-settings.json 的 forbidden 那一塊與禁區攔截器 tools/forbidden-tools.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等"
   },
   {
    "item": "合併後驗收分級與動作的正本（路徑家族表＋各級動作）",
@@ -94,12 +94,12 @@
   {
    "item": "「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份）",
    "rules": "K6",
-   "where": "根目錄 AGENTS.md 的「擁有者的常設指示」那一節。不建 CLAUDE.md（也不建 CLAUDE.local.md、.claude/CLAUDE.md）：只要有它，Claude 就只讀它、不讀 AGENTS.md；Codex 只自動讀 AGENTS.md 前約 32 KB，所以那份要保持短"
+   "where": "根目錄 AGENTS.md 的「擁有者的常設指示」那一節。不建 CLAUDE.md（也不建 CLAUDE.local.md、.claude/CLAUDE.md；工作目錄的上層任何一層也算）：只要有它，Claude 就只讀它、不讀 AGENTS.md（Claude Code 2.1.277 起才讀 AGENTS.md、2.1.281 起各種工作階段都讀）；Codex 只自動讀 AGENTS.md 前約 32 KB，所以那份要保持短"
   },
   {
    "item": "「進度摘要」放在哪、已結束的留幾天（各方共用一份）",
    "rules": "J5",
-   "where": "主目錄的上一層、檔名 progress-summary.md，跟使用專案 personal-finance-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）；附件（證據位置）從 2026-10-09 起另放同一層的 progress-attachments.md，本檔的附件那一節只留指標（檢查時帶 --attachments）。已結束的留 30 天（擁有者 2026-10-07 裁，取代 2026-09-21 對 personal-finance-webapp 裁的七天；2026-10-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺。清理目前靠更新的那一方順手做（靠自覺），本倉庫沒有排程或背景程式在清（2026-10-05 在主幹搜過；倉庫外、這台機器上有沒有別的，沒查過）"
+   "where": "主目錄的上一層、檔名 progress-summary.md，跟使用專案 personal-finance-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）；附件（證據位置）從 2026-10-09 起另放同一層的 progress-attachments.md，本檔的附件那一節只留指標（檢查時帶 --attachments）。已結束的留 30 天（擁有者 2026-10-07 裁，取代 2026-09-21 對 personal-finance-webapp 裁的七天；2026-10-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺。清理目前靠更新的那一方順手做（靠自覺）"
   }
  ],
  "backlog": {

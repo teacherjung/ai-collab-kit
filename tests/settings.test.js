@@ -85,7 +85,7 @@ test('啟用表裡每一支機器標的規矩條號都存在', () => {
 /** 從 MACHINES.md 的標籤定義表抽名字（跟 rules-length 那題同一個來源），再判一個標籤的**名字**是哪一個。 */
 function labelNames() {
   const text = fs.readFileSync(path.join(__dirname, '..', 'MACHINES.md'), 'utf8');
-  const at = text.indexOf('句尾的執行者標籤，定義在這裡、只在這裡');
+  const at = text.indexOf('每條最後一行的執行者標籤，定義在這裡、只在這裡');
   assert.ok(at >= 0, '找不到標籤定義表');
   const names = [];
   for (const line of text.slice(at).split('\n')) {

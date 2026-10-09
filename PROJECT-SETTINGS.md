@@ -2,7 +2,7 @@
 
 這是產物：值住在 settings.json，改完跑 node tools/build-settings.js。搬進專案後把每個「未設定」填掉；沒填的欄位＝那條規矩的機器退化成靠自覺。「填了設定」和「機器已啟用」是兩件事，最後一節逐支登記。
 
-本檔裡的指令是**展示**：一格一格用空白隔開，含空白、引號、反斜線或換行的那一格用 JSON 字串寫（例如換行寫成 \n）。不要把展示文字直接貼進終端機跑——那樣 \n 會變成字面的反斜線加 n；執行一律用 settings.json 裡的陣列、經工具入口（搬家修正 r2 T6）。
+本檔裡的指令是**展示**：一格一格用空白隔開，含空白、引號、反斜線或換行的那一格用 JSON 字串寫（例如換行寫成 \n）。不要把展示文字直接貼進終端機跑——那樣 \n 會變成字面的反斜線加 n；執行一律用 settings.json 裡的陣列、經工具入口。
 
 ## 一、參與者識別值
 
@@ -41,12 +41,12 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | 忽略清單、檢查豁免允許清單 | E7 | 忽略＝\.gitignore（由 settings\.json 的 ignoreLists 登記、tests\/ignore\-lists\.test\.js 逐字比對）；檢查豁免：無 |
 | 路標考題掃描的目錄範圍 | K3 | tests\/signposts\.test\.js：掃 tests\/ 第一層的 \*\.test\.js 與 tests\/helpers\/ 第一層的 \.js（目錄寫死、不讀這一格） |
 | 三關的實際命令、執行環境版本、稽核等級（或唯一設定檔位置） | E2、E3 | settings\.json 的 checks：只有 node \-\-test 一關（套件零相依，沒有型別與風格兩關）；雲端＝\.github\/workflows\/ci\.yml 的「三關」job 呼叫 tools\/run\-checks\.js；執行環境版本＝\.node\-version；本機推送前鉤子：套件倉庫沒裝（core\.hooksPath 沒設），E2 在本倉庫靠自覺 |
-| 必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單） | E3、H3 | 正本在 GitHub：main 分支保護的 required\_status\_checks（唯讀重讀：gh api repos\/teacherjung\/ai\-collab\-kit\/branches\/main\/protection\/required\_status\_checks）；檢查名逐字對應 \.github\/workflows\/ci\.yml 與 \.github\/workflows\/collab\-fields\.yml 的 job 名；要用傳統分支保護規則（classic branch protection rule），登記的 requiredChecks 指令只讀那一組端點，規則集（ruleset）讀不到、真考卷閘會退 2（推論，沒實測規則集） |
+| 必要檢查名單與分支保護設定（指向平台上的設定正本與驗證入口，不另抄一份會漂的名單） | E3、H3 | 正本在 GitHub：main 分支保護的 required\_status\_checks（唯讀重讀：gh api repos\/teacherjung\/ai\-collab\-kit\/branches\/main\/protection\/required\_status\_checks）；檢查名逐字對應 \.github\/workflows\/ci\.yml 與 \.github\/workflows\/collab\-fields\.yml 的 job 名；怎麼設（傳統分支保護規則、勾哪幾格）見 README「本倉庫自己怎麼合併」的雲端那一項 |
 | 合併步驟登記正本（閘登記對帳題讀它） | H1 | settings\.json 的 gates（登記；每筆＝name／rules／command／args／state）；各閘腳本＝tools\/gates\/\*\.js；對帳考題＝tests\/settings\.test\.js（磁碟上的閘 vs 登記的閘）；合併指令 tools\/merge\.js 只跑登記為已啟用的閘、任一非零就停 |
-| 「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭） | A5 | 本支還沒回的待裁＝合併指令裡的待裁閘擋（tools\/gates\/check\-pending\-rulings\.js；只認照範本貼在本支的 ❓，對話裡問了沒貼的看不見）；開工時看全部還沒回的＝node tools\/pending\-rulings\.js。另外兩種靠自覺、沒有專屬清單：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭（本倉庫自己沒接攔截器，B1 那一列是「無」；但空白範本 tests\/helpers\/unfilled\-settings\.json 的 forbidden 那一塊與禁區攔截器 tools\/forbidden\-tools\.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等擁有者點頭）。三種都沒有＝按合併鍵前不用問裁示者；合併前沒有驗收（合併後的驗收見 H6 那一列） |
+| 「按合併鍵」前要查的三種例外（裁示者叫停、本支還沒回的待裁、改到禁區清單的PR要擁有者點頭） | A5 | 本支還沒回的待裁＝合併指令裡的待裁閘（tools\/gates\/check\-pending\-rulings\.js）；開工時看全部還沒回的＝node tools\/pending\-rulings\.js。另外兩種靠自覺：叫停＝看對話與本支PR的留言；改到禁區清單的PR＝先等擁有者點頭——空白範本 tests\/helpers\/unfilled\-settings\.json 的 forbidden 那一塊與禁區攔截器 tools\/forbidden\-tools\.js 就是每個專案拿到的禁區清單與判斷，改到它們的PR一樣先等 |
 | 合併後驗收分級與動作的正本（路徑家族表＋各級動作） | H6 | 已啟用（2026\-10\-08）：套件倉庫沒有畫面、部署或要重啟的程式，acceptance 只填一級「免驗收」、所有路徑都歸它（合併後 node tools\/acceptance\-tier\.js \<編號\> 印得出來，照它印的做＝不需擁有者驗收）；改動在同步進使用專案那一支照該專案的分級驗收 |
-| 「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份） | K6 | 根目錄 AGENTS\.md 的「擁有者的常設指示」那一節。不建 CLAUDE\.md（也不建 CLAUDE\.local\.md、\.claude\/CLAUDE\.md）：只要有它，Claude 就只讀它、不讀 AGENTS\.md；Codex 只自動讀 AGENTS\.md 前約 32 KB，所以那份要保持短 |
-| 「進度摘要」放在哪、已結束的留幾天（各方共用一份） | J5 | 主目錄的上一層、檔名 progress\-summary\.md，跟使用專案 personal\-finance\-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）；附件（證據位置）從 2026\-10\-09 起另放同一層的 progress\-attachments\.md，本檔的附件那一節只留指標（檢查時帶 \-\-attachments）。已結束的留 30 天（擁有者 2026\-10\-07 裁，取代 2026\-09\-21 對 personal\-finance\-webapp 裁的七天；2026\-10\-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺。清理目前靠更新的那一方順手做（靠自覺），本倉庫沒有排程或背景程式在清（2026\-10\-05 在主幹搜過；倉庫外、這台機器上有沒有別的，沒查過） |
+| 「指示檔」與「常設指示」寫在哪（兩方每次開工都會自動整份讀進去的那一份） | K6 | 根目錄 AGENTS\.md 的「擁有者的常設指示」那一節。不建 CLAUDE\.md（也不建 CLAUDE\.local\.md、\.claude\/CLAUDE\.md；工作目錄的上層任何一層也算）：只要有它，Claude 就只讀它、不讀 AGENTS\.md（Claude Code 2\.1\.277 起才讀 AGENTS\.md、2\.1\.281 起各種工作階段都讀）；Codex 只自動讀 AGENTS\.md 前約 32 KB，所以那份要保持短 |
+| 「進度摘要」放在哪、已結束的留幾天（各方共用一份） | J5 | 主目錄的上一層、檔名 progress\-summary\.md，跟使用專案 personal\-finance\-webapp 共用同一份（兩個主目錄在同一層；以主目錄為準，放在別處的工作資料夾（樹）的上一層不是這裡）；附件（證據位置）從 2026\-10\-09 起另放同一層的 progress\-attachments\.md，本檔的附件那一節只留指標（檢查時帶 \-\-attachments）。已結束的留 30 天（擁有者 2026\-10\-07 裁，取代 2026\-09\-21 對 personal\-finance\-webapp 裁的七天；2026\-10\-05 裁示這套規定也放進套件）。這份檔不在任何倉庫裡：考題、閘與PR的差異都看不到它，更新與核對都靠自覺。清理目前靠更新的那一方順手做（靠自覺） |
 
 待辦清單（開工印待辦 tools/backlog-touch.js 讀它；規矩 F6）：BACKLOG\.md 的「\#\# 待辦」那一節
 
