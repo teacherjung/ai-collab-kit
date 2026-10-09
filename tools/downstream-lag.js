@@ -16,9 +16,11 @@
 //   ②共用檔比的是內容雜湊：同一份內容搬到共用路徑外看不到；「專案改過」是拿它跟它記的那一版比出來的，記的版本錯就判錯；
 //   ③套件主幹以平台說的那一顆為準，本機沒有那一顆（沒 fetch）就算不出來；
 //   ④設定只比欄位名（鍵的路徑，陣列不往裡看）與機器列的名字，不比值；
-//   ⑤落後的支數是套件主幹上的提交數（套件一支PR壓成一顆提交，H5）；有人直接推上主幹的也算一支。
-// 退出碼：0＝印出來了（含沒有落後、沒有登記任何使用專案）；2＝有一個以上算不出來（設定寫壞、平台問不到、版本碼不在套件主幹上、
-// 本機沒有主幹那一顆、參數不對）——算得出來的照印。⚠️ 不是閘。
+//   ⑤落後的支數是套件主幹上的提交數（套件一支PR壓成一顆提交，H5）；有人直接推上主幹的也算一支；
+//   ⑥檔案清單與逐檔內容是分兩次問平台的：下游分支在兩次之間剛更新，讀到的內容會跟清單對不上——每個讀回的檔都拿內容算 blob 雜湊
+//     跟清單裡那一格比，對不上＝退 2 叫人重跑（#60 r1 R2）；清單本身跟同一瞬間的分支頂端對不對，這裡量不到。
+// 退出碼：0＝印出來了（含沒有落後、沒有登記任何使用專案）；2＝有一個以上算不出來（那一筆設定寫壞、平台問不到、版本碼不在套件主幹上、
+// 讀到的檔跟清單雜湊對不上、本機沒有主幹那一顆、參數不對）——算得出來的照印；只有整塊 downstream 的形狀壞掉才一個都不算（#60 r1 R1）。⚠️ 不是閘。
 'use strict';
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
@@ -48,23 +50,29 @@ function gitOut(cwd, args) {
   return r.stdout;
 }
 
-/** 設定裡登記的使用專案；寫壞的那一筆丟 LagError（不猜）。沒有這一塊或清單空的＝沒有登記。 */
+/** 設定裡登記的使用專案（原樣、還沒逐筆驗）；整塊的形狀壞掉才丟 LagError。沒有這一塊或清單空的＝沒有登記。 */
 function projectsOf(settings) {
   const d = settings.downstream;
   if (d === undefined) return [];
   if (!d || typeof d !== 'object' || !Array.isArray(d.projects)) throw new LagError('設定的 downstream 要是物件、裡面的 projects 要是陣列');
-  return d.projects.map((p, i) => {
-    const where = `downstream.projects[${i}]`;
-    if (!p || typeof p !== 'object') throw new LagError(`${where} 要是物件`);
-    for (const k of ['name', 'repo', 'branch']) {
-      if (typeof p[k] !== 'string' || !p[k].trim() || p[k] === UNSET) throw new LagError(`${where}.${k} 沒填`);
-    }
-    if (!REPO.test(p.repo)) throw new LagError(`${where}.repo「${p.repo}」要是「帳號/倉庫名」`);
-    if (!BRANCH.test(p.branch)) throw new LagError(`${where}.branch「${p.branch}」不是正常的分支名`);
-    const fallback = p.versionWithoutLock;
-    if (fallback !== undefined && fallback !== UNSET && !HEX40.test(String(fallback))) throw new LagError(`${where}.versionWithoutLock 要是 40 位小寫十六進位的套件版本碼（或「未設定」）`);
-    return { name: p.name, repo: p.repo, branch: p.branch, fallback: fallback === UNSET ? undefined : fallback, fallbackFrom: p.versionWithoutLockFrom };
-  });
+  return d.projects;
+}
+
+/**
+ * 一筆登記的形狀；寫壞丟 LagError（不猜）。逐筆驗、不在整批 map 裡驗：一筆寫壞只讓那一筆退 2，其餘照算（#60 r1 R1：
+ * 原本整批 map 一丟錯就整個 run 停、別的專案一行都沒印）。
+ */
+function validateProject(p, i) {
+  const where = `downstream.projects[${i}]`;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new LagError(`${where} 要是物件`);
+  for (const k of ['name', 'repo', 'branch']) {
+    if (typeof p[k] !== 'string' || !p[k].trim() || p[k] === UNSET) throw new LagError(`${where}.${k} 沒填`);
+  }
+  if (!REPO.test(p.repo)) throw new LagError(`${where}.repo「${p.repo}」要是「帳號/倉庫名」`);
+  if (!BRANCH.test(p.branch)) throw new LagError(`${where}.branch「${p.branch}」不是正常的分支名`);
+  const fallback = p.versionWithoutLock;
+  if (fallback !== undefined && fallback !== UNSET && !HEX40.test(String(fallback))) throw new LagError(`${where}.versionWithoutLock 要是 40 位小寫十六進位的套件版本碼（或「未設定」）`);
+  return { name: p.name, repo: p.repo, branch: p.branch, fallback: fallback === UNSET ? undefined : fallback, fallbackFrom: p.versionWithoutLockFrom };
 }
 
 /** 某一顆版本上共用路徑底下的每一個檔：路徑 → 內容雜湊。 */
@@ -78,6 +86,24 @@ function kitFiles(root, sha) {
     if (type === 'blob') map.set(rec.slice(tab + 1), blob);
   }
   return map;
+}
+
+/** 讀回來的檔內容算 blob 雜湊（跟 ls-tree、平台檔案清單裡的那一格同一種）。 */
+function blobSha(root, content) {
+  const r = spawnSync('git', ['hash-object', '--stdin'], { cwd: root, env: gitEnv(), encoding: 'utf8', input: content });
+  if (r.error || r.status !== 0) throw new LagError(`算不出讀回來的檔的雜湊：${r.error ? r.error.message : (r.stderr || '').trim()}`);
+  return r.stdout.trim();
+}
+
+/**
+ * 從下游讀一個檔，並核它跟這次檔案清單裡那一格的雜湊對得上：檔案清單與逐檔內容是兩次問平台，下游分支在中間剛更新就會拼出兩個時點的錯診斷
+ *（#60 r1 R2）；對不上就退 2 叫人重跑，不拼。
+ */
+function readConsistent(p, file, theirs, { root, settings, platform }) {
+  const content = platform.ask('repoFile', { repo: p.repo, ref: p.branch, path: file }, { settings }).content;
+  const got = blobSha(root, content);
+  if (got !== theirs.get(file)) throw new LagError(`它的 ${file} 讀到的內容跟這次檔案清單裡的雜湊對不上（清單 ${String(theirs.get(file)).slice(0, 7)}、內容 ${got.slice(0, 7)}）：下游分支在兩次讀取之間更新了，重跑一次`);
+  return content;
 }
 
 /** 鍵的路徑（陣列不往裡看；⑨ 也是這樣看形狀）。 */
@@ -102,7 +128,7 @@ function lagOf(p, { root, settings, platform, kitHead, template }) {
   let exceptions = [];
   if (theirs.has(LOCK_FILE)) {
     let lock;
-    try { lock = JSON.parse(platform.ask('repoFile', { repo: p.repo, ref: p.branch, path: LOCK_FILE }, { settings }).content); }
+    try { lock = JSON.parse(readConsistent(p, LOCK_FILE, theirs, { root, settings, platform })); }
     catch (e) { if (e instanceof SyntaxError) throw new LagError(`它的 ${LOCK_FILE} 不是合法的 JSON`); throw e; }
     try { validateLock(lock); } catch (e) { if (e instanceof LockError) throw new LagError(`它的 ${e.message}`); throw e; }
     version = lock.version;
@@ -140,7 +166,7 @@ function lagOf(p, { root, settings, platform, kitHead, template }) {
     settingsLines = [`  設定：它主幹上沒有 ${SETTINGS}`];
   } else {
     let ours;
-    try { ours = JSON.parse(platform.ask('repoFile', { repo: p.repo, ref: p.branch, path: SETTINGS }, { settings }).content); }
+    try { ours = JSON.parse(readConsistent(p, SETTINGS, theirs, { root, settings, platform })); }
     catch (e) { if (e instanceof SyntaxError) throw new LagError(`它的 ${SETTINGS} 不是合法的 JSON`); throw e; }
     const want = keyPaths(template);
     const have = keyPaths(ours);
@@ -169,6 +195,11 @@ function run({ settings = readSettings(), platform = { ask }, root = ROOT } = {}
   let projects;
   try { projects = projectsOf(settings); } catch (e) { if (e instanceof LagError) return { code: 2, lines: [`下游落後：${e.message}——算不出來。`] }; throw e; }
   if (!projects.length) return { code: 0, lines: ['下游落後：設定的 downstream 沒有登記任何使用專案，沒有東西要比。'] };
+  // 每一筆先逐筆驗形狀、錯的記下來；一筆都不合格就不去問平台（設定全壞不該打平台）；有合格的才往下
+  const checked = projects.map((raw, i) => {
+    try { return { p: validateProject(raw, i) }; } catch (e) { if (e instanceof LagError) return { err: e.message, i }; throw e; }
+  });
+  if (!checked.some((c) => c.p)) return { code: 2, lines: checked.map((c) => `downstream.projects[${c.i}]：算不出來——${c.err}`) };
   const main = settings.mainBranch;
   if (typeof main !== 'string' || !main.trim() || main === UNSET) return { code: 2, lines: ['下游落後：設定的 mainBranch 沒填，不知道套件主幹是哪一條——算不出來。'] };
   let kitHead;
@@ -185,7 +216,9 @@ function run({ settings = readSettings(), platform = { ask }, root = ROOT } = {}
   }
   const lines = [`下游落後｜套件主幹 ${main}＝${kitHead.slice(0, 7)}｜登記 ${projects.length} 個使用專案（只列不擋、不是排程）`];
   let code = 0;
-  for (const p of projects) {
+  for (const c of checked) {
+    if (c.err) { code = 2; lines.push(`downstream.projects[${c.i}]：算不出來——${c.err}`); continue; }
+    const p = c.p;
     try {
       lines.push(...lagOf(p, { root, settings, platform, kitHead, template }));
     } catch (e) {
@@ -208,4 +241,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, projectsOf, keyPaths, lagOf, LagError };
+module.exports = { run, projectsOf, validateProject, keyPaths, lagOf, blobSha, LagError };

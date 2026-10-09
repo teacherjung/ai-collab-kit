@@ -9,7 +9,9 @@
 //   ④設定只比欄位名（陣列不往裡看）與機器列名：少的、多的各列出；
 //   ⑤算不出來的情形一律退 2、說原因：版本碼本機沒有、不在套件主幹的歷史上、套件主幹那一顆本機沒有（沒 fetch）、平台問不到、主幹分支沒填、
 //     設定的 downstream 寫壞；有好幾個使用專案時，算得出來的照印；沒登記任何使用專案＝退 0；
-//   ⑥指令入口：給了參數＝退 2；在空白設定的複本裡跑＝退 0（沒有登記）。
+//   ⑥指令入口：給了參數＝退 2；在空白設定的複本裡跑＝退 0（沒有登記）；
+//   ⑦一筆登記寫壞只讓那一筆退 2、其餘照算（不論壞的排前排後）；整塊 downstream 壞掉或全部寫壞才一個都不算、也不問平台（#60 r1 R1）；
+//   ⑧讀回的每個檔跟這次檔案清單裡的雜湊對不上（下游分支在兩次讀取之間更新）＝那一個退 2 叫人重跑，不拼兩個時點（#60 r1 R2）；對得上的照算。
 // ⚠️ 守不到的：平台那條指令翻譯得對不對（GitHub 範本那兩條只在 tests/platform.test.js 看展開，沒有對真平台跑）；
 //   使用專案記的版本是不是真的就是它取檔的那一版。
 'use strict';
@@ -20,7 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { run, projectsOf, keyPaths } = require('../tools/downstream-lag.js');
+const { run, projectsOf, validateProject, keyPaths } = require('../tools/downstream-lag.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -191,8 +193,53 @@ test('⑤設定的 downstream：沒有這一塊或清單空的＝沒有登記、
     const r = run({ settings: { mainBranch: 'main', downstream: d }, platform: none, root: os.tmpdir() });
     assert.equal(r.code, 2, what);
   }
-  assert.deepEqual(projectsOf({ downstream: { projects: [{ name: 'a', repo: 'o/r', branch: 'main', versionWithoutLock: '未設定' }] } })[0].fallback, undefined, '「未設定」當沒填');
+  assert.deepEqual(validateProject(projectsOf({ downstream: { projects: [{ name: 'a', repo: 'o/r', branch: 'main', versionWithoutLock: '未設定' }] } })[0], 0).fallback, undefined, '「未設定」當沒填');
   assert.deepEqual(keyPaths({ a: { b: [{ c: 1 }] }, d: 1 }), ['a', 'a.b', 'd'], '陣列不往裡看');
+});
+
+test('⑦一筆寫壞只那一筆退 2、其餘照算（壞的排前或排後都一樣）；全部寫壞＝不問平台', () => {
+  const k = kit();
+  try {
+    const bad = project({ name: '壞的', repo: 'not-a-repo', versionWithoutLock: k.V });
+    const good = project({ versionWithoutLock: k.V });
+    for (const [what, list] of [['壞在前', [bad, good]], ['壞在後', [good, bad]]]) {
+      const p = platformFor(k, theirs(k));
+      const r = run({ settings: settingsFor(list), platform: p, root: k.dir });
+      assert.equal(r.code, 2, what);
+      const out = r.lines.join('\n');
+      assert.match(out, /downstream\.projects\[\d\]：算不出來——downstream\.projects\[\d\]\.repo「not-a-repo」要是「帳號\/倉庫名」/u, what);
+      assert.match(out, /下游甲（acme\/app 的 main）：記的套件版本 .{7}，來源＝設定裡人填的/u, `${what}：好的那一筆要照印`);
+      assert.match(out, /落後 3 支（其中動到共用路徑 2 支）/u, what);
+      assert.ok(p.asked.some(([op]) => op === 'repoTree'), `${what}：好的那一筆要真的去問平台`);
+    }
+    const none = { ask() { throw new Error('全部寫壞就不該問平台'); } };
+    const allBad = run({ settings: settingsFor([bad, project({ name: 'x', branch: 'bad branch' })]), platform: none, root: k.dir });
+    assert.equal(allBad.code, 2);
+    assert.equal(allBad.lines.length, 2, allBad.lines.join('\n'));
+  } finally { clean(k); }
+});
+
+test('⑧讀回的檔跟這次檔案清單裡的雜湊對不上＝那一個退 2 叫人重跑；對得上照算', () => {
+  const k = kit();
+  try {
+    const files = theirs(k);
+    const stale = platformFor(k, files);
+    // 檔案清單照舊快照，但 settings.json 的內容已經是下游更新後的：兩個時點拼起來會誤報
+    const inner = stale.ask;
+    stale.ask = (op, args) => (op === 'repoFile' && args.path === 'settings.json' ? { content: JSON.stringify({ x: '改過了', machines: [] }) } : inner(op, args));
+    const r = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: stale, root: k.dir });
+    assert.equal(r.code, 2, r.lines.join('\n'));
+    assert.match(r.lines.join('\n'), /它的 settings\.json 讀到的內容跟這次檔案清單裡的雜湊對不上（清單 [0-9a-f]{7}、內容 [0-9a-f]{7}）：下游分支在兩次讀取之間更新了，重跑一次/u);
+    assert.doesNotMatch(r.lines.join('\n'), /少的欄位/u, '對不上就不印拼出來的設定差異');
+    const lock = { repo: 'acme/kit', version: k.S1, syncedAt: '2026-10-01', entries: [], exceptions: [] };
+    const staleLock = platformFor(k, theirs(k, { lock }));
+    const inner2 = staleLock.ask;
+    staleLock.ask = (op, args) => (op === 'repoFile' && args.path === 'kit-lock.json' ? { content: JSON.stringify({ ...lock, syncedAt: '2026-10-02' }) } : inner2(op, args));
+    const r2 = run({ settings: settingsFor([project()]), platform: staleLock, root: k.dir });
+    assert.equal(r2.code, 2); assert.match(r2.lines.join('\n'), /它的 kit-lock\.json 讀到的內容跟這次檔案清單裡的雜湊對不上/u);
+    const ok = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, files), root: k.dir });
+    assert.equal(ok.code, 0, '對得上的對照組照算');
+  } finally { clean(k); }
 });
 
 test('⑥指令入口：給了參數＝退 2；空白設定的複本裡跑＝退 0、沒有登記', () => {
