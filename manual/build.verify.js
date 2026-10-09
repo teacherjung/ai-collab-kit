@@ -176,7 +176,7 @@ function ownTemplates(text) {
     return { paths: head.split('`').filter((x) => x.startsWith('templates/')), desc, rules };
   });
 }
-const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'D4', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3', 'E1'], 'templates/ruling-record.md': ['I1', 'I3'] };
+const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'D4', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3'], 'templates/collab-fields-github.yml': ['E1'], 'templates/ruling-record.md': ['I1', 'I3'] };
 
 // 套用頁取的 README 兩節（寫死，不拿產生器的 ADOPT_HEADINGS 當答案）
 const ADOPT_HEADS = ['搬進一個專案', '專案裡改到套件的檔'];
@@ -1269,7 +1269,7 @@ const TEMPLATE_NOTES = {
 // 說明書排得了的範本：寫死的樣本（考題沒有自己的判準決定哪一份該排，所以釘住今天的結果；範本或排版規則一改就紅，確認是要的改變再跟著改）
 const TEMPLATE_LAID_OUT = ['templates/review-fixed-dimensions.md', 'templates/verdict-header.md'];
 // 規矩卡上的範本鈕：寫死的樣本（照 MACHINES.md 現在的「範本」那一節）
-const TEMPLATE_LINK_SAMPLES = { F2: ['templates/review-fixed-dimensions.md'], G3: ['templates/pr-body.md', 'templates/scan-record.md'], E1: ['templates/pr-body.md', 'templates/ci-github.yml', 'templates/collab-fields-github.yml'] };
+const TEMPLATE_LINK_SAMPLES = { F2: ['templates/review-fixed-dimensions.md'], G3: ['templates/pr-body.md', 'templates/scan-record.md'], E1: ['templates/pr-body.md', 'templates/collab-fields-github.yml'] };
 
 /**
  * 排好版的範本（跳窗裡 tpl-body 那一塊）跟考題自己讀的原文逐項比：大標題、開頭各塊、每一節（h3）的標題與各塊、
