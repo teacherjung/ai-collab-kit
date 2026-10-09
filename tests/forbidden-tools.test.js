@@ -194,11 +194,14 @@ test('⑫「動作名」不因為前面掛了查詢字就放行：命中**家族
     'view_order_create']) {
     assert.equal(onMoney(t).deny, true, `${t}：唯讀前綴不可以替動作名脫罪`);
   }
-  // ── 以下兩組都是**現況特徵測試（現況／待裁）**，不是安全規格 ───────────────────────
+  // ── 以下兩組都是**現況特徵測試**，不是安全規格 ───────────────────────
   // ⚠️ **它們證明的是「這一版是這樣」，不證明「這樣是安全的」**（#641 r1 #4）。
-  //    將來裁准收緊時，**應該同步改掉這幾行**——不可以拿「考題紅了」當理由拒絕安全修正。
+  //    裁准收緊時**應該同步改掉這幾行**——不可以拿「考題紅了」當理由拒絕安全修正。
   //
-  // 現況 A：對應「**兩張樣式表**」那一段的 `patterns` 那一列。
+  // 現況 A：對應「**兩張樣式表**」那一段的 `patterns` 那一列——測的是**這一欄本身**的行為。
+  //   擁有者 2026-10-08 裁「做：轉帳、提款這一族照樣擋」，做法是預設範本把那一族搬出這一欄（範圍＝「兩張樣式表」的「再削一刀」那一節；
+  //   預設範本那一側由 tests/forbidden-defaults.test.js ⑥ 釘），這一欄的判法沒改，所以這幾行不跟著改；
+  //   本夾具刻意把 withdraw、deposit 留在這一欄，才測得到它。
   //   ⚠️ **本檔夾具的樣式是 `(^|_)(withdraw|deposit)(_|$)`——它要詞界**，不是「出現就算」
   //      （掃描 #1 更正我上一版的寫法：`withdrawal`／`get_withdrawing`／`prewithdraw`
   //       就算清空唯讀前綴也仍然放行）。
@@ -206,9 +209,10 @@ test('⑫「動作名」不因為前面掛了查詢字就放行：命中**家族
   //      （掃描 #1 抓到我又把兩份設定混在一起）：本夾具把 `transfer` 列為**動詞**、
   //      樣式裡也沒有 `transfer` ⇒ 清空 `readPrefixes` 之後 `get_transfer_log` 在這裡**仍然放行**。
   //      正式設定才有那一條，`test/money-kit-hook.test.js` 的矩陣也在那邊要求它放行。
+  //      （預設範本 2026-10-08 起就是拆掉閥的那一種、`get_transfer_log` 擋——見正本「再削一刀」；原專案那邊要求它放行的探針，整批同步時要跟著改。）
   for (const t of ['search_withdraw', 'get_deposit']) {
     assert.equal(onMoney(t).deny, false,
-      `${t}：命中本夾具的額外樣式、沒命中家族網 ⇒ **目前**仍放行（現況，非安全保證；要收＝拆 patterns＝動判準，待裁）`);
+      `${t}：命中本夾具 patterns 那一欄、沒命中家族網 ⇒ 放行（這一欄本身的行為；預設範本 2026-10-08 起把轉帳提款那一族搬出這一欄，見「兩張樣式表」）`);
   }
   assert.equal(onMoney('withdraw').deny, true, '對照：沒有唯讀前綴時，額外樣式照擋');
   assert.equal(onMoney('get_withdrawing', { ...FORBIDDEN, readPrefixes: [] }).deny, false,
@@ -272,9 +276,9 @@ test('⑬兩張樣式表照正本的分工生效（裁示者 2026-09-24 裁庚�
   for (const t of ['get_convert_funds', 'view_swap_crypto', 'list_convert_money', 'search_swap_cash']) {
     assert.equal(onMoney(t).deny, true, `${t}：patternsReadSafe 連唯讀前綴也要擋`);
   }
-  // ②對應「**兩張樣式表**」那一段的 `patterns` 那一列（`get_transfer_log` 不被誤擋的原因）
+  // ②對應「**兩張樣式表**」那一段的 `patterns` 那一列（2026-10-08 之前預設下 `get_transfer_log` 不被誤擋就是因為這一欄；之後那一族搬走了，見正本「再削一刀」）
   for (const t of ['search_withdraw', 'get_deposit']) {
-    assert.equal(onMoney(t).deny, false, `${t}：patterns 那一張仍吃豁免（現況，見上面 ⑫）`);
+    assert.equal(onMoney(t).deny, false, `${t}：patterns 那一張仍吃豁免（這一欄本身的行為，見上面 ⑫；預設範本裡留在這一欄的是哪幾條＝「兩張樣式表」）`);
   }
   // ③**沒有唯讀前綴時，兩張表的聯集一律生效**——這是「不可能變鬆」的那一半：
   //   拆表之前那五條全部無條件生效，拆完之後沒有前綴的路徑跑的是聯集 ⊇ 原本五條。
