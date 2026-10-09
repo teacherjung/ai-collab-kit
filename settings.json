@@ -263,6 +263,10 @@
     "tier": "高"
    },
    {
+    "pattern": "^kit-only/",
+    "tier": "高"
+   },
+   {
     "pattern": "^(settings\\.json|PROJECT-SETTINGS\\.md)$",
     "tier": "高"
    },

@@ -134,6 +134,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | \^cases\/ | 低 |
 | \^\(rules\\\.json\|RULES\\\.md\|GLOSSARY\\\.md\|MACHINES\\\.md\)\$ | 高 |
 | \^\(tools\|tests\|templates\|manual\|docs\)\/ | 高 |
+| \^kit\-only\/ | 高 |
 | \^\(settings\\\.json\|PROJECT\-SETTINGS\\\.md\)\$ | 高 |
 | \^\(\\\.github\/\|package\(\-lock\)\?\\\.json\$\|\\\.node\-version\$\|\\\.gitignore\$\) | 高 |
 
