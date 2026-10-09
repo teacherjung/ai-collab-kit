@@ -19,7 +19,7 @@
 // ⚠️ 巢狀：複本裡的這一題與「誘餌倉庫」那題（也會整份考卷重跑）看到 KIT_NESTED_SUITE=1 就標成跳過，
 //    免得無限巢狀；跳過在報告裡是 skipped，不是靜靜通過。
 // 案例簿：複本**一律不帶** cases/、把那一列登記成未移植（不帶案例簿的專案的樣子）；案例簿考題只讀設定的機器表那一列、不叫外面，
-//   所以巢狀那一輪固定走「不帶」那條路，而且這一題核對它真的走了（四題跳過、原因寫出來）。帶案例簿時的完整檢查由外層那一輪做
+//   所以巢狀那一輪固定走「不帶」那條路，而且這一題核對它真的走了（五題跳過、原因寫出來）。帶案例簿時的完整檢查由外層那一輪做
 //   （套件自己的倉庫）；在不帶案例簿的專案裡，外層同樣是跳過。
 // 共用檔清單：反過來，複本**照使用專案的樣子帶一份**（空白範本那一列是已安裝未啟用，假設定把它翻成已啟用；複本 git init 之後
 //   先跑 kit-lock.js --write 寫清單；--write 要讀套件倉庫，所以在旁邊另建一個只放共用檔的假套件倉庫、提交一次當那一版），
@@ -131,7 +131,7 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     const failing = r.stdout.split('\n').filter((l) => /^✖|^not ok/u.test(l)).slice(0, 12).join('\n');
     assert.equal(r.status, 0, `填了假設定的整份考卷不是全綠：\n${failing}`);
     const skippedCasebook = r.stdout.split(NOT_CARRIED_REASON).length - 1;
-    assert.equal(skippedCasebook, 4, `巢狀那一輪要走「不帶案例簿」那條路：四題跳過、各寫一次原因（實際 ${skippedCasebook} 次）`);
+    assert.equal(skippedCasebook, 5, `巢狀那一輪要走「不帶案例簿」那條路：五題跳過、各寫一次原因（實際 ${skippedCasebook} 次）`);
     const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim() : '';
     assert.equal(calls, '', `有考題照設定去叫了外面（平台、合併、三關、隔離或 gh）：\n${calls.split('\n').slice(0, 8).join('\n')}`);
     for (const d of watched) {

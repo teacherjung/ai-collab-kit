@@ -23,7 +23,7 @@
 | 要改的 | 正本 | 產物 | 產生指令 |
 |---|---|---|---|
 | 規矩 | `rules.json` | `RULES.md` | `node tools/build-rules.js` |
-| 案例簿 | `cases/*.md`、`cases/index.json` | `cases/README.md` | `node tools/build-casebook-index.js` |
+| 案例簿 | `cases/*.md`、`cases/index.json`（摘要另讀 `rules.json`） | `cases/README.md`、`cases/DIGEST.md`（每條規矩為什麼的摘要） | `node tools/build-casebook-index.js` |
 | 套件倉庫自己的設定 | `settings.json` | `PROJECT-SETTINGS.md` | `node tools/build-settings.js` |
 
 - 機器標籤的定義與每條規矩的執行者：[MACHINES.md](MACHINES.md)。
