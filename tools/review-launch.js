@@ -48,6 +48,7 @@ const FILL = [
   ['<路徑>', 'reviewTree'], ['<路徑>', 'mutationCopy'],
   ['<指令；照專案設定「複審者的模型與怎麼起」那一節或專案說明寫的>', 'copyTest'],
   ['<指令>', 'fullDiff'], ['<指令；第 1 輪寫「沒有」>', 'roundDiff'], ['<識別值>', 'implementer'],
+  ['<版本碼>', 'base'],
   ['<來源字串>', 'source'], ['<識別值>', 'reviewer'], ['<來源字串>', 'source'], ['<短碼>', 'headShort'],
   ['<輪次>', 'round'], ['<三選一>', null], ['<貼留言的指令>', 'postComment'],
 ];
