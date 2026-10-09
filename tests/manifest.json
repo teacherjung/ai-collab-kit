@@ -1,5 +1,6 @@
 [
   "acceptance-tier.test.js",
+  "agents-entry.test.js",
   "backlog-touch.test.js",
   "canary-server.test.js",
   "casebook.test.js",

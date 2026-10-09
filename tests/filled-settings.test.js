@@ -43,7 +43,7 @@ const { MACHINE: KIT_LOCK, LOCK_FILE, SHARED_PATHS } = require('../tools/kit-loc
 const ROOT = path.join(__dirname, '..');
 const NESTED = process.env.KIT_NESTED_SUITE === '1';
 /** 工具與考題從根目錄讀的那幾份；複本裡的 settings.json 會換成下面填了假值的那一份，PROJECT-SETTINGS.md 由它重新產生。 */
-const ROOT_FILES = ['settings.json', 'rules.json', 'RULES.md', 'MACHINES.md', 'PROJECT-SETTINGS.md'];
+const ROOT_FILES = ['settings.json', 'rules.json', 'RULES.md', 'MACHINES.md', 'PROJECT-SETTINGS.md', 'AGENTS.md'];   // AGENTS.md：使用專案一定有自己的那一份，指示檔長度題量它
 const ROOT_DIRS = ['tools', 'tests', 'templates'];   // cases/ 刻意不帶（上面「案例簿」那段）
 
 /** 只記錄、退 97 的錄音機（一條 argv）。 */
