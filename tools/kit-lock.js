@@ -330,4 +330,4 @@ if (require.main === module) {
   process.exit(r.code);
 }
 
-module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, FINGERPRINT_SHARED, CODEX_TEMPLATE, LockError, entries, kitEntries, readLock, validateLock, compare, check, write, declaration, parseArgs, main };
+module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, underShared, FINGERPRINT_SHARED, CODEX_TEMPLATE, LockError, entries, kitEntries, readLock, validateLock, compare, check, write, declaration, parseArgs, main };

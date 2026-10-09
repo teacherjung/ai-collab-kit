@@ -86,6 +86,12 @@ function build(data) {
   }
   const backlog = data.backlog || {};
   out.push('', `待辦清單（開工印待辦 tools/backlog-touch.js 讀它；規矩 F6）：${plain(backlog.file === undefined ? '未設定' : backlog.file, '待辦檔')} 的「${plain(backlog.section === undefined ? '未設定' : backlog.section, '待辦那一節的標題')}」那一節`);
+  const downstream = (data.downstream && Array.isArray(data.downstream.projects)) ? data.downstream.projects : [];
+  out.push('', `使用這個套件的專案（下游落後 tools/downstream-lag.js 讀它、開工時手動跑、只列不擋；只有套件倉庫要填，使用專案留空）：${downstream.length ? '' : '（沒有登記）'}`);
+  for (const p of downstream) {
+    const v = p.versionWithoutLock && p.versionWithoutLock !== '未設定' ? `；還沒裝 kit-lock.json 時用的版本 ${plain(p.versionWithoutLock, '下游版本碼')}（出處：${plain(p.versionWithoutLockFrom || '沒寫', '下游版本出處')}）` : '';
+    out.push(`- ${plain(p.name, '下游名稱')}：${plain(p.repo, '下游倉庫')} 的 ${plain(p.branch, '下游分支')}${v}`);
+  }
   out.push('', `主幹分支名（原閘寫死 main，規矩 H2、H3、H4）：${plain(data.mainBranch, '主幹分支名')}`, '');
   out.push('## 四、掃描發射者（規矩 A1、G1、G4）', '');
   out.push(`- 掃描者：${plain(data.scanner.tool, '掃描者')}（沒有掃描者＝照風險級別要掃的那幾支，掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式；表定不掃的照規矩 G1）`);
