@@ -17,6 +17,7 @@ const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 const fs = require('node:fs');
 const path = require('node:path');
+const { leadingText } = require('../tools/markdown-effective.js');
 
 const ROLES = ['Alpha', 'Beta', 'Gamma'];
 
@@ -153,14 +154,19 @@ test('⑤自審藏在藏字元裡：折回來之後要被抓到，不是被放�
   }
 });
 
-test('⑨範本 templates/pr-body.md 的欄名跟閘的必填清單綁在一起：每個必填欄名都以「- **欄名**：」的形狀出現，而且閘自己讀得到', () => {
+test('⑨範本 templates/pr-body.md 的欄名跟閘的必填清單綁在一起：每個必填欄名都以「- **欄名**：」的形狀出現在開頭那一段，而且閘自己讀得到', () => {
   const tpl = fs.readFileSync(path.join(__dirname, '..', 'templates', 'pr-body.md'), 'utf8');
   assert.ok(REQUIRED_FIELDS.length >= 4, '必填清單至少四欄（清單被清空這一題就守不到東西）');
-  for (const f of REQUIRED_FIELDS) {
+  // 形狀只看閘真的會讀的那一段（leadingText：碰到圍欄、引用等特殊行就停）——看整份檔的話，檔尾圍欄裡的範例也能滿足斷言（r2 R1）
+  const missing = (text) => REQUIRED_FIELDS.filter((f) => {
     const esc = f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    assert.match(tpl, new RegExp(`^- \\*\\*${esc}\\*\\*：`, 'mu'), `範本 templates/pr-body.md 缺「- **${f}**：」這一行：欄名改了要範本與閘的 REQUIRED_FIELDS 一起改`);
-    assert.notEqual(fieldValue(tpl, f), '', `閘自己的讀法讀不到範本的「${f}」（角括號裡的提示字也算有值）：範本的寫法跟閘的讀法對不上`);
-  }
+    return !new RegExp(`^- \\*\\*${esc}\\*\\*：`, 'mu').test(leadingText(text)) || fieldValue(text, f) === '';
+  });
+  assert.deepEqual(missing(tpl), [], '範本 templates/pr-body.md 開頭那一段缺「- **欄名**：」這一行、或閘自己讀不到（角括號裡的提示字也算有值）：欄名改了要範本與閘的 REQUIRED_FIELDS 一起改');
+  // 反例：前段的實作者欄掉了粗體、檔尾圍欄裡另有一份粗體的範例——要抓到前段那一筆，不能被範例滿足
+  const bad = tpl.replace('- **實作者**：', '- 實作者：') + '\n```md\n- **實作者**：<識別值>\n```\n';
+  assert.notEqual(bad, tpl + '\n```md\n- **實作者**：<識別值>\n```\n', '反例要真的動到前段那一行');
+  assert.deepEqual(missing(bad), ['實作者'], '前段掉粗體、檔尾圍欄裡有同名粗體範例：要抓到前段那一筆');
 });
 
 test('角色名單來自專案設定，不是寫死的', () => {
