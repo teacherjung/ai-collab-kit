@@ -143,9 +143,11 @@ if (process.env.FAKE_GH_GARBAGE === "1") { process.stdout.write("not json"); pro
 if (process.env.FAKE_GH_TOUCH && url.includes("/pulls?")) { const f = process.env.FAKE_GH_TOUCH; fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("A-專用值", "B-專用值")); }
 if (url.includes("/pulls?")) {
   if (process.env.FAKE_GH_EMPTY === "1") { process.stdout.write("[]"); process.exit(0); }
+  if (process.env.FAKE_GH_COMMENTS_ENDLESS === "1") { process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(dir + "/page2.json", "utf8")).slice(0, 1))); process.exit(0); }
   if (process.env.FAKE_GH_ENDLESS === "1") { process.stdout.write(fs.readFileSync(dir + "/page1.json", "utf8")); process.exit(0); }
   process.stdout.write(fs.readFileSync(dir + (url.includes("page=2") ? "/page2.json" : "/page1.json"), "utf8")); process.exit(0);
 }
+if (process.env.FAKE_GH_COMMENTS_ENDLESS === "1" && url.includes("/comments")) { process.stdout.write(fs.readFileSync(dir + "/comments-2-p1.json", "utf8")); process.exit(0); }
 if (url.includes("/issues/2/comments")) { process.stdout.write(fs.readFileSync(dir + (url.includes("page=2") ? "/comments-2-p2.json" : "/comments-2-p1.json"), "utf8")); process.exit(0); }
 if (url.includes("/issues/1000/comments")) { process.stdout.write(fs.readFileSync(dir + "/comments-1000.json", "utf8")); process.exit(0); }
 if (url.includes("/comments")) { process.stdout.write("[]"); process.exit(0); }
@@ -200,6 +202,15 @@ process.stderr.write("unexpected " + url); process.exit(3);
   assert.equal(cap.status, 2, `每一頁都滿且都在窗內，翻到 ${MAX_PAGES} 頁要退 2：${cap.stdout}${cap.stderr}`);
   assert.match(cap.stderr, /不完整/u);
   assert.equal(fs.readFileSync(capFile, 'utf8'), original, '退 2 時檔案不動');
+  // 留言翻到上限還沒讀完＝退 2、不猜驗收、不寫（r2 R7：這條出口以前沒有考題守）
+  const capFile2 = path.join(dir, 'cap2.md'); fs.writeFileSync(capFile2, original);
+  fs.writeFileSync(record, '[]');
+  const cap2 = cli([...base, '--file', capFile2, '--write'], { FAKE_GH_COMMENTS_ENDLESS: '1' });
+  assert.equal(cap2.status, 2, `留言每一頁都滿、翻到 ${MAX_PAGES} 頁要退 2：${cap2.stdout}${cap2.stderr}`);
+  assert.match(cap2.stderr, /不猜驗收/u);
+  assert.equal(fs.readFileSync(capFile2, 'utf8'), original, '退 2 時檔案不動');
+  const commentCalls = JSON.parse(fs.readFileSync(record, 'utf8')).filter((c) => c.args[c.args.length - 1].includes('/comments'));
+  assert.equal(commentCalls.length, MAX_PAGES, '真的翻到了上限那一頁才放棄');
   // 退 2 的幾種
   const noSection = path.join(dir, 'no-section.md');
   fs.writeFileSync(noSection, doc(['- 10/01']).replace(HEADING, '## 本週'));
