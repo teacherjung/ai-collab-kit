@@ -12,7 +12,8 @@
 //   ⑥指令入口：給了參數＝退 2；在空白設定的複本裡跑＝退 0（沒有登記）；
 //   ⑦一筆登記寫壞只讓那一筆退 2、其餘照算（不論壞的排前排後）；整塊 downstream 壞掉或全部寫壞才一個都不算、也不問平台（#60 r1 R1）；
 //   ⑧讀回的每個檔跟這次檔案清單裡的雜湊對不上（下游分支在兩次讀取之間更新）＝那一個退 2 叫人重跑，不拼兩個時點（#60 r1 R2）；對得上的照算；
-//   ⑨使用者的 git 設定開了 log.showSignature、範圍裡有簽過章的提交時，簽章診斷不算成支數、不混進逐支清單（#60 r3 R1；假 gpgsig 標頭＋假 gpg 程式，先驗裸的 git log 真的會被污染）。
+//   ⑨使用者的 git 設定開了 log.showSignature、範圍裡有簽過章的提交時，簽章診斷不算成支數、不混進逐支清單（#60 r3 R1；假 gpgsig 標頭＋假 gpg 程式，先驗裸的 git log 真的會被污染）；
+//   ⑩使用者的 git 設定把 i18n.logOutputEncoding 設成 ISO-8859-1 時，逐支清單的題名照原字印、不成亂碼（#60 r4 R1；先驗裸的 git log 真的吐出別的編碼）。
 // ⚠️ 守不到的：平台那條指令翻譯得對不對（GitHub 範本那兩條只在 tests/platform.test.js 看展開，沒有對真平台跑）；
 //   使用專案記的版本是不是真的就是它取檔的那一版。
 'use strict';
@@ -267,6 +268,26 @@ test('⑨使用者的 git 設定開了 log.showSignature、範圍裡有簽過章
     assert.match(out, /落後 4 支（其中動到共用路徑 3 支）/u, out);
     assert.match(out, /假簽過章的那一支/u, '簽過章的那一支本身要列');
     assert.doesNotMatch(out, /gpg/u, '簽章診斷不能混進支數或逐支清單');
+  } finally { clean(k); }
+});
+
+test('⑩使用者的 git 設定把 i18n.logOutputEncoding 設成 ISO-8859-1：逐支清單的題名照原字印、不成亂碼', () => {
+  const k = kit();
+  try {
+    // 題名用 ISO-8859-1 寫得出來的非 ASCII 字（é）：中文字那個編碼寫不出來，git 會原樣吐 UTF-8，驗不到東西
+    write(k.dir, { 'tools/a.js': 'a3\n' }); sh(k.dir, 'add', '-A'); sh(k.dir, 'commit', '-q', '-m', 'café shared a');
+    const head = sh(k.dir, 'rev-parse', 'HEAD');
+    sh(k.dir, 'config', 'i18n.logOutputEncoding', 'ISO-8859-1');
+    // 探針：這個設定下裸的 git log 真的把 é 吐成單一位元組（當 UTF-8 讀＝替代字元）
+    const bare = spawnSync('git', ['log', '--format=%s', `${k.V}..main`], { cwd: k.dir, env: gitEnv(), encoding: 'utf8' }).stdout;
+    assert.doesNotMatch(bare, /café/u, '探針：裸的 git log 要被輸出編碼設定改掉，不然這一題守不到東西');
+    assert.match(bare, /caf\uFFFD/u, '探針：é 要變成替代字元');
+    const r = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k), { head }), root: k.dir });
+    assert.equal(r.code, 0, r.lines.join('\n'));
+    const out = r.lines.join('\n');
+    assert.match(out, /落後 4 支（其中動到共用路徑 3 支）/u, out);
+    assert.match(out, /café shared a/u, '題名要照原字印');
+    assert.doesNotMatch(out, /\uFFFD/u, '不能有替代字元');
   } finally { clean(k); }
 });
 
