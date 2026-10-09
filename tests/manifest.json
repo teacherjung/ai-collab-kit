@@ -36,5 +36,6 @@
   "settings.test.js",
   "signposts.test.js",
   "stale-text.test.js",
-  "time-point.test.js"
+  "time-point.test.js",
+  "week-digest.test.js"
 ]
