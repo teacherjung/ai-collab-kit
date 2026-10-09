@@ -16,7 +16,54 @@
   "title": "規矩為什麼存在（摘要）",
   "intro": [
    "本文每一條一行：條號｜最早指著它的那一則案例（日期）——那一則的教訓前半句。完整的經過、代價與來源在案例簿（cases/ 底下各則；不帶案例簿的專案看不到）。",
+   "規矩後來改過意思、最早那一則講的是已退役做法的幾條，改挑支撐現行寫法的那一則（哪幾條、為什麼，記在 cases/index.json 的 digest.pick；挑錯了產生器會紅）。",
    "這一份由案例簿產生（node tools/build-casebook-index.js），不要手改；跟用語對照表同待遇：不算進 K2 的字數，跟規矩一起搬進每個專案，不帶案例簿的專案也帶這一份。"
-  ]
+  ],
+  "pick": {
+   "A4": {
+    "slug": "implementer-runs-merge-command",
+    "why": "最早那一則講舊制「實作者不按自己的合併鍵」；A4 第二輪改成由實作者跑合併指令、按鍵"
+   },
+   "F2": {
+    "slug": "review-scope-by-risk-tier",
+    "why": "最早那一則的教訓是「固定維度每輪全跑」；F2 現在照風險級別與輪次分全審或只核差異"
+   },
+   "F3": {
+    "slug": "review-prompt-overrode-template",
+    "why": "最早那一則講備審查樹的管線，不是送審提示照範本"
+   },
+   "F4": {
+    "slug": "review-verdict-strings",
+    "why": "最早那一則的教訓前半句講的是 F2 的舊制，不是結論標頭"
+   },
+   "F5": {
+    "slug": "source-string-drift-ghost-reviewer",
+    "why": "最早那一則的教訓前半句講的是 F2 的舊制；這一則講來源字串要固定，否則自己的阻擋撤不掉"
+   },
+   "F6": {
+    "slug": "f6-six-kinds",
+    "why": "最早那一則說「只有那三種情況」；F6 現在是六種"
+   },
+   "G4": {
+    "slug": "ready-for-review-by-scan-launcher",
+    "why": "最早那一則講角色命名，不是誰轉正式"
+   },
+   "I3": {
+    "slug": "one-ruling-per-question",
+    "why": "最早那一則講契約句要先跑過，不是留痕"
+   },
+   "J2": {
+    "slug": "no-hash-ids-in-reports",
+    "why": "最早那一則的教訓是 C1 的（一支做到合併才開下一支），不是回報用白話"
+   },
+   "K1": {
+    "slug": "rule-copied-six-places-drifted",
+    "why": "最早那一則的教訓是 H2 的（堆疊由下而上），不是只有一份正本"
+   },
+   "K3": {
+    "slug": "comments-lied-one-in-five",
+    "why": "最早那一則的教訓是 K4 的（全稱句先量），不是註解只寫三種"
+   }
+  }
  }
 }

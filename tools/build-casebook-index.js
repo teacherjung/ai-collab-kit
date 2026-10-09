@@ -20,8 +20,10 @@
 // 另產一份 cases/DIGEST.md（每條規矩為什麼存在的摘要；擁有者 2026-10-07 第 10 題裁「做。（建議）」）：
 // 不帶案例簿的專案（套件私有、案例可能含私人紀錄）讀得到規矩「要這樣做」、讀不到「為什麼」；這一份每條規矩一行，
 // 跟用語對照表同待遇：不算 K2 字數、跟規矩一起搬進每個專案（不帶案例簿的也帶這一份，共用檔清單釘著它）。
-// 每條只列**最早**指著它的那一則（日期、檔名比字碼）——那一則多半就是它訂下來的原因；教訓只取第一個「；」或「。」之前。
-// ⚠️ 代價：一條規矩若後來的案例比最早那一則更貼切，摘要看不到；它也不判斷那一則撐不撐得住那條規矩（字面引用≠事件支撐，同案例簿考題）。
+// 每條預設列**最早**指著它的那一則（日期、檔名比字碼）——那一則多半就是它訂下來的原因；教訓只取第一個「；」或「。」之前。
+// 規矩後來改過意思的（例如 A4 從「實作者不按合併鍵」改成「實作者跑合併指令」），最早那一則講的是已退役的做法，照抄會把舊制當成現行規矩的理由
+// 送進不帶案例簿的專案（#59 r1 R1）：這幾條在 cases/index.json 的 digest.pick 指定改挑哪一則（附為什麼），產生器驗那一則在、而且指著那條規矩，不然丟錯。
+// ⚠️ 代價：挑哪一則貼不貼切、規矩再改意思時 pick 要不要跟著改，都靠人（複審必驗清單第 18 項動到 rules.json 時順手看）；它也不判斷那一則撐不撐得住那條規矩（字面引用≠事件支撐，同案例簿考題）。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -43,7 +45,7 @@ const FIELDS = ['日期', '本文條號', '發生什麼', '代價', '教訓', '�
  * 考題看得到的只有磁碟上的 cases/，分不出自己在套件還是在專案裡，所以訊息兩種情況都要講清楚。
  */
 const MACHINE = '案例簿考題＋索引產生器';
-const NOT_CARRIED_REASON = `settings.json 把「${MACHINE}」登記成未移植（本專案不帶案例簿），cases/ 也確實不在`;
+const NOT_CARRIED_REASON = `settings.json 把「${MACHINE}」登記成未移植（本專案不帶案例簿），cases/ 裡也確實沒有摘要以外的東西`;
 
 /**
  * @param {unknown} machines 設定的機器表
@@ -59,7 +61,7 @@ function declaration(machines, casesPresent) {
       : { run: true, problem: `「${MACHINE}」登記已啟用（帶案例簿），cases/ 卻不在。在套件自己的倉庫＝案例簿被誤刪，還原它；在不帶案例簿的專案（多半是同步時設定被蓋回已啟用）＝把這一列改回未移植，不要把 cases/ 複製進來` };
   }
   if (state === '未移植') {
-    return casesPresent ? { run: true, problem: `「${MACHINE}」登記未移植（不帶案例簿），cases/ 卻在：不帶就刪掉 cases/；要帶就改登記已啟用` }
+    return casesPresent ? { run: true, problem: `「${MACHINE}」登記未移植（不帶案例簿），cases/ 裡卻有摘要以外的東西：不帶就把 cases/ 裡摘要以外的檔刪掉（cases/DIGEST.md 要留著，它在共用檔清單裡、刪了那一題會紅）；要帶就改登記已啟用` }
       : { run: false, problem: null };
   }
   return { run: true, problem: `「${MACHINE}」只能登記已啟用（帶案例簿）或未移植（不帶），現在是「${state}」：這一列是開關，不只是紀錄` };
@@ -157,6 +159,7 @@ const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  */
 function buildDigest({ rules = require('./build-rules.js').read(), rows = caseFiles().map(readCase), notes = JSON.parse(fs.readFileSync(notesFile, 'utf8')) } = {}) {
   const d = notes.digest || {};
+  const pick = d.pick && typeof d.pick === 'object' && !Array.isArray(d.pick) ? d.pick : {};
   const out = [`# ${literal(checkPlain(d.title, '摘要標題'))}`, ''];
   for (const line of d.intro || []) out.push(literal(checkPlain(line, '摘要導言')), '');
   for (const section of rules.sections) {
@@ -164,7 +167,14 @@ function buildDigest({ rules = require('./build-rules.js').read(), rows = caseFi
       const id = `${section.letter}${rule.n}`;
       const hit = rows.filter((r) => r['本文條號'].split('、').includes(id)).sort((a, b) => byCode(a.日期, b.日期) || byCode(a.slug, b.slug));
       if (!hit.length) throw new Error(`本文 ${id} 沒有任何案例指著：摘要產不出那一行`);
-      const first = hit[0];
+      let first = hit[0];
+      if (Object.hasOwn(pick, id)) {
+        const p = pick[id];
+        if (!p || typeof p.slug !== 'string' || typeof p.why !== 'string') throw new Error(`index.json 的 digest.pick.${id} 要是 { slug, why }`);
+        checkPlain(p.why, `digest.pick.${id}.why`);
+        first = hit.find((r) => r.slug === p.slug);
+        if (!first) throw new Error(`index.json 的 digest.pick.${id} 指的「${p.slug}」不在案例簿、或它的本文條號沒有 ${id}：摘要產不出那一行`);
+      }
       const lesson = checkPlain(first.教訓, `${first.slug} 的教訓`).split(/[；。]/u)[0].trim();
       out.push(`- ${id}｜${literal(first.標題)}（${first.日期}）——${literal(checkPlain(lesson, `${first.slug} 的教訓前半句`))}`);
     }

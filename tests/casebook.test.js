@@ -171,7 +171,7 @@ test('案例、索引與摘要都不出現擁有者名字與 AI 產品名（只�
   }
 });
 
-test('⑤摘要的產法（假資料，帶不帶案例簿都跑）：每條取最早一則（日期、檔名比字碼）、教訓切在第一個；或。、照本文順序；有條沒案例指著＝產不出來；只有摘要的 cases/ 不算帶了案例簿', () => {
+test('⑤摘要的產法（假資料，帶不帶案例簿都跑）：每條預設取最早一則（日期、檔名比字碼）、pick 可以改挑且要指到有指著那條的案例、教訓切在第一個；或。、照本文順序；有條沒案例指著＝產不出來；只有摘要的 cases/ 不算帶了案例簿', () => {
   const rules = { sections: [{ letter: 'A', rules: [{ n: 1 }, { n: 2 }] }, { letter: 'B', rules: [{ n: 1 }] }] };
   const notes = { digest: { title: '摘要', intro: ['導言'] } };
   const row = (slug, 日期, 條號, 教訓, 標題 = slug) => ({ slug, 日期, 標題, 本文條號: 條號, 教訓 });
@@ -189,6 +189,12 @@ test('⑤摘要的產法（假資料，帶不帶案例簿都跑）：每條取�
     '',
   ].join('\n'));
   assert.throws(() => buildDigest({ rules, rows: rows.filter((r) => r.slug !== 'only-a2'), notes }), /本文 A2 沒有任何案例指著/u);
+  // pick：規矩改過意思時改挑哪一則；指到的要在、要指著那一條，不然丟錯
+  const picked = buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: { slug: 'b-later', why: '最早那一則講舊制' } } } } });
+  assert.ok(picked.includes('- A1｜b\\-later（2026-09-02）——後來的') && !picked.includes('Z\\-same\\-day（'), picked);
+  assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: { slug: 'only-a2', why: 'x' } } } } }), /digest\.pick\.A1 指的「only-a2」不在案例簿、或它的本文條號沒有 A1/u, '指到沒指著 A1 的案例＝丟錯');
+  assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: { slug: 'nope', why: 'x' } } } } }), /不在案例簿/u);
+  assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: 'b-later' } } } }), /要是 \{ slug, why \}/u, 'pick 要帶為什麼');
   assert.ok(require('../tools/kit-lock.js').SHARED_PATHS.includes('cases/DIGEST.md'), '摘要在共用檔清單的共用路徑裡：同步時跟規矩一起搬，不帶案例簿的專案也拿得到');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'casebook-present-'));
   try {
@@ -221,4 +227,7 @@ test('帶不帶案例簿只看設定的登記，而且登記要跟 cases/ 在不
   }
   // 訊息不可以只叫人還原：在不帶案例簿的專案裡照做＝把私人紀錄複製進公開倉庫（挑錯那一輪實際走出來過）
   assert.match(declaration(row('已啟用'), false).problem, /不要把 cases\/ 複製進來/u, '登記帶、cases/ 不在：訊息要講不帶案例簿的專案該怎麼做');
+  // 不帶案例簿的專案也帶摘要：訊息不可以叫人刪整個 cases/（會把共用檔清單裡的摘要刪掉；#59 r1 R2）
+  assert.match(declaration(row('未移植'), true).problem, /摘要以外的檔刪掉（cases\/DIGEST\.md 要留著/u, '登記不帶、cases/ 有別的東西：只刪摘要以外的、摘要要留');
+  assert.match(NOT_CARRIED_REASON, /沒有摘要以外的東西/u);
 });
