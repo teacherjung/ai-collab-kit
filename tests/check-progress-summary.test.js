@@ -6,6 +6,7 @@
 //   ②八欄：少一欄（八欄逐欄各試一次，清單寫死在本檔、不用工具匯出的那一份；r1 R6）、空一欄、順序錯、同一欄寫兩次、舊的五欄寫法（沒有清單記號）、不是清單的行都列出來；
 //   ③時間欄：缺整理、缺核實、核實沒有月/日 時:分、核實晚於整理；相等不算；整理、核實各讀自己那一段，缺的不借另一段的時間（r8 R1）；
 //   ④證據欄引的附件條號不存在；範圍「45〜47」「1 〜 3」都會展開（r1 R4）；拆不開、倒過來、超出安全整數或上限的條號列成問題、不會卡住（r1 R3）；證據欄一條都沒引也列；
+//     附件另放一份檔（--attachments）：條號從那份檔讀（有「## 附件」那一節就讀那一節、沒有就整份讀），本檔那一節只留指標或沒有都行，同一條兩邊都有＝列；
 //   ⑤已合併：引到的附件沒有 PR＝核不了；離線只查這一點；平台答案不是布林（字串、物件）＝核不了，不當成已合併（r1 R5）；
 //     有答案時沒有一支合併＝列；施工中或等複審、沒寫已合併、引到的全合併了＝可能過期；「套件 #45」這種寫法要 --repos 登記才算，`__proto__` 也登記得進去（r1 R8）；
 //     切段只看空白、不看任何標點（擁有者 2026-10-08 裁）：一段裡第一個「://」不是 http(s) 的 GitHub PR 網址（大小寫不分、ftp 這類也算網址），那一段後面的全部不算
@@ -156,6 +157,20 @@ test('④證據：引的附件條號不存在；範圍展開（含帶空白的�
   assert.deepEqual(expandRefs('附件第 ６８ 條'), [68], '全形數字也認');
   assert.deepEqual(expandRefs('附件第 1 〜 3 條'), [1, 2, 3], 'r1 R4：範圍兩側有空白也是範圍，不是只引兩端');
   assert.deepEqual(parseRefs('附件第 50〜1 條'), { numbers: [], bad: ['50〜1'] }, '倒過來的範圍不展開、列成寫壞的');
+  // 第三件（擁有者 2026-10-07 裁「三件都做」）：附件另放一份檔，本檔那一節只留指標或沒有；條號從附件檔讀；兩邊都有同一條＝列
+  const pointerDoc = doc({ attachments: ['（附件在同一層的 progress-attachments.md，本檔只留指標）'] });
+  const withFile = evaluate(pointerDoc, { now: NOW, prStates: MERGED, attachmentsText: '# 附件\n\n說明：略\n\n## 附件（證據位置）\n\n1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。\n' });
+  assert.equal(withFile.unsure, null); assert.deepEqual(withFile.problems, []);
+  assert.equal(withFile.attachments, 1); assert.equal(withFile.attachmentsFile, 1); assert.equal(withFile.attachmentsInline, 0);
+  assert.deepEqual(evaluate(pointerDoc, { now: NOW, prStates: MERGED, attachmentsText: '1. https://github.com/acme/kit/pull/41\n' }).problems, [], '附件檔沒有那一節的標題就整份讀');
+  const noAttachSection = doc().slice(0, doc().indexOf('## 附件（證據位置）'));
+  assert.match(evaluate(noAttachSection, { now: NOW, prStates: MERGED }).unsure, /附件/u, '沒給附件檔時本檔一定要有那一節');
+  const noSectionWithFile = evaluate(noAttachSection, { now: NOW, prStates: MERGED, attachmentsText: '1. https://github.com/acme/kit/pull/41\n' });
+  assert.equal(noSectionWithFile.unsure, null); assert.deepEqual(noSectionWithFile.problems, [], '給了附件檔，本檔沒有那一節也查得了');
+  const dup = evaluate(doc(), { now: NOW, prStates: MERGED, attachmentsText: '1. https://github.com/acme/kit/pull/41\n2. 第二條\n' });
+  assert.ok(dup.problems.some((p) => p.includes('附件第 1 條') && p.includes('都有')), dup.problems.join('\n'));
+  assert.equal(dup.attachments, 2);
+  assert.ok(!problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 2 條。' } })] }), { attachmentsText: '2. 第二條\n' }).some((p) => p.includes('不存在')), '引到附件檔裡的條號不算不存在');
   assert.deepEqual(parseRefs('附件第 0 條').bad, ['0']);
   assert.deepEqual(parseRefs('附件第 〜 條').bad, ['〜']);
   const middle = problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 1 〜 3 條。' } })], attachments: ['1. https://github.com/acme/kit/pull/41 甲', '3. 丙'] }));
@@ -368,6 +383,14 @@ test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀�
   assert.equal(b.status, 0, '只列不擋'); assert.match(b.stdout, /少了「他要的」/u); assert.match(b.stdout, /只列不擋/u);
   assert.equal(cli('--file', bad, '--now', '10/07', '--pr-states', states, '--strict').status, 1, '--strict 才擋');
   // r8 R2：離線要真的傳進判斷層——有合法 PR 網址的摘要，離線加 --strict 要退 0、問題 0 條（接線改壞會報核不了、退 1）
+  // 附件另放一份檔：--attachments 讀得到＝照查；讀不到＝退 2
+  const pointer = path.join(dir, 'pointer.md'); const att = path.join(dir, 'attachments.md');
+  fs.writeFileSync(pointer, doc({ attachments: ['（附件在 attachments.md）'] }));
+  fs.writeFileSync(att, '## 附件（證據位置）\n\n1. https://github.com/acme/kit/pull/41\n');
+  const withAtt = cli('--file', pointer, '--now', '10/07', '--pr-states', states, '--attachments', att, '--strict');
+  assert.equal(withAtt.status, 0, withAtt.stdout + withAtt.stderr); assert.match(withAtt.stdout, /附件 1 條（本檔 0、附件檔 1）/u);
+  assert.equal(cli('--file', pointer, '--now', '10/07', '--pr-states', states, '--strict').status, 1, '沒帶附件檔，條號就找不到');
+  assert.equal(cli('--file', pointer, '--now', '10/07', '--attachments', path.join(dir, 'nope-att.md')).status, 2, '附件檔讀不到＝退 2');
   const off = cli('--file', good, '--now', '10/07', '--offline', '--strict');
   assert.equal(off.status, 0, `離線加 --strict 要退 0：${off.stdout}${off.stderr}`);
   assert.match(off.stdout, /離線/u); assert.match(off.stdout, /問題 0 條/u);

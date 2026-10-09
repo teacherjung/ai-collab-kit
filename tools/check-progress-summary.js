@@ -13,6 +13,8 @@
 //     檔頭沒規定的節（例如把工作線的標題寫成兩個井號、自己長出一節）列出來；同名的節出現兩次＝查不了，後一節不可以蓋掉前一節；
 //   ②時間欄：整理與核實都要有「月/日 時:分」，核實不可以晚於整理；
 //   ③證據欄引的「附件第 N 條」在附件裡找得到（已結束那一節引的也查）；「45〜47」「1 〜 3」這種範圍會展開；
+//     附件可以另放一份檔（--attachments <附件檔>，擁有者 2026-10-07 裁「三件」的第三件：附件搬出摘要本檔、本文只留指標）：
+//     條號從那份檔讀（有「## 附件」那一節就讀那一節，沒有就整份讀），本檔的附件那一節這時可以只留指標、也可以沒有；同一個條號兩邊都有＝列出來；
 //     「附件第 … 條」裡拆不開、倒過來、不是 1〜MAX_REF 的整數、一個範圍超過 MAX_RANGE 條的，列成問題、不會卡住；
 //   ④到哪一步寫了「已合併」：引到的附件裡要找得到 PR（github.com 的完整網址——主機與路徑都要對，別站網址裡夾著 github.com 不算；
 //     或 --repos 登記過的「套件 #N」這種寫法，別名要整個對上、不可以被較短的別名搶走）；切段只看空白、不看任何標點（擁有者 2026-10-08 裁
@@ -30,7 +32,7 @@
 // ⚠️ 守不到的：內容真不真（「他要的」是不是他要的、核實時間有沒有真的核）；「已驗收」對不對（平台上沒有固定形狀可查）；
 //   跨年的先後（只比月日，未來的日期當成還沒到）；附件以外的網址；github.com 以外的平台；沒帶 https:// 的網址；有沒有人跑它；
 //   平台回的答案是不是真的；網址寫在別的連結的「標題」裡（[x](https://外站 "https://github.com/…")）會被認——只用空白切段的代價。
-// 退出碼：0＝查完了（有沒有問題都是 0；--strict 時有問題＝1）／2＝查不了（檔讀不到、少了要查的節、同名的節重複、參數不對）。
+// 退出碼：0＝查完了（有沒有問題都是 0；--strict 時有問題＝1）／2＝查不了（檔或附件檔讀不到、少了要查的節、同名的節重複、參數不對）。
 'use strict';
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
@@ -350,19 +352,32 @@ function checkWeek(lines, ctx) {
  * repos＝{ 套件: 'owner/repo' }；offline＝不看 prStates。
  * 回 { unsure, problems, entries, attachments, cited }：unsure 非空＝查不了。
  */
-function evaluate(text, { now, prStates = {}, repos = {}, offline = false } = {}) {
+function evaluate(text, { now, prStates = {}, repos = {}, offline = false, attachmentsText = null } = {}) {
   const sections = splitSections(text);
   const actives = findSections(sections, SECTIONS.active);
   const attachmentSections = findSections(sections, SECTIONS.attachments);
   if (actives.length === 0) return { unsure: `找不到「${SECTIONS.active}」那一節` };
-  if (attachmentSections.length === 0) return { unsure: `找不到「${SECTIONS.attachments}」那一節` };
+  // 附件另放一份檔時，本檔的附件那一節可以沒有（只留指標也行）；沒給附件檔就一定要有
+  if (attachmentSections.length === 0 && attachmentsText === null) return { unsure: `找不到「${SECTIONS.attachments}」那一節（附件另放一份檔的話要帶 --attachments）` };
   for (const [name, found] of [[SECTIONS.active, actives], [SECTIONS.attachments, attachmentSections]]) {
     if (found.length > 1) return { unsure: `「${name}」那一節出現 ${found.length} 次，分不出哪一節算數` };
   }
   if (!now || !(now.year >= 2000) || !(now.month >= 1 && now.month <= 12) || !(now.day >= 1 && now.day <= 31)) return { unsure: '今天的日期讀不出來' };
-  const attachments = parseAttachments(attachmentSections[0].lines);
-  const ctx = { now, prStates, repos, offline, attachments };
+  const inline = attachmentSections.length ? parseAttachments(attachmentSections[0].lines) : new Map();
+  const attachments = new Map(inline);
   const problems = [];
+  let fromFile = 0;
+  if (attachmentsText !== null) {
+    // 附件檔：有「## 附件」那一節就讀那一節，沒有就整份讀（檔頭、說明都不是條目，parseAttachments 只認「N. 」開頭的行）
+    const fileSections = findSections(splitSections(attachmentsText), SECTIONS.attachments);
+    const extra = fileSections.length ? parseAttachments(fileSections[0].lines) : parseAttachments(normalize(attachmentsText).split('\n'));
+    fromFile = extra.size;
+    for (const [n, body] of extra) {
+      if (attachments.has(n)) problems.push(`附件第 ${n} 條在摘要本檔與附件檔都有，分不出哪一條算數（本檔那一節應該只留指標）`);
+      attachments.set(n, body);
+    }
+  }
+  const ctx = { now, prStates, repos, offline, attachments };
   // 檔頭沒規定的節：把工作線標題寫成兩個井號，整則就變成一節、從所有檢查裡消失（r2 R1）
   for (const s of sections) {
     if (KNOWN_SECTIONS.some((k) => s.heading.startsWith(k))) continue;
@@ -381,7 +396,7 @@ function evaluate(text, { now, prStates = {}, repos = {}, offline = false } = {}
   }
   for (const s of findSections(sections, SECTIONS.done)) problems.push(...checkDone(s.lines, ctx));
   for (const s of findSections(sections, SECTIONS.week)) problems.push(...checkWeek(s.lines, ctx));
-  return { unsure: null, problems, entries: entries.length, attachments: attachments.size, cited: [...cited] };
+  return { unsure: null, problems, entries: entries.length, attachments: attachments.size, attachmentsInline: inline.size, attachmentsFile: fromFile, cited: [...cited] };
 }
 
 /** 問平台用的環境：清掉 GIT_ 那一族（E4）之外，再清選主機、選倉庫的變數——證據網址是 github.com，查詢不可以被環境變數導去別的主機（r1 R7）。 */
@@ -425,6 +440,7 @@ function parseArgs(argv) {
     const a = argv[i];
     const next = () => { i += 1; if (i >= argv.length) throw new Error(`${a} 後面要接值`); return argv[i]; };
     if (a === '--file') opts.file = next();
+    else if (a === '--attachments') opts.attachmentsFile = next();
     else if (a === '--now') opts.now = next();
     else if (a === '--offline') opts.offline = true;
     else if (a === '--strict') opts.strict = true;
@@ -457,6 +473,10 @@ function run(argv, { fetch = fetchPrStates } = {}) {
   try { opts = parseArgs(argv); } catch (e) { return { code: 2, lines: [`進度摘要檢查：${e.message}`] }; }
   let text;
   try { text = fs.readFileSync(opts.file, 'utf8'); } catch (e) { return { code: 2, lines: [`進度摘要檢查：讀不到 ${opts.file}（${e.code || e.message}）`] }; }
+  let attachmentsText = null;
+  if (opts.attachmentsFile) {
+    try { attachmentsText = fs.readFileSync(opts.attachmentsFile, 'utf8'); } catch (e) { return { code: 2, lines: [`進度摘要檢查：讀不到附件檔 ${opts.attachmentsFile}（${e.code || e.message}）`] }; }
+  }
   const now = opts.now ? parseNow(opts.now) : todayLocal();
   if (!now) return { code: 2, lines: [`進度摘要檢查：--now 要寫成 月/日（收到「${opts.now}」）`] };
   let prStates = {};
@@ -465,12 +485,12 @@ function run(argv, { fetch = fetchPrStates } = {}) {
     if (!prStates || typeof prStates !== 'object' || Array.isArray(prStates)) return { code: 2, lines: ['進度摘要檢查：--pr-states 要是一個物件（owner/repo#n → { merged: true|false }）'] };
   }
   // 先離線跑一次，只為了知道要問平台哪幾支；再帶著答案真的判。
-  const dry = evaluate(text, { now, repos: opts.repos, offline: true });
+  const dry = evaluate(text, { now, repos: opts.repos, offline: true, attachmentsText });
   if (dry.unsure) return { code: 2, lines: [`進度摘要檢查：${dry.unsure}——查不了。`] };
   if (!opts.offline && !opts.prStatesFile && dry.cited.length) prStates = fetch(dry.cited);
-  const result = evaluate(text, { now, prStates, repos: opts.repos, offline: opts.offline });
+  const result = evaluate(text, { now, prStates, repos: opts.repos, offline: opts.offline, attachmentsText });
   if (result.unsure) return { code: 2, lines: [`進度摘要檢查：${result.unsure}——查不了。`] };
-  const lines = [`進度摘要檢查｜${opts.file}：進行中 ${result.entries} 則、附件 ${result.attachments} 條、引到 ${result.cited.length} 支 PR${opts.offline ? '（離線，沒問平台）' : ''}；問題 ${result.problems.length} 條`];
+  const lines = [`進度摘要檢查｜${opts.file}：進行中 ${result.entries} 則、附件 ${result.attachments} 條${opts.attachmentsFile ? `（本檔 ${result.attachmentsInline}、附件檔 ${result.attachmentsFile}）` : ''}、引到 ${result.cited.length} 支 PR${opts.offline ? '（離線，沒問平台）' : ''}；問題 ${result.problems.length} 條`];
   for (const p of result.problems) lines.push(`  ・${p}`);
   lines.push(result.problems.length ? '只列不擋（--strict 才擋）；照檔頭「怎麼寫」逐條改，改完再跑一次。' : '沒有問題。');
   return { code: opts.strict && result.problems.length ? 1 : 0, lines };
