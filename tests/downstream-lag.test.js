@@ -11,7 +11,8 @@
 //     設定的 downstream 寫壞；有好幾個使用專案時，算得出來的照印；沒登記任何使用專案＝退 0；
 //   ⑥指令入口：給了參數＝退 2；在空白設定的複本裡跑＝退 0（沒有登記）；
 //   ⑦一筆登記寫壞只讓那一筆退 2、其餘照算（不論壞的排前排後）；整塊 downstream 壞掉或全部寫壞才一個都不算、也不問平台（#60 r1 R1）；
-//   ⑧讀回的每個檔跟這次檔案清單裡的雜湊對不上（下游分支在兩次讀取之間更新）＝那一個退 2 叫人重跑，不拼兩個時點（#60 r1 R2）；對得上的照算。
+//   ⑧讀回的每個檔跟這次檔案清單裡的雜湊對不上（下游分支在兩次讀取之間更新）＝那一個退 2 叫人重跑，不拼兩個時點（#60 r1 R2）；對得上的照算；
+//   ⑨使用者的 git 設定開了 log.showSignature、範圍裡有簽過章的提交時，簽章診斷不算成支數、不混進逐支清單（#60 r3 R1；假 gpgsig 標頭＋假 gpg 程式，先驗裸的 git log 真的會被污染）。
 // ⚠️ 守不到的：平台那條指令翻譯得對不對（GitHub 範本那兩條只在 tests/platform.test.js 看展開，沒有對真平台跑）；
 //   使用專案記的版本是不是真的就是它取檔的那一版。
 'use strict';
@@ -239,6 +240,33 @@ test('⑧讀回的檔跟這次檔案清單裡的雜湊對不上＝那一個退 2
     assert.equal(r2.code, 2); assert.match(r2.lines.join('\n'), /它的 kit-lock\.json 讀到的內容跟這次檔案清單裡的雜湊對不上/u);
     const ok = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, files), root: k.dir });
     assert.equal(ok.code, 0, '對得上的對照組照算');
+  } finally { clean(k); }
+});
+
+test('⑨使用者的 git 設定開了 log.showSignature、範圍裡有簽過章的提交：簽章診斷不算成支數、不混進逐支清單', () => {
+  const k = kit();
+  try {
+    // 主幹頂端再加一顆帶 gpgsig 標頭的提交（假簽章；動到共用檔 tools/a.js），gpg 換成只會印診斷的假程式
+    write(k.dir, { 'tools/a.js': 'a3\n' }); sh(k.dir, 'add', '-A');
+    const tree = sh(k.dir, 'write-tree');
+    const raw = `tree ${tree}\nparent ${k.H}\nauthor t <t@example.invalid> 1700000000 +0000\ncommitter t <t@example.invalid> 1700000000 +0000\n`
+      + 'gpgsig -----BEGIN PGP SIGNATURE-----\n \n 假簽章\n -----END PGP SIGNATURE-----\n\n假簽過章的那一支\n';
+    const signed = spawnSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin'], { cwd: k.dir, env: gitEnv(), input: raw, encoding: 'utf8' }).stdout.trim();
+    assert.match(signed, /^[0-9a-f]{40}$/u, '假簽章的提交要寫得進去');
+    sh(k.dir, 'update-ref', 'refs/heads/main', signed);
+    const fakeGpg = path.join(k.dir, 'fake-gpg');
+    fs.writeFileSync(fakeGpg, '#!/bin/sh\necho "gpg: Signature made 假的" >&2\necho "gpg: Can\'t check signature: No public key" >&2\nexit 1\n', { mode: 0o755 });
+    sh(k.dir, 'config', 'gpg.program', fakeGpg);
+    sh(k.dir, 'config', 'log.showSignature', 'true');
+    // 探針：這個設定下裸的 git log 真的會把診斷印進標準輸出（探針不對，這一題就量不到東西）
+    const bare = spawnSync('git', ['log', '--format=%h %s', `${k.V}..main`], { cwd: k.dir, env: gitEnv(), encoding: 'utf8' }).stdout;
+    assert.match(bare, /gpg: /u, '探針：裸的 git log 要被簽章診斷污染，不然這一題守不到東西');
+    const r = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k), { head: signed }), root: k.dir });
+    assert.equal(r.code, 0, r.lines.join('\n'));
+    const out = r.lines.join('\n');
+    assert.match(out, /落後 4 支（其中動到共用路徑 3 支）/u, out);
+    assert.match(out, /假簽過章的那一支/u, '簽過章的那一支本身要列');
+    assert.doesNotMatch(out, /gpg/u, '簽章診斷不能混進支數或逐支清單');
   } finally { clean(k); }
 });
 

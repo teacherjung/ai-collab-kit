@@ -18,7 +18,9 @@
 //   ④設定只比欄位名（鍵的路徑，陣列不往裡看）與機器列的名字，不比值；
 //   ⑤落後的支數是套件主幹上的提交數（套件一支PR壓成一顆提交，H5）；有人直接推上主幹的也算一支；
 //   ⑥檔案清單與逐檔內容是分兩次問平台的：下游分支在兩次之間剛更新，讀到的內容會跟清單對不上——每個讀回的檔都拿內容算 blob 雜湊
-//     跟清單裡那一格比，對不上＝退 2 叫人重跑（#60 r1 R2）；清單本身跟同一瞬間的分支頂端對不對，這裡量不到。
+//     跟清單裡那一格比，對不上＝退 2 叫人重跑（#60 r1 R2）；清單本身跟同一瞬間的分支頂端對不對，這裡量不到；
+//   ⑦本機 git 的輸出只信 --format 指定的欄位、log 一律帶 --no-show-signature（開了 log.showSignature 時簽章診斷會混進標準輸出被算成支數，#60 r3 R1）；
+//     別的會改輸出的使用者設定（例如包一層的 git 啟動器）沒逐一量。
 // 退出碼：0＝印出來了（含沒有落後、沒有登記任何使用專案）；2＝有一個以上算不出來（那一筆設定寫壞、平台問不到、版本碼不在套件主幹上、
 // 讀到的檔跟清單雜湊對不上、本機沒有主幹那一顆、參數不對）——算得出來的照印；只有整塊 downstream 的形狀壞掉才一個都不算（#60 r1 R1）。⚠️ 不是閘。
 'use strict';
@@ -142,8 +144,10 @@ function lagOf(p, { root, settings, platform, kitHead, template }) {
   }
   if (git(root, ['cat-file', '-e', `${version}^{commit}`]).status !== 0) throw new LagError(`它記的套件版本 ${version.slice(0, 7)} 本機找不到（先 git fetch；還是找不到＝那不是套件的版本）`);
   if (git(root, ['merge-base', '--is-ancestor', version, kitHead]).status !== 0) throw new LagError(`它記的套件版本 ${version.slice(0, 7)} 不在套件主幹的歷史上：不是從主幹取的檔，落後數算不出來`);
-  const behind = gitOut(root, ['log', '--format=%h %s', `${version}..${kitHead}`]).split('\n').filter(Boolean);
-  const behindShared = gitOut(root, ['log', '--format=%h %s', `${version}..${kitHead}`, '--', ...SHARED_PATHS]).split('\n').filter(Boolean);
+  // --no-show-signature：使用者的 git 設定開了 log.showSignature、範圍裡有簽過章的提交（GitHub 壓成的合併提交都有簽）時，
+  // 簽章診斷會混進標準輸出、每一行都被算成一支（#60 r3 R1）；--format 只印這兩欄，別的 log 顯示設定蓋不過它
+  const behind = gitOut(root, ['log', '--no-show-signature', '--format=%h %s', `${version}..${kitHead}`]).split('\n').filter(Boolean);
+  const behindShared = gitOut(root, ['log', '--no-show-signature', '--format=%h %s', `${version}..${kitHead}`, '--', ...SHARED_PATHS]).split('\n').filter(Boolean);
 
   const kitNow = kitFiles(root, kitHead);
   const kitThen = kitFiles(root, version);
