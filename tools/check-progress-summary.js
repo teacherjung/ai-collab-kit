@@ -14,7 +14,7 @@
 //   ②時間欄：整理與核實都要有「月/日 時:分」，核實不可以晚於整理；
 //   ③證據欄引的「附件第 N 條」在附件裡找得到（已結束那一節引的也查）；「45〜47」「1 〜 3」這種範圍會展開；
 //     附件可以另放一份檔（--attachments <附件檔>，擁有者 2026-10-07 裁「三件」的第三件：附件搬出摘要本檔、本文只留指標）：
-//     條號從那份檔讀（有「## 附件」那一節就讀那一節，沒有就整份讀），本檔的附件那一節這時可以只留指標、也可以沒有；同一個條號兩邊都有＝列出來；
+//     條號從那份檔讀（有「## 附件」那一節就讀那一節，沒有就整份讀；那一節出現兩次＝查不了），本檔的附件那一節這時可以只留指標、也可以沒有；同一個條號兩邊都有＝列出來；
 //     「附件第 … 條」裡拆不開、倒過來、不是 1〜MAX_REF 的整數、一個範圍超過 MAX_RANGE 條的，列成問題、不會卡住；
 //   ④到哪一步寫了「已合併」：引到的附件裡要找得到 PR（github.com 的完整網址——主機與路徑都要對，別站網址裡夾著 github.com 不算；
 //     或 --repos 登記過的「套件 #N」這種寫法，別名要整個對上、不可以被較短的別名搶走）；切段只看空白、不看任何標點（擁有者 2026-10-08 裁
@@ -370,6 +370,8 @@ function evaluate(text, { now, prStates = {}, repos = {}, offline = false, attac
   if (attachmentsText !== null) {
     // 附件檔：有「## 附件」那一節就讀那一節，沒有就整份讀（檔頭、說明都不是條目，parseAttachments 只認「N. 」開頭的行）
     const fileSections = findSections(splitSections(attachmentsText), SECTIONS.attachments);
+    // 附件檔裡那一節出現兩次＝跟本檔一樣查不了，不自己挑第一節（r1 R1）
+    if (fileSections.length > 1) return { unsure: `附件檔裡「${SECTIONS.attachments}」那一節出現 ${fileSections.length} 次，分不出哪一節算數` };
     const extra = fileSections.length ? parseAttachments(fileSections[0].lines) : parseAttachments(normalize(attachmentsText).split('\n'));
     fromFile = extra.size;
     for (const [n, body] of extra) {

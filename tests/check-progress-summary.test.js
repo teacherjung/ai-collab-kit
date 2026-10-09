@@ -171,6 +171,18 @@ test('④證據：引的附件條號不存在；範圍展開（含帶空白的�
   assert.ok(dup.problems.some((p) => p.includes('附件第 1 條') && p.includes('都有')), dup.problems.join('\n'));
   assert.equal(dup.attachments, 2);
   assert.ok(!problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 2 條。' } })] }), { attachmentsText: '2. 第二條\n' }).some((p) => p.includes('不存在')), '引到附件檔裡的條號不算不存在');
+  // r1 R1：附件檔裡那一節出現兩次＝查不了（不自己挑第一節；兩節同一條號指到相反的證據時，挑了就是錯的）
+  const twoSections = '## 附件（證據位置）\n\n1. https://github.com/acme/kit/pull/41\n\n## 附件（舊的）\n\n1. https://github.com/acme/kit/pull/42\n';
+  assert.match(evaluate(pointerDoc, { now: NOW, prStates: MERGED, attachmentsText: twoSections }).unsure, /出現 2 次/u);
+  // r1 R3：有那一節時只讀那一節——節外（例如「## 操作說明」）同號的假證據不可以被採到；沒有標題的檔 CRLF、CR 都要讀得出條號
+  const outside = '## 附件（證據位置）\n\n1. https://github.com/acme/kit/pull/42\n\n## 操作說明\n\n1. https://github.com/acme/kit/pull/41（這是示範，不是證據）\n';
+  const onlySection = evaluate(pointerDoc, { now: NOW, prStates: { 'acme/kit#41': { merged: true }, 'acme/kit#42': { merged: false } }, attachmentsText: outside });
+  assert.deepEqual(onlySection.cited, ['acme/kit#42'], '只採那一節的證據');
+  assert.ok(onlySection.problems.some((p) => p.includes('沒有一支合併了')), onlySection.problems.join('\n'));
+  for (const nl of ['\r\n', '\r']) {
+    const r = evaluate(pointerDoc, { now: NOW, prStates: MERGED, attachmentsText: `1. https://github.com/acme/kit/pull/41${nl}2. 第二條${nl}` });
+    assert.equal(r.attachments, 2, JSON.stringify(nl)); assert.deepEqual(r.problems, [], `換行 ${JSON.stringify(nl)} 的附件檔要讀得出條號：${r.problems.join('\n')}`);
+  }
   assert.deepEqual(parseRefs('附件第 0 條').bad, ['0']);
   assert.deepEqual(parseRefs('附件第 〜 條').bad, ['〜']);
   const middle = problemsOf(doc({ entries: [entry({ fields: { 證據: '附件第 1 〜 3 條。' } })], attachments: ['1. https://github.com/acme/kit/pull/41 甲', '3. 丙'] }));
@@ -391,6 +403,9 @@ test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀�
   assert.equal(withAtt.status, 0, withAtt.stdout + withAtt.stderr); assert.match(withAtt.stdout, /附件 1 條（本檔 0、附件檔 1）/u);
   assert.equal(cli('--file', pointer, '--now', '10/07', '--pr-states', states, '--strict').status, 1, '沒帶附件檔，條號就找不到');
   assert.equal(cli('--file', pointer, '--now', '10/07', '--attachments', path.join(dir, 'nope-att.md')).status, 2, '附件檔讀不到＝退 2');
+  const twoAtt = path.join(dir, 'two-att.md');
+  fs.writeFileSync(twoAtt, '## 附件（證據位置）\n\n1. https://github.com/acme/kit/pull/41\n\n## 附件（舊的）\n\n1. https://github.com/acme/kit/pull/42\n');
+  assert.equal(cli('--file', pointer, '--now', '10/07', '--pr-states', states, '--attachments', twoAtt).status, 2, 'r1 R1：附件檔那一節出現兩次＝退 2');
   const off = cli('--file', good, '--now', '10/07', '--offline', '--strict');
   assert.equal(off.status, 0, `離線加 --strict 要退 0：${off.stdout}${off.stderr}`);
   assert.match(off.stdout, /離線/u); assert.match(off.stdout, /問題 0 條/u);
@@ -422,6 +437,12 @@ test('⑦指令入口：有問題退 0、--strict 退 1、沒問題退 0；讀�
   const recorded = JSON.parse(fs.readFileSync(record, 'utf8'));
   assert.deepEqual(recorded.args, ['api', '--hostname', 'github.com', 'repos/acme/kit/pulls/41']);
   assert.equal(recorded.env.GH_HOST, undefined); assert.equal(recorded.env.GH_REPO, undefined); assert.equal(recorded.env.GIT_DIR, undefined);
+  // r1 R2：附件檔裡的 PR 要真的被拿去問平台、答案要被用上（不帶 --pr-states、不離線）
+  fs.rmSync(record, { force: true });
+  const attViaGh = spawnSync(process.execPath, [TOOL, '--file', pointer, '--now', '10/07', '--attachments', att, '--strict'], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+  assert.equal(attViaGh.status, 1, attViaGh.stdout + attViaGh.stderr);
+  assert.match(attViaGh.stdout, /沒有一支合併了/u, '附件檔裡的 PR 要問平台、而且用它的答案（假 gh 回沒合併）');
+  assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')).args, ['api', '--hostname', 'github.com', 'repos/acme/kit/pulls/41'], '問的要是附件檔裡那一支');
   assert.equal(cli('--file', path.join(dir, 'nope.md'), '--now', '10/07').status, 2);
   const noSection = path.join(dir, 'no-section.md');
   fs.writeFileSync(noSection, doc().replace('## 附件（證據位置）', '## 證據'));
