@@ -129,12 +129,15 @@ function readCase(file) {
   return parseCase(fs.readFileSync(path.join(casesDir, file), 'utf8'), file);
 }
 
+/** 比字碼（不跟著機器的語系走：同一份輸入在每台機器都排成一樣；索引與摘要都用這一個）。 */
+const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
 /** 由案例檔與 index.json 產生索引的完整內容（換行一律用 \n）。 */
 function build() {
   const notes = JSON.parse(fs.readFileSync(notesFile, 'utf8'));
   const rows = caseFiles()
     .map(readCase)
-    .sort((a, b) => (a.日期 === b.日期 ? a.slug.localeCompare(b.slug) : a.日期.localeCompare(b.日期)));
+    .sort((a, b) => byCode(a.日期, b.日期) || byCode(a.slug, b.slug));
   const out = [`# ${literal(checkPlain(notes.title, '索引標題'))}`, ''];
   for (const line of notes.intro) out.push(literal(checkPlain(line, '索引導言')));
   out.push('', `共 ${rows.length} 則。`, '', '| 日期 | 案例 | 本文條號 |', '|---|---|---|');
@@ -149,9 +152,6 @@ function build() {
   }
   return out.join('\n');
 }
-
-/** 比字碼（不跟著機器的語系走：同一份輸入在每台機器都排成一樣）。 */
-const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * 由案例檔、index.json 與規矩資料檔產生摘要的完整內容：本文每一條一行，照本文的順序。
