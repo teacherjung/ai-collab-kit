@@ -159,7 +159,19 @@ const byCode = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
  */
 function buildDigest({ rules = require('./build-rules.js').read(), rows = caseFiles().map(readCase), notes = JSON.parse(fs.readFileSync(notesFile, 'utf8')) } = {}) {
   const d = notes.digest || {};
-  const pick = d.pick && typeof d.pick === 'object' && !Array.isArray(d.pick) ? d.pick : {};
+  // pick 整份先驗（#59 r2 R1）：寫壞的設定不可以默默當成「沒指定」而退回最早那一則——那正是 r1 要修掉的舊制摘要，逐字比對還會接受它
+  const ids = rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
+  let pick = {};
+  if (d.pick !== undefined) {
+    if (!d.pick || typeof d.pick !== 'object' || Array.isArray(d.pick)) throw new Error('index.json 的 digest.pick 要是物件（條號 → { slug, why }）');
+    for (const [id, p] of Object.entries(d.pick)) {
+      if (!ids.includes(id)) throw new Error(`index.json 的 digest.pick 有「${id}」：本文沒有這一條（打錯條號會讓那一條默默退回最早那一則）`);
+      if (!p || typeof p !== 'object' || Array.isArray(p) || typeof p.slug !== 'string' || typeof p.why !== 'string') throw new Error(`index.json 的 digest.pick.${id} 要是 { slug, why }`);
+      checkPlain(p.slug, `digest.pick.${id}.slug`);
+      checkPlain(p.why, `digest.pick.${id}.why`);
+    }
+    pick = d.pick;
+  }
   const out = [`# ${literal(checkPlain(d.title, '摘要標題'))}`, ''];
   for (const line of d.intro || []) out.push(literal(checkPlain(line, '摘要導言')), '');
   for (const section of rules.sections) {
@@ -170,8 +182,6 @@ function buildDigest({ rules = require('./build-rules.js').read(), rows = caseFi
       let first = hit[0];
       if (Object.hasOwn(pick, id)) {
         const p = pick[id];
-        if (!p || typeof p.slug !== 'string' || typeof p.why !== 'string') throw new Error(`index.json 的 digest.pick.${id} 要是 { slug, why }`);
-        checkPlain(p.why, `digest.pick.${id}.why`);
         first = hit.find((r) => r.slug === p.slug);
         if (!first) throw new Error(`index.json 的 digest.pick.${id} 指的「${p.slug}」不在案例簿、或它的本文條號沒有 ${id}：摘要產不出那一行`);
       }

@@ -24,7 +24,7 @@
 //
 //   ⑤**cases/DIGEST.md（每條規矩為什麼的摘要）必須與重新產生的結果逐字元相同**；產法本身（每條取最早一則、比字碼、
 //     教訓切在第一個「；」或「。」、有條規矩沒案例指著＝產不出來）用假資料另考，帶不帶案例簿都跑；
-//     「cases/ 在不在」不把那一份算進去（不帶案例簿的專案也帶它）。
+//     「cases/ 在不在」不把那一份算進去（不帶案例簿的專案也帶它）；pick 整份先驗：不是物件、鍵不是本文條號、形狀不對、指到不在或沒指著那條的案例＝產不出來。
 //
 //   ④**帶不帶案例簿只看設定的登記**（裁示 2a：公開的專案可以不帶）：機器表「案例簿考題＋索引產生器」那一列已啟用＝帶、未移植＝不帶。
 //     登記跟 cases/ 在不在對不上一律紅（而且照跑上面四題）；唯一跳過的情況是「登記不帶，而且 cases/ 確實不在」，跳過會寫出原因。
@@ -195,6 +195,9 @@ test('⑤摘要的產法（假資料，帶不帶案例簿都跑）：每條預�
   assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: { slug: 'only-a2', why: 'x' } } } } }), /digest\.pick\.A1 指的「only-a2」不在案例簿、或它的本文條號沒有 A1/u, '指到沒指著 A1 的案例＝丟錯');
   assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: { slug: 'nope', why: 'x' } } } } }), /不在案例簿/u);
   assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A1: 'b-later' } } } }), /要是 \{ slug, why \}/u, 'pick 要帶為什麼');
+  // 整份 pick 先驗（#59 r2 R1）：鍵打錯條號、整份寫成陣列，都不可以默默當成沒指定而退回最早那一則
+  assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: { A9: { slug: 'b-later', why: 'x' } } } } }), /digest\.pick 有「A9」：本文沒有這一條/u, '鍵不是本文條號＝丟錯');
+  assert.throws(() => buildDigest({ rules, rows, notes: { digest: { ...notes.digest, pick: [{ id: 'A1', slug: 'b-later', why: 'x' }] } } }), /digest\.pick 要是物件/u, '寫成陣列＝丟錯，不當成 {}');
   assert.ok(require('../tools/kit-lock.js').SHARED_PATHS.includes('cases/DIGEST.md'), '摘要在共用檔清單的共用路徑裡：同步時跟規矩一起搬，不帶案例簿的專案也拿得到');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'casebook-present-'));
   try {
