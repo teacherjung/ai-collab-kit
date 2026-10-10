@@ -515,16 +515,17 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     'case ",$TIDY_FAKE_EXIT," in *",$sub,"*|*",$sub:$arg,"*) exit 3;; esac',
     'case ",$TIDY_FAKE_KILL," in *",$sub,"*|*",$sub:$arg,"*) kill -TERM $$;; esac',
     'case ",$TIDY_FAKE_EMPTY," in *",$sub,"*|*",$sub:$arg,"*) exit 0;; esac',
+    'case ",$TIDY_FAKE_CTRL," in *",$sub,"*|*",$sub:$arg,"*) printf "bad\\001name\\n"; exit 0;; esac',
     `"${realGit}" "$@"; code=$?`,
     'case ",$TIDY_FAKE_WARN," in *",$sub,"*|*",$sub:$arg,"*) echo "warning: fake warning for $sub" >&2;; esac',
     'case ",$TIDY_FAKE_SHAPE," in *",$sub,"*) printf "garbage-row\\n";; esac',
     'exit $code', ''].join('\n'));
   fs.chmodSync(path.join(bin, 'git'), 0o755);
-  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT', 'TIDY_FAKE_KILL', 'TIDY_FAKE_EMPTY'];
+  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT', 'TIDY_FAKE_KILL', 'TIDY_FAKE_EMPTY', 'TIDY_FAKE_CTRL'];
   const saved = { PATH: process.env.PATH, ...Object.fromEntries(VARS.map((v) => [v, process.env[v]])) };
-  const withFake = (warn, shape, exit = '', kill = '', empty = '') => {
+  const withFake = (warn, shape, exit = '', kill = '', empty = '', ctrl = '') => {
     process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
-    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit], ['TIDY_FAKE_KILL', kill], ['TIDY_FAKE_EMPTY', empty]]) { if (val) process.env[v] = val; else delete process.env[v]; }
+    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit], ['TIDY_FAKE_KILL', kill], ['TIDY_FAKE_EMPTY', empty], ['TIDY_FAKE_CTRL', ctrl]]) { if (val) process.env[v] = val; else delete process.env[v]; }
     try { return run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty, '--list'] }); } finally {
       process.env.PATH = saved.PATH;
       for (const v of VARS) { if (saved[v] === undefined) delete process.env[v]; else process.env[v] = saved[v]; }
@@ -558,6 +559,10 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     const cur = withFake('', 'branch');
     assert.equal(cur.code, 2, `目前分支的輸出形狀認不得要退 2：${cur.lines.join('\n')}`);
     assert.match(cur.lines[0], /branch --show-current 的輸出形狀認不得/u);
+    // 分支名裡有控制字元也算形狀認不得（檢查用字碼判、不寫進正規式：使用專案的 ESLint 不准正規式裡有控制字元）
+    const ctrlName = withFake('', '', '', '', '', 'branch');
+    assert.equal(ctrlName.code, 2, `分支名有控制字元要退 2：${ctrlName.lines.join('\n')}`);
+    assert.match(ctrlName.lines[0], /branch --show-current 的輸出形狀認不得/u);
     // 找主幹時遠端那一次安靜退錯誤碼、或被殺掉（#73 r5 R2）：退 2，不能默默換成本機主幹
     for (const [exit, kill] of [['rev-parse:--verify', ''], ['', 'rev-parse:--verify']]) {
       const res = withFake('', '', exit, kill);
