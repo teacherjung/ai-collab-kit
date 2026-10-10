@@ -18,7 +18,12 @@
 //   ⑥b查祖先出錯＝退 2；同名標籤不影響分支名與排除（②）；
 //   ⑥c上一層資料夾進不去（0o000、0o444）：有沒提交內容的工作樹兩類都不列、記進判斷不了、第一行與 --list 都印出來；
 //   ⑥d（#73 r3 之後按 F10 換的做法，直接量性質）：工具每一次讀檔案系統的呼叫逐一換成 EACCES，三類清單都不能多出東西，
-//     變短時判斷不了那一欄一定有東西（射程：經過工具那一層讀檔案系統的呼叫；git 子行程另由退出碼判）；
+//     變短時判斷不了那一欄一定有東西（射程：經過工具那一層讀檔案系統的呼叫）；
+//   ⑥e真 git 讀不了沒追蹤的子資料夾（0o000、0o111：退 0、輸出空、只在 stderr 警告）：本倉庫的工作樹、別的倉庫在暫存區的樹都不列、
+//     進判斷不了附警告第一行、唯一內容還在；
+//   ⑥f（Fable 代裁 D1：git 出聲就判斷不了）包著真 git 的假 git：全域那幾次（工作樹登記、分支清單、目前分支、stash、rev-parse）
+//     印警告＝退 2（rev-parse 三處各自單獨試）；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
+//     （不安靜丟掉）、其餘照算；
 //   ⑥輸出：預設只印各類幾個（有東西才提示加 --list）、--list 才印整份；
 //   ⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑧空白設定的複本裡跑指令入口＝退 2。
 // ⚠️ 守不到的：壓成一顆的合併只能從「上游已不在」推、推錯也列；工作樹有沒有人開著編輯器；暫存資料夾裡更深的檔改了、
@@ -337,7 +342,7 @@ test('⑤⑥stash 列出日期與說明；預設只印幾個，--list 才印整�
   try {
     const clean = run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
     assert.equal(clean.code, 0);
-    assert.match(clean.lines[0], /^整理清單｜主幹 origin\/main｜只列不刪：已合併或上游已刪的分支 0、沒人用的工作樹 0、暫存資料夾的舊審查樹 0（超過 1 天沒改）、stash 0$/u);
+    assert.match(clean.lines[0], /^整理清單｜主幹 origin\/main｜只列不刪：已合併或上游已刪的分支 0、沒人用的工作樹 0、暫存資料夾的舊審查樹 0（超過 1 天沒改）、stash 0｜列出來的是候選，刪之前擁有者再看一眼$/u);
     assert.ok(!clean.lines.some((l) => l.includes('--list')), '什麼都沒有就不提示加 --list');
     fs.writeFileSync(path.join(r.dir, 'a.txt'), 'stashed\n');
     r.g('stash', 'push', '-q', '-m', '暫放 先收起來');
@@ -388,7 +393,7 @@ test('⑥c上一層資料夾進不去：有沒提交內容的工作樹不當成�
       assert.deepEqual(res.worktrees, [], `上一層 ${mode.toString(8)}：工作樹那一類不該列`);
       assert.deepEqual(res.tmp, [], `上一層 ${mode.toString(8)}：暫存那一類不該列`);
       assert.ok(res.unsure.length > 0, `上一層 ${mode.toString(8)}：要記進判斷不了`);
-      assert.match(res.lines[0], /；判斷不了、沒列 \d+$/u, '第一行要說有幾個判斷不了');
+      assert.match(res.lines[0], /；判斷不了、沒列 \d+｜列出來的是候選，刪之前擁有者再看一眼$/u, '第一行要說有幾個判斷不了');
       assert.ok(res.lines.some((l) => l.startsWith('  ・判斷不了、沒列 ')), '--list 要印出是哪些');
     }
     assert.equal(fs.readFileSync(path.join(parent, 'tree', 'a.txt'), 'utf8'), 'UNIQUE_UNCOMMITTED_R3\n', '沒提交的內容逐字還在');
@@ -451,6 +456,114 @@ test('⑥d讀不到只會讓清單變短（F10 換的做法）：工具每一次
   } finally {
     other.cleanup(); r.cleanup();
   }
+});
+
+test('⑥e真 git 讀不了沒追蹤的子資料夾（退 0、輸出空、只在 stderr 警告）：本倉庫的工作樹與別的倉庫在暫存區的樹都不列、記進判斷不了附警告、內容還在（#73 r4 R1）', () => {
+  const r = repo();
+  const other = repo();
+  const tmpA = path.join(r.base, 'tmpA');
+  fs.mkdirSync(tmpA);
+  const locked = [];
+  try {
+    const old = (NOW - 3 * DAY) / 1000;
+    const own = path.join(r.base, 'wt-own');
+    r.g('worktree', 'add', '-q', '--detach', own, 'HEAD');
+    fs.mkdirSync(path.join(tmpA, 'review-external'));
+    const ext = path.join(tmpA, 'review-external', 'tree');
+    other.g('worktree', 'add', '-q', '--detach', ext, 'HEAD');
+    for (const d of [own, ext]) { fs.mkdirSync(path.join(d, 'untracked')); fs.writeFileSync(path.join(d, 'untracked', 'only.txt'), 'UNIQUE_UNTRACKED_R4\n'); }
+    for (const mode of [0o000, 0o111]) {
+      for (const d of [own, ext]) { fs.chmodSync(path.join(d, 'untracked'), mode); locked.push(path.join(d, 'untracked')); }
+      fs.utimesSync(path.join(tmpA, 'review-external'), old, old);
+      // 先確認真 git 就是這個樣子（不然這一題證明不了什麼）
+      const probe = spawnSync('git', ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal'], { cwd: own, env: gitEnv(), encoding: 'utf8' });
+      assert.equal(probe.status, 0, `git 在 ${mode.toString(8)} 下應該照樣退 0：${probe.stderr}`);
+      assert.equal(probe.stdout, '', '輸出是空的');
+      assert.match(probe.stderr, /could not open directory|Permission denied/u, '只在 stderr 警告');
+      const res = run({ settings: SETTINGS, cwd: r.dir, now: NOW, argv: ['--tmp', tmpA, '--list'] });
+      for (const p of locked) fs.chmodSync(p, 0o755);
+      assert.equal(res.code, 0, res.lines.join('\n'));
+      assert.ok(!res.worktrees.some((w) => w.dir === own), `${mode.toString(8)}：本倉庫那一棵不該列成乾淨`);
+      assert.ok(!res.tmp.some((x) => x.dir.endsWith('review-external')), `${mode.toString(8)}：別的倉庫那一棵所在的資料夾不該列`);
+      const why = res.unsure.map((u) => `${u.dir}：${u.why}`).join('\n');
+      assert.ok(res.unsure.some((u) => u.dir === own && /印了警告「.*(could not open directory|Permission denied)/u.test(u.why)), `本倉庫那一棵要進判斷不了、附警告第一行：\n${why}`);
+      assert.ok(res.unsure.some((u) => u.dir.endsWith('review-external') && /印了警告/u.test(u.why)), `別的倉庫那一棵要進判斷不了：\n${why}`);
+    }
+    for (const d of [own, ext]) assert.equal(fs.readFileSync(path.join(d, 'untracked', 'only.txt'), 'utf8'), 'UNIQUE_UNTRACKED_R4\n', '唯一內容還在');
+  } finally {
+    for (const p of locked) { try { fs.chmodSync(p, 0o755); } catch { /* 已收 */ } }
+    other.cleanup(); r.cleanup();
+  }
+});
+
+test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印警告＝退 2 什麼都不列；逐棵、逐支那幾次印警告或形狀認不得＝那一樣進判斷不了', () => {
+  const r = repo();
+  const empty = path.join(r.base, 'empty-tmp');
+  fs.mkdirSync(empty);
+  const bin = path.join(r.base, 'fake-bin');
+  fs.mkdirSync(bin);
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  assert.ok(realGit, '找不到真的 git');
+  // 包著真 git 的假 git：照環境變數在指定的子指令後面加一行警告、或在輸出後面塞一行認不得的東西
+  fs.writeFileSync(path.join(bin, 'git'), [
+    '#!/bin/sh',
+    'sub="$1"; arg="$2"; [ "$1" = "--no-optional-locks" ] && sub="$2" && arg="$3"',
+    'case ",$TIDY_FAKE_EXIT," in *",$sub,"*) exit 3;; esac',
+    `"${realGit}" "$@"; code=$?`,
+    'case ",$TIDY_FAKE_WARN," in *",$sub,"*|*",$sub:$arg,"*) echo "warning: fake warning for $sub" >&2;; esac',
+    'case ",$TIDY_FAKE_SHAPE," in *",$sub,"*) printf "garbage-row\\n";; esac',
+    'exit $code', ''].join('\n'));
+  fs.chmodSync(path.join(bin, 'git'), 0o755);
+  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT'];
+  const saved = { PATH: process.env.PATH, ...Object.fromEntries(VARS.map((v) => [v, process.env[v]])) };
+  const withFake = (warn, shape, exit = '') => {
+    process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
+    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit]]) { if (val) process.env[v] = val; else delete process.env[v]; }
+    try { return run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty, '--list'] }); } finally {
+      process.env.PATH = saved.PATH;
+      for (const v of VARS) { if (saved[v] === undefined) delete process.env[v]; else process.env[v] = saved[v]; }
+    }
+  };
+  try {
+    const first = r.g('rev-parse', 'HEAD~1');
+    r.g('branch', 'merged', first);
+    r.g('worktree', 'add', '-q', '--detach', path.join(r.base, 'wt-old'), first);
+    const base = withFake('', '');
+    assert.equal(base.code, 0, base.lines.join('\n'));
+    assert.deepEqual(names(base.branches), ['merged'], '假 git 不加料時跟真的一樣');
+    assert.equal(base.worktrees.length, 1);
+    // 全域那幾次逐一單獨加警告（rev-parse 有三處、各自分開試：在不在倉庫裡、找主幹、倉庫位置）
+    for (const sub of ['worktree', 'for-each-ref', 'branch', 'stash', 'rev-parse:--is-inside-work-tree', 'rev-parse:--verify', 'rev-parse:--git-common-dir']) {
+      const res = withFake(sub, '');
+      assert.equal(res.code, 2, `${sub} 印了警告要退 2：${res.lines.join('\n')}`);
+      assert.match(res.lines[0], /印了警告「warning: fake warning/u, sub);
+    }
+    const st = withFake('status', '');
+    assert.equal(st.code, 0, st.lines.join('\n'));
+    assert.deepEqual(st.worktrees, [], 'status 印了警告：那一棵不列');
+    assert.ok(st.unsure.some((u) => u.dir === path.join(r.base, 'wt-old') && /fake warning for status/u.test(u.why)), JSON.stringify(st.unsure));
+    // status 安靜地退非 0（stderr 空的）：退出碼本身就要算讀不了，不靠 stderr 接
+    const quiet = withFake('', '', 'status');
+    assert.equal(quiet.code, 0, quiet.lines.join('\n'));
+    assert.deepEqual(quiet.worktrees, [], 'status 退非 0：那一棵不列');
+    assert.ok(quiet.unsure.some((u) => u.dir === path.join(r.base, 'wt-old') && /git status 退 3/u.test(u.why)), JSON.stringify(quiet.unsure));
+    const mb = withFake('merge-base', '');
+    assert.equal(mb.code, 0, mb.lines.join('\n'));
+    assert.deepEqual(mb.branches, [], 'merge-base 印了警告：那一支不列');
+    assert.deepEqual(mb.worktrees, [], 'merge-base 印了警告：那一棵不列');
+    assert.ok(mb.unsure.some((u) => u.dir === '分支 merged' && /fake warning for merge-base/u.test(u.why)), JSON.stringify(mb.unsure));
+    const shape = withFake('', 'for-each-ref');
+    assert.equal(shape.code, 0, shape.lines.join('\n'));
+    assert.deepEqual(names(shape.branches), ['merged'], '認得的那幾行照算');
+    assert.ok(shape.unsure.some((u) => /分支清單的一行「garbage-row」/u.test(u.dir) && u.why === '形狀認不得'), JSON.stringify(shape.unsure));
+    const stashShape = withFake('', 'stash');
+    assert.equal(stashShape.code, 0, stashShape.lines.join('\n'));
+    assert.ok(stashShape.unsure.some((u) => /stash 清單的一行「garbage-row/u.test(u.dir) && u.why === '形狀認不得'), JSON.stringify(stashShape.unsure));
+    const wtShape = withFake('', 'worktree');
+    assert.equal(wtShape.code, 0, wtShape.lines.join('\n'));
+    assert.ok(wtShape.unsure.some((u) => /工作樹登記的一筆「garbage-row/u.test(u.dir) && u.why === '工作樹登記那一筆形狀認不得'), `認不得的那一筆不能被安靜丟掉：${JSON.stringify(wtShape.unsure)}`);
+    assert.equal(wtShape.worktrees.length, 1, '認得的那幾筆照算');
+  } finally { r.cleanup(); }
 });
 
 test('⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）', () => {

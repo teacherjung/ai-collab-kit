@@ -24,7 +24,12 @@
 //   ④stash：每一筆都列、附建立的日期；stash 整個倉庫共用，誰的都在這裡。
 // 主幹：--main 給的（先找 origin/<名字>、再找本機同名分支），沒給就用專案設定的主幹分支名（origin/<主幹>，再找本機）。
 // 輸出：預設只印各類幾個；--list 才印整份清單。
-// ⚠️ 守不到的：分支「真的合併過」只看得到快轉或一般合併、看不到壓成一顆的合併（那種只能用「上游已不在」推，推錯的會列成可以收）；
+// ⚠️ 守不到的（Fable 代裁 D1 定的範圍：判斷只認工具自己看得到的訊號——讀檔案系統的三種結果、git 的退出碼、stderr 有沒有字、輸出形狀認不認得；
+//   之後找到屬於下面前三句的情形，算「守不到、已寫明」，不再改做法；找到「出聲了卻沒落到判斷不了」才算錯、照修）：
+//   ・git 不出聲的讀不完整（退 0、stderr 空的、輸出形狀也對，實際卻沒讀全）看不到；
+//   ・讀得到、內容卻不可信的檔案系統（網路磁碟、掛載的磁碟回了舊的或錯的內容）看不到；
+//   ・列出來之後到真的刪之間，東西又變了（又有人開始用那棵樹、又寫進了檔）看不到——所以第一行寫「列出來的是候選，刪之前擁有者再看一眼」；
+//   分支「真的合併過」只看得到快轉或一般合併、看不到壓成一顆的合併（那種只能用「上游已不在」推，推錯的會列成可以收）；
 //   工作樹「有沒有人在用」只看有沒有未提交的改動，開著的編輯器、正在跑的工具看不到；暫存資料夾只看名字與第一層的修改時間
 //   （裡面更深的檔改了，第一層的時間不一定跟著變），不看內容，名字不像審查樹的舊資料夾（例如考題留下的）不列；裡面的樹只往下找兩層、
 //   捷徑不跟，更深的樹或沒有 .git 的複本有沒有人在用看不到；
@@ -50,6 +55,8 @@ const USAGE = '用法：node tools/tidy-list.js [--main <主幹>] [--days <天�
 
 class TidyError extends Error {}
 
+const firstLine = (s) => String(s || '').trim().split('\n')[0].slice(0, 160);
+
 /**
  * 讀檔案系統一律經這裡（#73 r3 R1 之後換的做法，F10）：每一次讀的結果分三種——
  *   { ok: true, value }＝讀到了；{ ok: false, gone: true }＝確定不在（ENOENT、ENOTDIR）；{ ok: false, gone: false, code }＝判斷不了（權限、I/O…）。
@@ -70,6 +77,9 @@ function git(cwd, args, { allowFail = false } = {}) {
   const r = spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new TidyError(`git 起不來：${r.error.message}`);
   if (r.status !== 0 && !allowFail) throw new TidyError(`git ${args.join(' ')} 退 ${r.status === null ? '（被殺掉）' : r.status}：${(r.stderr || '').trim() || '（沒有訊息）'}`);
+  // 全域的那幾次（工作樹登記、分支清單、目前分支、stash、倉庫位置）退 0 卻印了警告＝這一次讀到的不能信，整支列不了（判斷不了就什麼都不列）；
+  // 逐棵、逐支的那幾次（allowFail）由呼叫的那一方自己看 stderr，判斷不了的只有那一樣不列（Fable 代裁 D1）
+  if (!allowFail && (r.stderr || '').trim()) throw new TidyError(`git ${args.join(' ')} 印了警告「${firstLine(r.stderr)}」：這一次讀到的不能信，什麼都不列`);
   return r;
 }
 
@@ -90,13 +100,18 @@ function parseArgs(argv) {
 /** 主幹：先 origin/<名字>、再本機 <名字>。回 { ref：完整的參照名（拿來算），label：印給人看的 }。 */
 function mainRef(cwd, name) {
   const tries = [[`refs/remotes/origin/${name}`, `origin/${name}`], [`refs/heads/${name}`, name]];
-  for (const [ref, label] of tries) if (git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { allowFail: true }).status === 0) return { ref, label, name };
+  for (const [ref, label] of tries) {
+    const r = git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { allowFail: true });
+    if ((r.stderr || '').trim()) throw new TidyError(`git rev-parse 找主幹時印了警告「${firstLine(r.stderr)}」：這一次讀到的不能信，什麼都不列`);
+    if (r.status === 0) return { ref, label, name };
+  }
   throw new TidyError(`找不到主幹（試過 ${tries.map((x) => x[1]).join('、')}）`);
 }
 
-/** a 在不在 b 的歷史裡：0＝在、1＝不在；其他退出碼（物件壞了、查不到）＝git 出錯、退 2，不當成「不在」（#73 r1 R2）。 */
+/** a 在不在 b 的歷史裡：0＝在、1＝不在；退 0 或 1 卻印了警告＝回 { unsure }（判斷不了，那一樣不列）；其他退出碼（物件壞了、查不到）＝git 出錯、退 2，不當成「不在」（#73 r1 R2）。 */
 function isAncestor(cwd, a, b) {
   const r = git(cwd, ['merge-base', '--is-ancestor', a, b], { allowFail: true });
+  if ((r.status === 0 || r.status === 1) && (r.stderr || '').trim()) return { unsure: `查 ${a.slice(0, 12)} 在不在主幹歷史裡時 git 印了警告「${firstLine(r.stderr)}」` };
   if (r.status === 0) return true;
   if (r.status === 1) return false;
   throw new TidyError(`git merge-base --is-ancestor ${a} ${b} 退 ${r.status === null ? '（被殺掉）' : r.status}：${(r.stderr || '').trim() || '（沒有訊息）'}`);
@@ -105,44 +120,62 @@ function isAncestor(cwd, a, b) {
 /** 參照的短名：只拿掉固定前綴（refs/heads/、refs/remotes/）。不用 git 的 :short——有同名標籤時它會回 heads/main 這種（#73 r1 R3）。 */
 const shortRef = (ref) => ref.replace(/^refs\/(?:heads|remotes)\//u, '');
 
-/** 一棵樹的狀態（不搶鎖、不寫索引）：回 { ok：讀得到，dirty：有沒提交的改動（含沒追蹤的檔） }。 */
+/**
+ * 一棵樹的狀態（不搶鎖、不寫索引）：回 { ok：讀得完整，dirty：有沒提交的改動（含沒追蹤的檔），why：讀不完整的理由 }。
+ * 退 0 不夠：git 讀不了某個沒追蹤的子資料夾時照樣退 0、輸出空的，只在 stderr 印警告（#73 r4 R1）——stderr 有字＝讀不完整＝判斷不了。
+ */
 function treeStatus(dir) {
   let r;
   try { r = git(dir, ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal'], { allowFail: true }); } catch (e) {
-    if (e instanceof TidyError) return { ok: false, dirty: false };   // 進不去那個資料夾（權限）＝讀不了狀態，照「可能有人在用」不列，不讓整支停
+    if (e instanceof TidyError) return { ok: false, dirty: false, why: e.message };   // 進不去那個資料夾（權限）＝讀不了狀態，不讓整支停
     throw e;
   }
-  return { ok: r.status === 0, dirty: r.status === 0 && r.stdout.trim() !== '' };
+  if (r.status !== 0) return { ok: false, dirty: false, why: `git status 退 ${r.status === null ? '（被殺掉）' : r.status}：${firstLine(r.stderr) || '（沒有訊息）'}` };
+  if ((r.stderr || '').trim()) return { ok: false, dirty: false, why: `git status 印了警告「${firstLine(r.stderr)}」` };
+  return { ok: true, dirty: r.stdout.trim() !== '' };
 }
 
-/** 工作樹登記：每棵一筆 { dir, real, gone：確定不在, unsure：判斷不了的錯誤碼, branch, head, detached, locked, prunable }。 */
+/** 工作樹登記：每棵一筆 { dir, real, gone：確定不在, unsure：判斷不了的錯誤碼, branch, head, detached, locked, prunable, shapeBad：那一筆形狀認不得 }。 */
 function worktreeEntries(cwd) {
   const blocks = git(cwd, ['worktree', 'list', '--porcelain', '-z']).stdout.split('\0\0').filter((b) => b.replace(/\0/gu, '').trim());
   return blocks.map((block) => {
     const f = {};
     for (const l of block.split('\0').filter(Boolean)) { const i = l.indexOf(' '); if (i < 0) f[l] = true; else f[l.slice(0, i)] = l.slice(i + 1); }
-    const r = f.worktree ? read('realpathSync', f.worktree) : { ok: false, gone: true };
+    if (typeof f.worktree !== 'string' || !f.worktree) {
+      // 沒有 worktree 那一行＝這一筆形狀認不得：不丟掉，記成判斷不了
+      return { dir: `工作樹登記的一筆「${block.replace(/\0/gu, ' ').trim().slice(0, 60)}」`, real: null, gone: false, unsure: null, branch: null, head: null, detached: false, locked: false, prunable: false, shapeBad: true };
+    }
+    const r = read('realpathSync', f.worktree);
     return {
       dir: f.worktree, real: r.ok ? r.value : null, gone: !r.ok && r.gone, unsure: !r.ok && !r.gone ? r.code : null,
       branch: typeof f.branch === 'string' ? f.branch.replace(/^refs\/heads\//u, '') : null,
       head: typeof f.HEAD === 'string' ? f.HEAD : null,
       detached: Boolean(f.detached), locked: f.locked !== undefined, prunable: f.prunable !== undefined,
+      // 形狀認不得（每一棵都該有 HEAD 那一行、而且是一串十六進位；裸倉庫才沒有）＝判斷不了
+      shapeBad: !f.bare && !(typeof f.HEAD === 'string' && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(f.HEAD)),
     };
-  }).filter((w) => w.dir);
+  });
 }
 
 /** ①分支：尖端在主幹歷史裡、或上游已不在。 */
-function staleBranches(cwd, main, trees) {
+function staleBranches(cwd, main, trees, unsure) {
   const current = git(cwd, ['branch', '--show-current']).stdout.trim();
   const out = [];
   const rows = git(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)', 'refs/heads/']).stdout.split('\n').filter(Boolean);
   for (const row of rows) {
-    const [ref, sha, upstreamRef, track] = row.split('\0');
+    const fields = row.split('\0');
+    const [ref, sha, upstreamRef, track] = fields;
+    if (fields.length !== 4 || !ref.startsWith('refs/heads/') || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(sha)) {
+      unsure.push({ dir: `分支清單的一行「${row.slice(0, 60)}」`, why: '形狀認不得' });
+      continue;
+    }
     const name = shortRef(ref);
     const upstream = upstreamRef ? shortRef(upstreamRef) : '';
     if (name === current || name === main.name) continue;
     let why = null;
-    if (isAncestor(cwd, sha, main.ref)) why = '尖端已在主幹歷史裡';
+    const anc = isAncestor(cwd, sha, main.ref);
+    if (anc && anc.unsure) { unsure.push({ dir: `分支 ${name}`, why: anc.unsure }); continue; }
+    if (anc) why = '尖端已在主幹歷史裡';
     else if (upstream && track === '[gone]') why = `上游 ${upstream} 已不在遠端（遠端刪了；是不是壓成一顆合併過，要對 PR 確認）`;
     if (!why) continue;
     const at = trees.find((w) => w.branch === name);
@@ -161,14 +194,19 @@ function staleWorktrees(cwd, main, branches, trees, unsure) {
   for (const w of trees) {
     if ((w.real || path.resolve(w.dir)) === mainDir) continue;
     if (w.locked) continue;
+    if (w.shapeBad) { unsure.push({ dir: w.dir, why: '工作樹登記那一筆形狀認不得' }); continue; }
     if (w.unsure) { unsure.push({ dir: w.dir, why: `工作樹的資料夾判斷不了在不在（${w.unsure}）` }); continue; }
     if (w.gone) { out.push({ dir: w.dir, why: '資料夾已經不在（可以 prune 的登記）' }); continue; }
     if (!w.real) { unsure.push({ dir: w.dir, why: '工作樹的資料夾判斷不了在不在' }); continue; }   // 防呆：上面兩種都不是卻沒有真實路徑
     const s = treeStatus(w.real);
-    if (!s.ok) { unsure.push({ dir: w.dir, why: '工作樹讀不了狀態' }); continue; }
+    if (!s.ok) { unsure.push({ dir: w.dir, why: `工作樹讀不了完整的狀態（${s.why}）` }); continue; }
     if (s.dirty) continue;   // 有未提交改動＝可能有人在用，不列
     if (w.branch && listed.has(w.branch)) out.push({ dir: w.dir, why: `檢出的分支 ${w.branch} 在①裡、乾淨` });
-    else if (w.detached && w.head && isAncestor(cwd, w.head, main.ref)) out.push({ dir: w.dir, why: `分離狀態停在主幹歷史裡的 ${w.head.slice(0, 8)}、乾淨（常設工作樹也長這樣，收之前先對是誰的）` });
+    else if (w.detached && w.head) {
+      const anc = isAncestor(cwd, w.head, main.ref);
+      if (anc && anc.unsure) unsure.push({ dir: w.dir, why: anc.unsure });
+      else if (anc) out.push({ dir: w.dir, why: `分離狀態停在主幹歷史裡的 ${w.head.slice(0, 8)}、乾淨（常設工作樹也長這樣，收之前先對是誰的）` });
+    }
   }
   return out;
 }
@@ -203,7 +241,7 @@ function protectedInside(dir, own) {
         }
       }
       const s = treeStatus(d);
-      if (!s.ok) return { unsure: `裡面有讀不了狀態的樹（${d}）` };
+      if (!s.ok) return { unsure: `裡面有讀不了完整狀態的樹（${d}：${s.why}）` };
       if (s.dirty) return { busy: `裡面有沒提交改動的樹（${d}）` };
       continue;
     }
@@ -245,9 +283,14 @@ function staleTmp(dirs, days, now, own, unsure) {
 }
 
 /** ④stash：每一筆、附日期（%cs；不能加 --date，那會讓 %gd 也印成 stash@{日期}、編號就不見了）。 */
-function stashes(cwd) {
-  return git(cwd, ['stash', 'list', '-z', '--format=%gd%x09%cs%x09%gs']).stdout.split('\0').filter(Boolean)
-    .map((l) => { const [ref, date, ...rest] = l.split('\t'); return { ref, date, subject: rest.join('\t') }; });
+function stashes(cwd, unsure) {
+  const out = [];
+  for (const l of git(cwd, ['stash', 'list', '-z', '--format=%gd%x09%cs%x09%gs']).stdout.split('\0').filter(Boolean)) {
+    const [ref, date, ...rest] = l.split('\t');
+    if (!/^stash@\{\d+\}$/u.test(ref || '') || !/^\d{4}-\d{2}-\d{2}$/u.test(date || '')) { unsure.push({ dir: `stash 清單的一行「${l.slice(0, 60)}」`, why: '形狀認不得' }); continue; }
+    out.push({ ref, date, subject: rest.join('\t') });
+  }
+  return out;
 }
 
 function run({ settings = readSettings(), cwd = process.cwd(), argv = [], now = Date.now(), tmpDefaults = [os.tmpdir(), '/tmp'], fsIo = FS_IO } = {}) {
@@ -261,22 +304,23 @@ function runInner({ settings, cwd, argv, now, tmpDefaults }) {
   try {
     const inside = git(cwd, ['rev-parse', '--is-inside-work-tree'], { allowFail: true });
     if (inside.status !== 0 || inside.stdout.trim() !== 'true') throw new TidyError('這裡不在 git 倉庫的工作樹裡');
+    if ((inside.stderr || '').trim()) throw new TidyError(`git rev-parse 印了警告「${firstLine(inside.stderr)}」：這一次讀到的不能信，什麼都不列`);
     let name = opts.main;
     if (!name) {
       if (!settings.mainBranch || settings.mainBranch === UNSET) throw new TidyError('專案設定的主幹分支名沒填，也沒給 --main');
       name = settings.mainBranch;
     }
     const main = mainRef(cwd, name);
-    const trees = worktreeEntries(cwd);
-    const branches = staleBranches(cwd, main, trees);
     const unsure = [];
+    const trees = worktreeEntries(cwd);
+    const branches = staleBranches(cwd, main, trees, unsure);
     const worktrees = staleWorktrees(cwd, main, branches, trees, unsure);
     const own = new Set();
     for (const w of trees) { own.add(path.resolve(w.dir)); if (w.real) own.add(w.real); }
     const tmpDirs = opts.tmp.length ? opts.tmp : tmpDefaults;
     const tmp = staleTmp(tmpDirs, opts.days, now, own, unsure);
-    const st = stashes(cwd);
-    const lines = [`整理清單｜主幹 ${main.label}｜只列不刪：已合併或上游已刪的分支 ${branches.length}、沒人用的工作樹 ${worktrees.length}、暫存資料夾的舊審查樹 ${tmp.length}（超過 ${opts.days} 天沒改）、stash ${st.length}${unsure.length ? `；判斷不了、沒列 ${unsure.length}` : ''}`];
+    const st = stashes(cwd, unsure);
+    const lines = [`整理清單｜主幹 ${main.label}｜只列不刪：已合併或上游已刪的分支 ${branches.length}、沒人用的工作樹 ${worktrees.length}、暫存資料夾的舊審查樹 ${tmp.length}（超過 ${opts.days} 天沒改）、stash ${st.length}${unsure.length ? `；判斷不了、沒列 ${unsure.length}` : ''}｜列出來的是候選，刪之前擁有者再看一眼`];
     if (opts.list) {
       for (const b of branches) lines.push(`  ・分支 ${b.name}：${b.why}`);
       for (const w of worktrees) lines.push(`  ・工作樹 ${w.dir}：${w.why}`);
