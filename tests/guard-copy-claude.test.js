@@ -221,7 +221,7 @@ test('②--claude-line 只讀不寫、不需要 git；指紋三方互證；複�
   // 工作樹沒提交的改動：清單以外的欄位不影響指紋；清單改了＝那一行的指紋跟著變，但複本（抽已合併版本）不變
   const settingsFile = path.join(src, 'settings.json');
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, mergeAuthorization: '別的欄位' }));
+  fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, notInGuardList: '別的欄位' }));
   assert.equal(treeFingerprint(src), fp, '清單以外的欄位（連同整份檔的排版）不進指紋');
   fs.writeFileSync(settingsFile, JSON.stringify({ ...settings, forbidden: LOOSE }, null, 2));
   assert.notEqual(treeFingerprint(src), fp, '工作樹的清單改了，--claude-line 的指紋要跟著變');
