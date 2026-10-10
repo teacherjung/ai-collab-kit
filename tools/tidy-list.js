@@ -50,6 +50,22 @@ const USAGE = '用法：node tools/tidy-list.js [--main <主幹>] [--days <天�
 
 class TidyError extends Error {}
 
+/**
+ * 讀檔案系統一律經這裡（#73 r3 R1 之後換的做法，F10）：每一次讀的結果分三種——
+ *   { ok: true, value }＝讀到了；{ ok: false, gone: true }＝確定不在（ENOENT、ENOTDIR）；{ ok: false, gone: false, code }＝判斷不了（權限、I/O…）。
+ * 判斷不了的一律不當成「不在」「不是樹」「沒上鎖」：那一樣不列，記進「判斷不了、沒列」（輸出會印出來，不靜默）。
+ * 考題把 io 換成會在指定那一次呼叫丟 EACCES 的版本，逐一試每一次呼叫：清單只能變短、變短時判斷不了那一欄一定有東西。
+ */
+const GONE = new Set(['ENOENT', 'ENOTDIR']);
+const FS_IO = { realpathSync: fs.realpathSync, lstatSync: fs.lstatSync, readdirSync: fs.readdirSync, readFileSync: fs.readFileSync };
+let io = FS_IO;
+function read(method, ...args) {
+  try { return { ok: true, value: io[method](...args) }; } catch (e) {
+    const code = e && e.code ? e.code : '不明';
+    return { ok: false, gone: GONE.has(code), code };
+  }
+}
+
 function git(cwd, args, { allowFail = false } = {}) {
   const r = spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new TidyError(`git 起不來：${r.error.message}`);
@@ -99,16 +115,15 @@ function treeStatus(dir) {
   return { ok: r.status === 0, dirty: r.status === 0 && r.stdout.trim() !== '' };
 }
 
-/** 工作樹登記：每棵一筆 { dir, real, branch, head, detached, locked, prunable }。 */
+/** 工作樹登記：每棵一筆 { dir, real, gone：確定不在, unsure：判斷不了的錯誤碼, branch, head, detached, locked, prunable }。 */
 function worktreeEntries(cwd) {
   const blocks = git(cwd, ['worktree', 'list', '--porcelain', '-z']).stdout.split('\0\0').filter((b) => b.replace(/\0/gu, '').trim());
   return blocks.map((block) => {
     const f = {};
     for (const l of block.split('\0').filter(Boolean)) { const i = l.indexOf(' '); if (i < 0) f[l] = true; else f[l.slice(0, i)] = l.slice(i + 1); }
-    let real = null;
-    try { real = fs.realpathSync(f.worktree); } catch { /* 不在 */ }
+    const r = f.worktree ? read('realpathSync', f.worktree) : { ok: false, gone: true };
     return {
-      dir: f.worktree, real,
+      dir: f.worktree, real: r.ok ? r.value : null, gone: !r.ok && r.gone, unsure: !r.ok && !r.gone ? r.code : null,
       branch: typeof f.branch === 'string' ? f.branch.replace(/^refs\/heads\//u, '') : null,
       head: typeof f.HEAD === 'string' ? f.HEAD : null,
       detached: Boolean(f.detached), locked: f.locked !== undefined, prunable: f.prunable !== undefined,
@@ -137,18 +152,21 @@ function staleBranches(cwd, main, trees) {
 }
 
 /** ②工作樹：資料夾不在、檢出①的分支、或分離狀態停在主幹歷史裡而且乾淨。 */
-function staleWorktrees(cwd, main, branches, trees) {
+function staleWorktrees(cwd, main, branches, trees, unsure) {
   const common = path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).stdout.trim());
-  let mainDir = null;
-  try { mainDir = fs.realpathSync(path.dirname(common)); } catch { /* 主目錄不在：每棵都照下面判 */ }
+  const m = read('realpathSync', path.dirname(common));
+  const mainDir = m.ok ? m.value : path.dirname(common);
   const listed = new Set(branches.map((b) => b.name));
   const out = [];
   for (const w of trees) {
-    if (w.real && w.real === mainDir) continue;
+    if ((w.real || path.resolve(w.dir)) === mainDir) continue;
     if (w.locked) continue;
-    if (!w.real) { out.push({ dir: w.dir, why: '資料夾已經不在（可以 prune 的登記）' }); continue; }
+    if (w.unsure) { unsure.push({ dir: w.dir, why: `工作樹的資料夾判斷不了在不在（${w.unsure}）` }); continue; }
+    if (w.gone) { out.push({ dir: w.dir, why: '資料夾已經不在（可以 prune 的登記）' }); continue; }
+    if (!w.real) { unsure.push({ dir: w.dir, why: '工作樹的資料夾判斷不了在不在' }); continue; }   // 防呆：上面兩種都不是卻沒有真實路徑
     const s = treeStatus(w.real);
-    if (!s.ok || s.dirty) continue;   // 有未提交改動、或讀不了＝可能有人在用，不列
+    if (!s.ok) { unsure.push({ dir: w.dir, why: '工作樹讀不了狀態' }); continue; }
+    if (s.dirty) continue;   // 有未提交改動＝可能有人在用，不列
     if (w.branch && listed.has(w.branch)) out.push({ dir: w.dir, why: `檢出的分支 ${w.branch} 在①裡、乾淨` });
     else if (w.detached && w.head && isAncestor(cwd, w.head, main.ref)) out.push({ dir: w.dir, why: `分離狀態停在主幹歷史裡的 ${w.head.slice(0, 8)}、乾淨（常設工作樹也長這樣，收之前先對是誰的）` });
   }
@@ -156,7 +174,7 @@ function staleWorktrees(cwd, main, branches, trees) {
 }
 
 /**
- * 暫存資料夾的候選能不能當成「可以收」（#73 r1 R1、r2 R1）。不能的理由回字串，可以回 null：
+ * 暫存資料夾的候選能不能當成「可以收」（#73 r1 R1、r2 R1、r3 R1）。確定有人在用回 { busy }、判斷不了回 { unsure }，可以收回 null：
  *   ①它本身就是、或底下（任何深度）有這個倉庫登記的工作樹＝歸②判，整個不列。只比登記的路徑，不看 .git 讀不讀得到
  *     （.git 被移走或讀不了時，登記與鎖都還在）。
  *   ②它自己與往下 TREE_DEPTH 層裡，別的倉庫或獨立倉庫的樹：上鎖、讀不了狀態、有沒提交的改動＝不列；找到一棵樹就不往它裡面走、捷徑不跟。
@@ -165,55 +183,61 @@ function staleWorktrees(cwd, main, branches, trees) {
  */
 const TREE_DEPTH = 2;
 function protectedInside(dir, own) {
-  const forms = new Set([path.resolve(dir)]);
-  try { forms.add(fs.realpathSync(dir)); } catch { /* 留原路徑 */ }
-  for (const o of own) for (const f of forms) if (o === f || o.startsWith(f + path.sep)) return `本身是、或底下有登記在這個倉庫的工作樹（${o}，歸工作樹那一類判）`;
+  // dir 已經是真實路徑（暫存資料夾先解過真實路徑、候選用 lstat 確定是資料夾而不是捷徑），不用再解一次
+  const here = path.resolve(dir);
+  for (const o of own) if (o === here || o.startsWith(here + path.sep)) return { busy: `本身是、或底下有登記在這個倉庫的工作樹（${o}，歸工作樹那一類判）` };
   const queue = [[dir, 0]];
   while (queue.length) {
     const [d, depth] = queue.shift();
-    let dotGit = null;
-    try { dotGit = fs.lstatSync(path.join(d, '.git')); } catch (e) {
-      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') return `判斷不了 ${d} 是不是樹（${e.code}）`;
-    }
-    if (dotGit) {
-      if (dotGit.isFile()) {
-        let gitdir = null;
-        try { const m = /^gitdir:\s*(.+?)\s*$/mu.exec(fs.readFileSync(path.join(d, '.git'), 'utf8')); if (m) gitdir = path.resolve(d, m[1]); } catch { return `判斷不了 ${d} 是不是上鎖的樹（.git 讀不了）`; }
-        if (gitdir && fs.existsSync(path.join(gitdir, 'locked'))) return `裡面有上鎖的樹（${d}）`;
+    const g = read('lstatSync', path.join(d, '.git'));
+    if (!g.ok && !g.gone) return { unsure: `判斷不了 ${d} 是不是樹（${g.code}）` };
+    if (g.ok) {
+      if (g.value.isFile()) {
+        const txt = read('readFileSync', path.join(d, '.git'), 'utf8');
+        if (!txt.ok) return { unsure: `判斷不了 ${d} 是不是上鎖的樹（.git 讀不了：${txt.code}）` };
+        const m = /^gitdir:\s*(.+?)\s*$/mu.exec(txt.value);
+        if (m) {
+          const lock = read('lstatSync', path.join(path.resolve(d, m[1]), 'locked'));
+          if (lock.ok) return { busy: `裡面有上鎖的樹（${d}）` };
+          if (!lock.ok && !lock.gone) return { unsure: `判斷不了 ${d} 有沒有上鎖（${lock.code}）` };
+        }
       }
       const s = treeStatus(d);
-      if (!s.ok) return `裡面有讀不了狀態的樹（${d}）`;
-      if (s.dirty) return `裡面有沒提交改動的樹（${d}）`;
+      if (!s.ok) return { unsure: `裡面有讀不了狀態的樹（${d}）` };
+      if (s.dirty) return { busy: `裡面有沒提交改動的樹（${d}）` };
       continue;
     }
     if (depth >= TREE_DEPTH) continue;
-    let kids;
-    try { kids = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return `判斷不了 ${d} 裡面有什麼（${e.code}）`; }
-    for (const k of kids) if (k.isDirectory() && !k.isSymbolicLink()) queue.push([path.join(d, k.name), depth + 1]);
+    const kids = read('readdirSync', d, { withFileTypes: true });
+    if (!kids.ok) return { unsure: `判斷不了 ${d} 裡面有什麼（${kids.code}）` };
+    for (const k of kids.value) if (k.isDirectory() && !k.isSymbolicLink()) queue.push([path.join(d, k.name), depth + 1]);
   }
   return null;
 }
 
 /** ③暫存資料夾：名字像審查或掃描用的樹、超過 days 天沒改；裡面有不能收的樹的不列（protectedInside）。 */
-function staleTmp(dirs, days, now, own) {
+function staleTmp(dirs, days, now, own, unsure) {
   const out = [];
   const seen = new Set();
   for (const d of dirs) {
-    let root;
-    try { root = fs.realpathSync(d); } catch { continue; }
+    const r = read('realpathSync', d);
+    if (!r.ok) { if (!r.gone) unsure.push({ dir: d, why: `暫存資料夾判斷不了（${r.code}）` }); continue; }   // 確定不在＝沒東西可列
+    const root = r.value;
     if (seen.has(root)) continue;
     seen.add(root);
-    let names = [];
-    try { names = fs.readdirSync(root); } catch { continue; }
-    for (const n of names.sort()) {
+    const names = read('readdirSync', root);
+    if (!names.ok) { unsure.push({ dir: root, why: `暫存資料夾列不出裡面有什麼（${names.code}）` }); continue; }
+    for (const n of names.value.slice().sort()) {
       if (!TMP_NAME.test(n)) continue;
       const p = path.join(root, n);
-      let st;
-      try { st = fs.lstatSync(p); } catch { continue; }
-      if (!st.isDirectory()) continue;
-      const age = now - st.mtimeMs;
+      const st = read('lstatSync', p);
+      if (!st.ok) { if (!st.gone) unsure.push({ dir: p, why: `判斷不了是不是資料夾（${st.code}）` }); continue; }
+      if (!st.value.isDirectory()) continue;
+      const age = now - st.value.mtimeMs;
       if (age <= days * DAY_MS) continue;
-      if (protectedInside(p, own)) continue;
+      const guard = protectedInside(p, own);
+      if (guard && guard.unsure) { unsure.push({ dir: p, why: guard.unsure }); continue; }
+      if (guard) continue;
       out.push({ dir: p, why: `${Math.floor(age / DAY_MS)} 天沒改` });
     }
   }
@@ -226,7 +250,12 @@ function stashes(cwd) {
     .map((l) => { const [ref, date, ...rest] = l.split('\t'); return { ref, date, subject: rest.join('\t') }; });
 }
 
-function run({ settings = readSettings(), cwd = process.cwd(), argv = [], now = Date.now(), tmpDefaults = [os.tmpdir(), '/tmp'] } = {}) {
+function run({ settings = readSettings(), cwd = process.cwd(), argv = [], now = Date.now(), tmpDefaults = [os.tmpdir(), '/tmp'], fsIo = FS_IO } = {}) {
+  io = fsIo;
+  try { return runInner({ settings, cwd, argv, now, tmpDefaults }); } finally { io = FS_IO; }
+}
+
+function runInner({ settings, cwd, argv, now, tmpDefaults }) {
   let opts;
   try { opts = parseArgs(argv); } catch (e) { return { code: 2, lines: [`整理清單｜列不了：${e.message}`] }; }
   try {
@@ -240,24 +269,26 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [], now = 
     const main = mainRef(cwd, name);
     const trees = worktreeEntries(cwd);
     const branches = staleBranches(cwd, main, trees);
-    const worktrees = staleWorktrees(cwd, main, branches, trees);
+    const unsure = [];
+    const worktrees = staleWorktrees(cwd, main, branches, trees, unsure);
     const own = new Set();
     for (const w of trees) { own.add(path.resolve(w.dir)); if (w.real) own.add(w.real); }
     const tmpDirs = opts.tmp.length ? opts.tmp : tmpDefaults;
-    const tmp = staleTmp(tmpDirs, opts.days, now, own);
+    const tmp = staleTmp(tmpDirs, opts.days, now, own, unsure);
     const st = stashes(cwd);
-    const lines = [`整理清單｜主幹 ${main.label}｜只列不刪：已合併或上游已刪的分支 ${branches.length}、沒人用的工作樹 ${worktrees.length}、暫存資料夾的舊審查樹 ${tmp.length}（超過 ${opts.days} 天沒改）、stash ${st.length}`];
+    const lines = [`整理清單｜主幹 ${main.label}｜只列不刪：已合併或上游已刪的分支 ${branches.length}、沒人用的工作樹 ${worktrees.length}、暫存資料夾的舊審查樹 ${tmp.length}（超過 ${opts.days} 天沒改）、stash ${st.length}${unsure.length ? `；判斷不了、沒列 ${unsure.length}` : ''}`];
     if (opts.list) {
       for (const b of branches) lines.push(`  ・分支 ${b.name}：${b.why}`);
       for (const w of worktrees) lines.push(`  ・工作樹 ${w.dir}：${w.why}`);
       for (const t of tmp) lines.push(`  ・暫存 ${t.dir}：${t.why}`);
       for (const s of st) lines.push(`  ・stash ${s.ref}（${s.date}）：${s.subject}`);
-    } else if (branches.length + worktrees.length + tmp.length + st.length) {
+      for (const u of unsure) lines.push(`  ・判斷不了、沒列 ${u.dir}：${u.why}`);
+    } else if (branches.length + worktrees.length + tmp.length + st.length + unsure.length) {
       lines.push('整份清單：加 --list。');
     }
     lines.push('另外兩類不在這裡（不重做）：進度摘要的過期條目＝node tools/check-progress-summary.js；待辦條件已到的＝node tools/backlog-touch.js。');
     lines.push('要刪任何一樣，先列給擁有者看、他點頭再另外動手；這支不刪、不排程。');
-    return { code: 0, lines, main: main.label, branches, worktrees, tmp, stashes: st };
+    return { code: 0, lines, main: main.label, branches, worktrees, tmp, stashes: st, unsure };
   } catch (e) {
     if (e instanceof TidyError) return { code: 2, lines: [`整理清單｜列不了：${e.message}`] };
     throw e;
