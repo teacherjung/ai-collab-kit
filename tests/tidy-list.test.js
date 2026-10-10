@@ -151,7 +151,8 @@ test('③工作樹：檢出②的分支或分離在主幹歷史裡、而且乾�
     assert.match(why['wt-clean'], /^檢出的分支 m-clean 在①裡、乾淨$/u);
     assert.match(why['wt-detached-old'], new RegExp(`^分離狀態停在主幹歷史裡的 ${first.slice(0, 8)}、乾淨`, 'u'));
     assert.match(why['wt-gone'], /^資料夾已經不在/u);
-    // 在別棵工作樹裡跑：主目錄照樣不列、跑的那一棵（目前所在的分支不在①）也不列
+    // 在別棵工作樹裡跑：主目錄先切到分離狀態、停在主幹歷史裡而且乾淨（不跳過就會被列）——照樣不列；跑的那一棵（目前所在的分支不在①）也不列
+    r.g('switch', '-q', '--detach', first);
     const fromTree = run({ settings: SETTINGS, cwd: at('wt-clean'), argv: ['--tmp', empty] });
     assert.ok(!fromTree.worktrees.some((w) => w.dir === r.dir), '主目錄不列');
     assert.ok(!fromTree.branches.some((b) => b.name === 'm-clean'), '目前所在的分支不列');
