@@ -18,6 +18,7 @@
 //   ⑩沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則整理時間超過 14 天＝列、剛好 14 天不列；施工中、等複審、等驗收、等裁示四種核實時間超過 7 天＝列、剛好 7 天不列；
 //     暫停中的不重複列核實；寫在進行中的已結束、不在選單的狀態不算；施工中的只看核實、整理舊不算；未來的日期不算（只比月日）；
 //     缺整理／缺核實已另列、另一個時間舊了照列；一位數的月／日判成缺欄、不算天數（自審 C5）；--strict 下這兩種也退 1；指令入口帶 --now 印得出來。
+//   ⑪最近誰提交（擁有者 2026-10-10 裁）：摘要在 git 倉庫裡就印最近 1 小時改過本檔的提交（--recent 改窗口；只算改到本檔的、別的檔不算）；不在倉庫裡印查不到；只印、不算問題、不影響退出碼；--recent 寫法錯＝退 2。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -26,7 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, STALE_STATES } = require('../tools/check-progress-summary.js');
+const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, STALE_STATES, RECENT_HOURS } = require('../tools/check-progress-summary.js');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'check-progress-summary.js');
 const NOW = { year: 2026, month: 10, day: 7 };
@@ -558,4 +559,45 @@ test('⑩沒動的線：暫停中整理超過 14 天＝列、剛好 14 天不列
   assert.equal(r.code, 0);
   assert.ok(r.lines.some((l) => l.includes('暫停中已 15 天沒動')), r.lines.join('\n'));
   assert.equal(run(['--file', file, '--now', '10/07', '--offline', '--strict']).code, 1, '--strict 下沒動的線跟其餘問題一樣算（自審 C4）');
+});
+
+test('⑪最近誰提交：在 git 倉庫裡印最近 N 小時改過本檔的提交（預設 1、--recent 改窗口、只算本檔）；不在倉庫裡印查不到；只印不算問題；--recent 寫法錯＝退 2', () => {
+  assert.equal(RECENT_HOURS, 1, '預設窗口寫死在考題：改要兩邊一起改');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-git-'));
+  const file = path.join(dir, 's.md');
+  const git = (args, env = {}) => { const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: { ...ghEnv(), ...env } }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
+  git(['init', '-q']); git(['config', 'user.email', 'x@y']); git(['config', 'user.name', 'x']); git(['config', 'commit.gpgsign', 'false']);
+  const old = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+  fs.writeFileSync(file, doc()); git(['add', 's.md']); git(['commit', '-q', '-m', '更新：B線（三小時前）'], { GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old });
+  fs.writeFileSync(path.join(dir, 'other.md'), 'x'); git(['add', 'other.md']); git(['commit', '-q', '-m', '更新：別的檔']);
+  fs.writeFileSync(file, doc({ entries: [entry({ fields: { 做了什麼: '改了' } })] })); git(['add', 's.md']); git(['commit', '-q', '-m', '更新：A線（剛剛）']);
+  const r = run(['--file', file, '--offline']);
+  assert.equal(r.code, 0);
+  assert.ok(r.lines.some((l) => l.includes(`最近 ${RECENT_HOURS} 小時改過本檔的提交`)), r.lines.join('\n'));
+  assert.ok(r.lines.some((l) => l.includes('更新：A線（剛剛）')), r.lines.join('\n'));
+  assert.ok(!r.lines.some((l) => l.includes('B線')), `三小時前的不在一小時窗口裡：${r.lines.join('\n')}`);
+  assert.ok(!r.lines.some((l) => l.includes('別的檔')), `只算改到本檔的：${r.lines.join('\n')}`);
+  const wide = run(['--file', file, '--offline', '--recent', '4']);
+  assert.ok(wide.lines.some((l) => l.includes('最近 4 小時改過本檔的提交')) && wide.lines.some((l) => l.includes('B線')) && wide.lines.some((l) => l.includes('A線')), wide.lines.join('\n'));
+  assert.ok(!wide.lines.some((l) => l.includes('別的檔')), wide.lines.join('\n'));
+  // 只印、不算問題：合格的摘要照樣「沒有問題」、--strict 退 0
+  assert.ok(r.lines.some((l) => l === '沒有問題。'), r.lines.join('\n'));
+  assert.equal(run(['--file', file, '--offline', '--strict']).code, 0);
+  // 窗口裡沒有提交：印「沒有人提交」（不是查不到）——另開一個只有三小時前那一筆的倉庫（--recent 0 不能用來測：0 小時＝現在，剛提交的那一筆照樣算進去）
+  const quiet = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-quiet-'));
+  const qgit = (args, env = {}) => { const r = spawnSync('git', ['-C', quiet, ...args], { encoding: 'utf8', env: { ...ghEnv(), ...env } }); assert.equal(r.status, 0, r.stderr); };
+  qgit(['init', '-q']); qgit(['config', 'user.email', 'x@y']); qgit(['config', 'user.name', 'x']); qgit(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(quiet, 's.md'), doc()); qgit(['add', 's.md']); qgit(['commit', '-q', '-m', '更新：B線（三小時前）'], { GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old });
+  const none = run(['--file', path.join(quiet, 's.md'), '--offline']);
+  assert.equal(none.code, 0);
+  assert.ok(none.lines.some((l) => l.includes('最近 1 小時沒有人提交本檔')), none.lines.join('\n'));
+  assert.ok(!none.lines.some((l) => l.includes('B線')), none.lines.join('\n'));
+  // 不在 git 倉庫裡：印查不到，不炸、退出碼照舊
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-plain-'));
+  fs.writeFileSync(path.join(plain, 's.md'), doc());
+  const p = run(['--file', path.join(plain, 's.md'), '--offline']);
+  assert.equal(p.code, 0);
+  assert.ok(p.lines.some((l) => l.includes('不在 git 倉庫裡')), p.lines.join('\n'));
+  // --recent 寫法錯＝退 2
+  for (const bad of ['abc', '-1', '1.5', '']) assert.equal(run(['--file', file, '--offline', '--recent', bad]).code, 2, `--recent ${bad}`);
 });
