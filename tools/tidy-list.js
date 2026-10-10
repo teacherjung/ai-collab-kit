@@ -9,7 +9,7 @@
 // 只負責四類；另外兩類只指路、不重做（規矩 K1）：進度摘要裡過期的條目＝tools/check-progress-summary.js（已結束滿 30 天、
 // 沒動的線都由它列）；待辦裡條件已到的＝tools/backlog-touch.js（開工印待辦）。
 //
-// 判法（都只讀、不改任何東西）：
+// 判法（都只讀、不改任何東西；看樹的狀態用 git --no-optional-locks，不搶鎖、不寫索引）：
 //   ①分支：本機分支裡，尖端已經在主幹歷史裡的（快轉或一般合併），或追蹤的上游分支已經不在遠端的（壓成一顆合併、合併後刪了遠端分支
 //     的常見情形）；目前所在的分支與主幹本身不列。「上游已不在」只代表遠端刪了，不代表一定合併過——清單照實寫是哪一種。
 //     檢出在某棵工作樹的照列、並寫出是哪一棵（那棵有人在用就先別動分支）。
@@ -18,13 +18,15 @@
 //     常設工作樹（D2）平常就停在分離狀態、也會被列——收之前先對進度摘要裡那棵樹是誰的。
 //   ③暫存資料夾：--tmp 給的資料夾（預設系統暫存區與 /tmp）第一層、名字像審查或掃描用的樹（TMP_NAME：帶 review、scan、mutat、
 //     mutant、evidence、survivor、probe、fixture 其中一個字，或前後是分隔符號的 PR 編號 pr<數字>、輪次 r<一兩位數>〔可以直接接 PR 編號〕），而且最後修改超過 --days 天
-//     （預設 1 天＝24 小時）的資料夾。登記在這個倉庫的工作樹不算（它們歸②）。
+//     （預設 1 天＝24 小時）的資料夾。它自己或往下兩層裡有登記在這個倉庫的工作樹（歸②判）、或別的倉庫的樹上鎖、讀不了狀態、
+//     有沒提交的改動，整個資料夾不列（送審產生器的布局是 review-…/tree、review-…/mutation，容器本身不是樹）。
 //   ④stash：每一筆都列、附建立的日期；stash 整個倉庫共用，誰的都在這裡。
 // 主幹：--main 給的（先找 origin/<名字>、再找本機同名分支），沒給就用專案設定的主幹分支名（origin/<主幹>，再找本機）。
 // 輸出：預設只印各類幾個；--list 才印整份清單。
 // ⚠️ 守不到的：分支「真的合併過」只看得到快轉或一般合併、看不到壓成一顆的合併（那種只能用「上游已不在」推，推錯的會列成可以收）；
 //   工作樹「有沒有人在用」只看有沒有未提交的改動，開著的編輯器、正在跑的工具看不到；暫存資料夾只看名字與第一層的修改時間
-//   （裡面更深的檔改了，第一層的時間不一定跟著變），不看內容，名字不像審查樹的舊資料夾（例如考題留下的）不列；
+//   （裡面更深的檔改了，第一層的時間不一定跟著變），不看內容，名字不像審查樹的舊資料夾（例如考題留下的）不列；裡面的樹只往下找兩層、
+//   捷徑不跟，更深的樹或沒有 .git 的複本有沒有人在用看不到；
 //   別的倉庫的工作樹（登記在別的倉庫）不列——在那個倉庫裡跑才列得到。
 // 退出碼：0＝列完了（有沒有東西都是 0）／2＝列不了（不在 git 倉庫裡、主幹找不到、主幹沒填又沒給 --main、參數不對、git 出錯）。
 'use strict';
@@ -75,7 +77,22 @@ function mainRef(cwd, name) {
   throw new TidyError(`找不到主幹（試過 ${tries.map((x) => x[1]).join('、')}）`);
 }
 
-const isAncestor = (cwd, a, b) => git(cwd, ['merge-base', '--is-ancestor', a, b], { allowFail: true }).status === 0;
+/** a 在不在 b 的歷史裡：0＝在、1＝不在；其他退出碼（物件壞了、查不到）＝git 出錯、退 2，不當成「不在」（#73 r1 R2）。 */
+function isAncestor(cwd, a, b) {
+  const r = git(cwd, ['merge-base', '--is-ancestor', a, b], { allowFail: true });
+  if (r.status === 0) return true;
+  if (r.status === 1) return false;
+  throw new TidyError(`git merge-base --is-ancestor ${a} ${b} 退 ${r.status === null ? '（被殺掉）' : r.status}：${(r.stderr || '').trim() || '（沒有訊息）'}`);
+}
+
+/** 參照的短名：只拿掉固定前綴（refs/heads/、refs/remotes/）。不用 git 的 :short——有同名標籤時它會回 heads/main 這種（#73 r1 R3）。 */
+const shortRef = (ref) => ref.replace(/^refs\/(?:heads|remotes)\//u, '');
+
+/** 一棵樹的狀態（不搶鎖、不寫索引）：回 { ok：讀得到，dirty：有沒提交的改動（含沒追蹤的檔） }。 */
+function treeStatus(dir) {
+  const r = git(dir, ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal'], { allowFail: true });
+  return { ok: r.status === 0, dirty: r.status === 0 && r.stdout.trim() !== '' };
+}
 
 /** 工作樹登記：每棵一筆 { dir, real, branch, head, detached, locked, prunable }。 */
 function worktreeEntries(cwd) {
@@ -98,9 +115,11 @@ function worktreeEntries(cwd) {
 function staleBranches(cwd, main, trees) {
   const current = git(cwd, ['branch', '--show-current']).stdout.trim();
   const out = [];
-  const rows = git(cwd, ['for-each-ref', '--format=%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)', 'refs/heads/']).stdout.split('\n').filter(Boolean);
+  const rows = git(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)', 'refs/heads/']).stdout.split('\n').filter(Boolean);
   for (const row of rows) {
-    const [name, sha, upstream, track] = row.split('\0');
+    const [ref, sha, upstreamRef, track] = row.split('\0');
+    const name = shortRef(ref);
+    const upstream = upstreamRef ? shortRef(upstreamRef) : '';
     if (name === current || name === main.name) continue;
     let why = null;
     if (isAncestor(cwd, sha, main.ref)) why = '尖端已在主幹歷史裡';
@@ -123,16 +142,51 @@ function staleWorktrees(cwd, main, branches, trees) {
     if (w.real && w.real === mainDir) continue;
     if (w.locked) continue;
     if (!w.real) { out.push({ dir: w.dir, why: '資料夾已經不在（可以 prune 的登記）' }); continue; }
-    const dirty = git(w.real, ['status', '--porcelain', '--untracked-files=normal'], { allowFail: true });
-    if (dirty.status !== 0 || dirty.stdout.trim()) continue;   // 有未提交改動、或讀不了＝可能有人在用，不列
+    const s = treeStatus(w.real);
+    if (!s.ok || s.dirty) continue;   // 有未提交改動、或讀不了＝可能有人在用，不列
     if (w.branch && listed.has(w.branch)) out.push({ dir: w.dir, why: `檢出的分支 ${w.branch} 在①裡、乾淨` });
     else if (w.detached && w.head && isAncestor(cwd, w.head, main.ref)) out.push({ dir: w.dir, why: `分離狀態停在主幹歷史裡的 ${w.head.slice(0, 8)}、乾淨（常設工作樹也長這樣，收之前先對是誰的）` });
   }
   return out;
 }
 
-/** ③暫存資料夾：名字像審查或掃描用的樹、超過 days 天沒改；登記在這個倉庫的工作樹不算。 */
-function staleTmp(dirs, days, now, skip) {
+/**
+ * 暫存資料夾的候選裡面（它自己與往下 TREE_DEPTH 層）有沒有不能當成「可以收」的樹（#73 r1 R1：送審產生器的布局是 review-…/tree、
+ * review-…/mutation，容器本身不是工作樹，只排除完全相同的路徑會把裝著上鎖或有改動的樹的容器列出來）：
+ *   登記在這個倉庫的工作樹＝歸②判（②不列就是有人在用），整個容器不列；別的倉庫的樹或獨立倉庫：上鎖、讀不了狀態、有沒提交的改動＝不列。
+ * 回不列的理由，或 null。找到一棵樹就不往它裡面走；捷徑不跟。
+ */
+const TREE_DEPTH = 2;
+function protectedInside(dir, own) {
+  const queue = [[dir, 0]];
+  while (queue.length) {
+    const [d, depth] = queue.shift();
+    let dotGit = null;
+    try { dotGit = fs.lstatSync(path.join(d, '.git')); } catch { /* 不是樹 */ }
+    if (dotGit) {
+      let real = d;
+      try { real = fs.realpathSync(d); } catch { /* 留原路徑 */ }
+      if (own.has(real) || own.has(path.resolve(d))) return `裡面有登記在這個倉庫的工作樹（${d}，歸工作樹那一類判）`;
+      if (dotGit.isFile()) {
+        let gitdir = null;
+        try { const m = /^gitdir:\s*(.+?)\s*$/mu.exec(fs.readFileSync(path.join(d, '.git'), 'utf8')); if (m) gitdir = path.resolve(d, m[1]); } catch { /* 讀不了 */ }
+        if (gitdir && fs.existsSync(path.join(gitdir, 'locked'))) return `裡面有上鎖的樹（${d}）`;
+      }
+      const s = treeStatus(d);
+      if (!s.ok) return `裡面有讀不了狀態的樹（${d}）`;
+      if (s.dirty) return `裡面有沒提交改動的樹（${d}）`;
+      continue;
+    }
+    if (depth >= TREE_DEPTH) continue;
+    let kids = [];
+    try { kids = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const k of kids) if (k.isDirectory() && !k.isSymbolicLink()) queue.push([path.join(d, k.name), depth + 1]);
+  }
+  return null;
+}
+
+/** ③暫存資料夾：名字像審查或掃描用的樹、超過 days 天沒改；裡面有不能收的樹的不列（protectedInside）。 */
+function staleTmp(dirs, days, now, own) {
   const out = [];
   const seen = new Set();
   for (const d of dirs) {
@@ -150,7 +204,7 @@ function staleTmp(dirs, days, now, skip) {
       if (!st.isDirectory()) continue;
       const age = now - st.mtimeMs;
       if (age <= days * DAY_MS) continue;
-      if (skip.has(p)) continue;
+      if (protectedInside(p, own)) continue;
       out.push({ dir: p, why: `${Math.floor(age / DAY_MS)} 天沒改` });
     }
   }
@@ -178,10 +232,10 @@ function run({ settings = readSettings(), cwd = process.cwd(), argv = [], now = 
     const trees = worktreeEntries(cwd);
     const branches = staleBranches(cwd, main, trees);
     const worktrees = staleWorktrees(cwd, main, branches, trees);
-    const skip = new Set();
-    for (const w of trees) { skip.add(path.resolve(w.dir)); if (w.real) skip.add(w.real); }
+    const own = new Set();
+    for (const w of trees) { own.add(path.resolve(w.dir)); if (w.real) own.add(w.real); }
     const tmpDirs = opts.tmp.length ? opts.tmp : tmpDefaults;
-    const tmp = staleTmp(tmpDirs, opts.days, now, skip);
+    const tmp = staleTmp(tmpDirs, opts.days, now, own);
     const st = stashes(cwd);
     const lines = [`整理清單｜主幹 ${main.label}｜只列不刪：已合併或上游已刪的分支 ${branches.length}、沒人用的工作樹 ${worktrees.length}、暫存資料夾的舊審查樹 ${tmp.length}（超過 ${opts.days} 天沒改）、stash ${st.length}`];
     if (opts.list) {

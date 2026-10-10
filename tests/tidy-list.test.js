@@ -2,7 +2,7 @@
 // 暫存資料夾裡的舊審查樹、stash；只列不刪。
 //
 // 守得到的：
-//   ①參數不對（不認得、少值、天數不是非負整數）、不在 git 倉庫裡、主幹沒填又沒給 --main、主幹找不到＝退 2；
+//   ①參數不對（不認得、少值、天數不是非負整數）、不在 git 倉庫裡、主幹沒填又沒給 --main、主幹找不到＝退 2；工作樹讀不了狀態＝不列（③）；
 //     主幹先找 origin/<名字>、再找本機同名分支；
 //   ②分支：尖端在主幹歷史裡的列「已在主幹歷史裡」、上游已不在遠端的列「上游…已不在」；上游還在、沒有上游的新分支、目前所在的分支、
 //     主幹本身都不列；檢出在某棵工作樹的照列並寫出那棵；
@@ -11,7 +11,9 @@
 //   ④暫存資料夾：名字帶審查字眼、或前後是分隔符號的 PR 編號與輪次、超過天數的資料夾＝列；mkdtemp 亂數尾巴碰巧長得像
 //     （「-PR9PKV」「-pr1xld」）、不像的名字、沒超過天數（剛好等於也不算）、不是資料夾（檔案、捷徑）、登記在這個倉庫的工作樹＝不列；
 //     兩個暫存資料夾其實是同一個只算一次、不存在的跳過；
-//   ⑤stash 每一筆列出來、附日期與說明；
+//     裝著樹的資料夾：這個倉庫登記的工作樹（乾淨、上鎖、有改動都一樣）、別的倉庫或獨立倉庫有改動、上鎖、讀不了狀態的＝不列，乾淨沒上鎖的照列；
+//   ⑤stash 每一筆列出來、附日期與說明；②③④⑤每一題跑預設與 --list 兩次，前後所有參照、stash、工作樹登記、暫存資料夾第一層的名字與修改時間都不變（只列不刪）；
+//   ⑥b查祖先出錯＝退 2；同名標籤不影響分支名與排除（②）；
 //   ⑥輸出：預設只印各類幾個（有東西才提示加 --list）、--list 才印整份；
 //   ⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑧空白設定的複本裡跑指令入口＝退 2。
 // ⚠️ 守不到的：壓成一顆的合併只能從「上游已不在」推、推錯也列；工作樹有沒有人開著編輯器；暫存資料夾裡更深的檔改了、
@@ -56,6 +58,30 @@ function repo() {
 }
 
 const names = (xs, key = 'name') => xs.map((x) => x[key]).sort();
+
+/** 只列不刪的對照（#73 r1 R4）：所有參照、stash、工作樹登記、給的暫存資料夾第一層每一項的名字與修改時間。跑工具前後各拍一次、要一樣。 */
+function snapshot(r, tmpDirs = []) {
+  const stash = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/stash'], { cwd: r.dir, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+  const tmp = tmpDirs.map((d) => (fs.existsSync(d) ? fs.readdirSync(d).sort().map((n) => `${n}@${fs.lstatSync(path.join(d, n)).mtimeMs}`) : []));
+  return {
+    refs: r.g('for-each-ref', '--format=%(refname) %(objectname)'),
+    stash,
+    stashList: r.g('stash', 'list', '--format=%H %gs'),
+    worktrees: r.g('worktree', 'list', '--porcelain'),
+    tmp,
+  };
+}
+
+/** 跑一次預設、一次 --list，前後的 snapshot 都要一樣；回 --list 那一次的結果。 */
+function runKeeping(r, opts, tmpDirs = []) {
+  const before = snapshot(r, tmpDirs);
+  const plain = run(opts);
+  assert.deepEqual(snapshot(r, tmpDirs), before, '預設那一次跑完東西不能變（只列不刪）');
+  const listed = run({ ...opts, argv: [...opts.argv, '--list'] });
+  assert.deepEqual(snapshot(r, tmpDirs), before, '--list 那一次跑完東西不能變（只列不刪）');
+  assert.equal(plain.code, listed.code);
+  return listed;
+}
 
 test('①參數、不在倉庫裡、主幹沒填或找不到＝退 2；主幹先找 origin/<名字> 再找本機', () => {
   for (const argv of [['--oops'], ['--days'], ['--days', '1.5'], ['--days', '-1'], ['--main']]) {
@@ -112,9 +138,11 @@ test('②分支：已在主幹歷史裡、上游已不在＝列；上游還在�
     r.g('switch', '-q', '-c', 'here', first);
     const tree = path.join(r.base, 'tree-merged');
     r.g('worktree', 'add', '-q', tree, 'merged-in-tree');
-    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
+    // 同名標籤（#73 r1 R3）：git 的 :short 會把分支印成 heads/main，主幹與目前分支的排除就失效、檢出在哪棵也找不到
+    for (const tag of ['main', 'here', 'merged-in-tree', 'gone']) r.g('tag', tag, first);
+    const res = runKeeping(r, { settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
     assert.equal(res.code, 0, res.lines.join('\n'));
-    assert.deepEqual(names(res.branches), ['gone', 'merged', 'merged-in-tree']);
+    assert.deepEqual(names(res.branches), ['gone', 'merged', 'merged-in-tree'], '有同名標籤，名字照樣是分支名、主幹與目前分支照樣不列');
     const why = Object.fromEntries(res.branches.map((b) => [b.name, b.why]));
     assert.match(why.merged, /^尖端已在主幹歷史裡$/u);
     assert.match(why.gone, /^上游 origin\/gone 已不在遠端/u);
@@ -144,7 +172,10 @@ test('③工作樹：檢出②的分支或分離在主幹歷史裡、而且乾�
     r.g('worktree', 'add', '-q', '--detach', at('wt-detached-side'), sideTip);
     r.g('worktree', 'add', '-q', '--detach', at('wt-gone'), first);
     fs.rmSync(at('wt-gone'), { recursive: true, force: true });
-    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
+    // 讀不了狀態（.git 指到不存在的地方）＝可能有人在用，不列（#73 r1 R2 附帶：狀態的退出碼檢查要有題守）
+    r.g('worktree', 'add', '-q', '--detach', at('wt-broken'), first);
+    fs.writeFileSync(path.join(at('wt-broken'), '.git'), `gitdir: ${path.join(r.base, 'no-such-gitdir')}\n`);
+    const res = runKeeping(r, { settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(names(res.worktrees, 'dir'), [at('wt-clean'), at('wt-detached-old'), at('wt-gone')].sort());
     const why = Object.fromEntries(res.worktrees.map((w) => [path.basename(w.dir), w.why]));
@@ -175,6 +206,43 @@ test('④暫存資料夾：名字像審查樹而且超過天數的資料夾才�
     fs.utimesSync(path.join(tmpA, 'review-fresh'), (NOW - DAY) / 1000, (NOW - DAY) / 1000);   // 剛好一天＝不算超過
     r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-registered'), 'HEAD');
     fs.utimesSync(path.join(tmpA, 'review-registered'), old, old);
+    // 裝著樹的容器（#73 r1 R1；送審產生器的布局 review-…/tree、review-…/mutation）：
+    //   這個倉庫登記的（乾淨、上鎖、有改動都一樣歸②）→ 不列；別的倉庫的樹或獨立倉庫：有改動、上鎖、讀不了 → 不列；乾淨沒上鎖 → 照列
+    const nest = (n) => { fs.mkdirSync(path.join(tmpA, n)); return path.join(tmpA, n, 'tree'); };
+    r.g('worktree', 'add', '-q', '--detach', nest('review-own-clean'), 'HEAD');
+    r.g('worktree', 'add', '-q', '--detach', nest('review-own-locked'), 'HEAD');
+    r.g('worktree', 'lock', path.join(tmpA, 'review-own-locked', 'tree'));
+    r.g('worktree', 'add', '-q', '--detach', nest('review-own-dirty'), 'HEAD');
+    fs.writeFileSync(path.join(tmpA, 'review-own-dirty', 'tree', 'only-here.txt'), '沒提交的唯一內容\n');
+    const other = repo();
+    try {
+      other.g('worktree', 'add', '-q', '--detach', nest('review-other-dirty'), 'HEAD');
+      fs.writeFileSync(path.join(tmpA, 'review-other-dirty', 'tree', 'a.txt'), 'changed\n');
+      other.g('worktree', 'add', '-q', '--detach', nest('review-other-locked'), 'HEAD');
+      other.g('worktree', 'lock', path.join(tmpA, 'review-other-locked', 'tree'));
+      other.g('worktree', 'add', '-q', '--detach', nest('review-other-clean'), 'HEAD');
+      fs.mkdirSync(path.join(tmpA, 'review-standalone-dirty'));
+      sh(path.join(tmpA, 'review-standalone-dirty'), 'init', '-q');
+      fs.writeFileSync(path.join(tmpA, 'review-standalone-dirty', 'new.txt'), 'x\n');
+      fs.mkdirSync(path.join(tmpA, 'review-broken'));
+      fs.writeFileSync(path.join(tmpA, 'review-broken', '.git'), `gitdir: ${path.join(r.base, 'no-such-gitdir')}\n`);
+      for (const n of ['review-own-clean', 'review-own-locked', 'review-own-dirty', 'review-other-dirty', 'review-other-locked', 'review-other-clean', 'review-standalone-dirty', 'review-broken']) fs.utimesSync(path.join(tmpA, n), old, old);
+      // 看狀態不寫別人的索引：工作檔內容不變、只換修改時間，一般的 git status 會順手重寫索引；這裡要用不搶鎖的讀法、索引一個位元組都不動
+      const cleanTree = path.join(tmpA, 'review-other-clean', 'tree');
+      const later = (NOW + DAY) / 1000;
+      fs.utimesSync(path.join(cleanTree, 'a.txt'), later, later);
+      const indexFile = sh(cleanTree, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+      const indexBefore = fs.statSync(indexFile).mtimeMs + ':' + fs.readFileSync(indexFile).toString('base64');
+      fs.utimesSync(path.join(tmpA, 'review-other-clean'), old, old);
+      const nested = runKeeping(r, { settings: SETTINGS, cwd: r.dir, now: NOW, argv: ['--tmp', tmpA] }, [tmpA]);
+      assert.equal(fs.statSync(indexFile).mtimeMs + ':' + fs.readFileSync(indexFile).toString('base64'), indexBefore, '別的倉庫那棵樹的索引沒被寫');
+      const got = nested.tmp.map((x) => path.basename(x.dir));
+      for (const n of ['review-own-clean', 'review-own-locked', 'review-own-dirty', 'review-other-dirty', 'review-other-locked', 'review-standalone-dirty', 'review-broken', 'review-registered']) assert.ok(!got.includes(n), `${n} 不該列：${got.join('、')}`);
+      assert.ok(got.includes('review-other-clean'), '別的倉庫乾淨、沒上鎖的樹照列');
+      assert.ok(fs.existsSync(path.join(tmpA, 'review-own-dirty', 'tree', 'only-here.txt')), '沒提交的內容還在');
+      for (const n of ['review-own-clean', 'review-own-locked', 'review-own-dirty', 'review-other-dirty', 'review-other-locked', 'review-other-clean', 'review-standalone-dirty', 'review-broken']) fs.rmSync(path.join(tmpA, n), { recursive: true, force: true });
+      r.g('worktree', 'prune'); other.g('worktree', 'prune');
+    } finally { other.cleanup(); }
     const res = run({ settings: SETTINGS, cwd: r.dir, now: NOW, argv: ['--tmp', tmpA, '--tmp', path.join(tmpA, '.', ''), '--tmp', path.join(r.base, 'no-such-dir')] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(res.tmp.map((t) => path.basename(t.dir)).sort(), [...listed].sort(), '同一個資料夾給兩次只算一次');
@@ -205,9 +273,25 @@ test('⑤⑥stash 列出日期與說明；預設只印幾個，--list 才印整�
     assert.match(counted.stashes[0].subject, /暫放 先收起來$/u);
     assert.ok(counted.lines.includes('整份清單：加 --list。'));
     assert.ok(!counted.lines.some((l) => l.startsWith('  ・')), '預設不印整份');
-    const listed = run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty, '--list'] });
+    const listed = runKeeping(r, { settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
+    assert.equal(r.g('stash', 'list', '--format=%gs').split('\n').filter(Boolean).length, 1, 'stash 那一筆還在');
     assert.ok(listed.lines.some((l) => /^ {2}・stash stash@\{0\}（\d{4}-\d{2}-\d{2}）：.*暫放/u.test(l)), listed.lines.join('\n'));
     assert.ok(listed.lines.some((l) => l.includes('node tools/check-progress-summary.js') && l.includes('node tools/backlog-touch.js')), '另外兩類指路');
+  } finally { r.cleanup(); }
+});
+
+test('⑥b查祖先出錯（提交物件不見了）＝退 2、說是 git 出錯，不當成「沒合併」（#73 r1 R2）', () => {
+  const r = repo();
+  const empty = path.join(r.base, 'empty-tmp');
+  fs.mkdirSync(empty);
+  try {
+    r.g('switch', '-q', '-c', 'candidate');
+    const sha = r.commit('c.txt', 'c\n', 'candidate only');
+    r.g('switch', '-q', 'main');
+    fs.rmSync(path.join(r.dir, '.git', 'objects', sha.slice(0, 2), sha.slice(2)));
+    const res = run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
+    assert.equal(res.code, 2, res.lines.join('\n'));
+    assert.match(res.lines[0], /^整理清單｜列不了：git merge-base --is-ancestor /u);
   } finally { r.cleanup(); }
 });
 
