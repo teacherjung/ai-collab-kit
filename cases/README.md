@@ -1,9 +1,10 @@
 # 案例簿索引
 
 一則事故（或一則裁示）一檔；每則指回本文條號。角色寫法：擁有者／裁示者／實作者／複審者／掃描者，不寫人名；新寫的照新名字，舊案例照當時的寫法、不改名。
+日期欄填事故發生或裁示那一天，不填整理成案例的日子。
 來源欄的 PFW \#n ＝原專案 personal\-finance\-webapp 的第 n 支PR。
 
-共 181 則。
+共 185 則。
 
 | 日期 | 案例 | 本文條號 |
 |---|---|---|
@@ -166,6 +167,7 @@
 | 2026-09-24 | [規則裡的「變更」全書改叫 PR](rename-change-to-pr.md) | K2、J2 |
 | 2026-09-24 | [「審查」拆成自審與複審，規則裡寫清楚是哪一種](split-self-review-and-review.md) | A2、E9 |
 | 2026-09-24 | [給裁示者的「誤擋 0」是推論不是量測](unmeasured-zero-given-to-decider.md) | J4 |
+| 2026-09-25 | [給擁有者的成品放在對話暫存目錄，整個目錄含 PDF 被系統清掉](deliverable-in-scratch-dir-wiped.md) | J1 |
 | 2026-09-25 | [回頭改的清單從三種補到六種](f6-six-kinds.md) | F6 |
 | 2026-09-25 | [規矩寫清楚後撐破三千字，上限先放寬到四千](k2-limit-raised.md) | K2 |
 | 2026-09-25 | [審查那一方改名叫複審者，名字跟著它做的事走](rename-reviewer.md) | A1、A2 |
@@ -179,7 +181,9 @@
 | 2026-09-26 | [J4 的對象從擁有者改成裁示者](j4-audience-decider.md) | J4 |
 | 2026-09-26 | [K2 上限放寬到七千，數法搬去機器表](k2-seven-thousand-count-in-machines.md) | K2、K1 |
 | 2026-09-26 | [轉正式留給起掃描的那一方，沒人起得了掃描時預設實作者](ready-for-review-by-scan-launcher.md) | G4 |
+| 2026-09-29 | [純推理的「偏安全」反駁，被複審者用原樣服務重現推翻](pushback-without-reproduction-overturned.md) | E9、J4 |
 | 2026-09-30 | [回報不寫已經解決的問題](report-skip-resolved-problems.md) | J2 |
+| 2026-10-01 | [套件施工交接給開在雲端的工作階段，讀不到桌面檔與本機工具，整場白跑](handoff-to-cloud-session-wasted.md) | D2 |
 | 2026-10-02 | [複審用什麼模型、多強，只記在一方的對話裡，各輪各用各的](review-launch-settings-drift.md) | F11 |
 | 2026-10-02 | [一支排版 PR 審了三輪、九個半小時：審多深、掃不掃改成照風險級別查表](review-scope-by-risk-tier.md) | D4、F2、G1 |
 | 2026-10-03 | [拿到通過後順手再改，通過作廢、多審四輪](fix-after-pass-only-six-kinds.md) | F6、F2 |
@@ -187,6 +191,7 @@
 | 2026-10-03 | [擁有者的常設指示只有一方知道：43 則裡 22 則另一方讀不到或只讀到一部分](standing-instructions-only-one-side.md) | K6 |
 | 2026-10-03 | [只改畫面文字的 PR：擁有者想改成只自審，定案成他自己當複審者](text-only-fast-lane.md) | F12 |
 | 2026-10-05 | [進度摘要的規定只在一個專案：在套件做完的一支，共用的摘要裡沒有它自己的一則](progress-summary-one-project-only.md) | J5 |
+| 2026-10-05 | [掃描發射工具 600 秒後轉成背景工作，掃描程序跟著消失，那一批記成未執行](scan-launcher-backgrounded-at-600s.md) | G1、G3 |
 | 2026-10-06 | [B4 寫明存著真實憑證的檔也列進清單、AI 可以在真實資料上唯讀驗證](real-credentials-listed-readonly-allowed.md) | B4 |
 
 ## 不是事故、但值得記的方法
