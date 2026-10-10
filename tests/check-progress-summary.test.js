@@ -15,6 +15,8 @@
 //   ⑦指令入口：有問題也退 0、--strict 才退 1、沒問題退 0；檔讀不到、少了節、參數不對、--now 寫法錯＝退 2；--pr-states 的檔當平台的答案；
 //   ⑧問平台：固定問 github.com、環境裡的選主機變數先清掉（r1 R7）；gh 退非零、回的不是 JSON、形狀不對、merged_at 不是時間＝那一支 merged: null（核不了），不猜；
 //   ⑨CRLF 換行的摘要判得跟 LF 一樣（r1 R2）。
+//   ⑩沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則整理時間超過 14 天＝列、剛好 14 天不列；其他四種狀態核實時間超過 7 天＝列、剛好 7 天不列；
+//     暫停中的不重複列核實；施工中的只看核實、整理舊不算；未來的日期不算（只比月日）；缺整理／缺核實已另列、不再算天數。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -23,7 +25,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS } = require('../tools/check-progress-summary.js');
+const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS } = require('../tools/check-progress-summary.js');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'check-progress-summary.js');
 const NOW = { year: 2026, month: 10, day: 7 };
@@ -505,4 +507,40 @@ test('⑨CRLF 換行的摘要判得跟 LF 一樣（r1 R2）', () => {
   assert.equal(a.entries, 2); assert.equal(a.attachments, 1);
   assert.ok(a.problems.some((p) => p.includes('少了「動哪些檔」')), '對照組：LF 那一份真的只缺那一欄');
   assert.equal(a.problems.length, 1);
+});
+
+test('⑩沒動的線：暫停中整理超過 14 天＝列、剛好 14 天不列；其他狀態核實超過 7 天＝列、剛好 7 天不列、暫停中不重複列；未來的日期不算；缺時間的欄不算天數', () => {
+  assert.equal(STALE_PAUSED_DAYS, 14, '上限寫死在考題：改天數要兩邊一起改');
+  assert.equal(STALE_VERIFIED_DAYS, 7);
+  const paused = (edited, verified) => entry({ title: '### 套件｜說明書網頁｜暫停中｜Claude・ai-collab-kit-manual', fields: { 時間: `整理 ${edited}；核實 ${verified}（照他指示暫停）` } });
+  const p15 = problemsOf(doc({ entries: [paused('09/22 18:26', '09/22 18:00')] }));
+  assert.ok(p15.some((p) => p.includes('暫停中已 15 天沒動') && p.includes('整理 09/22') && p.includes('上限 14')), p15.join('\n'));
+  assert.ok(!p15.some((p) => p.includes('核實已')), `暫停中的不重複列核實：${p15.join('\n')}`);
+  assert.deepEqual(problemsOf(doc({ entries: [paused('09/23 18:26', '09/23 18:00')] })), [], '剛好 14 天＝還沒超過上限');
+  assert.deepEqual(problemsOf(doc({ entries: [paused('10/07 18:26', '09/22 18:00')] })), [], '暫停中只看整理：整理是新的、核實舊也不列');
+  const active = (state, verified, edited = '10/07 18:26') => entry({ title: `### 套件｜說明書網頁｜${state}｜Claude・ai-collab-kit-manual`, fields: { 時間: `整理 ${edited}；核實 ${verified}（核了 GitHub）` } });
+  for (const state of ['施工中', '等複審', '等驗收', '等裁示']) {
+    const v8 = problemsOf(doc({ entries: [active(state, '09/29 18:00')] }));
+    assert.ok(v8.some((p) => p.includes('核實已 8 天沒更新') && p.includes('核實 09/29') && p.includes('上限 7')), `${state}：${v8.join('\n')}`);
+    assert.ok(!v8.some((p) => p.includes('暫停中已')), `${state} 不算暫停：${v8.join('\n')}`);
+  }
+  assert.deepEqual(problemsOf(doc({ entries: [active('施工中', '09/30 18:00')] })), [], '剛好 7 天＝還沒超過上限');
+  // 施工中的則整理很久沒動、核實是新的：只看核實（整理舊不算；暫停中才看整理）
+  assert.deepEqual(problemsOf(doc({ entries: [active('施工中', '10/07 18:00', '10/07 18:26')] })), []);
+  assert.deepEqual(problemsOf(doc({ entries: [entry({ fields: { 時間: '整理 09/01 18:26；核實 09/01 18:00' } })] })).filter((p) => p.includes('沒動')), [], '施工中不看整理');
+  // 未來的日期（跨年只比月日）不算過期
+  assert.deepEqual(problemsOf(doc({ entries: [paused('12/01 18:26', '12/01 18:00')] })), []);
+  assert.deepEqual(problemsOf(doc({ entries: [active('施工中', '12/01 18:00', '12/01 18:26')] })), []);
+  // 缺整理／缺核實：缺欄已經列了，不再算天數（不會多一條、也不會炸）
+  const noEdit = problemsOf(doc({ entries: [entry({ title: '### 套件｜說明書網頁｜暫停中｜Claude・x', fields: { 時間: '核實 09/01 18:18' } })] }));
+  assert.ok(noEdit.some((p) => p.includes('缺「整理')) && !noEdit.some((p) => p.includes('沒動')), noEdit.join('\n'));
+  const noVerify = problemsOf(doc({ entries: [entry({ fields: { 時間: '整理 09/01 18:26' } })] }));
+  assert.ok(noVerify.some((p) => p.includes('缺「核實」')) && !noVerify.some((p) => p.includes('沒更新')), noVerify.join('\n'));
+  // 指令入口印得出來（--now 給定）
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-'));
+  const file = path.join(dir, 's.md');
+  fs.writeFileSync(file, doc({ entries: [paused('09/22 18:26', '09/22 18:00')] }));
+  const r = run(['--file', file, '--now', '10/07', '--offline']);
+  assert.equal(r.code, 0);
+  assert.ok(r.lines.some((l) => l.includes('暫停中已 15 天沒動')), r.lines.join('\n'));
 });

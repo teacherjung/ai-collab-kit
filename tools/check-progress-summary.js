@@ -26,6 +26,8 @@
 //     （不枚舉壞法：r1〜r3 連三輪補了縮排、四個井號、兩個井號、缺空白、七個井號，追不完，改成只認一種、其餘全列）；
 //     「已留」要有解析得出的附件條號、滿 30 天該刪；本週成果那一節：只認「- 月/日」與它底下縮排的子項目，其餘列出；
 //     子項目上面要有合法的日期行（沒有＝孤立、整組多縮排兩格＝日期行也縮了，都列出來，不讓成果躲過七天；r4 R2）；日期超過七天該刪。
+//   ⑥沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則，整理時間（文字最後改的那一刻）超過 STALE_PAUSED_DAYS 天＝列，不是刪、給擁有者決定關掉還是叫回；
+//     其他四種狀態的則，核實時間超過 STALE_VERIFIED_DAYS 天＝列（Codex 唸出來才不會是上週的狀態）；暫停中的不重複列核實；只比月日、未來的日期不算；缺整理／缺核實已另列、不再算天數。
 // 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
 // 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
 // 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
@@ -47,6 +49,9 @@ const SECTIONS = { active: '## 進行中的線', week: '## 本週成果', done: 
 const KNOWN_SECTIONS = ['## 全貌', SECTIONS.active, '## 等裁示', SECTIONS.week, SECTIONS.done, '## 待辦', SECTIONS.attachments];
 const DONE_DAYS = 30;
 const WEEK_DAYS = 7;
+// 沒動的線（擁有者 2026-10-10 裁 a）：暫停中的則整理超過 14 天、其他狀態的則核實超過 7 天就列出來（不是刪；第 15／第 8 天起列）
+const STALE_PAUSED_DAYS = 14;
+const STALE_VERIFIED_DAYS = 7;
 // 附件條號的上限：真的摘要到 2026-10-07 是 69 條；超過這個數字的幾乎一定是寫壞的（例如把留言編號寫成條號）
 const MAX_REF = 100000;
 // 一個範圍最多展開幾條（閉區間，1〜200 是 200 條）：防「1〜100000」這種把整份附件引進來的寫法
@@ -281,6 +286,20 @@ function checkEntry(entry, ctx) {
   if (!verifiedPart) say('時間欄缺「核實」');
   else if (!verified) say('「核實」後面要有一個月/日 時:分（沿用舊紀錄就寫那份紀錄的時間）');
   if (edited && verified && verified > edited) say(`核實時間（${verified}）晚於整理時間（${edited}）：核實之後改了字就要更新整理時間`);
+  // 沒動的線（擁有者 2026-10-10 裁 a）：暫停中看整理時間（文字最後改的那一刻），超過 STALE_PAUSED_DAYS 天＝列，給擁有者決定關掉還是叫回；
+  // 其他狀態看核實時間，超過 STALE_VERIFIED_DAYS 天＝列（唸出來才不會是上週的狀態）；暫停中不重複列核實。只比月日、未來的日期不算（跟已結束、本週成果同一套 daysBefore）。
+  const dayOf = (s) => ({ month: Number(s.slice(0, 2)), day: Number(s.slice(3, 5)) });
+  if (state === '暫停中') {
+    if (edited) {
+      const d = dayOf(edited);
+      const age = daysBefore(ctx.now, d.month, d.day);
+      if (age > STALE_PAUSED_DAYS) say(`暫停中已 ${age} 天沒動（整理 ${edited.slice(0, 5)}；上限 ${STALE_PAUSED_DAYS} 天）：給擁有者決定關掉還是叫回`);
+    }
+  } else if (verified) {
+    const d = dayOf(verified);
+    const age = daysBefore(ctx.now, d.month, d.day);
+    if (age > STALE_VERIFIED_DAYS) say(`核實已 ${age} 天沒更新（核實 ${verified.slice(0, 5)}；上限 ${STALE_VERIFIED_DAYS} 天）：回報前先核一次、再改時間`);
+  }
 
   const refs = parseRefs(fields.get('證據') || '');
   for (const b of refs.bad) say(`證據欄的附件條號寫法不對，認不出「${b}」（要寫成「附件第 N 條」或「附件第 N〜M 條」，N、M 是 1〜${MAX_REF} 的整數、一個範圍最多 ${MAX_RANGE} 條）`);
@@ -504,4 +523,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, MAX_REF, MAX_RANGE };
+module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, MAX_REF, MAX_RANGE };
