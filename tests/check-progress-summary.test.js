@@ -1,4 +1,4 @@
-// 守進度摘要檢查（規矩 J5）。它不是閘；它讓更新摘要的人在提交前看到自己漏了哪一欄、時間寫反、附件指不到、「已合併」跟平台對不上。
+// 守進度摘要檢查（規矩 J5）。它不是閘；它讓更新摘要的人在提交前看到自己漏了哪一欄、時間寫反、哪幾條線沒動了、附件指不到、「已合併」跟平台對不上。
 //
 // 守得到的：
 //   ①標題四段：五段（舊格式的確認時間還在）、專案不在三選一、狀態不在六選一、第四段沒有「・」都列出來；
@@ -15,8 +15,9 @@
 //   ⑦指令入口：有問題也退 0、--strict 才退 1、沒問題退 0；檔讀不到、少了節、參數不對、--now 寫法錯＝退 2；--pr-states 的檔當平台的答案；
 //   ⑧問平台：固定問 github.com、環境裡的選主機變數先清掉（r1 R7）；gh 退非零、回的不是 JSON、形狀不對、merged_at 不是時間＝那一支 merged: null（核不了），不猜；
 //   ⑨CRLF 換行的摘要判得跟 LF 一樣（r1 R2）。
-//   ⑩沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則整理時間超過 14 天＝列、剛好 14 天不列；其他四種狀態核實時間超過 7 天＝列、剛好 7 天不列；
-//     暫停中的不重複列核實；施工中的只看核實、整理舊不算；未來的日期不算（只比月日）；缺整理／缺核實已另列、不再算天數。
+//   ⑩沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則整理時間超過 14 天＝列、剛好 14 天不列；施工中、等複審、等驗收、等裁示四種核實時間超過 7 天＝列、剛好 7 天不列；
+//     暫停中的不重複列核實；寫在進行中的已結束、不在選單的狀態不算；施工中的只看核實、整理舊不算；未來的日期不算（只比月日）；
+//     缺整理／缺核實已另列、另一個時間舊了照列；一位數的月／日判成缺欄、不算天數（自審 C5）；--strict 下這兩種也退 1；指令入口帶 --now 印得出來。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -25,7 +26,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS } = require('../tools/check-progress-summary.js');
+const { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, STALE_STATES } = require('../tools/check-progress-summary.js');
 
 const TOOL = path.join(__dirname, '..', 'tools', 'check-progress-summary.js');
 const NOW = { year: 2026, month: 10, day: 7 };
@@ -512,6 +513,7 @@ test('⑨CRLF 換行的摘要判得跟 LF 一樣（r1 R2）', () => {
 test('⑩沒動的線：暫停中整理超過 14 天＝列、剛好 14 天不列；其他狀態核實超過 7 天＝列、剛好 7 天不列、暫停中不重複列；未來的日期不算；缺時間的欄不算天數', () => {
   assert.equal(STALE_PAUSED_DAYS, 14, '上限寫死在考題：改天數要兩邊一起改');
   assert.equal(STALE_VERIFIED_DAYS, 7);
+  assert.deepEqual(STALE_STATES, ['施工中', '等複審', '等驗收', '等裁示'], '核實那一條只管還在動的四種狀態');
   const paused = (edited, verified) => entry({ title: '### 套件｜說明書網頁｜暫停中｜Claude・ai-collab-kit-manual', fields: { 時間: `整理 ${edited}；核實 ${verified}（照他指示暫停）` } });
   const p15 = problemsOf(doc({ entries: [paused('09/22 18:26', '09/22 18:00')] }));
   assert.ok(p15.some((p) => p.includes('暫停中已 15 天沒動') && p.includes('整理 09/22') && p.includes('上限 14')), p15.join('\n'));
@@ -521,10 +523,22 @@ test('⑩沒動的線：暫停中整理超過 14 天＝列、剛好 14 天不列
   const active = (state, verified, edited = '10/07 18:26') => entry({ title: `### 套件｜說明書網頁｜${state}｜Claude・ai-collab-kit-manual`, fields: { 時間: `整理 ${edited}；核實 ${verified}（核了 GitHub）` } });
   for (const state of ['施工中', '等複審', '等驗收', '等裁示']) {
     const v8 = problemsOf(doc({ entries: [active(state, '09/29 18:00')] }));
-    assert.ok(v8.some((p) => p.includes('核實已 8 天沒更新') && p.includes('核實 09/29') && p.includes('上限 7')), `${state}：${v8.join('\n')}`);
+    assert.ok(v8.some((p) => p.includes('核實已 8 天沒更新') && p.includes('上次核實 09/29') && p.includes('上限 7') && p.includes('兩個時間都改')), `${state}：${v8.join('\n')}`);
     assert.ok(!v8.some((p) => p.includes('暫停中已')), `${state} 不算暫停：${v8.join('\n')}`);
   }
   assert.deepEqual(problemsOf(doc({ entries: [active('施工中', '09/30 18:00')] })), [], '剛好 7 天＝還沒超過上限');
+  // 寫在進行中的「已結束」不算核實天數（該搬去已結束那一節，不是叫人去核）；不在選單的狀態只列「不是六選一」、不算天數
+  assert.deepEqual(problemsOf(doc({ entries: [active('已結束', '09/01 18:00')] })), []);
+  const badState = problemsOf(doc({ entries: [active('完成', '09/01 18:00')] }));
+  assert.ok(badState.some((p) => p.includes('不是六選一')) && !badState.some((p) => p.includes('核實已')), badState.join('\n'));
+  // 缺一個時間，另一個舊了照列（缺欄那一條也照列；自審 C7）
+  const onlyEdited = problemsOf(doc({ entries: [entry({ title: '### 套件｜說明書網頁｜暫停中｜Claude・x', fields: { 時間: '整理 09/01 18:26' } })] }));
+  assert.ok(onlyEdited.some((p) => p.includes('缺「核實」')) && onlyEdited.some((p) => p.includes('暫停中已 36 天沒動')), onlyEdited.join('\n'));
+  const onlyVerified = problemsOf(doc({ entries: [entry({ fields: { 時間: '核實 09/01 18:00' } })] }));
+  assert.ok(onlyVerified.some((p) => p.includes('缺「整理')) && onlyVerified.some((p) => p.includes('核實已 36 天沒更新')), onlyVerified.join('\n'));
+  // 一位數的月／日：STAMP 讀不出＝判成缺欄、不算天數（不會切字串切出 NaN 靜靜放過；自審 C5）
+  const oneDigit = problemsOf(doc({ entries: [paused('9/22 18:26', '9/22 18:00')] }));
+  assert.ok(oneDigit.some((p) => p.includes('缺「整理')) && oneDigit.some((p) => p.includes('「核實」後面要有一個')) && !oneDigit.some((p) => p.includes('沒動') || p.includes('沒更新')), oneDigit.join('\n'));
   // 施工中的則整理很久沒動、核實是新的：只看核實（整理舊不算；暫停中才看整理）
   assert.deepEqual(problemsOf(doc({ entries: [active('施工中', '10/07 18:00', '10/07 18:26')] })), []);
   assert.deepEqual(problemsOf(doc({ entries: [entry({ fields: { 時間: '整理 09/01 18:26；核實 09/01 18:00' } })] })).filter((p) => p.includes('沒動')), [], '施工中不看整理');
@@ -543,4 +557,5 @@ test('⑩沒動的線：暫停中整理超過 14 天＝列、剛好 14 天不列
   const r = run(['--file', file, '--now', '10/07', '--offline']);
   assert.equal(r.code, 0);
   assert.ok(r.lines.some((l) => l.includes('暫停中已 15 天沒動')), r.lines.join('\n'));
+  assert.equal(run(['--file', file, '--now', '10/07', '--offline', '--strict']).code, 1, '--strict 下沒動的線跟其餘問題一樣算（自審 C4）');
 });

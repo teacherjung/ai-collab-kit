@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 進度摘要檢查（規矩 J5）：讀倉庫外那份共用進度摘要，列出不合檔頭寫法、時間寫反、附件條號指不到、
+// 進度摘要檢查（規矩 J5）：讀倉庫外那份共用進度摘要，列出不合檔頭寫法、時間寫反、沒動的線、附件條號指不到、
 // 「已合併」跟平台對不上的地方；只列不擋（有問題也退 0），接進鉤子時帶 --strict 才擋。
 //
 // 為什麼：進度摘要是擁有者最常看的檔，卻沒有任何機器看它（套件缺點稽核 2026-10-06 第一主題）。
@@ -26,8 +26,10 @@
 //     （不枚舉壞法：r1〜r3 連三輪補了縮排、四個井號、兩個井號、缺空白、七個井號，追不完，改成只認一種、其餘全列）；
 //     「已留」要有解析得出的附件條號、滿 30 天該刪；本週成果那一節：只認「- 月/日」與它底下縮排的子項目，其餘列出；
 //     子項目上面要有合法的日期行（沒有＝孤立、整組多縮排兩格＝日期行也縮了，都列出來，不讓成果躲過七天；r4 R2）；日期超過七天該刪。
-//   ⑥沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則，整理時間（文字最後改的那一刻）超過 STALE_PAUSED_DAYS 天＝列，不是刪、給擁有者決定關掉還是叫回；
-//     其他四種狀態的則，核實時間超過 STALE_VERIFIED_DAYS 天＝列（Codex 唸出來才不會是上週的狀態）；暫停中的不重複列核實；只比月日、未來的日期不算；缺整理／缺核實已另列、不再算天數。
+//   ⑥沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則，整理時間（文字最後改的那一刻）超過 STALE_PAUSED_DAYS 天＝列（第 15 天起），不是刪、給擁有者決定關掉還是叫回；
+//     施工中、等複審、等驗收、等裁示四種狀態的則（STALE_STATES），核實時間超過 STALE_VERIFIED_DAYS 天＝列（第 8 天起；Codex 唸出來才不會是上週的狀態）；暫停中的不重複列核實，
+//     寫在進行中的「已結束」與不在選單的狀態不算（前者該搬去已結束那一節、後者已另列）；只比月日、未來的日期不算；月日從 STAMP 重讀、讀不出（例如一位數的月）＝已列成缺欄、不算天數；
+//     --strict 時這兩種跟其餘問題一樣算；「再改時間」＝核實與整理兩個時間都改成現在（只改核實會撞到「核實晚於整理」那一條）。
 // 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
 // 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
 // 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
@@ -52,6 +54,8 @@ const WEEK_DAYS = 7;
 // 沒動的線（擁有者 2026-10-10 裁 a）：暫停中的則整理超過 14 天、其他狀態的則核實超過 7 天就列出來（不是刪；第 15／第 8 天起列）
 const STALE_PAUSED_DAYS = 14;
 const STALE_VERIFIED_DAYS = 7;
+// 核實那一條只管還在動的四種狀態；暫停中另算整理、已結束不該在進行中、不在選單的已另列（自審 C3／C10）
+const STALE_STATES = ['施工中', '等複審', '等驗收', '等裁示'];
 // 附件條號的上限：真的摘要到 2026-10-07 是 69 條；超過這個數字的幾乎一定是寫壞的（例如把留言編號寫成條號）
 const MAX_REF = 100000;
 // 一個範圍最多展開幾條（閉區間，1〜200 是 200 條）：防「1〜100000」這種把整份附件引進來的寫法
@@ -287,18 +291,21 @@ function checkEntry(entry, ctx) {
   else if (!verified) say('「核實」後面要有一個月/日 時:分（沿用舊紀錄就寫那份紀錄的時間）');
   if (edited && verified && verified > edited) say(`核實時間（${verified}）晚於整理時間（${edited}）：核實之後改了字就要更新整理時間`);
   // 沒動的線（擁有者 2026-10-10 裁 a）：暫停中看整理時間（文字最後改的那一刻），超過 STALE_PAUSED_DAYS 天＝列，給擁有者決定關掉還是叫回；
-  // 其他狀態看核實時間，超過 STALE_VERIFIED_DAYS 天＝列（唸出來才不會是上週的狀態）；暫停中不重複列核實。只比月日、未來的日期不算（跟已結束、本週成果同一套 daysBefore）。
-  const dayOf = (s) => ({ month: Number(s.slice(0, 2)), day: Number(s.slice(3, 5)) });
+  // STALE_STATES 四種狀態看核實時間，超過 STALE_VERIFIED_DAYS 天＝列（唸出來才不會是上週的狀態）；暫停中不重複列核實、已結束與不在選單的不算。
+  // 只比月日、未來的日期不算（跟已結束、本週成果同一套 daysBefore）；月日從 STAMP 重讀，不切字串（格式一鬆切出來是 NaN、會靜靜不列；自審 C5），讀不出＝不算天數。
+  const dayOf = (s) => { const m = STAMP.exec(s || ''); return m ? { month: Number(m[1]), day: Number(m[2]), text: `${m[1]}/${m[2]}` } : null; };
   if (state === '暫停中') {
-    if (edited) {
-      const d = dayOf(edited);
+    const d = dayOf(edited);
+    if (d) {
       const age = daysBefore(ctx.now, d.month, d.day);
-      if (age > STALE_PAUSED_DAYS) say(`暫停中已 ${age} 天沒動（整理 ${edited.slice(0, 5)}；上限 ${STALE_PAUSED_DAYS} 天）：給擁有者決定關掉還是叫回`);
+      if (age > STALE_PAUSED_DAYS) say(`暫停中已 ${age} 天沒動（整理 ${d.text}；上限 ${STALE_PAUSED_DAYS} 天）：給擁有者決定關掉還是叫回`);
     }
-  } else if (verified) {
+  } else if (STALE_STATES.includes(state)) {
     const d = dayOf(verified);
-    const age = daysBefore(ctx.now, d.month, d.day);
-    if (age > STALE_VERIFIED_DAYS) say(`核實已 ${age} 天沒更新（核實 ${verified.slice(0, 5)}；上限 ${STALE_VERIFIED_DAYS} 天）：回報前先核一次、再改時間`);
+    if (d) {
+      const age = daysBefore(ctx.now, d.month, d.day);
+      if (age > STALE_VERIFIED_DAYS) say(`核實已 ${age} 天沒更新（上次核實 ${d.text}；上限 ${STALE_VERIFIED_DAYS} 天）：回報前先核一次，核實與整理兩個時間都改成現在`);
+    }
   }
 
   const refs = parseRefs(fields.get('證據') || '');
@@ -332,7 +339,7 @@ function checkDone(lines, ctx) {
     const m = DONE_RECORD.exec(line);
     if (!m) { problems.push(`已結束：有一行不是合法的紀錄（只認「### 專案｜事情｜已結束 月/日｜已留：附件第 N 條」或「…｜無永久決定」，井號三個、後面一個空白）：「${line.trim().slice(0, 40)}」`); continue; }
     const age = daysBefore(ctx.now, Number(m[3]), Number(m[4]));
-    if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS}），該刪`);
+    if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS} 天），該刪`);
     if (m[5].startsWith('已留')) {
       const refs = parseRefs(m[5]);
       for (const b of refs.bad) problems.push(`已結束：「${m[2]}」的附件條號寫法不對，認不出「${b}」`);
@@ -523,4 +530,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, MAX_REF, MAX_RANGE };
+module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, STALE_STATES, MAX_REF, MAX_RANGE };
