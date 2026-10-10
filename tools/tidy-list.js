@@ -167,7 +167,9 @@ function currentBranch(cwd) {
   const out = git(cwd, ['branch', '--show-current']).stdout;
   const lines = out.replace(/\n$/u, '').split('\n');
   if (out === '' || (lines.length === 1 && lines[0] === '')) return '';
-  if (lines.length !== 1 || !/^[^\s~^:?*[\\\x00-\x1f\x7f]+$/u.test(lines[0])) throw new TidyError(`git branch --show-current 的輸出形狀認不得「${out.slice(0, 60).replace(/\n/gu, '⏎')}」：這一次讀到的不能信，什麼都不列`);
+  // 控制字元用字碼判，不寫進正規式：使用專案的 ESLint（no-control-regex）會把正規式裡的控制字元範圍判成錯、推送前那道門推不上去
+  const looksLikeBranch = (s) => s.length > 0 && !/[\s~^:?*[\\]/u.test(s) && ![...s].some((c) => c.codePointAt(0) < 0x20 || c.codePointAt(0) === 0x7f);
+  if (lines.length !== 1 || !looksLikeBranch(lines[0])) throw new TidyError(`git branch --show-current 的輸出形狀認不得「${out.slice(0, 60).replace(/\n/gu, '⏎')}」：這一次讀到的不能信，什麼都不列`);
   return lines[0];
 }
 
