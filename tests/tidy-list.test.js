@@ -18,12 +18,13 @@
 //   ⑥b查祖先出錯＝退 2；同名標籤不影響分支名與排除（②）；
 //   ⑥c上一層資料夾進不去（0o000、0o444）：有沒提交內容的工作樹兩類都不列、記進判斷不了、第一行與 --list 都印出來；
 //   ⑥d（#73 r3 之後按 F10 換的做法，直接量性質）：工具每一次讀檔案系統的呼叫逐一換成 EACCES，三類清單都不能多出東西，
-//     變短時判斷不了那一欄一定有東西（射程：經過工具那一層讀檔案系統的呼叫）；
+//     變短時判斷不了那一欄一定有東西；全域那幾樣核不出來＝退 2 什麼都不列也算（射程：經過工具那一層讀檔案系統的呼叫）；
 //   ⑥e真 git 讀不了沒追蹤的子資料夾（0o000、0o111：退 0、輸出空、只在 stderr 警告）：本倉庫的工作樹、別的倉庫在暫存區的樹都不列、
 //     進判斷不了附警告第一行、唯一內容還在；
 //   ⑥f（Fable 代裁 D1：git 出聲就判斷不了）包著真 git 的假 git：全域那幾次（工作樹登記、分支清單、目前分支、stash、rev-parse）
 //     印警告＝退 2（rev-parse 三處各自單獨試）；目前分支的輸出多一行＝退 2；找主幹時遠端那一次安靜退錯誤碼或被殺掉＝退 2（不默默換成本機主幹；
-//     確定沒有遠端主幹時用本機的照舊，見①）；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
+//     確定沒有遠端主幹時用本機的照舊，見①）；主目錄那一次 git 回空的＝退 2；
+//   ⑥g主目錄要先核實：用捷徑當目前資料夾照樣不列主目錄；主目錄的真實路徑讀不到（EACCES、EIO）＝退 2；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
 //     （不安靜丟掉）、其餘照算；
 //   ⑥輸出：預設只印各類幾個（有東西才提示加 --list）、--list 才印整份；
 //   ⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑧空白設定的複本裡跑指令入口＝退 2。
@@ -446,9 +447,11 @@ test('⑥d讀不到只會讓清單變短（F10 換的做法）：工具每一次
         return fs[m](...a);
       }]));
       const res = run({ ...opts, fsIo: failing });
-      const got = key(res);
       const label = `${method}(${arg}) 讀不到`;
+      // 全域那幾樣（例如主目錄是哪一個）核不出來＝退 2、什麼都不列，也算「清單只會變短」；要說是列不了
+      if (res.code === 2) { assert.match(res.lines[0], /列不了：.*(判斷不了|核不出)/u, `${label}：退 2 要說列不了：${res.lines[0]}`); continue; }
       assert.equal(res.code, 0, `${label}：${res.lines.join('\n')}`);
+      const got = key(res);
       for (const k of ['b', 'w', 't']) for (const x of got[k]) assert.ok(want[k].includes(x), `${label}：多列了 ${x}（讀不到被當成確定的結論）`);
       const fewer = ['b', 'w', 't'].some((k) => got[k].length < want[k].length);
       if (fewer) { shrunk++; assert.ok(res.unsure.length > 0, `${label}：清單變短了，判斷不了那一欄卻是空的（靜默）`); }
@@ -511,16 +514,17 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     'sub="$1"; arg="$2"; [ "$1" = "--no-optional-locks" ] && sub="$2" && arg="$3"',
     'case ",$TIDY_FAKE_EXIT," in *",$sub,"*|*",$sub:$arg,"*) exit 3;; esac',
     'case ",$TIDY_FAKE_KILL," in *",$sub,"*|*",$sub:$arg,"*) kill -TERM $$;; esac',
+    'case ",$TIDY_FAKE_EMPTY," in *",$sub,"*|*",$sub:$arg,"*) exit 0;; esac',
     `"${realGit}" "$@"; code=$?`,
     'case ",$TIDY_FAKE_WARN," in *",$sub,"*|*",$sub:$arg,"*) echo "warning: fake warning for $sub" >&2;; esac',
     'case ",$TIDY_FAKE_SHAPE," in *",$sub,"*) printf "garbage-row\\n";; esac',
     'exit $code', ''].join('\n'));
   fs.chmodSync(path.join(bin, 'git'), 0o755);
-  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT', 'TIDY_FAKE_KILL'];
+  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT', 'TIDY_FAKE_KILL', 'TIDY_FAKE_EMPTY'];
   const saved = { PATH: process.env.PATH, ...Object.fromEntries(VARS.map((v) => [v, process.env[v]])) };
-  const withFake = (warn, shape, exit = '', kill = '') => {
+  const withFake = (warn, shape, exit = '', kill = '', empty = '') => {
     process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
-    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit], ['TIDY_FAKE_KILL', kill]]) { if (val) process.env[v] = val; else delete process.env[v]; }
+    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit], ['TIDY_FAKE_KILL', kill], ['TIDY_FAKE_EMPTY', empty]]) { if (val) process.env[v] = val; else delete process.env[v]; }
     try { return run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty, '--list'] }); } finally {
       process.env.PATH = saved.PATH;
       for (const v of VARS) { if (saved[v] === undefined) delete process.env[v]; else process.env[v] = saved[v]; }
@@ -560,6 +564,12 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
       assert.equal(res.code, 2, `${exit || kill}：${res.lines.join('\n')}`);
       assert.match(res.lines[0], /找主幹（origin\/main）退 .*判斷不了，不換成別的主幹/u);
     }
+    // 主目錄那一次 git 回空的（退 0、輸出空、stderr 空）＝核不出主目錄：退 2（#73 r6 R1；主目錄停在分離狀態、乾淨，不擋就會被列）
+    r.g('switch', '-q', '--detach', first);
+    const noCommon = withFake('', '', '', '', 'rev-parse:--git-common-dir');
+    r.g('switch', '-q', 'main');
+    assert.equal(noCommon.code, 2, `核不出主目錄要退 2：${noCommon.lines.join('\n')}`);
+    assert.match(noCommon.lines[0], /git-common-dir 的輸出形狀認不得/u);
     const mb = withFake('merge-base', '');
     assert.equal(mb.code, 0, mb.lines.join('\n'));
     assert.deepEqual(mb.branches, [], 'merge-base 印了警告：那一支不列');
@@ -576,6 +586,31 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     assert.equal(wtShape.code, 0, wtShape.lines.join('\n'));
     assert.ok(wtShape.unsure.some((u) => /工作樹登記的一筆「garbage-row/u.test(u.dir) && u.why === '工作樹登記那一筆形狀認不得'), `認不得的那一筆不能被安靜丟掉：${JSON.stringify(wtShape.unsure)}`);
     assert.equal(wtShape.worktrees.length, 1, '認得的那幾筆照算');
+  } finally { r.cleanup(); }
+});
+
+test('⑥g主目錄要先核實：用捷徑當目前資料夾照樣不列主目錄；主目錄的真實路徑讀不到＝退 2、不列（#73 r6 R1）', () => {
+  const r = repo();
+  const empty = path.join(r.base, 'empty-tmp');
+  fs.mkdirSync(empty);
+  try {
+    r.g('switch', '-q', '--detach', 'HEAD~1');   // 主目錄停在主幹歷史裡、乾淨、分離狀態：不跳過就會被列
+    const alias = path.join(r.base, 'alias');
+    fs.symlinkSync(r.dir, alias);
+    const ok = run({ settings: SETTINGS, cwd: alias, argv: ['--tmp', empty] });
+    assert.equal(ok.code, 0, ok.lines.join('\n'));
+    assert.deepEqual(ok.worktrees, [], '用捷徑當目前資料夾，主目錄照樣不列');
+    for (const code of ['EACCES', 'EIO']) {
+      let hits = 0;
+      const io = {
+        realpathSync: (p, ...rest) => { if (String(p) === alias) { hits++; throw Object.assign(new Error(`${code}: ${p}`), { code }); } return fs.realpathSync(p, ...rest); },
+        lstatSync: fs.lstatSync, readdirSync: fs.readdirSync, readFileSync: fs.readFileSync,
+      };
+      const res = run({ settings: SETTINGS, cwd: alias, argv: ['--tmp', empty], fsIo: io });
+      assert.ok(hits >= 1, '注入要真的打到主目錄那一次');
+      assert.equal(res.code, 2, `${code}：${res.lines.join('\n')}`);
+      assert.match(res.lines[0], new RegExp(`主目錄的真實路徑判斷不了（${code}）`, 'u'));
+    }
   } finally { r.cleanup(); }
 });
 

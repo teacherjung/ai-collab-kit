@@ -35,7 +35,8 @@
 //   （裡面更深的檔改了，第一層的時間不一定跟著變），不看內容，名字不像審查樹的舊資料夾（例如考題留下的）不列；裡面的樹只往下找兩層、
 //   捷徑不跟，更深的樹或沒有 .git 的複本有沒有人在用看不到；
 //   別的倉庫的工作樹（登記在別的倉庫）不列——在那個倉庫裡跑才列得到。
-// 退出碼：0＝列完了（有沒有東西都是 0）／2＝列不了（不在 git 倉庫裡、主幹找不到、主幹沒填又沒給 --main、參數不對、git 出錯）。
+// 退出碼：0＝列完了（有沒有東西都是 0）／2＝列不了（不在 git 倉庫裡、主幹找不到、主幹沒填又沒給 --main、參數不對、git 出錯、
+//   全域那幾次讀到的不能信——印了警告、形狀認不得、核不出主目錄是哪一個）。
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -198,9 +199,13 @@ function staleBranches(cwd, main, trees, unsure) {
 
 /** ②工作樹：資料夾不在、檢出①的分支、或分離狀態停在主幹歷史裡而且乾淨。 */
 function staleWorktrees(cwd, main, branches, trees, unsure) {
-  const common = path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).stdout.trim());
-  const m = read('realpathSync', path.dirname(common));
-  const mainDir = m.ok ? m.value : path.dirname(common);
+  // 主目錄是哪一個要先核實（#73 r6 R1）：git 回的路徑要剛好一行、不是空的；真實路徑要解得出來。核不出來＝連「主目錄不列」都做不到，
+  // 照全域那幾次的處理退 2、什麼都不列——不拿沒核過的字串去比（用捷徑當目前資料夾時，那個字串跟登記的真實路徑對不上，主目錄就被列出來）
+  const raw = git(cwd, ['rev-parse', '--git-common-dir']).stdout.replace(/\n$/u, '');
+  if (!raw || raw.includes('\n')) throw new TidyError(`git rev-parse --git-common-dir 的輸出形狀認不得「${raw.slice(0, 60).replace(/\n/gu, '⏎')}」：核不出主目錄，什麼都不列`);
+  const m = read('realpathSync', path.dirname(path.resolve(cwd, raw)));
+  if (!m.ok) throw new TidyError(`主目錄的真實路徑判斷不了（${m.code}）：核不出主目錄，什麼都不列`);
+  const mainDir = m.value;
   const listed = new Set(branches.map((b) => b.name));
   const out = [];
   for (const w of trees) {
