@@ -18,8 +18,9 @@
 //     常設工作樹（D2）平常就停在分離狀態、也會被列——收之前先對進度摘要裡那棵樹是誰的。
 //   ③暫存資料夾：--tmp 給的資料夾（預設系統暫存區與 /tmp）第一層、名字像審查或掃描用的樹（TMP_NAME：帶 review、scan、mutat、
 //     mutant、evidence、survivor、probe、fixture 其中一個字，或前後是分隔符號的 PR 編號 pr<數字>、輪次 r<一兩位數>〔可以直接接 PR 編號〕），而且最後修改超過 --days 天
-//     （預設 1 天＝24 小時）的資料夾。它自己或往下兩層裡有登記在這個倉庫的工作樹（歸②判）、或別的倉庫的樹上鎖、讀不了狀態、
-//     有沒提交的改動，整個資料夾不列（送審產生器的布局是 review-…/tree、review-…/mutation，容器本身不是樹）。
+//     （預設 1 天＝24 小時）的資料夾。它本身是或底下有登記在這個倉庫的工作樹（歸②判；只比登記的路徑，.git 讀不讀得到都一樣）、
+//     往下兩層裡別的倉庫的樹上鎖、讀不了狀態、有沒提交的改動、或有資料夾讀不了（判斷不了就保守不列），整個資料夾不列
+//     （送審產生器的布局是 review-…/tree、review-…/mutation，容器本身不是樹）。
 //   ④stash：每一筆都列、附建立的日期；stash 整個倉庫共用，誰的都在這裡。
 // 主幹：--main 給的（先找 origin/<名字>、再找本機同名分支），沒給就用專案設定的主幹分支名（origin/<主幹>，再找本機）。
 // 輸出：預設只印各類幾個；--list 才印整份清單。
@@ -90,7 +91,11 @@ const shortRef = (ref) => ref.replace(/^refs\/(?:heads|remotes)\//u, '');
 
 /** 一棵樹的狀態（不搶鎖、不寫索引）：回 { ok：讀得到，dirty：有沒提交的改動（含沒追蹤的檔） }。 */
 function treeStatus(dir) {
-  const r = git(dir, ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal'], { allowFail: true });
+  let r;
+  try { r = git(dir, ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=normal'], { allowFail: true }); } catch (e) {
+    if (e instanceof TidyError) return { ok: false, dirty: false };   // 進不去那個資料夾（權限）＝讀不了狀態，照「可能有人在用」不列，不讓整支停
+    throw e;
+  }
   return { ok: r.status === 0, dirty: r.status === 0 && r.stdout.trim() !== '' };
 }
 
@@ -151,25 +156,29 @@ function staleWorktrees(cwd, main, branches, trees) {
 }
 
 /**
- * 暫存資料夾的候選裡面（它自己與往下 TREE_DEPTH 層）有沒有不能當成「可以收」的樹（#73 r1 R1：送審產生器的布局是 review-…/tree、
- * review-…/mutation，容器本身不是工作樹，只排除完全相同的路徑會把裝著上鎖或有改動的樹的容器列出來）：
- *   登記在這個倉庫的工作樹＝歸②判（②不列就是有人在用），整個容器不列；別的倉庫的樹或獨立倉庫：上鎖、讀不了狀態、有沒提交的改動＝不列。
- * 回不列的理由，或 null。找到一棵樹就不往它裡面走；捷徑不跟。
+ * 暫存資料夾的候選能不能當成「可以收」（#73 r1 R1、r2 R1）。不能的理由回字串，可以回 null：
+ *   ①它本身就是、或底下（任何深度）有這個倉庫登記的工作樹＝歸②判，整個不列。只比登記的路徑，不看 .git 讀不讀得到
+ *     （.git 被移走或讀不了時，登記與鎖都還在）。
+ *   ②它自己與往下 TREE_DEPTH 層裡，別的倉庫或獨立倉庫的樹：上鎖、讀不了狀態、有沒提交的改動＝不列；找到一棵樹就不往它裡面走、捷徑不跟。
+ *   ③走的時候有資料夾讀不了、或 .git 判斷不了（不是「不存在」的錯）＝判斷不了，保守不列。
+ * 送審產生器的布局是 review-…/tree、review-…/mutation，容器本身不是樹，所以只比完全相同的路徑不夠。
  */
 const TREE_DEPTH = 2;
 function protectedInside(dir, own) {
+  const forms = new Set([path.resolve(dir)]);
+  try { forms.add(fs.realpathSync(dir)); } catch { /* 留原路徑 */ }
+  for (const o of own) for (const f of forms) if (o === f || o.startsWith(f + path.sep)) return `本身是、或底下有登記在這個倉庫的工作樹（${o}，歸工作樹那一類判）`;
   const queue = [[dir, 0]];
   while (queue.length) {
     const [d, depth] = queue.shift();
     let dotGit = null;
-    try { dotGit = fs.lstatSync(path.join(d, '.git')); } catch { /* 不是樹 */ }
+    try { dotGit = fs.lstatSync(path.join(d, '.git')); } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') return `判斷不了 ${d} 是不是樹（${e.code}）`;
+    }
     if (dotGit) {
-      let real = d;
-      try { real = fs.realpathSync(d); } catch { /* 留原路徑 */ }
-      if (own.has(real) || own.has(path.resolve(d))) return `裡面有登記在這個倉庫的工作樹（${d}，歸工作樹那一類判）`;
       if (dotGit.isFile()) {
         let gitdir = null;
-        try { const m = /^gitdir:\s*(.+?)\s*$/mu.exec(fs.readFileSync(path.join(d, '.git'), 'utf8')); if (m) gitdir = path.resolve(d, m[1]); } catch { /* 讀不了 */ }
+        try { const m = /^gitdir:\s*(.+?)\s*$/mu.exec(fs.readFileSync(path.join(d, '.git'), 'utf8')); if (m) gitdir = path.resolve(d, m[1]); } catch { return `判斷不了 ${d} 是不是上鎖的樹（.git 讀不了）`; }
         if (gitdir && fs.existsSync(path.join(gitdir, 'locked'))) return `裡面有上鎖的樹（${d}）`;
       }
       const s = treeStatus(d);
@@ -178,8 +187,8 @@ function protectedInside(dir, own) {
       continue;
     }
     if (depth >= TREE_DEPTH) continue;
-    let kids = [];
-    try { kids = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    let kids;
+    try { kids = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return `判斷不了 ${d} 裡面有什麼（${e.code}）`; }
     for (const k of kids) if (k.isDirectory() && !k.isSymbolicLink()) queue.push([path.join(d, k.name), depth + 1]);
   }
   return null;

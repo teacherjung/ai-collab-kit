@@ -12,7 +12,9 @@
 //     （「-PR9PKV」「-pr1xld」）、不像的名字、沒超過天數（剛好等於也不算）、不是資料夾（檔案、捷徑）、登記在這個倉庫的工作樹＝不列；
 //     兩個暫存資料夾其實是同一個只算一次、不存在的跳過；
 //     裝著樹的資料夾：這個倉庫登記的工作樹（乾淨、上鎖、有改動都一樣）、別的倉庫或獨立倉庫有改動、上鎖、讀不了狀態的＝不列，乾淨沒上鎖的照列；
-//   ⑤stash 每一筆列出來、附日期與說明；②③④⑤每一題跑預設與 --list 兩次，前後所有參照、stash、工作樹登記、暫存資料夾第一層的名字與修改時間都不變（只列不刪）；
+//     登記過的樹 .git 被移走或資料夾讀不了＝照樣不列（只比登記的路徑）；別的資料夾裡有讀不了的子資料夾＝判斷不了、保守不列；
+//   ⑤stash 每一筆列出來、附日期與說明；②③④⑤每一題跑預設與 --list 兩次，前後所有參照、stash、工作樹登記、每棵工作樹的工作檔內容
+//     （含沒提交的改動與沒追蹤的檔）、暫存資料夾第一層的名字與修改時間、底下每個檔的內容都不變（只列不刪）；
 //   ⑥b查祖先出錯＝退 2；同名標籤不影響分支名與排除（②）；
 //   ⑥輸出：預設只印各類幾個（有東西才提示加 --list）、--list 才印整份；
 //   ⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑧空白設定的複本裡跑指令入口＝退 2。
@@ -25,6 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const { gitEnv } = require('../tools/git-env.js');
 const { run, parseArgs, TMP_NAME, DAYS } = require('../tools/tidy-list.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
@@ -59,16 +62,41 @@ function repo() {
 
 const names = (xs, key = 'name') => xs.map((x) => x[key]).sort();
 
-/** 只列不刪的對照（#73 r1 R4）：所有參照、stash、工作樹登記、給的暫存資料夾第一層每一項的名字與修改時間。跑工具前後各拍一次、要一樣。 */
+/** 一個資料夾底下每個檔的相對路徑與內容雜湊（.git 資料夾不進去、.git 檔照算；讀不了的記「讀不了」）。 */
+function contents(dir) {
+  const out = [];
+  const walk = (d, rel) => {
+    let kids;
+    try { kids = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { out.push(`${rel || '.'}：讀不了 ${e.code}`); return; }
+    for (const k of kids.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const p = path.join(d, k.name);
+      const r = rel ? `${rel}/${k.name}` : k.name;
+      if (k.isSymbolicLink()) out.push(`${r} → ${fs.readlinkSync(p)}`);
+      else if (k.isDirectory()) { if (k.name !== '.git') walk(p, r); }
+      else { try { out.push(`${r}=${crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}`); } catch (e) { out.push(`${r}：讀不了 ${e.code}`); } }
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
+/**
+ * 只列不刪的對照（#73 r1 R4、r2 R2）：所有參照、stash、工作樹登記、每棵還在的工作樹的工作檔內容（含沒提交的改動與沒追蹤的檔）、
+ * 給的暫存資料夾第一層每一項的名字與修改時間、以及底下每個檔的內容。跑工具前後各拍一次、要一樣。
+ */
 function snapshot(r, tmpDirs = []) {
   const stash = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/stash'], { cwd: r.dir, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
   const tmp = tmpDirs.map((d) => (fs.existsSync(d) ? fs.readdirSync(d).sort().map((n) => `${n}@${fs.lstatSync(path.join(d, n)).mtimeMs}`) : []));
+  const list = r.g('worktree', 'list', '--porcelain');
+  const trees = list.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length)).filter((d) => fs.existsSync(d));
   return {
     refs: r.g('for-each-ref', '--format=%(refname) %(objectname)'),
     stash,
     stashList: r.g('stash', 'list', '--format=%H %gs'),
-    worktrees: r.g('worktree', 'list', '--porcelain'),
+    worktrees: list,
+    files: trees.map((d) => [d, contents(d)]),
     tmp,
+    tmpFiles: tmpDirs.map((d) => (fs.existsSync(d) ? contents(d) : [])),
   };
 }
 
@@ -177,6 +205,9 @@ test('③工作樹：檢出②的分支或分離在主幹歷史裡、而且乾�
     fs.writeFileSync(path.join(at('wt-broken'), '.git'), `gitdir: ${path.join(r.base, 'no-such-gitdir')}\n`);
     const res = runKeeping(r, { settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty] });
     assert.equal(res.code, 0, res.lines.join('\n'));
+    // 沒提交的內容逐字還在（#73 r2 R2：只比參照與登記，工作檔被還原也照綠）
+    assert.equal(fs.readFileSync(path.join(at('wt-dirty'), 'a.txt'), 'utf8'), 'changed\n', '追蹤檔沒提交的改動還在');
+    assert.equal(fs.readFileSync(path.join(at('wt-untracked'), 'new.txt'), 'utf8'), 'new\n', '沒追蹤的檔還在');
     assert.deepEqual(names(res.worktrees, 'dir'), [at('wt-clean'), at('wt-detached-old'), at('wt-gone')].sort());
     const why = Object.fromEntries(res.worktrees.map((w) => [path.basename(w.dir), w.why]));
     assert.match(why['wt-clean'], /^檢出的分支 m-clean 在①裡、乾淨$/u);
@@ -201,7 +232,9 @@ test('④暫存資料夾：名字像審查樹而且超過天數的資料夾才�
     for (const n of [...listed, ...notListed]) { fs.mkdirSync(path.join(tmpA, n)); fs.utimesSync(path.join(tmpA, n), old, old); }
     fs.writeFileSync(path.join(tmpA, 'review-file'), 'x');
     fs.utimesSync(path.join(tmpA, 'review-file'), old, old);
-    fs.symlinkSync(path.join(tmpA, 'claude-501'), path.join(tmpA, 'review-link'));
+    fs.mkdirSync(path.join(r.base, 'link-target'));
+    fs.symlinkSync(path.join(r.base, 'link-target'), path.join(tmpA, 'review-link'));
+    fs.lutimesSync(path.join(tmpA, 'review-link'), old, old);   // 捷徑自己的時間也設舊：不靠時間、要靠「不是資料夾」才不列
     fs.mkdirSync(path.join(tmpA, 'review-fresh'));
     fs.utimesSync(path.join(tmpA, 'review-fresh'), (NOW - DAY) / 1000, (NOW - DAY) / 1000);   // 剛好一天＝不算超過
     r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-registered'), 'HEAD');
@@ -243,6 +276,40 @@ test('④暫存資料夾：名字像審查樹而且超過天數的資料夾才�
       for (const n of ['review-own-clean', 'review-own-locked', 'review-own-dirty', 'review-other-dirty', 'review-other-locked', 'review-other-clean', 'review-standalone-dirty', 'review-broken']) fs.rmSync(path.join(tmpA, n), { recursive: true, force: true });
       r.g('worktree', 'prune'); other.g('worktree', 'prune');
     } finally { other.cleanup(); }
+    // 登記過的樹 .git 被移走、或資料夾讀不了（#73 r2 R1）：登記與鎖都還在，照樣不列——只比登記的路徑，不靠 .git 讀不讀得到；
+    // 別的資料夾裡有讀不了的子資料夾＝判斷不了，保守不列
+    const locked = [];
+    try {
+      r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-direct'), 'HEAD');
+      r.g('worktree', 'lock', path.join(tmpA, 'review-direct'));
+      fs.writeFileSync(path.join(tmpA, 'review-direct', 'only.txt'), 'UNIQUE_DIRECT\n');
+      fs.renameSync(path.join(tmpA, 'review-direct', '.git'), path.join(r.base, 'moved-dot-git'));
+      fs.mkdirSync(path.join(tmpA, 'review-container'));
+      r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-container', 'tree'), 'HEAD');
+      fs.rmSync(path.join(tmpA, 'review-container', 'tree', '.git'));
+      fs.mkdirSync(path.join(tmpA, 'review-noread'));
+      r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-noread', 'tree'), 'HEAD');
+      fs.chmodSync(path.join(tmpA, 'review-noread', 'tree'), 0o000); locked.push(path.join(tmpA, 'review-noread', 'tree'));
+      // 兩種讀不了分開布置：只能進不能列（0o111：看得到 .git 不存在、列不出裡面有什麼）／能列不能進（0o444：列得出名字、
+      // 判斷不了裡面那一層有沒有 .git）——各自只有一條判法接得住
+      fs.mkdirSync(path.join(tmpA, 'review-unreadable-inside', 'sub'), { recursive: true });
+      fs.chmodSync(path.join(tmpA, 'review-unreadable-inside', 'sub'), 0o111); locked.push(path.join(tmpA, 'review-unreadable-inside', 'sub'));
+      fs.mkdirSync(path.join(tmpA, 'review-unsearchable-inside', 'sub', 'inner'), { recursive: true });
+      fs.chmodSync(path.join(tmpA, 'review-unsearchable-inside', 'sub'), 0o444); locked.push(path.join(tmpA, 'review-unsearchable-inside', 'sub'));
+      for (const n of ['review-direct', 'review-container', 'review-noread', 'review-unreadable-inside', 'review-unsearchable-inside']) fs.utimesSync(path.join(tmpA, n), old, old);
+      const hidden = runKeeping(r, { settings: SETTINGS, cwd: r.dir, now: NOW, argv: ['--tmp', tmpA] }, [tmpA]);
+      assert.equal(hidden.code, 0, hidden.lines.join('\n'));
+      const got = hidden.tmp.map((x) => path.basename(x.dir));
+      for (const n of ['review-direct', 'review-container', 'review-noread', 'review-unreadable-inside', 'review-unsearchable-inside']) assert.ok(!got.includes(n), `${n} 不該列：${got.join('、')}`);
+      assert.match(r.g('worktree', 'list', '--porcelain'), /locked/u, '鎖還在');
+      assert.equal(fs.readFileSync(path.join(tmpA, 'review-direct', 'only.txt'), 'utf8'), 'UNIQUE_DIRECT\n', '沒提交的內容逐字還在');
+    } finally {
+      for (const p of locked) fs.chmodSync(p, 0o755);
+      for (const n of ['review-direct', 'review-container', 'review-noread', 'review-unreadable-inside', 'review-unsearchable-inside']) fs.rmSync(path.join(tmpA, n), { recursive: true, force: true });
+      fs.rmSync(path.join(r.base, 'moved-dot-git'), { force: true });
+      r.g('worktree', 'unlock', path.join(tmpA, 'review-direct'));
+      r.g('worktree', 'prune');
+    }
     const res = run({ settings: SETTINGS, cwd: r.dir, now: NOW, argv: ['--tmp', tmpA, '--tmp', path.join(tmpA, '.', ''), '--tmp', path.join(r.base, 'no-such-dir')] });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.deepEqual(res.tmp.map((t) => path.basename(t.dir)).sort(), [...listed].sort(), '同一個資料夾給兩次只算一次');
