@@ -52,15 +52,25 @@ function parseDiff(text) {
   return { removed, added };
 }
 
-/** 刪掉或改名的檔：舊路徑，加上看得出是檔名的舊檔名（太短太常見的檔名不單獨搜）。來源是 git diff --name-status -M。 */
-function pathPhrases(nameStatus) {
+/**
+ * 刪掉或改名的檔：舊路徑，加上看得出是檔名的舊檔名（太短太常見的檔名不單獨搜）。
+ * 來源是 git diff --name-status -M -z：每一筆是「狀態\0路徑\0」，改名與複製多一個「\0新路徑」。
+ * 一定要 -z：沒有 -z 時，路徑裡有雙引號、反斜線、控制字元，或（core.quotePath 預設開著時）中文這類非 ASCII 字，
+ * git 會加引號、轉成跳脫碼，拿那個樣子去搜就配不到倉庫裡真的舊路徑（理財 #672 r1 第 1 條）。
+ */
+function pathPhrases(nameStatusZ) {
   const out = [];
-  for (const line of String(nameStatus).split('\n')) {
-    const cols = line.split('\t');
-    if (!/^[DR]/u.test(cols[0] || '') || !cols[1]) continue;
-    out.push(cols[1]);
-    const base = cols[1].split('/').pop();
-    if (base !== cols[1] && looksLikeName(base)) out.push(base);
+  const tokens = String(nameStatusZ).split('\0');
+  for (let i = 0; i + 1 < tokens.length;) {
+    const status = tokens[i];
+    if (!status) { i += 1; continue; }
+    const pair = /^[RC]/u.test(status);
+    const oldPath = tokens[i + 1];
+    i += pair ? 3 : 2;
+    if (!/^[DR]/u.test(status) || !oldPath) continue;
+    out.push(oldPath);
+    const base = oldPath.split('/').pop();
+    if (base !== oldPath && looksLikeName(base)) out.push(base);
   }
   return out;
 }
@@ -113,12 +123,13 @@ function phrasesOf(removed, added, extra = []) {
 function searchAll(phrases, cwd, runGit = git) {
   const hits = new Map(phrases.map((p) => [p, []]));
   if (!phrases.length) return { hits };
-  const r = runGit(['grep', '-n', '-I', '-F', '--no-color', '-f', '-', 'HEAD'], { cwd, input: `${phrases.join('\n')}\n` });
+  // -z：檔名後面接 \0 而不是冒號，檔名照原樣印（沒有 -z 時中文、雙引號、反斜線會被加引號轉成跳脫碼，印出來讀不懂）
+  const r = runGit(['grep', '-z', '-n', '-I', '-F', '--no-color', '-f', '-', 'HEAD'], { cwd, input: `${phrases.join('\n')}\n` });
   // git grep 沒找到任何一處＝退 1、什麼都沒印，不是錯誤；其餘非零（含被訊號殺掉、超過輸出上限的 null）都是錯誤，不可以當成沒命中
   if (r.status === 1 && !r.stdout && !(r.stderr || '').trim()) return { hits };
   if (r.status !== 0) return { error: `git grep 出錯（退出碼 ${r.status}）：${(r.stderr || '').trim().split('\n')[0]}` };
   for (const line of r.stdout.split('\n')) {
-    const m = /^HEAD:(.*?):(\d+):(.*)$/u.exec(line);
+    const m = /^HEAD:([^\0]*)\0(\d+)\0(.*)$/u.exec(line);
     if (!m) continue;
     for (const p of phrases) if (m[3].includes(p)) hits.get(p).push({ file: m[1], line: Number(m[2]), text: m[3].trim() });
   }
@@ -144,7 +155,7 @@ function run(args = [], { settings = readSettings(), cwd = process.cwd(), runGit
   }
   const diff = runGit(['diff', '--no-color', '--no-ext-diff', '-M', '--unified=0', `${base}...HEAD`], { cwd: root });
   if (diff.status !== 0) return { code: 2, lines: [`git diff 出錯（退出碼 ${diff.status}）：${(diff.stderr || '').trim().split('\n')[0]}`] };
-  const names = runGit(['diff', '--no-color', '--name-status', '-M', `${base}...HEAD`], { cwd: root });
+  const names = runGit(['diff', '--no-color', '--name-status', '-M', '-z', `${base}...HEAD`], { cwd: root });
   if (names.status !== 0) return { code: 2, lines: [`git diff 出錯（退出碼 ${names.status}）：${(names.stderr || '').trim().split('\n')[0]}`] };
   const { removed, added } = parseDiff(diff.stdout);
   const all = phrasesOf(removed, added, pathPhrases(names.stdout));
