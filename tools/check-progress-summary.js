@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 進度摘要檢查（規矩 J5）：讀倉庫外那份共用進度摘要，列出不合檔頭寫法、時間寫反、附件條號指不到、
+// 進度摘要檢查（規矩 J5）：讀倉庫外那份共用進度摘要，列出不合檔頭寫法、時間寫反、沒動的線、附件條號指不到、
 // 「已合併」跟平台對不上的地方；只列不擋（有問題也退 0），接進鉤子時帶 --strict 才擋。
 //
 // 為什麼：進度摘要是擁有者最常看的檔，卻沒有任何機器看它（套件缺點稽核 2026-10-06 第一主題）。
@@ -26,6 +26,14 @@
 //     （不枚舉壞法：r1〜r3 連三輪補了縮排、四個井號、兩個井號、缺空白、七個井號，追不完，改成只認一種、其餘全列）；
 //     「已留」要有解析得出的附件條號、滿 30 天該刪；本週成果那一節：只認「- 月/日」與它底下縮排的子項目，其餘列出；
 //     子項目上面要有合法的日期行（沒有＝孤立、整組多縮排兩格＝日期行也縮了，都列出來，不讓成果躲過七天；r4 R2）；日期超過七天該刪。
+//   ⑥沒動的線（擁有者 2026-10-10 裁 a，進度摘要設計報告第一批）：暫停中的則，整理時間（文字最後改的那一刻）超過 STALE_PAUSED_DAYS 天＝列（第 15 天起），不是刪、給擁有者決定關掉還是叫回；
+//     施工中、等複審、等驗收、等裁示四種狀態的則（STALE_STATES），核實時間超過 STALE_VERIFIED_DAYS 天＝列（第 8 天起；Codex 唸出來才不會是上週的狀態）；暫停中的不重複列核實，
+//     寫在進行中的「已結束」與不在選單的狀態不算（前者該搬去已結束那一節、後者已另列）；只比月日、未來的日期不算；月日從 STAMP 重讀、讀不出（例如一位數的月）＝已列成缺欄、不算天數；
+//     --strict 時這兩種跟其餘問題一樣算；「再改時間」＝核實與整理兩個時間都改成現在（只改核實會撞到「核實晚於整理」那一條）；
+//   ⑦最近誰提交（擁有者 2026-10-10 裁「那三件小事就做」的第三件）：摘要在 git 倉庫裡（那一層是個小倉庫）就印最近 RECENT_HOURS 小時改過本檔的提交（--recent <小時> 改窗口，只收非負整數）；
+//     只算改到本檔的；只印、不是問題、不動退出碼——「現在誰在動」那一欄靠人改、會落後（10/10 量到一則寫沒人、那個視窗其實在跟擁有者對話），提交紀錄才是誰真的動過；不在倉庫裡或 git 不能用＝印查不到；
+//     log 帶 --no-show-signature 與 --encoding=UTF-8（使用者的 git 顯示設定不污染清單；r2 R1）、時間印提交時間（跟 --since 同一種；r2 R2）、
+//     檔名用 --literal-pathspecs 逐字比對（檔名裡的 [ ] * ? 與冒號開頭不當樣式；r3 R2）。
 // 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
 // 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
 // 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
@@ -35,6 +43,7 @@
 // 退出碼：0＝查完了（有沒有問題都是 0；--strict 時有問題＝1）／2＝查不了（檔或附件檔讀不到、少了要查的節、同名的節重複、參數不對）。
 'use strict';
 const fs = require('node:fs');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
@@ -47,6 +56,13 @@ const SECTIONS = { active: '## 進行中的線', week: '## 本週成果', done: 
 const KNOWN_SECTIONS = ['## 全貌', SECTIONS.active, '## 等裁示', SECTIONS.week, SECTIONS.done, '## 待辦', SECTIONS.attachments];
 const DONE_DAYS = 30;
 const WEEK_DAYS = 7;
+// 沒動的線（擁有者 2026-10-10 裁 a）：暫停中的則整理超過 14 天、其他狀態的則核實超過 7 天就列出來（不是刪；第 15／第 8 天起列）
+const STALE_PAUSED_DAYS = 14;
+const STALE_VERIFIED_DAYS = 7;
+// 核實那一條只管還在動的四種狀態；暫停中另算整理、已結束不該在進行中、不在選單的已另列（自審 C3／C10）
+const STALE_STATES = ['施工中', '等複審', '等驗收', '等裁示'];
+// 最近誰提交的預設窗口（小時）；--recent 改
+const RECENT_HOURS = 1;
 // 附件條號的上限：真的摘要到 2026-10-07 是 69 條；超過這個數字的幾乎一定是寫壞的（例如把留言編號寫成條號）
 const MAX_REF = 100000;
 // 一個範圍最多展開幾條（閉區間，1〜200 是 200 條）：防「1〜100000」這種把整份附件引進來的寫法
@@ -281,6 +297,23 @@ function checkEntry(entry, ctx) {
   if (!verifiedPart) say('時間欄缺「核實」');
   else if (!verified) say('「核實」後面要有一個月/日 時:分（沿用舊紀錄就寫那份紀錄的時間）');
   if (edited && verified && verified > edited) say(`核實時間（${verified}）晚於整理時間（${edited}）：核實之後改了字就要更新整理時間`);
+  // 沒動的線（擁有者 2026-10-10 裁 a）：暫停中看整理時間（文字最後改的那一刻），超過 STALE_PAUSED_DAYS 天＝列，給擁有者決定關掉還是叫回；
+  // STALE_STATES 四種狀態看核實時間，超過 STALE_VERIFIED_DAYS 天＝列（唸出來才不會是上週的狀態）；暫停中不重複列核實、已結束與不在選單的不算。
+  // 只比月日、未來的日期不算（跟已結束、本週成果同一套 daysBefore）；月日從 STAMP 重讀，不切字串（格式一鬆切出來是 NaN、會靜靜不列；自審 C5），讀不出＝不算天數。
+  const dayOf = (s) => { const m = STAMP.exec(s || ''); return m ? { month: Number(m[1]), day: Number(m[2]), text: `${m[1]}/${m[2]}` } : null; };
+  if (state === '暫停中') {
+    const d = dayOf(edited);
+    if (d) {
+      const age = daysBefore(ctx.now, d.month, d.day);
+      if (age > STALE_PAUSED_DAYS) say(`暫停中已 ${age} 天沒動（整理 ${d.text}；上限 ${STALE_PAUSED_DAYS} 天）：給擁有者決定關掉還是叫回`);
+    }
+  } else if (STALE_STATES.includes(state)) {
+    const d = dayOf(verified);
+    if (d) {
+      const age = daysBefore(ctx.now, d.month, d.day);
+      if (age > STALE_VERIFIED_DAYS) say(`核實已 ${age} 天沒更新（上次核實 ${d.text}；上限 ${STALE_VERIFIED_DAYS} 天）：回報前先核一次，核實與整理兩個時間都改成現在`);
+    }
+  }
 
   const refs = parseRefs(fields.get('證據') || '');
   for (const b of refs.bad) say(`證據欄的附件條號寫法不對，認不出「${b}」（要寫成「附件第 N 條」或「附件第 N〜M 條」，N、M 是 1〜${MAX_REF} 的整數、一個範圍最多 ${MAX_RANGE} 條）`);
@@ -313,7 +346,7 @@ function checkDone(lines, ctx) {
     const m = DONE_RECORD.exec(line);
     if (!m) { problems.push(`已結束：有一行不是合法的紀錄（只認「### 專案｜事情｜已結束 月/日｜已留：附件第 N 條」或「…｜無永久決定」，井號三個、後面一個空白）：「${line.trim().slice(0, 40)}」`); continue; }
     const age = daysBefore(ctx.now, Number(m[3]), Number(m[4]));
-    if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS}），該刪`);
+    if (age > DONE_DAYS) problems.push(`已結束：「${m[2]}」結束滿 ${age} 天（上限 ${DONE_DAYS} 天），該刪`);
     if (m[5].startsWith('已留')) {
       const refs = parseRefs(m[5]);
       for (const b of refs.bad) problems.push(`已結束：「${m[2]}」的附件條號寫法不對，認不出「${b}」`);
@@ -429,6 +462,18 @@ function fetchPrStates(prs, runner = runGh) {
   return out;
 }
 
+/** 最近 hours 小時改過 file 的提交（git log，只算這一個檔）；不在倉庫裡、git 不能用＝null（印查不到，不猜）。環境先清掉版本控制那一族變數（E4）。 */
+function recentCommits(file, hours) {
+  const dir = path.dirname(path.resolve(file));
+  // --no-show-signature、--encoding=UTF-8：使用者的 git 設定開了 log.showSignature（簽章診斷會混進標準輸出、被當成提交）或 i18n.logOutputEncoding 設成別的編碼（題名變亂碼）時也要對（#66 r2 R1；跟 tools/downstream-lag.js 同一套）；
+  // 時間印 %cd（提交時間）：--since 本來就用提交時間篩，印作者時間會對不上（rebase、amend 之後兩個時間不同；#66 r2 R2）；
+  // format-local：照這台機器的時區印（format: 會照提交裡記的時區，別的時區提的會對不上摘要裡的台北時間）
+  // --literal-pathspecs：檔名逐字比對，不當成比對樣式（檔名有 [ ] * ? 或冒號開頭時，別的檔的提交會被列進來；#66 r3 R2）
+  const r = spawnSync('git', ['-C', dir, '--literal-pathspecs', 'log', '--no-show-signature', '--encoding=UTF-8', `--since=${hours} hours ago`, '--format=%cd%x09%s', '--date=format-local:%m/%d %H:%M', '--', path.basename(file)], { encoding: 'utf8', env: gitEnv() });
+  if (r.error || r.status !== 0) return null;
+  return r.stdout.split('\n').filter(Boolean).map((l) => { const i = l.indexOf('\t'); return { time: l.slice(0, i), subject: l.slice(i + 1) }; });
+}
+
 function runGh(args) {
   const r = spawnSync('gh', args, { encoding: 'utf8', env: ghEnv(), maxBuffer: 16 * 1024 * 1024 });
   if (r.error) return { status: 127, stdout: '', stderr: String(r.error.message) };
@@ -437,7 +482,7 @@ function runGh(args) {
 
 function parseArgs(argv) {
   // 別名表不帶原型：登記什麼名字（連 __proto__）都只是自有的鍵，不會改到別的東西（r1 R8）
-  const opts = { file: null, now: null, offline: false, strict: false, prStatesFile: null, repos: Object.create(null) };
+  const opts = { file: null, now: null, offline: false, strict: false, prStatesFile: null, repos: Object.create(null), recent: String(RECENT_HOURS) };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => { i += 1; if (i >= argv.length) throw new Error(`${a} 後面要接值`); return argv[i]; };
@@ -446,6 +491,7 @@ function parseArgs(argv) {
     else if (a === '--now') opts.now = next();
     else if (a === '--offline') opts.offline = true;
     else if (a === '--strict') opts.strict = true;
+    else if (a === '--recent') opts.recent = next();
     else if (a === '--pr-states') opts.prStatesFile = next();
     else if (a === '--repos') {
       for (const pair of next().split(',')) {
@@ -453,7 +499,7 @@ function parseArgs(argv) {
         if (!name || !repo || !/^[^/]+\/[^/]+$/u.test(repo)) throw new Error(`--repos 的寫法是 名稱=owner/repo，用逗號隔開（收到「${pair}」）`);
         opts.repos[name.trim()] = repo.trim();
       }
-    } else throw new Error(`不認得的參數：${a}。用法：node tools/check-progress-summary.js --file <摘要檔> [--now 月/日] [--offline] [--strict] [--pr-states <json 檔>] [--repos 套件=owner/repo,...]`);
+    } else throw new Error(`不認得的參數：${a}。用法：node tools/check-progress-summary.js --file <摘要檔> [--now 月/日] [--offline] [--strict] [--recent <小時>] [--pr-states <json 檔>] [--repos 套件=owner/repo,...]`);
   }
   if (!opts.file) throw new Error('要給 --file <摘要檔>');
   return opts;
@@ -481,6 +527,8 @@ function run(argv, { fetch = fetchPrStates } = {}) {
   }
   const now = opts.now ? parseNow(opts.now) : todayLocal();
   if (!now) return { code: 2, lines: [`進度摘要檢查：--now 要寫成 月/日（收到「${opts.now}」）`] };
+  if (!/^\d+$/u.test(String(opts.recent))) return { code: 2, lines: [`進度摘要檢查：--recent 要是幾小時（非負整數；收到「${opts.recent}」）`] };
+  const recentHours = Number(opts.recent);
   let prStates = {};
   if (opts.prStatesFile) {
     try { prStates = JSON.parse(fs.readFileSync(opts.prStatesFile, 'utf8')); } catch (e) { return { code: 2, lines: [`進度摘要檢查：--pr-states 讀不到或不是 JSON（${e.code || e.message}）`] }; }
@@ -495,6 +543,14 @@ function run(argv, { fetch = fetchPrStates } = {}) {
   const lines = [`進度摘要檢查｜${opts.file}：進行中 ${result.entries} 則、附件 ${result.attachments} 條${opts.attachmentsFile ? `（本檔 ${result.attachmentsInline}、附件檔 ${result.attachmentsFile}）` : ''}、引到 ${result.cited.length} 支 PR${opts.offline ? '（離線，沒問平台）' : ''}；問題 ${result.problems.length} 條`];
   for (const p of result.problems) lines.push(`  ・${p}`);
   lines.push(result.problems.length ? '只列不擋（--strict 才擋）；照檔頭「怎麼寫」逐條改，改完再跑一次。' : '沒有問題。');
+  // 最近誰提交：只印、不算問題（「現在誰在動」落後時以這裡為準）
+  const recent = recentCommits(opts.file, recentHours);
+  if (recent === null) lines.push('最近誰提交：本檔不在 git 倉庫裡（或 git 不能用），查不到');
+  else if (!recent.length) lines.push(`最近 ${recentHours} 小時沒有人提交本檔（git）`);
+  else {
+    lines.push(`最近 ${recentHours} 小時改過本檔的提交（git；「現在誰在動」那一欄落後時以這裡為準）：`);
+    for (const c of recent) lines.push(`  ・${c.time} ${c.subject}`);
+  }
   return { code: opts.strict && result.problems.length ? 1 : 0, lines };
 }
 
@@ -504,4 +560,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, MAX_REF, MAX_RANGE };
+module.exports = { run, evaluate, fetchPrStates, ghEnv, expandRefs, parseRefs, prRefs, parseArgs, FIELDS, STATES, PROJECTS, KNOWN_SECTIONS, DONE_DAYS, WEEK_DAYS, STALE_PAUSED_DAYS, STALE_VERIFIED_DAYS, STALE_STATES, RECENT_HOURS, MAX_REF, MAX_RANGE };
