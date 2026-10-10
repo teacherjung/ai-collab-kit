@@ -22,7 +22,8 @@
 //     往下兩層裡別的倉庫的樹上鎖、讀不了狀態、有沒提交的改動、或有資料夾讀不了（判斷不了就保守不列），整個資料夾不列
 //     （送審產生器的布局是 review-…/tree、review-…/mutation，容器本身不是樹）。
 //   ④stash：每一筆都列、附建立的日期；stash 整個倉庫共用，誰的都在這裡。
-// 主幹：--main 給的（先找 origin/<名字>、再找本機同名分支），沒給就用專案設定的主幹分支名（origin/<主幹>，再找本機）。
+// 主幹：--main 給的（先找 origin/<名字>、確定沒有才找本機同名分支；查的時候出錯或被殺掉＝退 2，不默默換一個主幹），
+//   沒給就用專案設定的主幹分支名（同樣先 origin/<主幹>、確定沒有才找本機）。
 // 輸出：預設只印各類幾個；--list 才印整份清單。
 // ⚠️ 守不到的（Fable 代裁 D1 定的範圍：判斷只認工具自己看得到的訊號——讀檔案系統的三種結果、git 的退出碼、stderr 有沒有字、輸出形狀認不認得；
 //   之後找到屬於下面前三句的情形，算「守不到、已寫明」，不再改做法；找到「出聲了卻沒落到判斷不了」才算錯、照修）：
@@ -104,6 +105,8 @@ function mainRef(cwd, name) {
     const r = git(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { allowFail: true });
     if ((r.stderr || '').trim()) throw new TidyError(`git rev-parse 找主幹時印了警告「${firstLine(r.stderr)}」：這一次讀到的不能信，什麼都不列`);
     if (r.status === 0) return { ref, label, name };
+    // --quiet 時「確定沒有這個參照」＝安靜退 1；其他退出碼、被殺掉＝判斷不了，不默默換成下一個主幹（#73 r5 R2）
+    if (r.status !== 1) throw new TidyError(`git rev-parse 找主幹（${label}）退 ${r.status === null ? `（被殺掉${r.signal ? `：${r.signal}` : ''}）` : r.status}：判斷不了，不換成別的主幹，什麼都不列`);
   }
   throw new TidyError(`找不到主幹（試過 ${tries.map((x) => x[1]).join('、')}）`);
 }
@@ -158,8 +161,17 @@ function worktreeEntries(cwd) {
 }
 
 /** ①分支：尖端在主幹歷史裡、或上游已不在。 */
+/** 目前所在的分支：分離狀態＝空的；不然要剛好一行、像分支名的字（#73 r5 R1：多一行或怪字照樣當名字，目前分支就排除不了）。形狀不對＝退 2。 */
+function currentBranch(cwd) {
+  const out = git(cwd, ['branch', '--show-current']).stdout;
+  const lines = out.replace(/\n$/u, '').split('\n');
+  if (out === '' || (lines.length === 1 && lines[0] === '')) return '';
+  if (lines.length !== 1 || !/^[^\s~^:?*[\\\x00-\x1f\x7f]+$/u.test(lines[0])) throw new TidyError(`git branch --show-current 的輸出形狀認不得「${out.slice(0, 60).replace(/\n/gu, '⏎')}」：這一次讀到的不能信，什麼都不列`);
+  return lines[0];
+}
+
 function staleBranches(cwd, main, trees, unsure) {
-  const current = git(cwd, ['branch', '--show-current']).stdout.trim();
+  const current = currentBranch(cwd);
   const out = [];
   const rows = git(cwd, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:track)', 'refs/heads/']).stdout.split('\n').filter(Boolean);
   for (const row of rows) {

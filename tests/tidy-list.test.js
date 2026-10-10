@@ -22,7 +22,8 @@
 //   ⑥e真 git 讀不了沒追蹤的子資料夾（0o000、0o111：退 0、輸出空、只在 stderr 警告）：本倉庫的工作樹、別的倉庫在暫存區的樹都不列、
 //     進判斷不了附警告第一行、唯一內容還在；
 //   ⑥f（Fable 代裁 D1：git 出聲就判斷不了）包著真 git 的假 git：全域那幾次（工作樹登記、分支清單、目前分支、stash、rev-parse）
-//     印警告＝退 2（rev-parse 三處各自單獨試）；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
+//     印警告＝退 2（rev-parse 三處各自單獨試）；目前分支的輸出多一行＝退 2；找主幹時遠端那一次安靜退錯誤碼或被殺掉＝退 2（不默默換成本機主幹；
+//     確定沒有遠端主幹時用本機的照舊，見①）；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
 //     （不安靜丟掉）、其餘照算；
 //   ⑥輸出：預設只印各類幾個（有東西才提示加 --list）、--list 才印整份；
 //   ⑦git 那一族環境變數指向別的倉庫，照樣看這一個（E4）；⑧空白設定的複本裡跑指令入口＝退 2。
@@ -508,17 +509,18 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
   fs.writeFileSync(path.join(bin, 'git'), [
     '#!/bin/sh',
     'sub="$1"; arg="$2"; [ "$1" = "--no-optional-locks" ] && sub="$2" && arg="$3"',
-    'case ",$TIDY_FAKE_EXIT," in *",$sub,"*) exit 3;; esac',
+    'case ",$TIDY_FAKE_EXIT," in *",$sub,"*|*",$sub:$arg,"*) exit 3;; esac',
+    'case ",$TIDY_FAKE_KILL," in *",$sub,"*|*",$sub:$arg,"*) kill -TERM $$;; esac',
     `"${realGit}" "$@"; code=$?`,
     'case ",$TIDY_FAKE_WARN," in *",$sub,"*|*",$sub:$arg,"*) echo "warning: fake warning for $sub" >&2;; esac',
     'case ",$TIDY_FAKE_SHAPE," in *",$sub,"*) printf "garbage-row\\n";; esac',
     'exit $code', ''].join('\n'));
   fs.chmodSync(path.join(bin, 'git'), 0o755);
-  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT'];
+  const VARS = ['TIDY_FAKE_WARN', 'TIDY_FAKE_SHAPE', 'TIDY_FAKE_EXIT', 'TIDY_FAKE_KILL'];
   const saved = { PATH: process.env.PATH, ...Object.fromEntries(VARS.map((v) => [v, process.env[v]])) };
-  const withFake = (warn, shape, exit = '') => {
+  const withFake = (warn, shape, exit = '', kill = '') => {
     process.env.PATH = `${bin}${path.delimiter}${saved.PATH}`;
-    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit]]) { if (val) process.env[v] = val; else delete process.env[v]; }
+    for (const [v, val] of [['TIDY_FAKE_WARN', warn], ['TIDY_FAKE_SHAPE', shape], ['TIDY_FAKE_EXIT', exit], ['TIDY_FAKE_KILL', kill]]) { if (val) process.env[v] = val; else delete process.env[v]; }
     try { return run({ settings: SETTINGS, cwd: r.dir, argv: ['--tmp', empty, '--list'] }); } finally {
       process.env.PATH = saved.PATH;
       for (const v of VARS) { if (saved[v] === undefined) delete process.env[v]; else process.env[v] = saved[v]; }
@@ -530,6 +532,7 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     r.g('worktree', 'add', '-q', '--detach', path.join(r.base, 'wt-old'), first);
     const base = withFake('', '');
     assert.equal(base.code, 0, base.lines.join('\n'));
+    assert.equal(base.main, 'origin/main', '遠端主幹在的時候用遠端那一個');
     assert.deepEqual(names(base.branches), ['merged'], '假 git 不加料時跟真的一樣');
     assert.equal(base.worktrees.length, 1);
     // 全域那幾次逐一單獨加警告（rev-parse 有三處、各自分開試：在不在倉庫裡、找主幹、倉庫位置）
@@ -547,6 +550,16 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     assert.equal(quiet.code, 0, quiet.lines.join('\n'));
     assert.deepEqual(quiet.worktrees, [], 'status 退非 0：那一棵不列');
     assert.ok(quiet.unsure.some((u) => u.dir === path.join(r.base, 'wt-old') && /git status 退 3/u.test(u.why)), JSON.stringify(quiet.unsure));
+    // 目前分支的輸出多一行（#73 r5 R1）：退 2，不能讓目前分支變成候選
+    const cur = withFake('', 'branch');
+    assert.equal(cur.code, 2, `目前分支的輸出形狀認不得要退 2：${cur.lines.join('\n')}`);
+    assert.match(cur.lines[0], /branch --show-current 的輸出形狀認不得/u);
+    // 找主幹時遠端那一次安靜退錯誤碼、或被殺掉（#73 r5 R2）：退 2，不能默默換成本機主幹
+    for (const [exit, kill] of [['rev-parse:--verify', ''], ['', 'rev-parse:--verify']]) {
+      const res = withFake('', '', exit, kill);
+      assert.equal(res.code, 2, `${exit || kill}：${res.lines.join('\n')}`);
+      assert.match(res.lines[0], /找主幹（origin\/main）退 .*判斷不了，不換成別的主幹/u);
+    }
     const mb = withFake('merge-base', '');
     assert.equal(mb.code, 0, mb.lines.join('\n'));
     assert.deepEqual(mb.branches, [], 'merge-base 印了警告：那一支不列');
