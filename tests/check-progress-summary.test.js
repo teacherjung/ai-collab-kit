@@ -25,7 +25,8 @@
 //   ⑪⑫⑬ 只驗 git 那一段，每次都帶 --now 10/07（跟測資日期一致；#66 r3 R1：沒帶的話 10/15 起「核實已 8 天」會讓考題隨日曆變紅）。
 //   ⑭大小與孤兒附件（擁有者 2026-10-10 授權 Fable 代裁 Q8：本文 30 KB 不含本週成果、附件 60 KB、一條 1,500 位元組、附件條跟線一起到期；都只列不擋、用位元組算）：
 //     本文剛好 30,000 不列、30,001 列，本週成果與附件那一節不算進本文；附件檔剛好 60,000 不列、60,001 列（附件放本檔時量那一節）；
-//     一條附件剛好 1,500 不列、1,501 列（條號那一行起到下一條前、空行不算）；沒有任何一則引用的附件條列出來——進行中、已結束、等裁示那幾節的引用都算，只被別的附件條引用不算；--strict 下都退 1。
+//     一條附件剛好 1,500 不列、1,501 列（從原文量：條號那一行起到下一條前，空行以外每一行原樣都算、含分隔線與前導零；附件檔有沒有標題、放本檔，三種放法結果一樣；#72 r1 R2）；
+//     本文與附件那一節的邊界：有沒有結尾換行都要剛好（只算真的存在的換行；#72 r1 R1）；沒有任何一則引用的附件條列出來——進行中、已結束、等裁示那幾節的引用都算，只被別的附件條引用不算；--strict 下都退 1。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -678,35 +679,70 @@ test('⑭大小與孤兒附件：本文 30,000（不含本週成果、附件那�
   assert.equal(ATTACH_MAX_BYTES, 60000);
   assert.equal(ATTACH_ITEM_MAX_BYTES, 1500);
   const bytes = (s) => Buffer.byteLength(s, 'utf8');
-  // 本文的位元組＝整份減掉「## 本週成果」與「## 附件」兩節（標題行起、到下一個 ## 之前）——考題自己算，不用工具的函式
-  const bodyBytes = (text) => { let skip = false; let n = 0; for (const line of text.split('\n')) { if (line.startsWith('## ')) skip = line.startsWith('## 本週成果') || line.startsWith('## 附件'); if (!skip) n += bytes(line) + 1; } return n; };
-  const withBody = (target) => { const base = doc({ entries: [entry({ fields: { 做了什麼: 'P' } })] }); const pad = target - bodyBytes(base); return doc({ entries: [entry({ fields: { 做了什麼: 'P' + 'x'.repeat(pad) } })] }); };
-  const at = withBody(30000); assert.equal(bodyBytes(at), 30000);
-  assert.deepEqual(problemsOf(at), [], '剛好 30,000＝還沒超過');
-  const over = problemsOf(withBody(30001));
-  assert.ok(over.some((p) => p.includes('本文') && p.includes('30001') && p.includes('上限 30000')), over.join('\n'));
+  const sizeProblems = (ps) => ps.filter((p) => p.includes('上限'));
+  // 預期大小一律從已知字串直接量（#72 r1 R1：不抄受測的逐行算法）。附件另放一份檔、本檔沒有附件那一節＝本文就是整份減掉本週成果那一節
+  const file1 = '1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。\n';
+  const base = doc({ entries: [entry({ fields: { 做了什麼: 'P' } })] });
+  const noAttach = base.slice(0, base.indexOf('## 附件'));
+  const weekStart = noAttach.indexOf('## 本週成果'); const weekEnd = noAttach.indexOf('## ', weekStart + 3);
+  const weekBytes = bytes(noAttach.slice(weekStart, weekEnd));
+  const withBody = (target, trailingLf) => {
+    const head = noAttach.replace(/\n+$/u, '');
+    const core = bytes(head) - weekBytes + (trailingLf ? 1 : 0);
+    const text = head.replace('- 做了什麼：P', `- 做了什麼：P${'x'.repeat(target - core)}`) + (trailingLf ? '\n' : '');
+    assert.equal(bytes(text) - weekBytes, target, '考題自己造的本文大小要剛好');
+    return text;
+  };
+  for (const lf of [true, false]) {
+    const at = evaluate(withBody(30000, lf), { now: NOW, prStates: MERGED, attachmentsText: file1 }).problems;
+    assert.deepEqual(sizeProblems(at), [], `剛好 30,000（結尾${lf ? '有' : '沒有'}換行）＝還沒超過：${at.join('\n')}`);
+    const over = evaluate(withBody(30001, lf), { now: NOW, prStates: MERGED, attachmentsText: file1 }).problems;
+    assert.ok(over.some((p) => p.includes('本文') && p.includes('30001') && p.includes('上限 30000')), `30,001（結尾${lf ? '有' : '沒有'}換行）要列：${over.join('\n')}`);
+  }
   // 本週成果那一節再大都不算進本文（機器照那一週合了幾支印的，寫的人控制不了）
   const bigWeek = doc({ week: ['- 10/07', ...Array.from({ length: 400 }, (_, i) => `  - 套件：第 ${i} 支${'很長的標題'.repeat(10)}——已合併（#${i}）`)] });
   assert.ok(bytes(bigWeek) > 60000);
   assert.deepEqual(problemsOf(bigWeek).filter((p) => p.includes('本文')), [], '本週成果不算進本文');
-  // 附件檔：整份的位元組
+  // 附件檔：整份的位元組（填充字放在「## 附件」那一節之前，不是任何一條的續行）
   const pointer = doc({ attachments: ['（附件在附件檔）'] });
-  // 填充字放在「## 附件」那一節之前（那一節之外的文字不是任何一條的續行，只算進整份檔的大小）
   const fileOf = (target) => { const tail = '\n## 附件\n\n1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。\n'; return 'y'.repeat(target - bytes(tail) - 1) + '\n' + tail; };
   assert.equal(bytes(fileOf(60000)), 60000);
-  const aOk = evaluate(pointer, { now: NOW, prStates: MERGED, attachmentsText: fileOf(60000) }).problems;
-  assert.deepEqual(aOk.filter((p) => p.includes('附件') && p.includes('上限')), [], aOk.join('\n'));
-  const aOver = evaluate(pointer, { now: NOW, prStates: MERGED, attachmentsText: fileOf(60001) }).problems;
-  assert.ok(aOver.some((p) => p.includes('附件') && p.includes('60001') && p.includes('上限 60000')), aOver.join('\n'));
-  // 附件放本檔時量那一節
-  const inlineBig = doc({ attachments: ['1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。', '', ...Array.from({ length: 70 }, () => 'z'.repeat(1000))] });
-  assert.ok(problemsOf(inlineBig).some((p) => p.includes('附件') && p.includes('上限 60000')), problemsOf(inlineBig).join('\n'));
-  // 一條附件：條號那一行起到下一條前，空行不算（續行算，中間換行算一個位元組）
-  const itemOf = (target) => { const head = '1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。'; const cont = '  續行'; return [head, '', cont + 'w'.repeat(target - bytes(head) - 1 - bytes(cont))]; };
-  const i1500 = problemsOf(doc({ attachments: itemOf(1500) }));
-  assert.deepEqual(i1500.filter((p) => p.includes('一條的上限')), [], i1500.join('\n'));
-  const i1501 = problemsOf(doc({ attachments: itemOf(1501) }));
-  assert.ok(i1501.some((p) => p.includes('附件第 1 條') && p.includes('1501') && p.includes('一條的上限 1500')), i1501.join('\n'));
+  assert.deepEqual(sizeProblems(evaluate(pointer, { now: NOW, prStates: MERGED, attachmentsText: fileOf(60000) }).problems), []);
+  assert.ok(evaluate(pointer, { now: NOW, prStates: MERGED, attachmentsText: fileOf(60001) }).problems.some((p) => p.includes('附件檔') && p.includes('60001') && p.includes('上限 60000')));
+  // 附件放本檔：量那一節（標題行起到檔尾）；那一節在檔尾，有沒有結尾換行都要剛好（#72 r1 R1）
+  const head = '1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。';
+  for (const lf of [true, false]) {
+    const inlineOf = (target) => {
+      const pre = doc({ attachments: [head] }).replace(/\n+$/u, '');
+      const sectionNow = bytes(pre.slice(pre.indexOf('## 附件'))) + (lf ? 1 : 0);
+      const pad = target - sectionNow - 1;   // 填充字另起一行（前面那個換行算一個位元組）
+      return `${pre}\n${'z'.repeat(pad)}${lf ? '\n' : ''}`;
+    };
+    for (const [target, listed] of [[60000, false], [60001, true]]) {
+      const text = inlineOf(target);
+      assert.equal(bytes(text.slice(text.indexOf('## 附件'))), target, '考題自己造的附件那一節大小要剛好');
+      const ps = problemsOf(text).filter((p) => p.includes('附件那一節'));
+      assert.equal(ps.length > 0, listed, `附件那一節 ${target}（結尾${lf ? '有' : '沒有'}換行）：${ps.join('\n')}`);
+    }
+  }
+  // 一條附件從原文量：條號那一行起到下一條前，空行以外的每一行原樣都算（含分隔線、前導零），換行算一個位元組（#72 r1 R2）
+  const itemOf = (target) => { const cont = '  續行'; return [head, '', cont + 'w'.repeat(target - bytes(head) - 1 - bytes(cont))]; };
+  assert.deepEqual(problemsOf(doc({ attachments: itemOf(1500) })).filter((p) => p.includes('一條的上限')), []);
+  assert.ok(problemsOf(doc({ attachments: itemOf(1501) })).some((p) => p.includes('附件第 1 條') && p.includes('1501') && p.includes('一條的上限 1500')));
+  const ref1 = doc({ attachments: ['（附件在附件檔）'] });
+  const withSep = `1. ${'x'.repeat(1497)}\n---`;
+  assert.equal(bytes(withSep), 1504);
+  const leadingZero = `01. ${'甲'.repeat(499)}`;
+  assert.equal(bytes(leadingZero), 1501);
+  for (const [label, item, n] of [['分隔線', withSep, 1504], ['前導零', leadingZero, 1501]]) {
+    // 三種放法結果要一樣：附件檔有「## 附件」標題、沒有標題、放在本檔那一節
+    const shapes = [
+      ['附件檔有標題', evaluate(ref1, { now: NOW, prStates: MERGED, attachmentsText: `## 附件\n${item}` }).problems],
+      ['附件檔沒有標題', evaluate(ref1, { now: NOW, prStates: MERGED, attachmentsText: item }).problems],
+      ['本檔那一節', problemsOf(doc({ attachments: [item] }))],
+    ];
+    for (const [where, ps] of shapes) assert.ok(ps.some((p) => p.includes('附件第 1 條') && p.includes(`${n} 位元組`)), `${label}（${where}）要量成 ${n}：${ps.join('\n')}`);
+  }
   // 孤兒附件：第 2 條沒有任何一則引用＝列；第 3 條被已結束那一行引用、第 4 條被等裁示那一節引用＝不列；第 5 條只被第 2 條引用＝列
   const orphanDoc = doc({
     attachments: ['1. 套件 #41 https://github.com/acme/kit/pull/41 已合併。', '2. 沒人引用，提到附件第 5 條。', '3. 已結束那條線的證據。', '4. 等裁示那一節提到的。', '5. 只有第 2 條提到。'],

@@ -31,8 +31,8 @@
 //     寫在進行中的「已結束」與不在選單的狀態不算（前者該搬去已結束那一節、後者已另列）；只比月日、未來的日期不算；月日從 STAMP 重讀、讀不出（例如一位數的月）＝已列成缺欄、不算天數；
 //     --strict 時這兩種跟其餘問題一樣算；「再改時間」＝核實與整理兩個時間都改成現在（只改核實會撞到「核實晚於整理」那一條）；
 //   ⑧大小與孤兒附件（擁有者 2026-10-10 授權 Fable 代裁 Q8；只列不擋、都用位元組算、換行先統一成 LF）：本文（整份減掉「本週成果」與「附件」兩節——本週成果是機器照那一週合了幾支印的、
-//     寫的人控制不了）超過 BODY_MAX_BYTES＝列；附件（另放一份檔就量整份檔，放本檔就量那一節）超過 ATTACH_MAX_BYTES＝列；一條附件（條號那一行起到下一條前、空行不算）
-//     超過 ATTACH_ITEM_MAX_BYTES＝列（只放去哪查，逐輪經過留在 PR 說明）；沒有任何一則引用的附件條＝列（附件那一節以外的引用都算，只被別的附件條引用不算；
+//     寫的人控制不了）超過 BODY_MAX_BYTES＝列；附件（另放一份檔就量整份檔，放本檔就量那一節）超過 ATTACH_MAX_BYTES＝列；一條附件（從原文量，條號那一行起到下一條前、空行不算）
+//     超過 ATTACH_ITEM_MAX_BYTES＝列（從原文量：空行以外每一行原樣都算，含分隔線與條號的前導零；只放去哪查，逐輪經過留在 PR 說明；#72 r1 R2）；本文與附件那一節只算真的存在的換行（#72 r1 R1）；沒有任何一則引用的附件條＝列（附件那一節以外的引用都算，只被別的附件條引用不算；
 //     附件條跟它的線一起到期：已結束那一行滿 30 天刪時它引的附件條一起刪，刪前先確認裡面沒有還沒貼出去的原話或還沒歸位的決定）。
 //   ⑦最近誰提交（擁有者 2026-10-10 裁「那三件小事就做」的第三件）：摘要在 git 倉庫裡（那一層是個小倉庫）就印最近 RECENT_HOURS 小時改過本檔的提交（--recent <小時> 改窗口，只收非負整數）；
 //     只算改到本檔的；只印、不是問題、不動退出碼——「現在誰在動」那一欄靠人改、會落後（10/10 量到一則寫沒人、那個視窗其實在跟擁有者對話），提交紀錄才是誰真的動過；不在倉庫裡或 git 不能用＝印查不到；
@@ -392,7 +392,8 @@ function checkWeek(lines, ctx) {
 /**
  * 大小與孤兒附件（擁有者 2026-10-10 授權 Fable 代裁 Q8）：本文、附件、一條附件的位元組上限，與沒有任何一則引用的附件條。
  * 本文＝整份（換行統一成 LF）減掉「本週成果」與「附件」兩節（標題行起、到下一個 ## 之前）；附件＝另放一份檔就量整份檔，放本檔就量那一節；
- * 一條附件＝條號那一行起到下一條前（空行不算，續行之間的換行算一個位元組）；引用＝附件那一節以外的「附件第 … 條」（只被別的附件條引用不算）。
+ * 一條附件＝從原文量：條號那一行起到下一條前，空行以外的每一行原樣都算（含分隔線與條號的前導零），行與行之間的換行算一個位元組；
+ * 本文與附件那一節只算真的存在的換行（#72 r1 R1、R2）；引用＝附件那一節以外的「附件第 … 條」（只被別的附件條引用不算）。
  */
 function checkSizes(text, attachmentsText, attachments) {
   const problems = [];
@@ -400,17 +401,42 @@ function checkSizes(text, attachmentsText, attachments) {
   let inlineAttach = 0;
   let where = null;
   const refText = [];
-  for (const line of normalize(text).split('\n')) {
+  const inlineLines = [];
+  const lines = normalize(text).split('\n');
+  lines.forEach((line, i) => {
+    // 只算真的存在的換行：最後一段後面沒有換行就不加（#72 r1 R1：逐行一律 +1 會把剛好卡在上限的內容多算 1）
+    const b = bytesOf(line) + (i < lines.length - 1 ? 1 : 0);
     if (line.startsWith('## ')) where = line.startsWith(SECTIONS.week) ? 'week' : line.startsWith(SECTIONS.attachments) ? 'attach' : null;
-    if (where === 'attach') { inlineAttach += bytesOf(line) + 1; continue; }
+    if (where === 'attach') { inlineAttach += b; if (!line.startsWith('## ')) inlineLines.push(line); return; }
     refText.push(line);
-    if (where !== 'week') body += bytesOf(line) + 1;
-  }
+    if (where !== 'week') body += b;
+  });
   if (body > BODY_MAX_BYTES) problems.push(`大小：本文（不含本週成果與附件那一節）${body} 位元組，超過上限 ${BODY_MAX_BYTES}：先結案、縮附件、刪過期再寫，不是刪交接要用的資訊`);
   const attachBytes = attachmentsText !== null ? bytesOf(normalize(attachmentsText)) : inlineAttach;
   if (attachBytes > ATTACH_MAX_BYTES) problems.push(`大小：附件${attachmentsText !== null ? '檔' : '那一節'} ${attachBytes} 位元組，超過上限 ${ATTACH_MAX_BYTES}：先縮超過一條上限的、刪跟線一起到期的`);
-  for (const [n, item] of attachments) {
-    const b = bytesOf(`${n}. ${item}`);
+  // 一條附件從原文量（#72 r1 R2：用解析後重組的文字會漏掉分隔線、條號的前導零，而且有沒有「## 附件」標題結果不同）：
+  // 條號那一行起到下一條前，空行以外的每一行都算（原樣、含分隔線），行與行之間的換行算一個位元組
+  const sizes = new Map();
+  const measure = (raw) => {
+    let cur = null;
+    for (const line of raw) {
+      const m = /^(\d+)\. /u.exec(line);
+      if (m) { cur = Number(m[1]); sizes.set(cur, bytesOf(line)); continue; }
+      if (cur !== null && line.trim()) sizes.set(cur, sizes.get(cur) + 1 + bytesOf(line));
+    }
+  };
+  measure(inlineLines);
+  if (attachmentsText !== null) {
+    const fileLines = normalize(attachmentsText).split('\n');
+    const h = fileLines.findIndex((l) => l.startsWith(SECTIONS.attachments));
+    if (h < 0) measure(fileLines);
+    else {
+      const rest = fileLines.slice(h + 1);
+      const next = rest.findIndex((l) => l.startsWith('## '));
+      measure(next < 0 ? rest : rest.slice(0, next));
+    }
+  }
+  for (const [n, b] of sizes) {
     if (b > ATTACH_ITEM_MAX_BYTES) problems.push(`附件第 ${n} 條 ${b} 位元組，超過一條的上限 ${ATTACH_ITEM_MAX_BYTES}：只留去哪查（網址、版本碼、留言編號、檔名），逐輪經過留在 PR 說明，全文可以搬到 Archive`);
   }
   const cited = new Set(parseRefs(refText.join('\n')).numbers);
