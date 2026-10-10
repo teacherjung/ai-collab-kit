@@ -87,7 +87,7 @@ test('③形狀：產出的那一節丟給進度摘要檢查 0 條；日期新�
   assert.deepEqual(evaluate(doc(empty), { now: { year: 2026, month: 10, day: 9 }, prStates: { 'acme/kit#41': { merged: true } } }).problems, []);
 });
 
-test('④--write 只換那一節：前後的節一個字不動、分隔線留著；沒有那一節＝null；結尾照 Markdown 認、像標題卻不合格式＝拒寫', () => {
+test('④--write 只換那一節：前後的節一個字不動、分隔線留著；沒有那一節＝null；結尾照 Markdown 認（同級或更高、# 前面 0〜3 個空白）、像標題卻不合格式＝拒寫', () => {
   const before = doc(['- 10/01', '  - 套件：舊的']);
   const after = replaceSection(before, ['- 10/09', '  - 套件：新的——已合併（#1）']);
   assert.ok(after.includes(`${HEADING}（最近七天）\n\n- 10/09\n  - 套件：新的——已合併（#1）\n\n---\n\n## 已結束`), after);
@@ -103,6 +103,14 @@ test('④--write 只換那一節：前後的節一個字不動、分隔線留著
     const out = replaceSection(shifted, ['- 10/09']);
     assert.equal(typeof out, 'string', `「${pad}## 已結束」是合格的標題`);
     assert.equal(out.slice(out.indexOf(`${pad}## 已結束`)), shifted.slice(shifted.indexOf(`${pad}## 已結束`)), `前面 ${pad.length} 個空白的標題與後面全部原樣留著`);
+  }
+  // 更高一級的標題（「# 」一級）也是結尾：照寫、那一節換新、後面逐字留著（#74 r1：原本只驗了二級的縮排）
+  for (const pad of ['', ' ', '   ']) {
+    const higher = before.replace('## 已結束（留 30 天）', `${pad}# 已結束（留 30 天）`).replace('### 套件｜舊事｜已結束 10/01｜無永久決定', '### 套件｜舊事｜已結束 10/01｜無永久決定\nsentinel-higher-heading');
+    const out = replaceSection(higher, ['- 10/09', '  - 套件：新的——已合併（#1）']);
+    assert.equal(typeof out, 'string', `「${pad}# 已結束」是合格的一級標題`);
+    assert.ok(out.includes('  - 套件：新的——已合併（#1）') && !out.includes('套件：舊的'), '那一節確實換新');
+    assert.equal(out.slice(out.indexOf(`${pad}# 已結束`)), higher.slice(higher.indexOf(`${pad}# 已結束`)), '一級標題與後面全部逐字留著（含專屬那一行）');
   }
   // 長得像標題、格式不對＝分不出結尾，整個不寫（回第幾行與那一行）
   for (const badHead of ['##已結束（留 30 天）', '    ## 已結束（留 30 天）', '\t## 已結束（留 30 天）', '#已結束']) {
