@@ -32,7 +32,8 @@
 //     --strict 時這兩種跟其餘問題一樣算；「再改時間」＝核實與整理兩個時間都改成現在（只改核實會撞到「核實晚於整理」那一條）；
 //   ⑦最近誰提交（擁有者 2026-10-10 裁「那三件小事就做」的第三件）：摘要在 git 倉庫裡（那一層是個小倉庫）就印最近 RECENT_HOURS 小時改過本檔的提交（--recent <小時> 改窗口，只收非負整數）；
 //     只算改到本檔的；只印、不是問題、不動退出碼——「現在誰在動」那一欄靠人改、會落後（10/10 量到一則寫沒人、那個視窗其實在跟擁有者對話），提交紀錄才是誰真的動過；不在倉庫裡或 git 不能用＝印查不到；
-//     log 帶 --no-show-signature 與 --encoding=UTF-8（使用者的 git 顯示設定不污染清單；r2 R1）、時間印提交時間（跟 --since 同一種；r2 R2）。
+//     log 帶 --no-show-signature 與 --encoding=UTF-8（使用者的 git 顯示設定不污染清單；r2 R1）、時間印提交時間（跟 --since 同一種；r2 R2）、
+//     檔名用 --literal-pathspecs 逐字比對（檔名裡的 [ ] * ? 與冒號開頭不當樣式；r3 R2）。
 // 換行先統一：CRLF、CR 的摘要判得跟 LF 一樣。
 // 平台只問一件事：那支 PR 合併了沒（gh api；證據網址是 github.com，查詢也固定問 github.com，環境裡選主機、選倉庫的變數先清掉）；
 // 答案可以用 --pr-states <json 檔> 代替（考題與離線用）；--offline＝不問平台，④只查引不引得到 PR。
@@ -467,7 +468,8 @@ function recentCommits(file, hours) {
   // --no-show-signature、--encoding=UTF-8：使用者的 git 設定開了 log.showSignature（簽章診斷會混進標準輸出、被當成提交）或 i18n.logOutputEncoding 設成別的編碼（題名變亂碼）時也要對（#66 r2 R1；跟 tools/downstream-lag.js 同一套）；
   // 時間印 %cd（提交時間）：--since 本來就用提交時間篩，印作者時間會對不上（rebase、amend 之後兩個時間不同；#66 r2 R2）；
   // format-local：照這台機器的時區印（format: 會照提交裡記的時區，別的時區提的會對不上摘要裡的台北時間）
-  const r = spawnSync('git', ['-C', dir, 'log', '--no-show-signature', '--encoding=UTF-8', `--since=${hours} hours ago`, '--format=%cd%x09%s', '--date=format-local:%m/%d %H:%M', '--', path.basename(file)], { encoding: 'utf8', env: gitEnv() });
+  // --literal-pathspecs：檔名逐字比對，不當成比對樣式（檔名有 [ ] * ? 或冒號開頭時，別的檔的提交會被列進來；#66 r3 R2）
+  const r = spawnSync('git', ['-C', dir, '--literal-pathspecs', 'log', '--no-show-signature', '--encoding=UTF-8', `--since=${hours} hours ago`, '--format=%cd%x09%s', '--date=format-local:%m/%d %H:%M', '--', path.basename(file)], { encoding: 'utf8', env: gitEnv() });
   if (r.error || r.status !== 0) return null;
   return r.stdout.split('\n').filter(Boolean).map((l) => { const i = l.indexOf('\t'); return { time: l.slice(0, i), subject: l.slice(i + 1) }; });
 }

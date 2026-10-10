@@ -21,6 +21,8 @@
 //   ⑪最近誰提交（擁有者 2026-10-10 裁）：摘要在 git 倉庫裡就印最近 1 小時改過本檔的提交（--recent 改窗口；只算改到本檔的、別的檔不算）；不在倉庫裡印查不到；只印、不算問題、不影響退出碼；--recent 寫法錯＝退 2。
 //   ⑫最近誰提交的清單不被 git 的顯示設定污染（#66 r2 R1）：log.showSignature 開著、範圍裡有簽過章的提交時簽章診斷不混進清單（假 gpgsig 標頭＋假 gpg 程式，先驗裸的 git log 真的被污染）；
 //     i18n.logOutputEncoding 設成 ISO-8859-1 時題名照原字印（先驗裸的 git log 真的吐出別的編碼）；時間印提交時間、不印作者時間（窗口本來就是用提交時間篩的；#66 r2 R2）、照本機時區印（format-local；這台機器在 UTC 時這一句等價、量不到）。
+//   ⑬摘要檔名逐字比對、不當 git 的比對樣式（#66 r3 R2）：摘要叫 s[1].md、旁邊有 s1.md，只改 s1.md 的提交不列；檔名帶 * 的同理。
+//   ⑪⑫⑬ 只驗 git 那一段，每次都帶 --now 10/07（跟測資日期一致；#66 r3 R1：沒帶的話 10/15 起「核實已 8 天」會讓考題隨日曆變紅）。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -573,35 +575,35 @@ test('⑪最近誰提交：在 git 倉庫裡印最近 N 小時改過本檔的提
   fs.writeFileSync(file, doc()); git(['add', 's.md']); git(['commit', '-q', '-m', '更新：B線（三小時前）'], { GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old });
   fs.writeFileSync(path.join(dir, 'other.md'), 'x'); git(['add', 'other.md']); git(['commit', '-q', '-m', '更新：別的檔']);
   fs.writeFileSync(file, doc({ entries: [entry({ fields: { 做了什麼: '改了' } })] })); git(['add', 's.md']); git(['commit', '-q', '-m', '更新：A線（剛剛）']);
-  const r = run(['--file', file, '--offline']);
+  const r = run(['--file', file, '--now', '10/07', '--offline']);
   assert.equal(r.code, 0);
   assert.ok(r.lines.some((l) => l.includes(`最近 ${RECENT_HOURS} 小時改過本檔的提交`)), r.lines.join('\n'));
   assert.ok(r.lines.some((l) => l.includes('更新：A線（剛剛）')), r.lines.join('\n'));
   assert.ok(!r.lines.some((l) => l.includes('B線')), `三小時前的不在一小時窗口裡：${r.lines.join('\n')}`);
   assert.ok(!r.lines.some((l) => l.includes('別的檔')), `只算改到本檔的：${r.lines.join('\n')}`);
-  const wide = run(['--file', file, '--offline', '--recent', '4']);
+  const wide = run(['--file', file, '--now', '10/07', '--offline', '--recent', '4']);
   assert.ok(wide.lines.some((l) => l.includes('最近 4 小時改過本檔的提交')) && wide.lines.some((l) => l.includes('B線')) && wide.lines.some((l) => l.includes('A線')), wide.lines.join('\n'));
   assert.ok(!wide.lines.some((l) => l.includes('別的檔')), wide.lines.join('\n'));
   // 只印、不算問題：合格的摘要照樣「沒有問題」、--strict 退 0
   assert.ok(r.lines.some((l) => l === '沒有問題。'), r.lines.join('\n'));
-  assert.equal(run(['--file', file, '--offline', '--strict']).code, 0);
+  assert.equal(run(['--file', file, '--now', '10/07', '--offline', '--strict']).code, 0);
   // 窗口裡沒有提交：印「沒有人提交」（不是查不到）——另開一個只有三小時前那一筆的倉庫（--recent 0 不能用來測：0 小時＝現在，剛提交的那一筆照樣算進去）
   const quiet = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-quiet-'));
   const qgit = (args, env = {}) => { const r = spawnSync('git', ['-C', quiet, ...args], { encoding: 'utf8', env: { ...ghEnv(), ...env } }); assert.equal(r.status, 0, r.stderr); };
   qgit(['init', '-q']); qgit(['config', 'user.email', 'x@y']); qgit(['config', 'user.name', 'x']); qgit(['config', 'commit.gpgsign', 'false']);
   fs.writeFileSync(path.join(quiet, 's.md'), doc()); qgit(['add', 's.md']); qgit(['commit', '-q', '-m', '更新：B線（三小時前）'], { GIT_AUTHOR_DATE: old, GIT_COMMITTER_DATE: old });
-  const none = run(['--file', path.join(quiet, 's.md'), '--offline']);
+  const none = run(['--file', path.join(quiet, 's.md'), '--now', '10/07', '--offline']);
   assert.equal(none.code, 0);
   assert.ok(none.lines.some((l) => l.includes('最近 1 小時沒有人提交本檔')), none.lines.join('\n'));
   assert.ok(!none.lines.some((l) => l.includes('B線')), none.lines.join('\n'));
   // 不在 git 倉庫裡：印查不到，不炸、退出碼照舊
   const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-plain-'));
   fs.writeFileSync(path.join(plain, 's.md'), doc());
-  const p = run(['--file', path.join(plain, 's.md'), '--offline']);
+  const p = run(['--file', path.join(plain, 's.md'), '--now', '10/07', '--offline']);
   assert.equal(p.code, 0);
   assert.ok(p.lines.some((l) => l.includes('不在 git 倉庫裡')), p.lines.join('\n'));
   // --recent 寫法錯＝退 2
-  for (const bad of ['abc', '-1', '1.5', '']) assert.equal(run(['--file', file, '--offline', '--recent', bad]).code, 2, `--recent ${bad}`);
+  for (const bad of ['abc', '-1', '1.5', '']) assert.equal(run(['--file', file, '--now', '10/07', '--offline', '--recent', bad]).code, 2, `--recent ${bad}`);
 });
 
 test('⑫最近誰提交：簽章診斷不混進清單、輸出編碼設定不成亂碼、印的是提交時間不是作者時間（#66 r2 R1、R2）', () => {
@@ -616,7 +618,7 @@ test('⑫最近誰提交：簽章診斷不混進清單、輸出編碼設定不�
   // 兩個時間都用 git 自己（本機時區）印出來比，不用 Date 自己算：git 的 format: 會照提交裡記的時區印、format-local: 才是本機時區
   const [adStamp, cdStamp] = git(['log', '-1', '--format=%ad%x09%cd', '--date=format-local:%m/%d %H:%M']).split('\t');
   assert.notEqual(adStamp, cdStamp, '探針：作者時間與提交時間要差三小時，不然這一題量不到東西');
-  const r0 = run(['--file', file, '--offline']);
+  const r0 = run(['--file', file, '--now', '10/07', '--offline']);
   assert.ok(r0.lines.some((l) => l.includes('café line') && l.includes(cdStamp)), `提交時間在窗口裡就要列、印提交時間 ${cdStamp}：${r0.lines.join('\n')}`);
   assert.ok(!r0.lines.some((l) => l.includes(adStamp)), `不印作者時間 ${adStamp}：${r0.lines.join('\n')}`);
   // ②簽章診斷：加一顆帶 gpgsig 標頭的提交（假簽章），gpg 換成只印診斷的假程式，開 log.showSignature（r2 R1；做法同 tests/downstream-lag.test.js ⑨）
@@ -632,7 +634,7 @@ test('⑫最近誰提交：簽章診斷不混進清單、輸出編碼設定不�
   git(['config', 'gpg.program', fakeGpg]); git(['config', 'log.showSignature', 'true']);
   const bare = spawnSync('git', ['-C', dir, 'log', '--format=%s', '--', 's.md'], { encoding: 'utf8', env: ghEnv() }).stdout;
   assert.match(bare, /gpg: /u, '探針：裸的 git log 要被簽章診斷污染，不然這一題守不到東西');
-  const r1 = run(['--file', file, '--offline']);
+  const r1 = run(['--file', file, '--now', '10/07', '--offline']);
   const listed = r1.lines.filter((l) => l.startsWith('  ・'));
   assert.ok(listed.some((l) => l.includes('假簽過章的那一支')), `簽過章的那一筆本身要列：${r1.lines.join('\n')}`);
   assert.ok(!r1.lines.some((l) => /gpg/u.test(l)), `簽章診斷不能混進清單：${r1.lines.join('\n')}`);
@@ -644,7 +646,25 @@ test('⑫最近誰提交：簽章診斷不混進清單、輸出編碼設定不�
   git(['config', 'log.showSignature', 'false']); git(['config', 'i18n.logOutputEncoding', 'ISO-8859-1']);
   const bare2 = spawnSync('git', ['-C', dir, 'log', '--format=%s', '--', 's.md'], { encoding: 'utf8', env: ghEnv() }).stdout;
   assert.match(bare2, /caf\uFFFD/u, '探針：裸的 git log 要把 é 吐成替代字元，不然這一題守不到東西');
-  const r2 = run(['--file', file, '--offline']);
+  const r2 = run(['--file', file, '--now', '10/07', '--offline']);
   assert.ok(r2.lines.some((l) => l.includes('café line')), `題名要照原字印：${r2.lines.join('\n')}`);
   assert.ok(!r2.lines.some((l) => /\uFFFD/u.test(l)), `不能有替代字元：${r2.lines.join('\n')}`);
+});
+
+test('⑬摘要檔名逐字比對、不當 git 的比對樣式：s[1].md 旁邊有 s1.md、s*.md 旁邊有 sx.md，只改旁邊那個檔的提交不列（#66 r3 R2）', () => {
+  for (const [name, sibling] of [['s[1].md', 's1.md'], ['s*.md', 'sx.md']]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-literal-'));
+    const git = (args) => { const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: ghEnv() }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    git(['init', '-q']); git(['config', 'user.email', 't@example.invalid']); git(['config', 'user.name', 't']); git(['config', 'commit.gpgsign', 'false']);
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, doc()); git(['add', '--', name]); git(['commit', '-q', '-m', '更新：摘要本身']);
+    fs.writeFileSync(path.join(dir, sibling), 'x'); git(['add', '--', sibling]); git(['commit', '-q', '-m', '更新：只改旁邊的檔']);
+    // 探針：不帶 --literal-pathspecs 的 git log 真的會把旁邊那個檔的提交也列進來，不然這一題守不到東西
+    const bare = git(['log', '--format=%s', '--', name]);
+    assert.match(bare, /只改旁邊的檔/u, `探針（${name}）：裸的 git log 要被比對樣式帶到旁邊的檔`);
+    const r = run(['--file', file, '--now', '10/07', '--offline']);
+    assert.equal(r.code, 0, r.lines.join('\n'));
+    assert.ok(r.lines.some((l) => l.includes('更新：摘要本身')), `${name}：${r.lines.join('\n')}`);
+    assert.ok(!r.lines.some((l) => l.includes('只改旁邊的檔')), `${name}：只改旁邊那個檔的提交不能列：${r.lines.join('\n')}`);
+  }
 });
