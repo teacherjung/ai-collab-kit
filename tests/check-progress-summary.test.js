@@ -19,6 +19,8 @@
 //     暫停中的不重複列核實；寫在進行中的已結束、不在選單的狀態不算；施工中的只看核實、整理舊不算；未來的日期不算（只比月日）；
 //     缺整理／缺核實已另列、另一個時間舊了照列；一位數的月／日判成缺欄、不算天數（自審 C5）；--strict 下這兩種也退 1；指令入口帶 --now 印得出來。
 //   ⑪最近誰提交（擁有者 2026-10-10 裁）：摘要在 git 倉庫裡就印最近 1 小時改過本檔的提交（--recent 改窗口；只算改到本檔的、別的檔不算）；不在倉庫裡印查不到；只印、不算問題、不影響退出碼；--recent 寫法錯＝退 2。
+//   ⑫最近誰提交的清單不被 git 的顯示設定污染（#66 r2 R1）：log.showSignature 開著、範圍裡有簽過章的提交時簽章診斷不混進清單（假 gpgsig 標頭＋假 gpg 程式，先驗裸的 git log 真的被污染）；
+//     i18n.logOutputEncoding 設成 ISO-8859-1 時題名照原字印（先驗裸的 git log 真的吐出別的編碼）；時間印提交時間、不印作者時間（窗口本來就是用提交時間篩的；#66 r2 R2）、照本機時區印（format-local；這台機器在 UTC 時這一句等價、量不到）。
 // ⚠️ 守不到的：內容真不真；「已驗收」；跨年；真的 gh 沒在考題裡跑（用假的 runner）。
 'use strict';
 const test = require('node:test');
@@ -600,4 +602,49 @@ test('⑪最近誰提交：在 git 倉庫裡印最近 N 小時改過本檔的提
   assert.ok(p.lines.some((l) => l.includes('不在 git 倉庫裡')), p.lines.join('\n'));
   // --recent 寫法錯＝退 2
   for (const bad of ['abc', '-1', '1.5', '']) assert.equal(run(['--file', file, '--offline', '--recent', bad]).code, 2, `--recent ${bad}`);
+});
+
+test('⑫最近誰提交：簽章診斷不混進清單、輸出編碼設定不成亂碼、印的是提交時間不是作者時間（#66 r2 R1、R2）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'psum-gitcfg-'));
+  const file = path.join(dir, 's.md');
+  const git = (args, env = {}) => { const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: { ...ghEnv(), ...env } }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  git(['init', '-q']); git(['config', 'user.email', 't@example.invalid']); git(['config', 'user.name', 't']); git(['config', 'commit.gpgsign', 'false']);
+  // ①作者時間三小時前、提交時間現在：窗口用提交時間（要列出來），印的也要是提交時間、不是作者時間（rebase、amend 之後兩個時間會不一樣；r2 R2）
+  //   題名只用 ISO-8859-1 寫得出來的非 ASCII 字（é）：③要靠它驗編碼，中文字那個編碼寫不出來、git 會原樣吐 UTF-8，驗不到東西
+  const old = new Date(Date.now() - 3 * 3600 * 1000);
+  fs.writeFileSync(file, doc()); git(['add', 's.md']); git(['commit', '-q', '-m', 'café line (author 3h ago)'], { GIT_AUTHOR_DATE: old.toISOString() });
+  // 兩個時間都用 git 自己（本機時區）印出來比，不用 Date 自己算：git 的 format: 會照提交裡記的時區印、format-local: 才是本機時區
+  const [adStamp, cdStamp] = git(['log', '-1', '--format=%ad%x09%cd', '--date=format-local:%m/%d %H:%M']).split('\t');
+  assert.notEqual(adStamp, cdStamp, '探針：作者時間與提交時間要差三小時，不然這一題量不到東西');
+  const r0 = run(['--file', file, '--offline']);
+  assert.ok(r0.lines.some((l) => l.includes('café line') && l.includes(cdStamp)), `提交時間在窗口裡就要列、印提交時間 ${cdStamp}：${r0.lines.join('\n')}`);
+  assert.ok(!r0.lines.some((l) => l.includes(adStamp)), `不印作者時間 ${adStamp}：${r0.lines.join('\n')}`);
+  // ②簽章診斷：加一顆帶 gpgsig 標頭的提交（假簽章），gpg 換成只印診斷的假程式，開 log.showSignature（r2 R1；做法同 tests/downstream-lag.test.js ⑨）
+  fs.writeFileSync(file, doc({ entries: [entry({ fields: { 做了什麼: '簽過章' } })] })); git(['add', 's.md']);
+  const tree = git(['write-tree']); const parent = git(['rev-parse', 'HEAD']); const sec = Math.floor(Date.now() / 1000);
+  const raw = `tree ${tree}\nparent ${parent}\nauthor t <t@example.invalid> ${sec} +0000\ncommitter t <t@example.invalid> ${sec} +0000\n`
+    + 'gpgsig -----BEGIN PGP SIGNATURE-----\n \n 假簽章\n -----END PGP SIGNATURE-----\n\n假簽過章的那一支\n';
+  const signed = spawnSync('git', ['-C', dir, 'hash-object', '-t', 'commit', '-w', '--stdin'], { input: raw, encoding: 'utf8', env: ghEnv() }).stdout.trim();
+  assert.match(signed, /^[0-9a-f]{40}$/u, '假簽章的提交要寫得進去');
+  git(['update-ref', 'HEAD', signed]);
+  const fakeGpg = path.join(dir, 'fake-gpg');
+  fs.writeFileSync(fakeGpg, '#!/bin/sh\necho "gpg: Signature made 假的" >&2\necho "gpg: Can\'t check signature: No public key" >&2\nexit 1\n', { mode: 0o755 });
+  git(['config', 'gpg.program', fakeGpg]); git(['config', 'log.showSignature', 'true']);
+  const bare = spawnSync('git', ['-C', dir, 'log', '--format=%s', '--', 's.md'], { encoding: 'utf8', env: ghEnv() }).stdout;
+  assert.match(bare, /gpg: /u, '探針：裸的 git log 要被簽章診斷污染，不然這一題守不到東西');
+  const r1 = run(['--file', file, '--offline']);
+  const listed = r1.lines.filter((l) => l.startsWith('  ・'));
+  assert.ok(listed.some((l) => l.includes('假簽過章的那一支')), `簽過章的那一筆本身要列：${r1.lines.join('\n')}`);
+  assert.ok(!r1.lines.some((l) => /gpg/u.test(l)), `簽章診斷不能混進清單：${r1.lines.join('\n')}`);
+  assert.equal(listed.length, 2, `只有兩筆提交（簽過章那筆與 café 那筆）：${r1.lines.join('\n')}`);
+  // 簽過章那一筆的提交時間記的是 +0000：清單要照本機時區印（format-local），不是照提交裡記的時區
+  const localStamp = git(['log', '-1', '--no-show-signature', '--format=%cd', '--date=format-local:%m/%d %H:%M', signed]);
+  assert.ok(listed.some((l) => l.includes('假簽過章的那一支') && l.includes(localStamp)), `要照本機時區印 ${localStamp}：${r1.lines.join('\n')}`);
+  // ③輸出編碼：i18n.logOutputEncoding 設成 ISO-8859-1 時，裸的 git log 會把 é 吐成單一位元組（當 UTF-8 讀＝替代字元）；清單要照原字印（r2 R1）
+  git(['config', 'log.showSignature', 'false']); git(['config', 'i18n.logOutputEncoding', 'ISO-8859-1']);
+  const bare2 = spawnSync('git', ['-C', dir, 'log', '--format=%s', '--', 's.md'], { encoding: 'utf8', env: ghEnv() }).stdout;
+  assert.match(bare2, /caf\uFFFD/u, '探針：裸的 git log 要把 é 吐成替代字元，不然這一題守不到東西');
+  const r2 = run(['--file', file, '--offline']);
+  assert.ok(r2.lines.some((l) => l.includes('café line')), `題名要照原字印：${r2.lines.join('\n')}`);
+  assert.ok(!r2.lines.some((l) => /\uFFFD/u.test(l)), `不能有替代字元：${r2.lines.join('\n')}`);
 });
