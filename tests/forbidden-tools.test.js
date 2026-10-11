@@ -7,7 +7,7 @@
 //     ⚠️ 唯讀前綴的豁免範圍與代價＝「**兩張樣式表**」（正本＝`docs/money-guard-two-pattern-tables.md`，這裡不重述）；
 //     駝峰、點、連字號都正規化；
 //     連接器前綴不同、工具名相同一起擋；
-//   ⑥四份接線範本（Claude 活讀、Claude 釘指紋、Codex 專案層、Codex 全域層）都只呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
+//   ⑥接線範本（目前四份：Claude 活讀、Claude 釘指紋、Codex 專案層、Codex 全域層）都只呼叫同一支判斷（不抄判斷＝不會漂）；指令入口：壞輸入也拒絕、放行不印；
 //   ⑩連接器在名字的任何一段都認得（多一層前綴照樣白名單制；邊界要真的是邊界）；
 //   ⑪雙保險：唯讀名單誤放了動禁區的工具，家族網照樣擋；
 //   ⑫接線範本真的跑一遍：從子目錄、別的專案起照樣判；找不到檔、沒有 node、載入就崩、Git 找不到工作樹根、清環境用的 env／sed 不在＝退 2 帶錯誤輸出
@@ -31,8 +31,8 @@
 //   登記為不碰錢的連接器（標準形狀的名字）整個放行（會對外送東西但不碰錢的那一級靠自覺）；登記名對不對、漏登記某個連接器機器看不到
 //   （填成工具名那一段是合法形狀、文法擋不了，但它不會靜靜放行：不碰錢那一欄當「分不清」擋、碰錢那一欄讓同連接器其餘工具當沒登記擋，⑮②e；
 //   mcp 本身／mcp__ 開頭／全是符號才由文法擋）；
-//   ⑫是用 /bin/sh 模擬鉤子，**這裡不證明真的 Claude Code／Codex session 有載入、有照做**（要由使用專案用測試鈕驗；
-//     第一個使用專案 2026-09-16／17 兩家都驗過擋得住，放行面在 Codex 真對話還沒直接量）；鉤子逾時兩家都不擋。
+//   ⑫是用 /bin/sh 模擬鉤子，**這裡不證明真的 AI session（Claude Code、Codex 或別家）有載入、有照做**（要由使用專案用測試鈕驗；
+//     第一個使用專案 2026-09-16／17 Claude Code 與 Codex 都驗過擋得住，放行面在 Codex 真對話還沒直接量）；鉤子逾時 Claude Code 與 Codex 都不擋（別家要自己量）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -698,7 +698,7 @@ test('⑥四份接線範本都只呼叫同一支判斷，範本裡不抄判斷�
 
 test('⑫接線範本真的跑一遍：不管從哪個目錄起、起不來一律擋（搬家驗屋 09-13）', () => {
   // 原本三份範本都是 node tools/forbidden-tools.js（相對路徑）：鉤子在 AI 當下所在的目錄執行，
-  // 從子目錄或別的專案起就找不到檔、退 1——兩家 AI 都把退 1 當「不擋」。
+  // 從子目錄或別的專案起就找不到檔、退 1——接過的鉤子協定（Claude Code、Codex）都把退 1 當「不擋」。
   const cmd = (f) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8')).hooks.PreToolUse[0].hooks[0].command;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-hook-'));
   const proj = path.join(scratch, 'proj');
