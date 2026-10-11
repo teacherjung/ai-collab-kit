@@ -50,7 +50,7 @@
 //     讀不了基底（例如有一層不給進）＝退 2、照實說確認不了、不刪；只有基底確實不存在才說「沒有東西可以退役」。
 //
 // Codex 全域層：裝與換只有一條順序（專案裡要看得到：套件的 README 不跟著搬進專案；README 第 3 步是同一份順序的抄本）：
-//   ⓪先確認禁區清單（settings.json 的 forbidden.deny）裡有一個刻意放的無害測試工具：它要是 Codex 連得到的伺服器上真的存在的 mcp__ 工具，就算真的執行了也不會動到禁區、不會造成任何改變，而且不可以是禁區連接器（forbidden.servers）上的任何工具——連唯讀的查詢也不行；原本還有別的攔截組並存時，挑一個只有這份清單擋、別組不擋的名字。套件帶了一支現成的＝tools/canary-server.js（掛上去只回一句 pong，什麼都不做），工具名 mcp__guard_canary__ping，兩家 AI 各登記一次的做法見 templates/canary-install.md。清單上還沒有就先加、合併，再從①開始——沒有就停下來，不可以拿任何別的工具代替。
+//   ⓪先確認禁區清單（settings.json 的 forbidden.deny）裡有一個刻意放的無害測試工具：它要是 Codex 連得到的伺服器上真的存在的 mcp__ 工具，就算真的執行了也不會動到禁區、不會造成任何改變，而且不可以是禁區連接器（forbidden.servers）上的任何工具——連唯讀的查詢也不行；原本還有別的攔截組並存時，挑一個只有這份清單擋、別組不擋的名字。套件帶了一支現成的＝tools/canary-server.js（掛上去只回一句 pong，什麼都不做），工具名 mcp__guard_canary__ping，每個參與的 AI 各登記一次的做法見 templates/canary-install.md。清單上還沒有就先加、合併，再從①開始——沒有就停下來，不可以拿任何別的工具代替。
 //   ①先 git fetch，在專案裡跑 node tools/guard-copy.js --from <已合併進主幹的版本> --to <新的空目錄>（建議家目錄底下固定的地方，例如 ~/.local/share/ai-collab-kit/guard/<版本碼前幾碼>）。
 //   ②關掉所有 Codex 視窗（改鉤子檔到按下信任之間，改過的那一組是停用的：Codex 對沒信任的鉤子一聲不吭地跳過，這段時間不能有 Codex 在跑）。
 //   ③編輯家目錄 .codex/hooks.json：第一次裝＝把印出的那一組加到 hooks.PreToolUse 最後面（原本有別的攔截組就讓它們並存）；換新複本＝在原位置換掉舊複本那一組。
