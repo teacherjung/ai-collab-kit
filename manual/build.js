@@ -371,7 +371,7 @@ function readTemplates(root) {
 }
 
 /**
- * cases/：索引的說明段（index.json）與每一則案例（.md，照檔名排；README.md 是產生出來的索引，不讀）。
+ * cases/：索引的說明段（index.json）與每一則案例（.md，照檔名排；README.md、DIGEST.md 是案例索引產生器產生的，不讀）。
  * 別的檔、子資料夾都停（說明書不知道它算不算案例）；不是合法的 UTF-8 也停（網頁上就不是原文了）。
  */
 function readCases(root) {
@@ -388,7 +388,7 @@ function readCases(root) {
   if (!fs.existsSync(path.join(abs, 'index.json'))) throw new Error('讀不到 cases/index.json：說明書不產生');
   const files = [];
   for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
-    if (entry.name === 'README.md' || entry.name === 'index.json') continue;
+    if (entry.name === 'README.md' || entry.name === 'DIGEST.md' || entry.name === 'index.json') continue; // README.md、DIGEST.md 是案例索引產生器的產物，不是案例
     if (!entry.isFile() || !entry.name.endsWith('.md')) throw new Error(`cases/${entry.name}：案例頁不知道它算不算案例`);
     files.push({ path: `cases/${entry.name}`, text: decode(entry.name) });
   }
@@ -939,12 +939,13 @@ ${cards}
 
 /**
  * 機器表「原專案的實作」那一欄用灰底框寫到這幾個路徑之一的列（照表的順序），一列一顆鈕；一列都沒有就寫明。
- * 「寫到」只認一個灰底框剛好放這一個路徑；那一欄用別的寫法提到它（兩個路徑放同一個框、沒有框）就停——
- * 不然頁上會說「沒有直接寫到它」，其實有。
+ * 「寫到」只認一個灰底框剛好放這一個路徑；那一欄沒有這種框、卻用別的寫法提到它（兩個路徑放同一個框、沒有框）就停——
+ * 不然頁上會說「沒有直接寫到它」，其實有。已經有這種框的列照算，同一格別處再提（例如跑法的指令框）不停。
  */
 function rowRefs(rows, paths, none = '機器表的「原專案的實作」那一欄沒有直接寫到它') {
   for (const row of rows) {
     for (const p of paths) {
+      if (row.fields[0].includes(`\`${p}\``)) continue; // 已經有一個灰底框剛好放這個路徑＝這一列算寫到它，別處再提（例如寫在跑法的指令框裡）不會讓頁上漏列
       const rest = row.fields[0].split(`\`${p}\``).join(' ');
       const loose = new RegExp(`(?<![A-Za-z0-9_./-])${p.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9_.-])`, 'u');
       if (loose.test(rest)) throw new Error(`MACHINES.md 機器表「${row.label}」那一列的「原專案的實作」提到 ${p}，但不是一個灰底框剛好放這一個路徑：說明書認不出算不算寫到它`);
@@ -1144,9 +1145,9 @@ function parseCaseNotes(text) {
   } catch {
     throw new Error('cases/index.json 不是合法的 JSON：說明書不產生');
   }
-  const shape = (value, keys, what) => {
-    const ok = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join() === [...keys].sort().join();
-    if (!ok) throw new Error(`cases/index.json 的${what}要剛好有 ${keys.join('、')} 這幾個鍵：說明書不產生`);
+  const shape = (value, keys, what, optional = []) => {
+    const ok = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).filter((k) => !optional.includes(k)).sort().join() === [...keys].sort().join();
+    if (!ok) throw new Error(`cases/index.json 的${what}要剛好有 ${keys.join('、')} 這幾個鍵${optional.length ? `（另外可以有 ${optional.join('、')}）` : ''}：說明書不產生`);
     return value;
   };
   const line = (value, what) => {
@@ -1159,7 +1160,7 @@ function parseCaseNotes(text) {
     if (!Array.isArray(value)) throw new Error(`cases/index.json 的${what}要是陣列：說明書不產生`);
     return value;
   };
-  shape(data, ['title', 'intro', 'sections'], '最外層');
+  shape(data, ['title', 'intro', 'sections'], '最外層', ['digest']); // digest＝cases/DIGEST.md 的原料（案例索引產生器自己驗），案例頁不排它
   return {
     title: line(data.title, '標題'),
     intro: list(data.intro, '開頭').map((v, i) => line(v, `開頭第 ${i + 1} 行`)),
