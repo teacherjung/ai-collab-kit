@@ -216,7 +216,8 @@ function onePath(cwd, args, what) {
  *     真實路徑要解得出來——不拿沒核過的字串去比（用捷徑當目前資料夾時，那個字串跟登記的真實路徑對不上，主目錄就被列出來）。
  *   gitDir＝git-common-dir 本身（存歷史的目錄）；keep＝③一定不能列、底下也不能有的：git 目錄本身、目前所在這棵樹的頂層、
  *     core.worktree 指的主工作目錄。git 目錄另存（--separate-git-dir）時，git 的工作樹清單第一筆是 git 目錄、不是實際的主工作目錄，
- *     只靠登記的路徑會把實際的主工作目錄列進③（理財 #672 r5 第 2 條）。core.worktree 沒設＝沒有這一項；設了、指的地方確定不在＝沒有這一項。
+ *     只靠登記的路徑會把實際的主工作目錄列進③（理財 #672 r5 第 2 條）。core.worktree 照 git 實際用的讀（直接寫的、include 引進來的、主樹的 config.worktree 都算）；
+ *     沒設＝沒有這一項；設了、指的地方確定不在＝沒有這一項。
  */
 function repoPlaces(cwd) {
   const raw = onePath(cwd, ['rev-parse', '--git-common-dir'], '主目錄');
@@ -227,8 +228,9 @@ function repoPlaces(cwd) {
   const top = read('realpathSync', path.resolve(cwd, onePath(cwd, ['rev-parse', '--show-toplevel'], '目前這棵樹的頂層')));
   if (!top.ok) throw new TidyError(`目前這棵樹的真實路徑判斷不了（${top.code}）：什麼都不列`);
   const keep = [g.value, top.value];
-  // 只讀 git 目錄裡那份設定（--file），不讀使用者層、系統層；退 1 而且沒出聲＝沒設（git config 的文件寫明），其他＝判斷不了、退 2
-  const wt = git(cwd, ['config', '--file', path.join(g.value, 'config'), '--get', 'core.worktree'], { allowFail: true });
+  // 在 git 目錄裡問 git，讀到的跟 git 自己用的一樣（含 include 引進來的、主樹的 config.worktree；#79 r1 R1：只讀 git 目錄裡那份檔，
+  // 這兩種放法都讀不到）；退 1 而且沒出聲＝沒設（git config 的文件寫明），其他＝判斷不了、退 2
+  const wt = git(g.value, ['config', '--get', 'core.worktree'], { allowFail: true });
   if ((wt.stderr || '').trim()) throw new TidyError(`git config 讀 core.worktree 印了警告「${firstLine(wt.stderr)}」：這一次讀到的不能信，什麼都不列`);
   if (wt.status === 0) {
     const v = wt.stdout.replace(/\n$/u, '');

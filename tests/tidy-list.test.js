@@ -26,7 +26,7 @@
 //     確定沒有遠端主幹時用本機的照舊，見①）；主目錄那一次 git 回空的＝退 2；
 //   ⑥h git 目錄另存（--separate-git-dir）：git 列的第一筆（主工作樹，路徑是 git 目錄本身）不列；
 //   ⑥i git 目錄另存時，暫存資料夾裡的實際主工作目錄與 git 目錄不列（理財 #672 r5 第 2 條）：從主目錄跑、從別的工作樹跑（主目錄的 .git 指回這個倉庫的 git 目錄）、
-//     主目錄埋得比兩層深時靠 core.worktree（相對路徑從 git 目錄算）或目前這棵樹的頂層認；別的獨立倉庫、一般資料夾照列；唯一內容還在；
+//     主目錄埋得比兩層深時靠 core.worktree（相對路徑從 git 目錄算；include 引進來、主樹 config.worktree 裡的也算，#79 r1 R1）或目前這棵樹的頂層認；別的獨立倉庫、一般資料夾照列；唯一內容還在；
 //     每一次解真實路徑、讀檔的呼叫逐一換成讀不到，主目錄那幾個照樣不列（同⑥d）；讀 core.worktree 印警告、退 1 以外、退 0 卻沒有值、頂層回空的＝退 2（⑥f）；
 //   ⑥g主目錄要先核實：用捷徑當目前資料夾照樣不列主目錄；主目錄的真實路徑讀不到（EACCES、EIO）＝退 2；status、merge-base 印警告、status 安靜地退非 0＝那一樣進判斷不了、不列；分支清單、stash 清單、工作樹登記塞一筆認不得的＝那一筆進判斷不了
 //     （不安靜丟掉）、其餘照算；
@@ -545,7 +545,7 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     assert.deepEqual(names(base.branches), ['merged'], '假 git 不加料時跟真的一樣');
     assert.equal(base.worktrees.length, 1);
     // 全域那幾次逐一單獨加警告（rev-parse 有四處、各自分開試：在不在倉庫裡、找主幹、倉庫位置、目前這棵樹的頂層；讀 core.worktree 那一次也算）
-    for (const sub of ['worktree', 'for-each-ref', 'branch', 'stash', 'rev-parse:--is-inside-work-tree', 'rev-parse:--verify', 'rev-parse:--git-common-dir', 'rev-parse:--show-toplevel', 'config:--file']) {
+    for (const sub of ['worktree', 'for-each-ref', 'branch', 'stash', 'rev-parse:--is-inside-work-tree', 'rev-parse:--verify', 'rev-parse:--git-common-dir', 'rev-parse:--show-toplevel', 'config:--get']) {
       const res = withFake(sub, '');
       assert.equal(res.code, 2, `${sub} 印了警告要退 2：${res.lines.join('\n')}`);
       assert.match(res.lines[0], /印了警告「warning: fake warning/u, sub);
@@ -583,7 +583,7 @@ test('⑥f git 出聲就判斷不了（Fable 代裁 D1）：全域那幾次印�
     const cfg = withFake('', '', 'config');
     assert.equal(cfg.code, 2, `讀 core.worktree 退 3 要退 2：${cfg.lines.join('\n')}`);
     assert.match(cfg.lines[0], /讀 core\.worktree 退 3/u);
-    const emptyCfg = withFake('', '', '', '', 'config:--file');
+    const emptyCfg = withFake('', '', '', '', 'config:--get');
     assert.equal(emptyCfg.code, 2, `讀 core.worktree 退 0 卻沒有值要退 2：${emptyCfg.lines.join('\n')}`);
     assert.match(emptyCfg.lines[0], /core\.worktree 的值形狀認不得/u);
     const noTop = withFake('', '', '', '', 'rev-parse:--show-toplevel');
@@ -666,7 +666,15 @@ test('⑥i git 目錄另存時，實際的主工作目錄與 git 目錄在暫存
   const sepRepo = (work, meta, linked, { coreWorktree }) => {
     fs.mkdirSync(work, { recursive: true });
     sh(work, 'init', '-q', '--separate-git-dir', meta, '-b', 'main');
-    if (coreWorktree) sh(work, 'config', 'core.worktree', coreWorktree === 'relative' ? path.relative(meta, work) : work);
+    if (coreWorktree === 'include') {
+      // core.worktree 寫在另一份檔、用 include 引進來（#79 r1 R1）
+      fs.writeFileSync(`${meta}.extra.conf`, `[core]\n\tworktree = ${work}\n`);
+      sh(work, 'config', 'include.path', `${meta}.extra.conf`);
+    } else if (coreWorktree === 'worktreeConfig') {
+      // 主樹自己的 config.worktree（#79 r1 R1）
+      sh(work, 'config', 'extensions.worktreeConfig', 'true');
+      sh(work, 'config', '--worktree', 'core.worktree', work);
+    } else if (coreWorktree) sh(work, 'config', 'core.worktree', coreWorktree === 'relative' ? path.relative(meta, work) : work);
     sh(work, 'config', 'maintenance.auto', 'false');
     fs.writeFileSync(path.join(work, '.gitignore'), 'local-only.txt\n');
     fs.writeFileSync(path.join(work, 'a.txt'), 'x\n');
@@ -674,8 +682,9 @@ test('⑥i git 目錄另存時，實際的主工作目錄與 git 目錄在暫存
     fs.writeFileSync(path.join(work, 'local-only.txt'), `UNIQUE ${work}\n`);
     sh(work, 'worktree', 'add', '-q', '--detach', linked, 'HEAD');
     assert.equal(sh(work, 'status', '--porcelain'), '', '主工作目錄要是乾淨的（不然本來就不列）');
-    const wt = spawnSync('git', ['config', '--file', path.join(meta, 'config'), '--get', 'core.worktree'], { env: gitEnv(), encoding: 'utf8' });
-    assert.equal(wt.status, coreWorktree ? 0 : 1, 'core.worktree 有沒有設要跟題目說的一樣');
+    const wt = spawnSync('git', ['config', '--get', 'core.worktree'], { cwd: work, env: gitEnv(), encoding: 'utf8' });
+    assert.equal(wt.status, coreWorktree ? 0 : 1, 'core.worktree 有沒有設要跟題目說的一樣（照 git 實際用的）');
+    assert.equal(fs.realpathSync(sh(work, 'rev-parse', '--show-toplevel')), work, 'git 自己認得主工作目錄');
   };
   try {
     // 甲：理財 #672 r5 的重現——主工作目錄就叫 review-main、git 目錄叫 review-meta.git，都在暫存資料夾第一層、三天沒改；core.worktree 指回主目錄
@@ -699,6 +708,13 @@ test('⑥i git 目錄另存時，實際的主工作目錄與 git 目錄在暫存
     const dBox = path.join(zone, 'review-d-box');
     const d = path.join(dBox, 'one', 'two', 'main');
     sepRepo(d, path.join(base, 'd-meta.git'), path.join(base, 'd-linked'), { coreWorktree: false });
+    // 戊、己：主目錄埋三層深、從另一棵工作樹跑；core.worktree 用 include 引進來／寫在主樹的 config.worktree（#79 r1 R1：只讀 git 目錄裡那份檔會漏掉）
+    const eBox = path.join(zone, 'review-e-box');
+    const e = path.join(eBox, 'one', 'two', 'main');
+    sepRepo(e, path.join(base, 'e-meta.git'), path.join(base, 'e-linked'), { coreWorktree: 'include' });
+    const fBox = path.join(zone, 'review-f-box');
+    const f = path.join(fBox, 'one', 'two', 'main');
+    sepRepo(f, path.join(base, 'f-meta.git'), path.join(base, 'f-linked'), { coreWorktree: 'worktreeConfig' });
     // 對照組：別的獨立倉庫、乾淨、三天沒改＝照列；一般資料夾也照列
     const other = path.join(zone, 'review-other');
     fs.mkdirSync(other);
@@ -707,12 +723,15 @@ test('⑥i git 目錄另存時，實際的主工作目錄與 git 目錄在暫存
     sh(other, 'add', '-A'); sh(other, 'commit', '-q', '-m', 'o');
     const plain = path.join(zone, 'review-plain');
     fs.mkdirSync(plain);
-    age(a, aMeta, b, c, path.dirname(c), path.dirname(path.dirname(c)), cBox, d, path.dirname(d), path.dirname(path.dirname(d)), dBox, other, plain);
+    const deep = (w, box) => [w, path.dirname(w), path.dirname(path.dirname(w)), box];
+    age(a, aMeta, b, ...deep(c, cBox), ...deep(d, dBox), ...deep(e, eBox), ...deep(f, fBox), other, plain);
     const cases = [
       ['甲（從主目錄跑）', a, [aMeta, a]],
       ['乙（從別的工作樹跑、只有 .git 指回）', path.join(base, 'b-linked'), [b]],
       ['丙（從別的工作樹跑、埋三層、靠 core.worktree 的相對路徑）', cLinked, [cBox]],
       ['丁（從主目錄跑、埋三層、靠目前這棵樹的頂層）', d, [dBox]],
+      ['戊（從別的工作樹跑、埋三層、core.worktree 用 include 引進來）', path.join(base, 'e-linked'), [eBox]],
+      ['己（從別的工作樹跑、埋三層、core.worktree 在主樹的 config.worktree）', path.join(base, 'f-linked'), [fBox]],
     ];
     for (const [label, cwd, mustKeep] of cases) {
       const res = run({ settings: SETTINGS, cwd, argv: ['--tmp', zone, '--list'], now: NOW });
@@ -747,7 +766,7 @@ test('⑥i git 目錄另存時，實際的主工作目錄與 git 目錄在暫存
         if (got.length < want.length) assert.ok(res.unsure.length > 0, `${what}：清單變短了，判斷不了那一欄卻是空的（靜默）`);
       }
     }
-    for (const w of [a, b, c, d]) assert.equal(fs.readFileSync(path.join(w, 'local-only.txt'), 'utf8'), `UNIQUE ${w}\n`, '唯一的內容還在');
+    for (const w of [a, b, c, d, e, f]) assert.equal(fs.readFileSync(path.join(w, 'local-only.txt'), 'utf8'), `UNIQUE ${w}\n`, '唯一的內容還在');
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
