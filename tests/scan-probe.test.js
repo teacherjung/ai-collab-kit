@@ -65,6 +65,34 @@ function fakeRunner(reply) {
 }
 const readSecretFromArgv = (argv) => { const f = argv.find((a) => path.basename(a) === 'fake-secret.txt'); return f ? fs.readFileSync(f, 'utf8').trim() : ''; };
 
+test('提供者是「借用」：試探與埋都退 2、逐字指路到出借的專案、什麼都不跑、不碰禁區（就算前綴與禁區有填也不用）', () => {
+  const zone = tempZone();
+  const listDir = tempZone();
+  try {
+    const msg = (who) => `隔離是借用的，試探、埋、收在 ${who} 那邊跑（用它的 tools/scan-probe.js 與它的設定；怎麼跑見本專案設定的掃描者那一格）。這裡不測、不假裝測過。`;
+    for (const [iso, who] of [
+      [{ provider: '借用', lender: '出借的甲', wrap: [process.execPath, FAKE, '{box}'], boxRoot: UNSET, forbidden: [zone] }, '出借的甲'],
+      [{ provider: '借用', wrap: [], forbidden: [] }, '出借的專案'],
+      [{ provider: '借用', lender: UNSET, wrap: [], forbidden: [] }, '出借的專案'],
+    ]) {
+      const { run, calls } = fakeRunner(() => ({}));
+      const r = probeRun({ settings: settingsWith(iso), run });
+      assert.equal(r.code, 2);
+      assert.deepEqual(r.lines, [msg(who)]);
+      assert.equal(calls.length, 0, '借用時不該跑任何東西');
+      const out = path.join(listDir, 'list.txt');
+      const p = plantCanaries({ settings: settingsWith(iso), outFile: out });
+      assert.equal(p.code, 2);
+      assert.deepEqual(p.lines, [msg(who)]);
+      assert.ok(!fs.existsSync(out), '借用時不該寫清單檔');
+    }
+    assert.deepEqual(fs.readdirSync(zone), [], '借用時不該在禁區埋任何東西');
+  } finally {
+    fs.rmSync(zone, { recursive: true, force: true });
+    fs.rmSync(listDir, { recursive: true, force: true });
+  }
+});
+
 test('沒有隔離提供者、前綴沒填、禁區清單空：都退 2、什麼都不跑', () => {
   for (const iso of [
     undefined,

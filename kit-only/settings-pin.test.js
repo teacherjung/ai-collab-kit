@@ -45,7 +45,10 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.deepEqual(s.acceptance.tiers.map((t) => t.id), ['免驗收']);
   assert.equal(s.acceptance.unknownTier, '免驗收');
   assert.deepEqual(s.acceptance.families, [{ pattern: '^', tier: '免驗收' }]);
-  assert.match(s.scanner.tool, /^無/u, '套件倉庫沒有掃描者');
+  // 掃描借用理財的（擁有者 2026-10-05「A，先借用試試看」；Fable 2026-10-11 代裁：只寫關係不寫路徑、提供者加「借用」）
+  assert.match(s.scanner.tool, /^Grok CLI（xAI），借用 personal-finance-webapp 的掃描腳本與隔離盒/u, '套件倉庫借用理財的掃描');
+  assert.ok(s.scanner.tool.includes('一律在 <理財工作樹> 經 node scripts/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射'), '發射指令（含 --repo）');
+  assert.deepEqual(s.scanner.isolation, { provider: '借用', lender: 'personal-finance-webapp', wrap: [], boxRoot: '未設定', forbidden: [] });
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
   const states = Object.fromEntries(s.machines.map((m) => [m.name.split('（')[0], m.state]));
   assert.deepEqual(states, {
@@ -61,4 +64,23 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   for (const m of s.machines) {
     if (m.state === '已啟用') assert.match(m.verified, /^\d{4}-\d{2}-\d{2}$/u, `已啟用的機器要有驗證日期：${m.name}`);
   }
+});
+
+test('借用的掃描：佔位只有一個寫法（<理財工作樹>）、設定與 README 不出現本機路徑；套件自己的試探與埋都退 2、指路去理財', { skip: IN_KIT ? false : '不是套件倉庫' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const texts = { 'settings.json': fs.readFileSync(path.join(ROOT, 'settings.json'), 'utf8'), 'README.md': fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8') };
+  for (const [name, text] of Object.entries(texts)) {
+    assert.ok(text.includes('<理財工作樹>'), `${name} 沒有用佔位 <理財工作樹>`);
+    assert.deepEqual([...new Set(text.match(/<理財[^>]*>/gu))], ['<理財工作樹>'], `${name} 的理財佔位要只有一種寫法`);
+    assert.doesNotMatch(text, /\/Users\/|\/home\/|~\/Desktop/u, `${name} 出現了本機路徑（只寫關係、不寫路徑）`);
+  }
+  const listDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kit-borrowed-'));
+  try {
+    for (const args of [[], ['--plant', path.join(listDir, 'list.txt')]]) {
+      const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'scan-probe.js'), ...args], { encoding: 'utf8' });
+      assert.equal(r.status, 2, `${args.join(' ') || '試探'}：${r.stdout}${r.stderr}`);
+      assert.match(r.stdout, /^隔離是借用的，試探、埋、收在 personal-finance-webapp 那邊跑/u);
+    }
+    assert.deepEqual(fs.readdirSync(listDir), [], '借用時不該寫清單檔');
+  } finally { fs.rmSync(listDir, { recursive: true, force: true }); }
 });

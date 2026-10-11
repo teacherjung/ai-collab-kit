@@ -22,7 +22,10 @@ const outFile = path.join(root, 'PROJECT-SETTINGS.md');
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
 const hasNul = (s) => String(s).includes('\u0000');
 const STATES = ['未移植', '已安裝未啟用', '已啟用'];
-const PROVIDERS = ['未設定', '無', '工具自帶', '專案自建'];
+const PROVIDERS = ['未設定', '無', '工具自帶', '專案自建', '借用'];
+// 「借用」＝用別的專案現成的隔離與掃描（套件倉庫借理財專案的，擁有者 2026-10-05「A，先借用試試看」；Fable 2026-10-11 代裁加這個值）：
+// 前綴、盒子位置、禁區只住出借的那一份，這裡不抄（抄了會漂移）；填出借的專案名（關係，不是路徑）
+const BORROWED = '借用';
 // 風險級別只有這三種、從重到輕（規矩 D4 定的，不是專案的值）
 const RISK_TIERS = ['高', '中', '低'];
 
@@ -98,23 +101,34 @@ function build(data) {
   out.push(`- 誰指派、登記在哪：${plain(data.scanner.assignedBy, '掃描發射者的指派方式')}`);
   out.push(`- 兩方都起得了時：${plain(data.scanner.tieBreak, '平手規則')}`);
   out.push(`- 沒有合格者時，誰記錄未執行、誰轉正式：${plain(data.scanner.fallback, '無合格者時的替代')}`);
-  // 掃描者的模型與推理（規矩 G1；擁有者 2026-10-04 的常設指示）：跟複審者那張表一樣，模型名只住這裡，換新模型只改這兩格
-  out.push(`- 掃描用的最強模型（規矩 G1；換新模型只改這裡）：${plain(data.scanner.strongest === undefined ? '未設定' : data.scanner.strongest, '掃描的最強模型')}；最高推理：${plain(data.scanner.maxEffort === undefined ? '未設定' : data.scanner.maxEffort, '掃描的最高推理')}`);
   const iso = data.scanner.isolation || {};
   if (!PROVIDERS.includes(iso.provider)) throw new Error(`隔離提供者「${iso.provider}」不在 ${PROVIDERS.join('／')} 裡`);
+  const borrowed = iso.provider === BORROWED;
+  // 掃描者的模型與推理（規矩 G1；擁有者 2026-10-04 的常設指示）：跟複審者那張表一樣，模型名只住這裡，換新模型只改這兩格（借用時住出借的那一份）
+  out.push(`- 掃描用的最強模型（規矩 G1；${borrowed ? '借用時照出借的專案那一格，換新模型改那裡' : '換新模型只改這裡'}）：${plain(data.scanner.strongest === undefined ? '未設定' : data.scanner.strongest, '掃描的最強模型')}；最高推理：${plain(data.scanner.maxEffort === undefined ? '未設定' : data.scanner.maxEffort, '掃描的最高推理')}`);
   const wrap = Array.isArray(iso.wrap) ? iso.wrap : [];
   const forbidden = Array.isArray(iso.forbidden) ? iso.forbidden : [];
   out.push('', '隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前檢查與掃後檢查兩支小工具）：', '');
-  out.push(`- 由誰提供：${plain(iso.provider, '隔離提供者')}（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」）`);
-  out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑、{projectRoot} 會換成專案根目錄）：${plain(wrap.length ? argvText(wrap) : '未設定', '隔離指令前綴')}`);
-  out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
-  out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；掃前檢查在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
-  out.push('- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：');
-  out.push('  1. node tools/scan-probe.js：任一禁區用它的讀寫機制碰得到＝隔離是假的，不掃；連試探都做不成（含盒內起不了那個機制）＝不掃。');
-  out.push('  2. node tools/scan-probe.js --plant <清單檔>：在每個禁區埋一個掃描期間才有的假機密。清單檔不要貼進任何紀錄。');
-  out.push('  3. 起掃描者（本套件不代跑）。');
-  out.push('  4. node tools/scan-postmortem.js --secrets <清單檔> --reply <回覆檔> --logs <日誌目錄>：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
-  out.push('  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。');
+  if (borrowed) {
+    if (iso.lender === '未設定') throw new Error('提供者是「借用」卻沒填出借的專案');
+    const lender = plain(iso.lender, '出借隔離的專案');
+    if (/[/\\]|^[~.]/u.test(iso.lender)) throw new Error('出借隔離的專案要寫專案名（關係），不寫路徑');
+    if (wrap.length || forbidden.length || (iso.boxRoot !== undefined && iso.boxRoot !== '未設定')) throw new Error('借用時前綴、盒子位置、禁區只住出借的那一份：這裡不抄（留空或未設定）');
+    out.push(`- 由誰提供：借用（出借的專案：${lender}）。試探、埋、比對、收都在出借的專案那邊、用它自己的工具與設定跑（測的就是真的要用的那個盒子）；怎麼跑寫在上面「掃描者」那一格。本專案的 node tools/scan-probe.js 遇到借用一律退 2、指路過去，不假裝測過。`);
+    out.push(`- 前綴、盒子位置、禁區清單：照出借的專案（${lender}）的設定，這裡不抄一份（抄了會漂移）。`);
+  } else {
+    if (iso.lender !== undefined && iso.lender !== '未設定') throw new Error('只有提供者是「借用」才填出借的專案（其他提供者留「未設定」）');
+    out.push(`- 由誰提供：${plain(iso.provider, '隔離提供者')}（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」；「借用」＝用別的專案現成的隔離）`);
+    out.push(`- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑、{projectRoot} 會換成專案根目錄）：${plain(wrap.length ? argvText(wrap) : '未設定', '隔離指令前綴')}`);
+    out.push(`- 盒子建在：${plain(iso.boxRoot || '未設定', '盒子位置')}（未設定＝系統暫存區）`);
+    out.push(`- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；掃前檢查在每一個各埋一個假機密）：${plain(forbidden.length ? forbidden.join('、') : '未設定', '禁區清單')}`);
+    out.push('- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：');
+    out.push('  1. node tools/scan-probe.js：任一禁區用它的讀寫機制碰得到＝隔離是假的，不掃；連試探都做不成（含盒內起不了那個機制）＝不掃。');
+    out.push('  2. node tools/scan-probe.js --plant <清單檔>：在每個禁區埋一個掃描期間才有的假機密。清單檔不要貼進任何紀錄。');
+    out.push('  3. 起掃描者（本套件不代跑）。');
+    out.push('  4. node tools/scan-postmortem.js --secrets <清單檔> --reply <回覆檔> --logs <日誌目錄>：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。');
+    out.push('  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。');
+  }
   out.push('', '## 五、平台介面（規矩 E5、H1；閘要問平台的每一件事都走這裡）', '');
   out.push('套件只定「問什麼」與「答案長什麼樣」，每個動作填一條指令，指令要把答案印成約定形狀的 JSON。翻譯是這個專案的事，套件不碰任何平台的語彙。沒登記的動作被問到時一律不放行，不會回一個空答案假裝問過了。', '');
   out.push(`平台：${plain((data.platform && data.platform.name) || '未設定', '平台名稱')}；倉庫身分（指令裡的 {project}）：${plain((data.platform && data.platform.project) || '未設定', '倉庫身分')}；問平台前要清掉的選倉環境變數：${plain((data.platform && Array.isArray(data.platform.clearEnv) && data.platform.clearEnv.length) ? data.platform.clearEnv.join('、') : '（無）', '選倉環境變數')}`, '');
@@ -235,4 +249,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 PROJECT-SETTINGS.md：${data.machines.length} 支機器\n`);
 }
 
-module.exports = { build, read, dataFile, outFile, STATES, PROVIDERS, RISK_TIERS };
+module.exports = { build, read, dataFile, outFile, STATES, PROVIDERS, BORROWED, RISK_TIERS };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 掃描前試探：隔離是不是真的（規矩 G2；裁示者 2026-09-12 裁「丙」）。
 //
-// 裁「丙」的內容：隔離本身不搬——由專案設定指定誰提供（工具自帶／專案自建），套件只搬兩樣通用的小工具：
+// 裁「丙」的內容：隔離本身不搬——由專案設定指定誰提供（工具自帶／專案自建／借用），套件只搬兩樣通用的小工具：
 // 這一支（掃前試探）與 tools/scan-postmortem.js（掃後比對）。沒有隔離、或試探不過＝不掃，掃描紀錄寫「未執行」。
 //
 // 它做什麼：在每個登記的禁區各埋一個假機密，從盒內用「確定會嘗試」的程式（cat、sh）去讀、去寫。
@@ -42,7 +42,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { read: readSettings } = require('./build-settings.js');
+const { read: readSettings, BORROWED } = require('./build-settings.js');
 
 const UNSET = '未設定';
 /** 這支在專案機器表裡的那一列（名字跟 settings.json 一字不差）。 */
@@ -103,10 +103,22 @@ function isBlocked(r, secret) {
  * 跑完整試探。回傳 { code, lines }；settings／run／home／tmp 都可以換掉，考題不必碰真的家目錄。
  * lines 裡不會出現假機密本身。
  */
+/**
+ * 提供者是「借用」＝隔離住在出借的專案：試探、埋、收都要在那邊用它自己的工具與設定跑，這裡一律退 2、指路過去
+ * （不假裝測過，也不拿空的禁區清單說「沒地方可埋」誤導人；Fable 2026-10-11 代裁）。不是借用＝null。
+ */
+function borrowedRefusal(iso) {
+  if (!iso || iso.provider !== BORROWED) return null;
+  const lender = typeof iso.lender === 'string' && iso.lender.trim() && iso.lender !== UNSET ? iso.lender : '出借的專案';
+  return `隔離是借用的，試探、埋、收在 ${lender} 那邊跑（用它的 tools/scan-probe.js 與它的設定；怎麼跑見本專案設定的掃描者那一格）。這裡不測、不假裝測過。`;
+}
+
 function probeRun({ settings = readSettings(), run = runCommand, home = os.homedir(), tmp = os.tmpdir(), projectRoot = path.join(__dirname, '..') } = {}) {
   const lines = [];
   const say = (text) => lines.push(text);
   const iso = settings.scanner && settings.scanner.isolation;
+  const lent = borrowedRefusal(iso);
+  if (lent) { say(lent); return { code: 2, lines }; }
   const provider = iso && typeof iso.provider === 'string' ? iso.provider : UNSET;
   if (provider === UNSET || provider === NONE) {
     say(`隔離提供者是「${provider}」：沒有隔離＝不掃，掃描紀錄寫「未執行：無隔離」。`);
@@ -245,6 +257,8 @@ const MANIFEST_SUFFIX = '.planted';
 function plantCanaries({ settings = readSettings(), home = os.homedir(), outFile } = {}) {
   const lines = [];
   const iso = (settings.scanner && settings.scanner.isolation) || {};
+  const lent = borrowedRefusal(iso);
+  if (lent) return { code: 2, lines: [lent] };
   const zones = Array.isArray(iso.forbidden) ? iso.forbidden.filter((x) => typeof x === 'string' && x.trim()) : [];
   if (!outFile) return { code: 2, lines: ['沒給清單檔的位置：不知道要把值寫到哪裡給比對用。'] };
   if (!zones.length) return { code: 2, lines: ['禁區清單是空的：沒有地方可埋，掃後比對就沒有鐵證可比。'] };
@@ -328,4 +342,4 @@ if (require.main === module) {
   process.exit(code);
 }
 
-module.exports = { MACHINE, notEnabled, cli, probeRun, plantCanaries, sweepCanaries, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE };
+module.exports = { MACHINE, notEnabled, cli, probeRun, plantCanaries, sweepCanaries, borrowedRefusal, runCommand, isBlocked, expandZone, minimalEnv, MANIFEST_SUFFIX, UNSET, NONE };
