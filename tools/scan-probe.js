@@ -20,7 +20,7 @@
 //           也守不到隔離有沒有別的洞（網路、剪貼簿、環境變數、沒登記的目錄）——那些由隔離提供者自己證明；
 //           以及掃描發射本身有沒有把呼叫者的環境變數帶進盒子（這一支自己只帶最少的環境變數）。
 //
-// 退出碼：0＝全部擋住、可以掃／1＝有禁區碰得到，隔離是假的，不掃／2＝試探做不成（沒有隔離、設定沒填、
+// 退出碼：0＝全部擋住、可以掃／1＝有禁區碰得到，隔離是假的，不掃／2＝試探做不成（沒有隔離、隔離是借用的、設定沒填、
 //        假機密埋不進去、對照組不活、盒內連自己的檔都讀不到或寫不進、有探針測不出），同樣不掃。
 //
 // ## 另外兩個動作：埋與收（--plant／--sweep）
@@ -100,13 +100,10 @@ function isBlocked(r, secret) {
 }
 
 /**
- * 跑完整試探。回傳 { code, lines }；settings／run／home／tmp 都可以換掉，考題不必碰真的家目錄。
- * lines 裡不會出現假機密本身。
- */
-/**
  * 提供者是「借用」＝隔離住在出借的專案：試探、埋、收都要在那邊用它自己的工具與設定跑；這裡的試探與埋一律退 2、指路過去
- * （不假裝測過，也不拿空的禁區清單說「沒地方可埋」誤導人；Fable 2026-10-11 代裁）。收（--sweep）不經過這裡：它不讀設定、
- * 只刪清單上核對過的（檔頭「收不擋」），借用時清單是出借那邊的埋寫的、就用那邊的收（#83 複審後掃抓到這裡原本寫「收也退 2」）。不是借用＝null。
+ * （不假裝測過，也不拿空的禁區清單說「沒地方可埋」誤導人；Fable 2026-10-11 代裁）。帶清單檔的收（--sweep <清單檔>）不經過這裡：
+ * 它不讀設定、只刪清單上核對過的（檔頭「收不擋」），借用時清單是出借那邊的埋寫的、就用那邊的收（#83 複審後掃抓到這裡原本寫「收也退 2」）。
+ * 不是借用＝null。
  */
 function borrowedRefusal(iso) {
   if (!iso || iso.provider !== BORROWED) return null;
@@ -114,6 +111,10 @@ function borrowedRefusal(iso) {
   return `隔離是借用的，試探、埋、收在 ${lender} 那邊跑（用它的 tools/scan-probe.js 與它的設定；怎麼跑見本專案設定的掃描者那一格）。這裡不測、不假裝測過。`;
 }
 
+/**
+ * 跑完整試探。回傳 { code, lines }；settings／run／home／tmp 都可以換掉，考題不必碰真的家目錄。
+ * lines 裡不會出現假機密本身。
+ */
 function probeRun({ settings = readSettings(), run = runCommand, home = os.homedir(), tmp = os.tmpdir(), projectRoot = path.join(__dirname, '..') } = {}) {
   const lines = [];
   const say = (text) => lines.push(text);
@@ -327,6 +328,9 @@ function cli(opts = {}, argv = []) {
     const sweep = arg('--sweep');
     if (sweep) return sweepCanaries({ ...opts, outFile: sweep });   // 收不擋：只刪清單上跟自己真實位置一字不差、名字 .scan-canary- 開頭、真的是目錄的
     const settings = opts.settings || readSettings();
+    // 借用排在「機器有沒有啟用」前面：借用的專案不管那一列登記成什麼，試探與埋都退 2 並指路（#83 複審後掃後的對抗驗證）
+    const lent = borrowedRefusal(settings.scanner && settings.scanner.isolation);
+    if (lent) return { code: 2, lines: [lent] };
     const off = notEnabled(settings);
     if (off) return { code: 2, lines: [`${off}。要用它，先在 settings.json 把那一列改成已啟用、重產設定說明，再跑。`] };
     const plant = arg('--plant');

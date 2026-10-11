@@ -68,17 +68,21 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
 
 test('借用的掃描：佔位只有一個寫法（<理財工作樹>）、設定與 README 不出現本機路徑；套件自己的試探與埋都退 2、指路去理財', { skip: IN_KIT ? false : '不是套件倉庫' }, () => {
   const { spawnSync } = require('node:child_process');
-  // 設定頁的 ASCII 標點前面有產生器加的反斜線，先拿掉再比（#83 複審後掃：原本設定頁整份不在這一題裡）
+  // 設定頁是產生器在標點前面加反斜線的產物：每個反斜線拿掉、留下它後面那個字（反斜線本身也被跳脫過，所以這樣剛好還原；
+  // 不手抄產生器跳脫哪些字）再比（#83 複審後掃：原本設定頁整份不在這一題裡）
   const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-  const texts = { 'settings.json': read('settings.json'), 'README.md': read('README.md'), 'PROJECT-SETTINGS.md': read('PROJECT-SETTINGS.md').replace(/\\([!-/:-@[-`{-~])/gu, '$1') };
-  // 會指到某台機器、某個帳號的寫法：家目錄（mac／Linux／Windows）、使用者暫存區、外接磁碟、環境變數寫的家目錄。
-  // 每台機器都一樣的系統路徑（/tmp、/dev/null、~/.local/share 底下的固定複本目錄）不算。
-  const LOCAL = /\/Users\/|\/home\/|~\/Desktop|\/var\/folders\/|\/Volumes\/|[A-Za-z]:[\\/]Users|\$\{?HOME\}?\/|%USERPROFILE%/iu;
+  const texts = { 'settings.json': read('settings.json'), 'README.md': read('README.md'), 'PROJECT-SETTINGS.md': read('PROJECT-SETTINGS.md').replace(/\\(.)/gsu, '$1') };
+  // 會指到某台機器、某個帳號的寫法：家目錄（mac／Linux／Windows，JSON 裡的 Windows 反斜線是兩個）、家目錄底下自己放的資料夾、
+  // 使用者暫存區與工作階段暫存區、外接磁碟、理財主目錄的資料夾名形狀（含擁有者本名，只比括號那段）。
+  // 每台機器都一樣的路徑（/tmp、/dev/null、~ 底下套件自己定的 ~/.local/share/…）不算；大小寫照實比，GitHub 網址的 /users/ 不算。
+  const LOCAL = /\/Users\/|\/home\/|(?:~|\$\{?HOME\}?)\/(?:Desktop|Documents|Downloads)\b|\/var\/folders\/|\/tmp\/claude-\d+\/|\/Volumes\/|[A-Za-z]:(?:\\{1,2}|\/)Users|%USERPROFILE%|\$env:USERPROFILE|（投資理財）/u;
   for (const [name, text] of Object.entries(texts)) {
     assert.ok(text.includes('<理財工作樹>'), `${name} 沒有用佔位 <理財工作樹>`);
     assert.deepEqual([...new Set(text.match(/<理財[^>]*>/gu))], ['<理財工作樹>'], `${name} 的理財佔位要只有一種寫法`);
     assert.doesNotMatch(text, LOCAL, `${name} 出現了本機路徑（只寫關係、不寫路徑）`);
   }
+  // 設定頁那一句由 data-contract 逐字釘；README 的同一件事在這裡釘（#83 複審後掃：收照常收，只有試探與埋退 2）
+  assert.ok(texts['README.md'].includes('本倉庫自己的 `tools/scan-probe.js` 試探與埋遇到借用一律退 2、指路過去（收不讀設定，借用時用理財那邊的收）。'), 'README 的借用那一句');
   const listDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kit-borrowed-'));
   try {
     for (const args of [[], ['--plant', path.join(listDir, 'list.txt')]]) {

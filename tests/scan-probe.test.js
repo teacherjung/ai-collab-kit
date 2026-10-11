@@ -93,6 +93,15 @@ test('提供者是「借用」：試探與埋都退 2、逐字指路到出借的
   }
 });
 
+test('提供者是「借用」＋機器表那一列沒啟用：指令入口照樣先講借用、指路過去（不是「還沒啟用」那句）', () => {
+  const settings = { machines: [{ name: MACHINE, state: '已安裝未啟用' }], scanner: { isolation: { provider: '借用', lender: '出借的甲', wrap: [], forbidden: [] } } };
+  for (const argv of [[], ['--plant', path.join(os.tmpdir(), 'scan-probe-never-written.txt')]]) {
+    const r = cli({ settings }, argv);
+    assert.equal(r.code, 2);
+    assert.match(r.lines.join('\n'), /^隔離是借用的，試探、埋、收在 出借的甲 那邊跑/u, argv.join(' ') || '試探');
+  }
+});
+
 test('提供者是「借用」：收（--sweep）不讀設定、照常只收清單上核對過的（收不擋；設定頁與 README 照這樣寫，#83 複審後掃）', () => {
   const zone = tempZone();
   const listDir = tempZone();

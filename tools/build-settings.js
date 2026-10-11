@@ -104,8 +104,16 @@ function build(data) {
   const iso = data.scanner.isolation || {};
   if (!PROVIDERS.includes(iso.provider)) throw new Error(`隔離提供者「${iso.provider}」不在 ${PROVIDERS.join('／')} 裡`);
   const borrowed = iso.provider === BORROWED;
-  // 掃描者的模型與推理（規矩 G1；擁有者 2026-10-04 的常設指示）：跟複審者那張表一樣，模型名只住這裡，換新模型只改這兩格（借用時住出借的那一份）
-  out.push(`- 掃描用的最強模型（規矩 G1；${borrowed ? '借用時照出借的專案那一格，換新模型改那裡' : '換新模型只改這裡'}）：${plain(data.scanner.strongest === undefined ? '未設定' : data.scanner.strongest, '掃描的最強模型')}；最高推理：${plain(data.scanner.maxEffort === undefined ? '未設定' : data.scanner.maxEffort, '掃描的最高推理')}`);
+  // 掃描者的模型與推理（規矩 G1；擁有者 2026-10-04 的常設指示）：跟複審者那張表一樣，模型名只住這裡，換新模型只改這兩格。
+  // 借用時兩格只住出借的那一份：這裡只准省略或「未設定」、指路句由產生器自己印（#83 複審後掃：原本照印本機原值，抄了模型名也不會紅、會漂移）
+  if (borrowed) {
+    const own = (v) => v !== undefined && v !== '未設定';
+    if (own(data.scanner.strongest) || own(data.scanner.maxEffort)) throw new Error('借用時掃描的最強模型與最高推理只住出借的那一份：這裡不抄（省略或寫「未設定」）');
+    const lenderName = plain(iso.lender === undefined ? '未設定' : iso.lender, '出借隔離的專案');
+    out.push(`- 掃描用的最強模型（規矩 G1；借用時照出借的專案那一格，換新模型改那裡）：照出借的專案（${lenderName}）設定的那一格（掃描腳本讀那一格、配方聲明印實際值；這裡不抄一份）；最高推理：同上`);
+  } else {
+    out.push(`- 掃描用的最強模型（規矩 G1；換新模型只改這裡）：${plain(data.scanner.strongest === undefined ? '未設定' : data.scanner.strongest, '掃描的最強模型')}；最高推理：${plain(data.scanner.maxEffort === undefined ? '未設定' : data.scanner.maxEffort, '掃描的最高推理')}`);
+  }
   const wrap = Array.isArray(iso.wrap) ? iso.wrap : [];
   const forbidden = Array.isArray(iso.forbidden) ? iso.forbidden : [];
   out.push('', '隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前檢查與掃後檢查兩支小工具）：', '');

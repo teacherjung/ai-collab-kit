@@ -267,7 +267,7 @@ test('設定資料的每一條契約，各有一發壞資料釘著', () => {
     ['出借的專案是空的', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: ' ' }; })],
     ['借用但出借的專案是未設定', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: '未設定' }; })],
     ['出借的專案寫成路徑（斜線）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: 'owner/repo' }; })],
-    ['出借的專案寫成路徑（反斜線）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: 'C:\\repo' }; })],
+    ['出借的專案寫成路徑（反斜線）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: 'owner\\repo' }; })],
     ['出借的專案寫成路徑（家目錄）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: '~repo' }; })],
     ['出借的專案寫成路徑（相對）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: '..repo' }; })],
     ['出借的專案寫成路徑（全形斜線）', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, lender: '甲／乙' }; })],
@@ -287,6 +287,8 @@ test('設定資料的每一條契約，各有一發壞資料釘著', () => {
     ['借用時禁區寫成字串', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, forbidden: '~' }; })],
     ['借用時盒子位置寫成空字串', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, boxRoot: '' }; })],
     ['借用時盒子位置寫成 null', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO, boxRoot: null }; })],
+    ['借用卻抄了最強模型', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO }; d.scanner.strongest = '甲'; d.scanner.maxEffort = '未設定'; })],
+    ['借用卻抄了最高推理', mutateS((d) => { d.scanner.isolation = { ...BORROWED_ISO }; d.scanner.strongest = '未設定'; d.scanner.maxEffort = '乙'; })],
     ['不是借用卻填了出借的專案', mutateS((d) => { d.scanner.isolation.lender = '別的專案'; })],
     ['閘的狀態不在三種裡', mutateS((d) => { d.gates[0].state = '大概好了'; })],
     ['機器的狀態不在三種裡', mutateS((d) => { d.machines[0].state = '應該可以'; })],
@@ -314,10 +316,10 @@ test('設定的值域清單本身沒有被偷偷放寬', () => {
 
 test('借用：設定頁的字逐字釘住（由誰提供、前綴那幾格不抄、模型那一格指去出借的專案）；盒子位置沒寫也合格', () => {
   for (const iso of [BORROWED_ISO, { provider: '借用', lender: '出借的甲', wrap: [], forbidden: [] }, { provider: '借用', lender: '出借的甲' }]) {
-    const out = settings.build(mutateS((d) => { d.scanner.isolation = { ...iso }; d.scanner.strongest = '甲'; d.scanner.maxEffort = '乙'; }));
+    const out = settings.build(mutateS((d) => { d.scanner.isolation = { ...iso }; d.scanner.strongest = '未設定'; delete d.scanner.maxEffort; }));
     assert.ok(out.includes('- 由誰提供：借用（出借的專案：出借的甲）。試探、埋、比對、收都在出借的專案那邊、用它自己的工具與設定跑（測的就是真的要用的那個盒子）；怎麼跑寫在上面「掃描者」那一格。本專案的 node tools/scan-probe.js 試探與埋遇到借用一律退 2、指路過去，不假裝測過（收不讀設定、只刪清單上核對過的，借用時用出借那邊的收）。\n'), out);
     assert.ok(out.includes('- 前綴、盒子位置、禁區清單：照出借的專案（出借的甲）的設定，這裡不抄一份（抄了會漂移）。\n'));
-    assert.ok(out.includes('- 掃描用的最強模型（規矩 G1；借用時照出借的專案那一格，換新模型改那裡）：甲；最高推理：乙\n'));
+    assert.ok(out.includes('- 掃描用的最強模型（規矩 G1；借用時照出借的專案那一格，換新模型改那裡）：照出借的專案（出借的甲）設定的那一格（掃描腳本讀那一格、配方聲明印實際值；這裡不抄一份）；最高推理：同上\n'), out);
     for (const gone of ['從盒內跑一條指令的前綴', '盒子建在', '盒內必須讀不到也寫不進的目錄', '整條鏈（每一步退非零就停']) assert.ok(!out.includes(gone), `借用時不該印「${gone}」那一格`);
   }
   const own = settings.build(goodSettings());
