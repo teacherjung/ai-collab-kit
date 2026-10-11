@@ -119,14 +119,15 @@
  },
  "mainBranch": "main",
  "scanner": {
-  "tool": "無（套件倉庫沒有隔離盒；掃描者與隔離綁在使用專案）",
-  "assignedBy": "無（沒有掃描者）",
-  "tieBreak": "無（沒有掃描者）",
-  "fallback": "要掃的那幾支（照風險級別，G1）由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：本專案無掃描者」，表定不掃的照 G1 寫；都不擋合併；轉正式也由實作者做",
-  "strongest": "無（沒有掃描者）",
-  "maxEffort": "無（沒有掃描者）",
+  "tool": "Grok CLI（xAI），借用 personal-finance-webapp 的掃描腳本與隔離盒（擁有者 2026-10-05「A，先借用試試看」）：一律在 <理財工作樹> 經 node scripts/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射；整條鏈（試探、埋、掃、比對、收）都在 <理財工作樹> 用它自己的工具與設定跑，步驟見 README「本倉庫自己怎麼合併」的掃描那一項；<理財工作樹>＝理財的工作樹（不是理財主目錄），只寫關係、不寫路徑（Fable 2026-10-11 代裁）；呼叫紀律、三個失效條件、執行檔版本釘＝那支腳本檔頭；不准手動啟動 grok CLI",
+  "assignedBy": "掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝Claude（借的是理財那一套，現況跟理財設定那一格登記的相同）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問 William",
+  "tieBreak": "還沒裁：今天只有一方起得了（見上一格），用不到；出現兩方都起得了時先問裁示者（理財那邊裁的是實作者）",
+  "fallback": "沒有任何一方起得了時（G4），由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：<原因>」並轉正式；掃得起但掃不成時，由掃描發射者（現況 Claude）寫「未執行：<原因>」、轉正式也由它做；表定不掃的照 G1；都不擋合併",
+  "strongest": "未設定",
+  "maxEffort": "未設定",
   "isolation": {
-   "provider": "未設定",
+   "provider": "借用",
+   "lender": "personal-finance-webapp",
    "wrap": [],
    "boxRoot": "未設定",
    "forbidden": []
@@ -363,7 +364,7 @@
   {
    "file": ".gitignore",
    "patterns": [
-    "node_modules/",
+    "node_modules",
     ".DS_Store",
     ".env",
     ".env.local"

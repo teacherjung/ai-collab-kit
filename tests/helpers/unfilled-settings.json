@@ -103,6 +103,7 @@
   "maxEffort": "未設定",
   "isolation": {
    "provider": "未設定",
+   "lender": "未設定",
    "wrap": [],
    "boxRoot": "未設定",
    "forbidden": []
