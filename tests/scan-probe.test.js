@@ -93,6 +93,24 @@ test('提供者是「借用」：試探與埋都退 2、逐字指路到出借的
   }
 });
 
+test('提供者是「借用」：收（--sweep）不讀設定、照常只收清單上核對過的（收不擋；設定頁與 README 照這樣寫，#83 複審後掃）', () => {
+  const zone = tempZone();
+  const listDir = tempZone();
+  try {
+    const out = path.join(listDir, 'list.txt');
+    assert.equal(plantCanaries({ settings: honest([zone]), outFile: out }).code, 0);
+    assert.equal(fs.readdirSync(zone).filter((n) => n.startsWith('.scan-canary-')).length, 1, '前提：真的埋了一個');
+    const swept = cli({ settings: settingsWith({ provider: '借用', lender: '出借的甲', wrap: [], forbidden: [] }) }, ['--sweep', out]);
+    assert.equal(swept.code, 0, swept.lines.join('\n'));
+    assert.doesNotMatch(swept.lines.join('\n'), /隔離是借用的/u, '收不走借用的拒絕');
+    assert.deepEqual(fs.readdirSync(zone), [], '收完禁區是空的');
+    assert.deepEqual(fs.readdirSync(listDir), [], '清單檔與位置檔都收掉了');
+  } finally {
+    fs.rmSync(zone, { recursive: true, force: true });
+    fs.rmSync(listDir, { recursive: true, force: true });
+  }
+});
+
 test('沒有隔離提供者、前綴沒填、禁區清單空：都退 2、什麼都不跑', () => {
   for (const iso of [
     undefined,

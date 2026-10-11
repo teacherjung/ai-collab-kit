@@ -68,11 +68,16 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
 
 test('借用的掃描：佔位只有一個寫法（<理財工作樹>）、設定與 README 不出現本機路徑；套件自己的試探與埋都退 2、指路去理財', { skip: IN_KIT ? false : '不是套件倉庫' }, () => {
   const { spawnSync } = require('node:child_process');
-  const texts = { 'settings.json': fs.readFileSync(path.join(ROOT, 'settings.json'), 'utf8'), 'README.md': fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8') };
+  // 設定頁的 ASCII 標點前面有產生器加的反斜線，先拿掉再比（#83 複審後掃：原本設定頁整份不在這一題裡）
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const texts = { 'settings.json': read('settings.json'), 'README.md': read('README.md'), 'PROJECT-SETTINGS.md': read('PROJECT-SETTINGS.md').replace(/\\([!-/:-@[-`{-~])/gu, '$1') };
+  // 會指到某台機器、某個帳號的寫法：家目錄（mac／Linux／Windows）、使用者暫存區、外接磁碟、環境變數寫的家目錄。
+  // 每台機器都一樣的系統路徑（/tmp、/dev/null、~/.local/share 底下的固定複本目錄）不算。
+  const LOCAL = /\/Users\/|\/home\/|~\/Desktop|\/var\/folders\/|\/Volumes\/|[A-Za-z]:[\\/]Users|\$\{?HOME\}?\/|%USERPROFILE%/iu;
   for (const [name, text] of Object.entries(texts)) {
     assert.ok(text.includes('<理財工作樹>'), `${name} 沒有用佔位 <理財工作樹>`);
     assert.deepEqual([...new Set(text.match(/<理財[^>]*>/gu))], ['<理財工作樹>'], `${name} 的理財佔位要只有一種寫法`);
-    assert.doesNotMatch(text, /\/Users\/|\/home\/|~\/Desktop/u, `${name} 出現了本機路徑（只寫關係、不寫路徑）`);
+    assert.doesNotMatch(text, LOCAL, `${name} 出現了本機路徑（只寫關係、不寫路徑）`);
   }
   const listDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kit-borrowed-'));
   try {

@@ -112,9 +112,12 @@ function build(data) {
   if (borrowed) {
     if (iso.lender === '未設定') throw new Error('提供者是「借用」卻沒填出借的專案');
     const lender = plain(iso.lender, '出借隔離的專案');
-    if (/[/\\]|^[~.]/u.test(iso.lender)) throw new Error('出借隔離的專案要寫專案名（關係），不寫路徑');
-    if (wrap.length || forbidden.length || (iso.boxRoot !== undefined && iso.boxRoot !== '未設定')) throw new Error('借用時前綴、盒子位置、禁區只住出借的那一份：這裡不抄（留空或未設定）');
-    out.push(`- 由誰提供：借用（出借的專案：${lender}）。試探、埋、比對、收都在出借的專案那邊、用它自己的工具與設定跑（測的就是真的要用的那個盒子）；怎麼跑寫在上面「掃描者」那一格。本專案的 node tools/scan-probe.js 遇到借用一律退 2、指路過去，不假裝測過。`);
+    // 專案名不會有的字一律擋：半形與全形斜線、百分號（編碼過的斜線）、冒號（磁碟機代號），`~`／`.`／空白開頭、空白結尾（#83 複審後掃抓到原本只看半形斜線與第一個字）
+    if (/[/\\／＼%:]|^[~.\s]|\s$/u.test(iso.lender)) throw new Error('出借隔離的專案要寫專案名（關係），不寫路徑');
+    // 前綴、禁區只准省略或空陣列：不是陣列的值（字串、null、帶 length 的物件）也算抄了（#83 複審後掃抓到原本只看長度）
+    const copied = (v) => v !== undefined && !(Array.isArray(v) && v.length === 0);
+    if (copied(iso.wrap) || copied(iso.forbidden) || (iso.boxRoot !== undefined && iso.boxRoot !== '未設定')) throw new Error('借用時前綴、盒子位置、禁區只住出借的那一份：這裡不抄（前綴與禁區省略或寫空陣列；盒子位置省略或寫「未設定」）');
+    out.push(`- 由誰提供：借用（出借的專案：${lender}）。試探、埋、比對、收都在出借的專案那邊、用它自己的工具與設定跑（測的就是真的要用的那個盒子）；怎麼跑寫在上面「掃描者」那一格。本專案的 node tools/scan-probe.js 試探與埋遇到借用一律退 2、指路過去，不假裝測過（收不讀設定、只刪清單上核對過的，借用時用出借那邊的收）。`);
     out.push(`- 前綴、盒子位置、禁區清單：照出借的專案（${lender}）的設定，這裡不抄一份（抄了會漂移）。`);
   } else {
     if (iso.lender !== undefined && iso.lender !== '未設定') throw new Error('只有提供者是「借用」才填出借的專案（其他提供者留「未設定」）');
