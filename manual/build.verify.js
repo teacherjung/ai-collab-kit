@@ -176,7 +176,7 @@ function ownTemplates(text) {
     return { paths: head.split('`').filter((x) => x.startsWith('templates/')), desc, rules };
   });
 }
-const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'D4', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3'], 'templates/collab-fields-github.yml': ['E1'], 'templates/ruling-record.md': ['I1', 'I3'] };
+const TEMPLATE_RULE_SAMPLES = { 'templates/pr-body.md': ['D3', 'D4', 'E1', 'F7', 'G3', 'H6'], 'templates/hook-claude.json': ['B1'], 'templates/ci-github.yml': ['E3'], 'templates/collab-fields-github.yml': ['E1'], 'templates/ruling-record.md': ['I1', 'I3', 'H6'] };
 
 // 套用頁取的 README 兩節（寫死，不拿產生器的 ADOPT_HEADINGS 當答案）
 const ADOPT_HEADS = ['搬進一個專案', '專案裡改到套件的檔'];
@@ -662,6 +662,7 @@ test('⑩ 工具頁：tools/ 與 tools/gates/ 每一支一則、照檔名排；�
     assert.throws(() => manual.build({ ...src, machines: src.machines.replace(b1, b1.replace(from, to)) }), /B1」那一列的「原專案的實作」提到 tools\/forbidden-tools\.js，但不是一個灰底框剛好放這一個路徑/u, `工具路徑寫成「${to}」應該停下`);
   }
   assert.doesNotThrow(() => manual.build({ ...src, machines: src.machines.replace(b1, b1.replace('`tools/forbidden-tools.js`', '`tools/forbidden-tools.js`（另見 `tools/forbidden-tools.js.orig`）')) }), '對照組：較長的路徑裡含它不算');
+  assert.doesNotThrow(() => manual.build({ ...src, machines: src.machines.replace(b1, b1.replace('`tools/forbidden-tools.js`', '`tools/forbidden-tools.js`（跑法：`node tools/forbidden-tools.js --x`）')) }), '對照組：已經有一個框剛好放它，跑法的指令框裡再提不停（MACHINES.md J5 那一列的寫法）');
   const checkReview = items.find((x) => x[1] === 'tools/gates/check-review-verdicts.js');
   assert.ok(checkReview && strip(checkReview[2]).includes('放行只認'), '跨兩行的第一句要接起來（check-review-verdicts 的後半「放行只認…」）');
   assert.ok(page.includes(`${tools.length} 支程式`), '工具頁頁首的支數不對');
@@ -1269,7 +1270,7 @@ const TEMPLATE_NOTES = {
 // 說明書排得了的範本：寫死的樣本（考題沒有自己的判準決定哪一份該排，所以釘住今天的結果；範本或排版規則一改就紅，確認是要的改變再跟著改）
 const TEMPLATE_LAID_OUT = ['templates/review-fixed-dimensions.md', 'templates/verdict-header.md'];
 // 規矩卡上的範本鈕：寫死的樣本（照 MACHINES.md 現在的「範本」那一節）
-const TEMPLATE_LINK_SAMPLES = { F2: ['templates/review-fixed-dimensions.md'], G3: ['templates/pr-body.md', 'templates/scan-record.md'], E1: ['templates/pr-body.md', 'templates/collab-fields-github.yml'] };
+const TEMPLATE_LINK_SAMPLES = { F2: ['templates/review-fixed-dimensions.md', 'templates/code-pitfalls.md'], G3: ['templates/pr-body.md', 'templates/scan-record.md'], E1: ['templates/pr-body.md', 'templates/collab-fields-github.yml'] };
 
 /**
  * 排好版的範本（跳窗裡 tpl-body 那一塊）跟考題自己讀的原文逐項比：大標題、開頭各塊、每一節（h3）的標題與各塊、
@@ -1342,7 +1343,7 @@ test('⑯ 範本全文跳窗：每一份範本一筆、標題是路徑；排得�
   assert.ok(data['templates/verdict-header.md'].html.includes('<strong>沒有 🤖 記號</strong>的疑似結論'), '結論留言標頭那一句的粗體要剛好包住「沒有 🤖 記號」（寫死的樣本）');
   // F2：擁有者 2026-10-02 問的「複審必驗清單」——F2 那張卡的範本鈕打開的就是它，而且排成表格、項目數照考題自己數的
   const checklistFile = 'templates/review-fixed-dimensions.md';
-  assert.deepEqual([...card(html, 'F2').matchAll(/data-template="([^"]*)"/gu)].map((x) => x[1]), [checklistFile], 'F2 的範本鈕要打開複審必驗清單（寫死的樣本）');
+  assert.deepEqual([...card(html, 'F2').matchAll(/data-template="([^"]*)"/gu)].map((x) => x[1]), [checklistFile, 'templates/code-pitfalls.md'], 'F2 的範本鈕要打開複審必驗清單（第一顆）與程式技術地雷表（寫死的樣本）');
   const checklist = data[checklistFile].html;
   assert.ok(checklist.includes('<div class="tpl-body">'), '複審必驗清單要照說明書的排法排成表格，不是照原始檔顯示');
   const doc = ownSettingsDoc(disk(checklistFile));
@@ -1597,10 +1598,10 @@ test('⑰ 套用頁：README.md「搬進一個專案」「專案裡改到套件�
 
 // ── 案例頁（⑱）：預期值由考題自己讀 cases/、自己切行內記號；排的順序另外跟 cases/README.md（同一批檔產生的索引）對 ──
 const CASE_TEXTS = ['發生什麼', '代價', '教訓', '來源'];
-/** 考題自己讀 cases/（不經過產生器的 readCases）：index.json，與 README.md 以外的每一則 .md（照檔名排）。 */
+/** 考題自己讀 cases/（不經過產生器的 readCases）：index.json，與 README.md、DIGEST.md 以外的每一則 .md（照檔名排）。 */
 function ownCaseSources(root = manual.ROOT) {
   const dir = path.join(root, 'cases');
-  const names = fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md').sort();
+  const names = fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md' && f !== 'DIGEST.md').sort();
   return { notes: fs.readFileSync(path.join(dir, 'index.json'), 'utf8'), files: names.map((f) => ({ path: `cases/${f}`, text: fs.readFileSync(path.join(dir, f), 'utf8') })) };
 }
 /** 考題自己讀一則案例：一行一行對「- 欄名：值」（不用產生器的 parseCases）。 */
@@ -1818,6 +1819,7 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   const bad = [
     ['index.json 不是 JSON', { ...RICH, notes: '{' }, /cases\/index\.json 不是合法的 JSON/u],
     ['index.json 多一個鍵', notesWith({ extra: 1 }), /cases\/index\.json 的最外層要剛好有 title、intro、sections 這幾個鍵/u],
+    ['index.json 多一個鍵（digest 以外）', notesWith({ digest: {}, extra: 1 }), /最外層要剛好有 title、intro、sections 這幾個鍵/u],
     ['index.json 少一個鍵', { ...RICH, notes: JSON.stringify({ title: 'x', intro: [] }) }, /最外層要剛好有 title、intro、sections 這幾個鍵/u],
     ['開頭不是陣列', notesWith({ intro: 'x' }), /cases\/index\.json 的開頭要是陣列/u],
     ['索引標題是空的', notesWith({ title: '' }), /cases\/index\.json 的標題要是一行非空/u],
@@ -1888,7 +1890,7 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
   assert.equal(manual.templateView({ path: 'templates/t.md', text: '# 標題\n\n見 [a](a.md) 與 <https://x.y>。\n' }).laidOut, false, '範本跳窗仍不排連結與自動連結（照原始檔）');
   assert.throws(() => manual.renderAdopt('# 套件\n\n## 搬進一個專案\n\n見 <https://x.y>。\n\n## 專案裡改到套件的檔\n\n- 例外\n'), /「<」後面緊接著半形字元/u, '套用頁仍不收自動連結');
 
-  // 讀來源：cases/ 或 index.json 不在、多了不是 .md 的檔或子資料夾、不是合法的 UTF-8，都停；README.md 不讀
+  // 讀來源：cases/ 或 index.json 不在、多了不是 .md 的檔或子資料夾、不是合法的 UTF-8，都停；README.md、DIGEST.md 不讀
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-cases-'));
   try {
     const casesDir = path.join(dir, 'cases');
@@ -1898,7 +1900,8 @@ test('⑱ 案例頁：cases/ 每一則照日期排成索引（日期、標題、
     assert.throws(() => manual.readCases(dir), /讀不到 cases\/index\.json/u);
     fs.writeFileSync(path.join(casesDir, 'index.json'), RICH.notes);
     fs.writeFileSync(path.join(casesDir, 'README.md'), '不讀的索引 <b>\n');
-    assert.deepEqual(manual.readCases(dir), { notes: RICH.notes, files: [...RICH.files].sort((a, b) => (a.path < b.path ? -1 : 1)) }, '讀到的是 index.json 與每一則案例（照檔名排）、README.md 不算');
+    fs.writeFileSync(path.join(casesDir, 'DIGEST.md'), '不讀的摘要 <b>\n');
+    assert.deepEqual(manual.readCases(dir), { notes: RICH.notes, files: [...RICH.files].sort((a, b) => (a.path < b.path ? -1 : 1)) }, '讀到的是 index.json 與每一則案例（照檔名排）、README.md 與 DIGEST.md 不算');
     for (const [name, file, make, why] of [
       ['不是 .md 的檔', 'notes.txt', (p) => fs.writeFileSync(p, 'x'), /cases\/notes\.txt：案例頁不知道它算不算案例/u],
       ['子資料夾', 'sub.md', (p) => fs.mkdirSync(p), /cases\/sub\.md：案例頁不知道它算不算案例/u],
