@@ -10,11 +10,16 @@
 // 守不到的：內容碰不碰到升級條件（要讀內容才知道，這支只印出條件提醒）；有沒有照印出來的級別送審；
 // 「只升不降」：它只看這支當下動到的檔、不記前幾輪算過的級別，拿掉一個高風險的檔就會印出比較輕的級別。
 // 退出碼：0＝算出來了／2＝算不出來（風險表沒填好、平台問不到、沒有路徑）。⚠️ 不是閘。
+// 指令列在輸出後面印 D4（級別怎麼定）、F2（審多深）、G1（掃不掃）的原文：送審前要用的就是這三條。只多印，不改退出碼。
 'use strict';
 const { ask } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
 const { changedPaths } = require('./acceptance-tier.js');
 const { RISK_TIERS } = require('./build-settings.js');
+const { ruleFooter } = require('./build-rules.js');
+
+/** 送審前印的那幾條（按需印條文）。 */
+const RULES_SHOWN = ['D4', 'F2', 'G1'];
 
 /**
  * 讀設定裡的風險表；形狀不對＝null。
@@ -77,8 +82,8 @@ function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
 if (require.main === module) {
   let result;
   try { result = run(process.argv[2]); } catch (e) { result = { code: 2, lines: [`風險分級：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] }; }
-  process.stdout.write(`${result.lines.join('\n')}\n`);
+  process.stdout.write(`${[...result.lines, ...ruleFooter(RULES_SHOWN)].join('\n')}\n`);
   process.exit(result.code);
 }
 
-module.exports = { run, riskTableOf, classifyRisk };
+module.exports = { run, riskTableOf, classifyRisk, RULES_SHOWN };
