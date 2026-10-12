@@ -408,8 +408,19 @@ function excerpt(data, wanted, { markdown = false } = {}) {
 }
 
 /**
- * 給「到了那個時機」的工具接在自己輸出後面的那幾行：先一行說這是哪幾條、從哪裡印的，再接原文。
- * 印不出來（rules.json 讀不到、不合契約、條號不存在）只印一行指回 RULES.md、不丟例外：
+ * 印不出條文的原因，只說哪一類、不帶檔案路徑：讀檔錯誤的原文會帶上本機的絕對路徑（含使用者與資料夾名），
+ * 這幾支工具的輸出常被整段貼進「PR說明」，使用專案的倉庫可能是公開的（B5；Grok 掃 #88 抓到）。
+ * 契約不合只留第一句（細節跑一次 node tools/build-rules.js 就看得到），條號不存在照原句（只帶條號）。
+ */
+function reasonOf(e) {
+  if (e && typeof e.code === 'string') return `讀不到 rules.json（${e.code}）`;
+  if (e instanceof SyntaxError) return 'rules.json 不是合格的 JSON';
+  return String((e && e.message) || e).split('\n')[0];
+}
+
+/**
+ * 給「到了那個時機」的工具接在自己輸出後面的那幾行：先空一行隔開，再一行說這是哪幾條、從哪裡印的，再接原文。
+ * 印不出來（rules.json 讀不到、不是 JSON、不合契約、條號不存在）就只有空行加一行說明、指回 RULES.md，不丟例外：
  * 工具本身的結果與退出碼不可以因為這幾行而變（合併指令尤其不行）。
  */
 function ruleFooter(wanted, { load = read } = {}) {
@@ -417,8 +428,7 @@ function ruleFooter(wanted, { load = read } = {}) {
   try {
     return ['', `——這一步相關的規矩原文（${names}；從 rules.json 印出，跟 RULES.md 同一條）——`, excerpt(load(), wanted)];
   } catch (e) {
-    const why = String((e && e.message) || e).split('\n')[0];
-    return ['', `（這一步相關的規矩是 ${names}，但條文印不出來：${why}——直接看 RULES.md 那幾條）`];
+    return ['', `（這一步相關的規矩是 ${names}，但條文印不出來：${reasonOf(e)}——直接看 RULES.md 那幾條）`];
   }
 }
 
@@ -459,7 +469,12 @@ if (require.main === module) {
     process.stderr.write(`${cli.error}\n`);
     process.exit(2);
   }
-  const data = read();
+  let data;
+  try { data = read(); } catch (e) {
+    // 讀不到就退 2、只說哪一類（不讓例外帶著本機路徑的堆疊印出來；兩種用法都一樣，什麼都沒寫）
+    process.stderr.write(`${reasonOf(e)}：沒有產生、也沒有印任何東西\n`);
+    process.exit(2);
+  }
   if (cli.mode === 'print') {
     let text;
     try { text = excerpt(data, cli.ids); } catch (e) {
@@ -474,4 +489,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { build, buildRaw, excerpt, ruleFooter, parseCli, read, validate, tokenize, inline, literal, plain, countRules, MARK, dataFile, outFile, MIN_RULES };
+module.exports = { build, buildRaw, excerpt, ruleFooter, reasonOf, parseCli, read, validate, tokenize, inline, literal, plain, countRules, MARK, dataFile, outFile, MIN_RULES };

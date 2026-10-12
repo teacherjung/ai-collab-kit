@@ -161,16 +161,30 @@ test('RULES.md 與 rules.json 產生的結果逐字元相同（本文是產物�
 // 合併、送審、問裁示那幾支工具在輸出後面印相關的幾條原文。要守的是：印出來的就是 RULES.md 裡那一條，
 // 不是另寫的一份（K1 不複述）；印不出來時工具照常、退出碼不變。
 
-test('按需印條文：每一條印出來的就是 RULES.md 裡那幾行（字面編碼逐字相同、解回來就是印的原文）', () => {
+/**
+ * RULES.md 裡某一條的完整那幾行：從條號那一行起，到下一條的條號或下一節的標題之前，去掉結尾的空行。
+ * 只比「出現過」不夠（Grok 掃 #88）：少了標籤行、只剩第一行的印法，前段照樣出現在本文裡。
+ */
+function ruleSegment(onDisk, id) {
+  const lines = onDisk.split('\n');
+  const starts = lines.flatMap((l, i) => (l.startsWith(`【${id}】`) ? [i] : []));
+  assert.equal(starts.length, 1, `${id}：RULES.md 裡這一條的條號行要剛好一行（實際 ${starts.length} 行）`);
+  let end = starts[0] + 1;
+  while (end < lines.length && !lines[end].startsWith('【') && !lines[end].startsWith('## ')) end += 1;
+  const seg = lines.slice(starts[0], end);
+  while (seg.length && seg[seg.length - 1] === '') seg.pop();
+  return seg.join('\n');
+}
+
+test('按需印條文：每一條印出來的就是 RULES.md 裡那一整條（字面編碼逐字相同、從條號到標籤一行不少、解回來就是印的原文）', () => {
   const data = read();
   const onDisk = fs.readFileSync(outFile, 'utf8');
   const ids = allRules(data).map((r) => r.id);
   assert.ok(ids.length >= MIN_RULES, `只找到 ${ids.length} 條規矩：這一題自己的前提變了`);
   for (const id of ids) {
     const md = excerpt(data, [id], { markdown: true });
-    assert.ok(md.startsWith(`【${id}】`), `${id}：印出來的第一行不是這一條的條號`);
-    assert.ok(onDisk.includes(`\n${md}\n`), `${id}：印出來的字面編碼不是 RULES.md 裡那幾行（範本或編碼跟本文分岔了）`);
-    assert.equal(plain(md), excerpt(data, [id]), `${id}：印給人看的原文跟本文那幾行解回來的不一樣`);
+    assert.equal(md, ruleSegment(onDisk, id), `${id}：印出來的字面編碼不是 RULES.md 裡那一整條（範本或編碼跟本文分岔了，或少印了幾行）`);
+    assert.equal(plain(md), excerpt(data, [id]), `${id}：印給人看的原文跟本文那一條解回來的不一樣`);
   }
 });
 
@@ -196,15 +210,23 @@ test('按需印條文：條號或節不存在、沒給、資料不合契約都�
   assert.throws(() => excerpt(broken, ['A1']), /不合資料契約/u);
 });
 
-test('按需印條文：工具接在後面的那幾行——印得出來接原文；印不出來只印一行指回 RULES.md、不丟例外', () => {
+test('按需印條文：工具接在後面的那幾行——印得出來接原文；印不出來只有空行加一行說明、指回 RULES.md、不帶檔案路徑、不丟例外', () => {
   const data = read();
   const ok = ruleFooter(['D1', 'I'], { load: () => data });
   assert.equal(ok[0], '', '跟工具自己的輸出隔一個空行');
   assert.match(ok[1], /D1、I 節；從 rules\.json 印出，跟 RULES\.md 同一條/u);
   assert.equal(ok[2], excerpt(data, ['D1', 'I']));
   assert.equal(ok.length, 3);
-  const unreadable = ruleFooter(['H1'], { load: () => { throw new Error('ENOENT: 讀不到 rules.json\n第二行'); } });
-  assert.deepEqual(unreadable, ['', '（這一步相關的規矩是 H1，但條文印不出來：ENOENT: 讀不到 rules.json——直接看 RULES.md 那幾條）']);
+  // 讀檔錯誤的原文帶著本機絕對路徑（B5）：只說哪一類
+  const fsError = Object.assign(new Error("ENOENT: no such file or directory, open '/Users/someone/秘密資料夾/rules.json'"), { code: 'ENOENT' });
+  const unreadable = ruleFooter(['H1'], { load: () => { throw fsError; } });
+  assert.deepEqual(unreadable, ['', '（這一步相關的規矩是 H1，但條文印不出來：讀不到 rules.json（ENOENT）——直接看 RULES.md 那幾條）']);
+  const notJson = ruleFooter(['H1'], { load: () => JSON.parse('{ 壞掉 /Users/someone/秘密資料夾') });
+  assert.deepEqual(notJson, ['', '（這一步相關的規矩是 H1，但條文印不出來：rules.json 不是合格的 JSON——直接看 RULES.md 那幾條）']);
+  for (const line of [...unreadable, ...notJson]) assert.ok(!line.includes('/Users/') && !line.includes('秘密資料夾'), `不可以帶出路徑：${line}`);
+  const broken = JSON.parse(JSON.stringify(data));
+  broken.sections[0].rules[0].text = '有\n換行';
+  assert.deepEqual(ruleFooter(['A1'], { load: () => broken }), ['', '（這一步相關的規矩是 A1，但條文印不出來：rules.json 不合資料契約，印不出條文：——直接看 RULES.md 那幾條）'], '契約不合只留第一句');
   const unknown = ruleFooter(['H99'], { load: () => data });
   assert.equal(unknown.length, 2);
   assert.match(unknown[1], /^（這一步相關的規矩是 H99，但條文印不出來：不認得的條號或節「H99」/u);
@@ -239,6 +261,17 @@ test('按需印條文：指令列只認「不給參數」與「--rules <條號,�
   for (const args of [['--rules', 'H1'], ['--rule', 'H1']]) {
     const r = run(args);
     assert.equal(r.after, null, `${args.join(' ')}：原本沒有本文，跑完也不可以多出一份`);
+  }
+  // 讀不到 rules.json：兩種用法都退 2、只說哪一類，不帶複本的路徑、不印堆疊，也不生出本文（B5；Grok 掃 #88）
+  for (const args of [['--rules', 'H1'], []]) {
+    const r = runInCopy('tools/build-rules.js', args, {
+      after: (dir) => ({ dir, made: fs.existsSync(path.join(dir, 'RULES.md')) }),
+    });
+    assert.equal(r.status, 2, `${args.join(' ') || '不給參數'}：${r.stdout}${r.stderr}`);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '讀不到 rules.json（ENOENT）：沒有產生、也沒有印任何東西\n');
+    assert.ok(!r.stderr.includes(r.after.dir), '不可以帶出路徑');
+    assert.equal(r.after.made, false, '讀不到就什麼都不寫');
   }
   // 對照組：不給參數照舊重產本文（證明 after 讀得到工具寫的檔，上面那幾發不是因為讀不到才綠）
   const write = run([], 'SENTINEL-WRITE\n');

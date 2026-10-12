@@ -307,10 +307,11 @@ test('⑫跑完印相關規矩原文：合了印 H6（接著驗收）、沒合�
   assert.equal(withRules.status, 2, withRules.stdout + withRules.stderr);
   assert.match(withRules.stdout, /^用法：node tools\/merge\.js/u, '工具自己的輸出照舊在前面');
   assert.ok(withRules.stdout.includes(`\n${excerpt(readRules(), ['H1'])}\n`), `沒印出 H1 原文：\n${withRules.stdout}`);
-  // 複本沒有 rules.json：只多一行指回 RULES.md，退出碼一樣是 2
-  const noRules = runInCopy('tools/merge.js', []);
+  // 複本沒有 rules.json：只多空行加一行說明、指回 RULES.md，不帶複本的路徑（B5），退出碼一樣是 2
+  const noRules = runInCopy('tools/merge.js', [], { after: (dir) => dir });
   assert.equal(noRules.status, 2, noRules.stdout + noRules.stderr);
-  assert.match(noRules.stdout, /這一步相關的規矩是 H1，但條文印不出來/u);
+  assert.match(noRules.stdout, /這一步相關的規矩是 H1，但條文印不出來：讀不到 rules\.json（ENOENT）/u);
+  assert.ok(!noRules.stdout.includes(noRules.after), `不可以帶出路徑：\n${noRules.stdout}`);
 });
 
 test('⑬指令列真的合成功（假平台、假閘、假合併指令，都在複本裡）：退 0、假合併真的跑了、後面接 H6 不是 H1；讀不到規矩資料照樣退 0', () => {
@@ -333,5 +334,5 @@ test('⑬指令列真的合成功（假平台、假閘、假合併指令，都�
   const noRules = runInCopy('tools/merge.js', ['7'], { settings, seed });
   assert.equal(noRules.status, 0, noRules.stdout + noRules.stderr);
   assert.match(noRules.stdout, /FAKE-MERGED 7/u);
-  assert.match(noRules.stdout, /這一步相關的規矩是 H6，但條文印不出來/u, '讀不到規矩資料只多一行，合併結果照舊');
+  assert.match(noRules.stdout, /這一步相關的規矩是 H6，但條文印不出來/u, '讀不到規矩資料只多空行加一行說明，合併結果照舊');
 });
