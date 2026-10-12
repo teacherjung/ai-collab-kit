@@ -210,20 +210,38 @@ test('按需印條文：工具接在後面的那幾行——印得出來接原�
   assert.match(unknown[1], /^（這一步相關的規矩是 H99，但條文印不出來：不認得的條號或節「H99」/u);
 });
 
-test('按需印條文：指令列只認「不給參數」與「--rules <條號,…>」，其餘退 2（打錯不會靜靜改去重寫本文）', () => {
+test('按需印條文：指令列只認「不給參數」與「--rules <條號,…>」，其餘退 2；印條文與打錯都不寫本文（打錯不會靜靜改去重寫本文）', () => {
   assert.deepEqual(parseCli([]), { mode: 'write' });
   assert.deepEqual(parseCli(['--rules', 'H1, H6,,']), { mode: 'print', ids: ['H1', 'H6'] });
   for (const bad of [['--rules'], ['--rules', ' , '], ['--rule', 'H1'], ['--rules', 'H1', 'H6'], ['H1'], ['--rules=H1']]) {
     assert.ok(parseCli(bad).error, `${bad.join(' ')}：要當用法錯`);
   }
-  const printed = runInCopy('tools/build-rules.js', ['--rules', 'H1,H6'], { files: ['rules.json'] });
+  // 每一發都在複本裡先放一份獨一無二的本文哨兵，跑完、複本收掉之前讀回來：只印、打錯、條號不存在都要原樣留著
+  const run = (args, sentinel) => runInCopy('tools/build-rules.js', args, {
+    files: ['rules.json'],
+    seed: sentinel === undefined ? {} : { 'RULES.md': sentinel },
+    after: (dir) => (fs.existsSync(path.join(dir, 'RULES.md')) ? fs.readFileSync(path.join(dir, 'RULES.md'), 'utf8') : null),
+  });
+  const printed = run(['--rules', 'H1,H6'], 'SENTINEL-PRINT\n');
   assert.equal(printed.status, 0, printed.stdout + printed.stderr);
   assert.equal(printed.stdout, `${excerpt(read(), ['H1', 'H6'])}\n`, '印出來的就是那兩條的原文、沒有別的');
-  const typo = runInCopy('tools/build-rules.js', ['--rule', 'H1'], { files: ['rules.json'] });
+  assert.equal(printed.after, 'SENTINEL-PRINT\n', '--rules 只印、不可以動到本文');
+  const typo = run(['--rule', 'H1'], 'SENTINEL-TYPO\n');
   assert.equal(typo.status, 2, typo.stdout + typo.stderr);
   assert.match(typo.stderr, /用法/u);
-  assert.equal(typo.stdout, '', '用法錯就什麼都不印到標準輸出（複本收掉了，寫沒寫本文這一題看不到）');
-  const unknown = runInCopy('tools/build-rules.js', ['--rules', 'H99'], { files: ['rules.json'] });
+  assert.equal(typo.stdout, '', '用法錯就什麼都不印到標準輸出');
+  assert.equal(typo.after, 'SENTINEL-TYPO\n', '打錯參數不可以改去重寫本文');
+  const unknown = run(['--rules', 'H99'], 'SENTINEL-UNKNOWN\n');
   assert.equal(unknown.status, 2, unknown.stdout + unknown.stderr);
   assert.match(unknown.stderr, /不認得的條號或節「H99」/u);
+  assert.equal(unknown.after, 'SENTINEL-UNKNOWN\n', '條號不存在也不可以動到本文');
+  // 本文原本不存在：只印、打錯都不可以把它生出來
+  for (const args of [['--rules', 'H1'], ['--rule', 'H1']]) {
+    const r = run(args);
+    assert.equal(r.after, null, `${args.join(' ')}：原本沒有本文，跑完也不可以多出一份`);
+  }
+  // 對照組：不給參數照舊重產本文（證明 after 讀得到工具寫的檔，上面那幾發不是因為讀不到才綠）
+  const write = run([], 'SENTINEL-WRITE\n');
+  assert.equal(write.status, 0, write.stdout + write.stderr);
+  assert.equal(write.after, build(read()), '不給參數＝重產本文，內容跟 rules.json 產生的一樣');
 });

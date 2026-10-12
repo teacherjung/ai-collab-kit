@@ -34,16 +34,21 @@ const unfilled = () => JSON.parse(fs.readFileSync(UNFILLED_FILE, 'utf8'));
  * @param {string} relTool 相對套件根目錄的工具路徑，例如 'tools/gates/check-stacked.js'
  * files：另外要從本倉庫照搬進複本根目錄的檔（相對路徑，例如 ['rules.json']）；預設只有 tools/ 與設定，
  * 所以工具在複本裡讀不到規矩資料——要看「讀不到時工具照常」的考題就不給。
+ * seed：跑之前寫進複本的檔（{ 相對路徑: 內容 }，例如假閘、假平台指令、預先放好的哨兵）。
+ * after：跑完、複本收掉之前叫一次 after(複本目錄)，回傳值放在結果的 after 欄（考題拿它看工具有沒有寫檔）。
  */
-function runInCopy(relTool, args = [], { settings = unfilled(), input, files = [] } = {}) {
+function runInCopy(relTool, args = [], { settings = unfilled(), input, files = [], seed = {}, after } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-copy-'));
   try {
     fs.cpSync(path.join(KIT_ROOT, 'tools'), path.join(dir, 'tools'), { recursive: true });
     for (const rel of files) fs.copyFileSync(path.join(KIT_ROOT, rel), path.join(dir, rel));
+    for (const [rel, content] of Object.entries(seed)) fs.writeFileSync(path.join(dir, rel), content);
     fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
     const env = gitEnv();
     delete env.NODE_TEST_CONTEXT;
-    return spawnSync(process.execPath, [path.join(dir, relTool), ...args], { cwd: dir, env, input, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [path.join(dir, relTool), ...args], { cwd: dir, env, input, encoding: 'utf8' });
+    if (after) result.after = after(dir);
+    return result;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
