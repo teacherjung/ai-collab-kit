@@ -22,7 +22,7 @@ const { mergedWithin, dayOf, render, replaceSection, acceptedDate, traceShape, p
 const { deciderOf } = require('../tools/pending-rulings.js');
 const { evaluate } = require('../tools/check-progress-summary.js');
 
-// 考題自己建的暫存資料夾記在這裡、整支跑完（不論成敗）一起收（BACKLOG 第 69 行：以前每跑一次三關就在系統暫存區多一批沒人收）；
+// 考題自己建的暫存資料夾記在這裡、整支跑完（不論成敗）一起收（待辦「考題在系統暫存區留下資料夾沒收」那一條，已落地 #79：以前每跑一次三關就在系統暫存區多一批沒人收）；
 // 只收這裡記下的、不碰暫存區裡別的東西
 const made = [];
 const tmpDir = (prefix) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; };
