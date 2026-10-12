@@ -1507,7 +1507,8 @@ function handbookCodeLines(md, rules) {
 
 /**
  * 名詞頁最上面的白話手冊：一節一個展開框（框上是節名與一句話）；展開是每一則原文（從規則資料抽、跟規矩頁同一套排法，條號點得到那一條）
- * 與它的白話，再來比方、每一條的把關標籤（點了看標籤的意思）、見名詞（點了跳到底下那個名詞）。手寫的字照名詞頁的行內排版。
+ * 與它的白話，再來比方、每一條的把關標籤（點了看標籤的意思）、見名詞（點了跳到底下那個名詞：跟條號一樣是 data-goto，
+ * 落地跟網址跳過去一樣——展開、捲過去、焦點落在那個名詞上；跳節鈕的 data-jump 只捲、不搬焦點）。手寫的字照名詞頁的行內排版。
  */
 function handbookBlock(hb, inline, termIds) {
   const details = hb.entries.map((e) => {
@@ -1520,7 +1521,7 @@ function handbookBlock(hb, inline, termIds) {
     const tags = e.quotes
       .map((q) => `<span class="hb-tag"><span class="hb-tag-id">${q.id}</span>${[...new Set(splitTag(q.rule.tag, hb.labels, hb.roles, `${q.id} 的標籤`).map((p) => p.name))].map(labelChip).join('')}</span>`)
       .join('');
-    const terms = e.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${e.terms.map((t) => `<button type="button" class="jump" data-jump="${termIds.get(t)}">${esc(t)}</button>`).join('')}</p>` : '';
+    const terms = e.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${e.terms.map((t) => `<button type="button" class="jump" data-goto="${termIds.get(t)}">${esc(t)}</button>`).join('')}</p>` : '';
     return `<details class="hb-entry" id="${e.id}" tabindex="-1">\n<summary><span class="hb-name">${esc(e.name)}</span><span class="hb-line">${inline(e.oneLine, `${where}的一句話`)}</span></summary>\n${quotes.join('\n')}${analogy}\n<p class="hb-tags"><span class="tag-lead">把關</span>${tags}</p>${terms}\n</details>`;
   });
   return `<section class="block handbook" id="hb" tabindex="-1">\n<h2>白話手冊<span class="sec-count">${hb.entries.length} 節</span></h2>\n<p class="muted">${HB_INTRO}</p>\n${details.join('\n')}\n</section>`;
@@ -1548,7 +1549,7 @@ function glossaryBody(sec, where, inline, mark = null) {
  * 名詞頁：每一節一塊（照原文的順序），字照名詞頁的行內排版（條號點得到那一條規矩）；跳節鈕只列名詞的那幾類。
  * hb（checkHandbook 回傳的每一節＋規則資料的角色與標籤表）＝最上面加白話手冊、跳節鈕最前面加一顆、頁首那一句先講最上面是白話手冊；
  * 每一個名詞一個錨點（term-1 起照原文的順序；跟展開框一樣 tabindex="-1"，跳過去時焦點落得上去），讓見名詞點得到，
- * 解釋後面再列回到白話手冊的鈕（哪幾節的見名詞寫了它）。
+ * 解釋後面再列回到白話手冊的鈕（哪幾節的見名詞寫了它）。兩頭的鈕都是 data-goto（跟網址跳過去一樣展開、捲過去、焦點落上去）。
  */
 function glossaryPage(gloss, ruleIds, hb = null) {
   const inline = (text, where) => settingsInline(text, where, null, ruleIds);
@@ -1558,7 +1559,7 @@ function glossaryPage(gloss, ruleIds, hb = null) {
   const mark = hb
     ? (term) => {
       const from = hb.entries.filter((e) => e.terms.includes(term));
-      const back = from.length ? `<span class="hb-back">白話手冊：${from.map((e) => `<button type="button" class="hb-link" data-jump="${e.id}">${esc(e.name)}</button>`).join('、')}</span>` : '';
+      const back = from.length ? `<span class="hb-back">白話手冊：${from.map((e) => `<button type="button" class="hb-link" data-goto="${e.id}">${esc(e.name)}</button>`).join('、')}</span>` : '';
       return { id: ` id="${termIds.get(term)}" tabindex="-1"`, back };
     }
     : null;
@@ -1867,6 +1868,7 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
    跳過去時焦點落在展開框或名詞上（給鍵盤與報讀器），不畫框線，跟名詞頁各節一樣 */
 .hb-entry{border-bottom:1px solid var(--line);padding:10px 0;scroll-margin-top:16px}
 .hb-entry:focus,.gloss dt:focus{outline:none}
+.hb-entry:focus-visible,.gloss dt:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
 .hb-entry summary{cursor:pointer;line-height:1.7}
 .hb-name{font-weight:700;margin-right:10px}
 .hb-line{color:var(--muted)}
@@ -1910,6 +1912,8 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 // 網址指到頁裡的某個位置（例如 #rule-B1；網頁自己的連結只帶頁名，這種是手打或外面貼來的）：切到它所在的那一頁、捲到它；頁名、位置都不是＝總覽。
 // 名詞頁、白話說明與優缺點的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
 // 白話手冊的一節收在 <details> 裡：跳到它或它裡面的東西（跳節鈕、名詞那一頭回來的鈕、網址），先展開再捲——收著的框裡的東西捲不到。
+// 見名詞與名詞那一頭回來的鈕是 data-goto（同一頁就直接 land）：跟網址跳過去一樣，展開、捲過去，焦點最後落在那個名詞或那一節上；
+// 各頁的跳節鈕（data-jump）只展開、捲過去，焦點留在鈕上。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

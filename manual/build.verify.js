@@ -16,7 +16,9 @@
 // 核對碼、必含的字、J3 那四個字、照抄原文或名詞解釋、見名詞找不到，各有一發真的停下）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
-// 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條、白話手冊的展開框跳過去會不會打開）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
+// 白話手冊的鈕點了落在哪（見名詞、名詞那一頭回來的鈕、網址跳過去：展開、捲過去、焦點落上去；跳節鈕只捲）由 ㉒ 的第二題在 node:vm 裡
+// 跑網頁最後那一段程式驗，DOM 是考題自己的替身（fakePage），不是瀏覽器。
+// 守不到的：其餘網頁上的互動（切頁、跳窗開關、篩選、跳到規矩頁某一條）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -24,6 +26,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { execFileSync, spawnSync } = require('node:child_process');
 const manual = require('./build.js');
 const rulesBook = require('../tools/build-rules.js');
@@ -2500,7 +2503,7 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
   const want = secs.map((s, i) => {
     const quotes = s.quotes.map((q) => `<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref(q.id)}</p><p class="hb-rule">${cardBody(q.id)}</blockquote>${q.plain ? `\n<p class="hb-plain"><span class="tag-lead">白話</span>${escT(q.plain)}</p>` : ''}`);
     for (const t of s.terms) assert.ok(terms.includes(t), `「${s.name}」的見名詞「${t}」不在考題自己讀的 GLOSSARY.md 裡`);
-    const see = s.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${s.terms.map((t) => `<button type="button" class="jump" data-jump="${termId(t)}">${escT(t)}</button>`).join('')}</p>` : '';
+    const see = s.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${s.terms.map((t) => `<button type="button" class="jump" data-goto="${termId(t)}">${escT(t)}</button>`).join('')}</p>` : '';
     return `<details class="hb-entry" id="hb-${i + 1}" tabindex="-1">\n<summary><span class="hb-name">${escT(s.name)}</span><span class="hb-line">${escT(s.oneLine)}</span></summary>\n${quotes.join('\n')}${s.analogy ? `\n<p class="hb-analogy"><span class="tag-lead">比方</span>${escT(s.analogy)}</p>` : ''}\n<p class="hb-tags"><span class="tag-lead">把關</span>${s.quotes.map((q) => tagsOf(q.id)).join('')}</p>${see}\n</details>`;
   });
   const got = [...page.matchAll(/<details class="hb-entry" id="hb-\d+" tabindex="-1">[\s\S]*?<\/details>/gu)].map((m) => m[0]);
@@ -2524,21 +2527,20 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
       return;
     }
     const back = dd.match(/<span class="hb-back">[^\n]*?<\/span>$/u);
-    assert.equal(back && back[0], `<span class="hb-back">白話手冊：${from.map(([s, i]) => `<button type="button" class="hb-link" data-jump="hb-${i + 1}">${escT(s.name)}</button>`).join('、')}</span>`, `「${terms[k]}」解釋後面回到白話手冊的鈕不對`);
-    for (const m of back[0].matchAll(/data-jump="(hb-\d+)"/gu)) backs.push(`${m[1]}→term-${k + 1}`);
+    assert.equal(back && back[0], `<span class="hb-back">白話手冊：${from.map(([s, i]) => `<button type="button" class="hb-link" data-goto="hb-${i + 1}">${escT(s.name)}</button>`).join('、')}</span>`, `「${terms[k]}」解釋後面回到白話手冊的鈕不對`);
+    for (const m of back[0].matchAll(/data-goto="(hb-\d+)"/gu)) backs.push(`${m[1]}→term-${k + 1}`);
   });
   // 兩頭配對：每一節見名詞的鈕跳到的名詞，那個名詞也有鈕跳回這一節；反過來也一樣
   const forth = [];
-  for (const m of page.matchAll(/<details class="hb-entry" id="(hb-\d+)" tabindex="-1">([\s\S]*?)<\/details>/gu)) for (const j of m[2].matchAll(/class="jump" data-jump="(term-\d+)"/gu)) forth.push(`${m[1]}→${j[1]}`);
+  for (const m of page.matchAll(/<details class="hb-entry" id="(hb-\d+)" tabindex="-1">([\s\S]*?)<\/details>/gu)) for (const j of m[2].matchAll(/class="jump" data-goto="(term-\d+)"/gu)) forth.push(`${m[1]}→${j[1]}`);
   assert.ok(forth.length >= 30, '前提：見名詞的鈕太少');
   assert.deepEqual([...forth].sort(), [...backs].sort(), '見名詞的鈕與名詞那一頭回來的鈕要一對一');
 
-  // 互動接線（這一支不開瀏覽器，這裡只釘住程式在）與樣式
-  assert.ok(html.includes("  function reveal(el){\n    var box = el.closest('details'); if (box) box.open = true;\n    if (el.hidden"), '跳到白話手冊的一節或裡面的東西：先展開最近的展開框、再捲過去');
+  // 樣式（點了落在哪由下一題在 node:vm 裡跑網頁那一段程式驗）
   const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
   assert.match(css, /\n\.hb-entry :is\(summary,\.hb-plain,\.hb-analogy\)\{white-space:pre-wrap\}/u, '手寫的字照原文留空白（連續空白不合併，跟白話說明同一條）');
   assert.match(css, /\n\.hb-entry\{[^}]*scroll-margin-top:16px[^}]*\}/u, '跳過去時展開框不貼頂');
-  assert.ok(css.includes('\n.hb-entry:focus,.gloss dt:focus{outline:none}\n'), '跳過去時焦點落在展開框或名詞上，不畫框線（跟名詞頁各節一樣）');
+  assert.ok(css.includes('\n.hb-entry:focus,.gloss dt:focus{outline:none}\n.hb-entry:focus-visible,.gloss dt:focus-visible{outline:2px solid var(--accent);outline-offset:4px}\n'), '跳過去時焦點落在展開框或名詞上：滑鼠點的不畫框線（跟名詞頁各節一樣），鍵盤走到的照規矩頁那樣畫焦點框（Codex r2 前的對抗驗證）');
   assert.match(css, /\n\.hb-quote\{[^}]*border-left:[^}]*\}/u, '原文放在引用框裡');
   for (const sel of ['.hb-name', '.hb-line', '.hb-tags', '.hb-back', '.hb-link']) assert.ok(css.includes(`\n${sel}{`) || css.includes(`\n${sel},`), `少了 ${sel} 的樣式`);
   // 不給白話手冊就只排對照表（名詞頁的考題 ⑲ 用的就是這一條路）
@@ -2590,9 +2592,9 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
   assert.ok(r1.startsWith('<details class="hb-entry" id="hb-1" tabindex="-1">\n<summary><span class="hb-name">甲 &lt;一&gt; &amp; &quot;二&quot;</span><span class="hb-line"><strong>粗體</strong> 與 <code>灰底框</code> 與 <a href="#rules" class="rule-ref" data-goto="rule-B1">B1</a> 條號 &lt;一&gt; &amp; &quot;二&quot; 與 $&amp; 照字面</span></summary>\n'), '對照組：節名要跳脫、一句話照名詞頁的行內排版（寫死的樣本）');
   assert.ok(r1.includes(`</blockquote>\n<p class="hb-plain"><span class="tag-lead">白話</span>價錢 $&amp; 與 $' 照字面，見 ${ref('B2')}。</p>\n<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref('B2')}</p>`), '對照組：白話接在它那則原文後面，$&、$\' 照字面、條號點得到（寫死的樣本）');
   assert.ok(r1.includes('\n<p class="hb-analogy"><span class="tag-lead">比方</span>兩  格 <strong>粗</strong> <code>框</code></p>\n<p class="hb-tags">'), '對照組：比方照排、連續空白照留（寫死的樣本）');
-  assert.equal(rich.html.match(/<details class="hb-entry" id="hb-2" tabindex="-1">[\s\S]*?<\/details>/u)[0], `<details class="hb-entry" id="hb-2" tabindex="-1">\n<summary><span class="hb-name">乙</span><span class="hb-line">一則原文，沒有白話與比方。</span></summary>\n<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref('C2')}</p><p class="hb-rule">${cardBody('C2')}</blockquote>\n<p class="hb-tags"><span class="tag-lead">把關</span>${tagsOf('C2')}</p>\n<p class="hb-terms"><span class="tag-lead">見名詞</span><button type="button" class="jump" data-jump="${termId('「錢」')}">「錢」</button></p>\n</details>`, '對照組：沒有白話、比方的一節');
-  assert.ok(rich.html.includes(`<dt id="${termId('「錢」')}" tabindex="-1"><strong>「錢」</strong></dt>`) && rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-jump="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button>、<button type="button" class="hb-link" data-jump="hb-2">乙</button></span></dd>'), '對照組：兩節都見「錢」，回來的鈕兩顆、照節的順序、節名要跳脫（寫死的樣本）');
-  assert.ok(rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-jump="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button></span></dd>'), '對照組：只有一節見「禁區」，回來的鈕一顆');
+  assert.equal(rich.html.match(/<details class="hb-entry" id="hb-2" tabindex="-1">[\s\S]*?<\/details>/u)[0], `<details class="hb-entry" id="hb-2" tabindex="-1">\n<summary><span class="hb-name">乙</span><span class="hb-line">一則原文，沒有白話與比方。</span></summary>\n<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref('C2')}</p><p class="hb-rule">${cardBody('C2')}</blockquote>\n<p class="hb-tags"><span class="tag-lead">把關</span>${tagsOf('C2')}</p>\n<p class="hb-terms"><span class="tag-lead">見名詞</span><button type="button" class="jump" data-goto="${termId('「錢」')}">「錢」</button></p>\n</details>`, '對照組：沒有白話、比方的一節');
+  assert.ok(rich.html.includes(`<dt id="${termId('「錢」')}" tabindex="-1"><strong>「錢」</strong></dt>`) && rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-goto="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button>、<button type="button" class="hb-link" data-goto="hb-2">乙</button></span></dd>'), '對照組：兩節都見「錢」，回來的鈕兩顆、照節的順序、節名要跳脫（寫死的樣本）');
+  assert.ok(rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-goto="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button></span></dd>'), '對照組：只有一節見「禁區」，回來的鈕一顆');
 
   // 認不得的形狀就停（排版那一種例外、原因要對）：每一發只改第一節的一處
   assert.doesNotThrow(() => render(md), '對照組：真的手冊照收');
@@ -2757,5 +2759,177 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
     assert.throws(() => manual.readSources(dir), /讀不到 manual\/handbook\.md：說明書不產生/u);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 考題自己的 DOM 替身（不是瀏覽器，不加套件）：把產生的整份網頁照標籤切成一棵樹（<script>、<style> 裡的字整段當內文、不往裡切；
+ * 標籤對不上就丟），在新的 node:vm 環境裡跑網頁最後那一段 <script>，跟用網址 hash 打開網頁一樣。每個元素只有那一段程式用得到的東西：
+ * 屬性、hidden、classList、closest／querySelector(All)（只認 tag、.class、[屬性]、[屬性="值"] 單一個；認不得就丟，免得替身默默答錯）、
+ * textContent；展開框打開、scrollIntoView、focus、window.scrollTo 照發生的順序記進 log（帶選項的寫成 JSON，跨 vm 也比得了）。
+ * click(el)＝先把焦點放在被點的鈕上（跟按下去一樣），再交給網頁登記的點擊處理。
+ */
+function fakePage(html, hash) {
+  const log = [];
+  const ids = new Map();
+  const listeners = { document: {}, window: {} };
+  const on = (bag) => (type, fn) => (bag[type] = bag[type] || []).push(fn);
+  const note = (what, el, opt) => log.push(opt === undefined ? `${what}:${el.id}` : `${what}:${el.id} ${JSON.stringify(opt)}`);
+  const classes = (el) => (el.attrs.class || '').split(/\s+/u).filter(Boolean);
+  const matches = (el, sel) => {
+    let m;
+    if ((m = sel.match(/^\[([a-z-]+)\]$/u))) return m[1] in el.attrs;
+    if ((m = sel.match(/^\[([a-z-]+)="([^"]*)"\]$/u))) return el.attrs[m[1]] === m[2];
+    if ((m = sel.match(/^\.([a-z][a-z0-9-]*)$/u))) return classes(el).includes(m[1]);
+    if (/^[a-z][a-z0-9]*$/u.test(sel)) return el.tag === sel;
+    throw new Error(`DOM 替身認不得的選擇器「${sel}」：網頁那一段程式改了，替身要跟著補`);
+  };
+  const below = (el) => el.children.flatMap((c) => [c, ...below(c)]);
+  const document = { activeElement: null, addEventListener: on(listeners.document) };
+  const make = (tag, attrs, parent) => {
+    const el = {
+      tag,
+      attrs,
+      parent,
+      children: [],
+      id: attrs.id || '',
+      hidden: 'hidden' in attrs,
+      getAttribute: (k) => (k in el.attrs ? el.attrs[k] : null),
+      setAttribute: (k, v) => { el.attrs[k] = String(v); },
+      removeAttribute: (k) => { delete el.attrs[k]; },
+      classList: {
+        add: (c) => { el.attrs.class = [...new Set([...classes(el), c])].join(' '); },
+        remove: (c) => { el.attrs.class = classes(el).filter((x) => x !== c).join(' '); },
+        toggle: (c, on) => (((on === undefined ? !classes(el).includes(c) : on) ? el.classList.add(c) : el.classList.remove(c)), classes(el).includes(c)),
+        contains: (c) => classes(el).includes(c),
+      },
+      closest: (sel) => { for (let x = el; x && x.tag !== '#root'; x = x.parent) if (matches(x, sel)) return x; return null; },
+      querySelector: (sel) => below(el).find((x) => matches(x, sel)) || null,
+      querySelectorAll: (sel) => below(el).filter((x) => matches(x, sel)),
+      get textContent() { const inner = html.slice(el.start, el.end); return el.raw ? inner : unescT(strip(inner)); },
+      scrollIntoView: (opt) => note('scroll', el, opt),
+      focus: (opt) => { note('focus', el, opt); document.activeElement = el; },
+    };
+    if (tag === 'details') {
+      let open = 'open' in attrs;
+      Object.defineProperty(el, 'open', { get: () => open, set: (v) => { if (v && !open) note('open', el); open = Boolean(v); } });
+    }
+    return el;
+  };
+  const root = make('#root', {}, null);
+  let cur = root;
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)>/gu;
+  for (let m = tagRe.exec(html); m; m = tagRe.exec(html)) {
+    const tag = m[2].toLowerCase();
+    if (m[1]) {
+      if (cur.tag !== tag) throw new Error(`DOM 替身讀網頁：第 ${m.index} 個字的 </${tag}> 對不到 <${cur.tag}>`);
+      cur.end = m.index;
+      cur = cur.parent;
+      continue;
+    }
+    const attrs = {};
+    for (const a of m[3].matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/gu)) attrs[a[1]] = a[2] === undefined ? '' : unescT(a[2]);
+    const el = make(tag, attrs, cur);
+    cur.children.push(el);
+    el.start = tagRe.lastIndex;
+    if (attrs.id) ids.set(attrs.id, el);
+    if (tag === 'link' || tag === 'meta' || tag === 'br') continue;
+    if (tag === 'script' || tag === 'style') {
+      el.raw = true;
+      el.end = html.indexOf(`</${tag}>`, el.start);
+      tagRe.lastIndex = el.end + tag.length + 3;
+      continue;
+    }
+    cur = el;
+  }
+  if (cur !== root) throw new Error(`DOM 替身讀網頁：<${cur.tag}> 沒有收尾`);
+  document.documentElement = make('html', {}, null);
+  document.getElementById = (id) => ids.get(id) || null;
+  document.querySelector = root.querySelector;
+  document.querySelectorAll = root.querySelectorAll;
+  const location = { hash };
+  const window = { scrollY: 0, matchMedia: () => ({ matches: false }), addEventListener: on(listeners.window), scrollTo: (x, y) => log.push(`scrollTo:${x},${y}`) };
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)];
+  vm.runInNewContext(scripts[scripts.length - 1][1], { window, document, location });
+  const click = (target) => {
+    document.activeElement = target;
+    for (const fn of listeners.document.click || []) fn({ target, preventDefault() {} });
+  };
+  return { log, document, location, byId: (id) => ids.get(id) || null, all: root.querySelectorAll, click };
+}
+
+test('㉒ 白話手冊的鈕點了落在哪（node:vm 跑網頁最後那一段程式、DOM 是考題自己的替身，不是瀏覽器）：見名詞跳到那個名詞、名詞那一頭的鈕跳回那一節，都跟網址跳過去一樣——展開、捲過去，焦點最後落上去；名詞頁的跳節鈕只捲、焦點留在鈕上', () => {
+  const { html } = manual.build(sources());
+  const secs = ownHandbook(disk('manual/handbook.md'));
+  const g = ownGlossary(disk('GLOSSARY.md'));
+  const terms = g.sections.filter((s) => s.terms).flatMap((s) => s.terms.map((t) => t.term));
+  // 落地＝捲過去（平滑、貼齊上緣），焦點最後落上去（不再捲一次）；在收著的展開框裡的，先展開
+  const SCROLL = JSON.stringify({ behavior: 'smooth', block: 'start' });
+  const FOCUS = JSON.stringify({ preventScroll: true });
+  const landing = (el) => [...(el.tag === 'details' ? [`open:${el.id}`] : []), `scroll:${el.id} ${SCROLL}`, `focus:${el.id} ${FOCUS}`];
+
+  const p = fakePage(html, '#glossary');
+  assert.deepEqual(p.all('[data-page]').filter((x) => !x.hidden).map((x) => x.id), ['page-glossary'], '前提：網址是 #glossary，開著的只有名詞頁');
+  const detailsAll = p.all('details');
+  assert.equal(detailsAll.filter((d) => d.attrs.class === 'hb-entry').length, secs.length, '前提：白話手冊的展開框一節一個');
+  const press = (btn, target, what) => {
+    for (const d of detailsAll) d.open = false;
+    const box = btn.closest('details');
+    if (box) box.open = true; // 點得到收在展開框裡的鈕＝那一節是展開的
+    p.log.length = 0;
+    p.click(btn);
+    return `${what}「${btn.textContent}」→ ${target.id}`;
+  };
+
+  // (a) 見名詞：每一顆（照考題自己讀的手冊與 GLOSSARY.md 算它該去哪個名詞，不看鈕上寫的屬性）
+  const see = p.all('.hb-terms').flatMap((x) => x.querySelectorAll('button'));
+  assert.equal(see.length, secs.reduce((n, s) => n + s.terms.length, 0), '前提：見名詞的鈕一顆不少');
+  for (const btn of see) {
+    const k = terms.indexOf(btn.textContent);
+    assert.ok(k >= 0, `前提：見名詞的鈕「${btn.textContent}」是 GLOSSARY.md 的名詞`);
+    const target = p.byId(`term-${k + 1}`);
+    assert.equal(target.tag, 'dt', '前提：名詞的錨點在名詞那一格');
+    const at = press(btn, target, '見名詞');
+    assert.deepEqual(p.log, landing(target), `${at}：要捲過去、焦點最後落在那個名詞上（跟網址跳過去一樣）`);
+    assert.equal(p.document.activeElement, target, `${at}：焦點要離開鈕、落在那個名詞上`);
+    assert.equal(p.location.hash, '#glossary', `${at}：同一頁，不換網址`);
+    assert.equal(p.byId('modal').hidden, true, `${at}：跳窗維持關著`);
+  }
+
+  // (b) 名詞那一頭回來的鈕：每一顆（照它在哪個名詞的解釋後面、鈕上的節名，算它該回哪一節；那一節本來收著）
+  const back = p.all('.hb-back').flatMap((x) => x.querySelectorAll('button'));
+  assert.equal(back.length, see.length, '前提：回來的鈕跟見名詞的鈕一樣多');
+  for (const btn of back) {
+    const i = secs.findIndex((s) => s.name === btn.textContent);
+    assert.ok(i >= 0, `前提：回來的鈕「${btn.textContent}」是白話手冊的一節`);
+    const dd = btn.closest('dd');
+    const dt = dd.parent.children[dd.parent.children.indexOf(dd) - 1];
+    assert.ok(secs[i].terms.includes(terms[Number(dt.id.slice('term-'.length)) - 1]), `前提：「${btn.textContent}」那一節的見名詞有 ${dt.id} 這個名詞`);
+    const target = p.byId(`hb-${i + 1}`);
+    assert.equal(target.tag, 'details', '前提：一節是一個展開框');
+    const at = press(btn, target, '回手冊');
+    assert.deepEqual(p.log, landing(target), `${at}：要先展開、再捲過去，焦點最後落在那一節上（跟網址跳過去一樣）`);
+    assert.equal(target.open, true, `${at}：那一節要展開`);
+    assert.equal(p.document.activeElement, target, `${at}：焦點要離開鈕、落在那一節上`);
+    assert.equal(p.location.hash, '#glossary', `${at}：同一頁，不換網址`);
+    assert.equal(p.byId('modal').hidden, true, `${at}：跳窗維持關著`);
+  }
+
+  // 對照組：網址直接指到一節、一個名詞，打開網頁時落地的樣子跟上面點鈕一模一樣
+  for (const id of ['hb-2', 'term-1']) {
+    const q = fakePage(html, `#${id}`);
+    assert.deepEqual(q.log, landing(q.byId(id)), `網址 #${id}：展開、捲過去、焦點落上去`);
+    assert.equal(q.document.activeElement, q.byId(id), `網址 #${id}：焦點落在它上面`);
+  }
+
+  // 對照組：名詞頁的跳節鈕（data-jump）照舊只捲過去，焦點留在鈕上——這一支只改見名詞與回來的鈕
+  const bar = p.byId('page-glossary').querySelector('.jumps').querySelectorAll('button');
+  assert.ok(bar.length >= 6 && bar[0].textContent === '白話手冊', '前提：名詞頁的跳節鈕，第一顆是白話手冊');
+  for (const btn of bar) {
+    const target = p.byId(btn.getAttribute('data-jump'));
+    assert.ok(target, `前提：跳節鈕「${btn.textContent}」是 data-jump、指得到一塊`);
+    const at = press(btn, target, '跳節鈕');
+    assert.deepEqual(p.log, [`scroll:${target.id} ${SCROLL}`], `${at}：只捲過去，不搬焦點`);
+    assert.equal(p.document.activeElement, btn, `${at}：焦點留在鈕上`);
   }
 });
