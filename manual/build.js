@@ -1335,13 +1335,21 @@ const HB_QUOTE = /^原文 ([A-Z]\d+)｜核對碼 ([0-9a-f]{8})：必含(.*)$/u;
 const HB_ABSOLUTE = ['一律', '固定', '直到', '只有'];
 // 手寫的字跟規矩原文或名詞解釋連著這麼多個字一樣＝手打了原文：原文要由產生器照條號抽，手打的那一份規矩一改就漂
 const HB_COPY = 20;
-// 看不見的格式字元（軟連字號、零寬空白與連接字元、左右方向記號、字連接符、BOM）：網頁上看不出來，卻能把 J3 那四個字或照抄的一段拆開，讓兩道檢查都比不到
-const HB_INVISIBLE = /[\u00AD\u200B-\u200F\u2060\uFEFF]/u;
+// 整段照抄：規矩原文或名詞解釋整段（拿掉空白後）至少這麼多個字、整段出現在手寫的字裡，也算手打了原文。連著 HB_COPY 個字那一道看不到比它短的整段
+// （C2 拿掉空白後只有 8 個字；名詞解釋也有一批不到 20 個字）。2026-10-12 量過：現行手冊與第三版稿的手寫字（含節名）裡，任何長度的整段都沒有出現；
+// 不到這個數的整段只剩三則（「見A2。」「見B1。」「裁示者的決定。」），照抄它們看不到
+const HB_WHOLE = 8;
+// 看不見的字元：Unicode 的格式字元整類（\p{Cf}：軟連字號、零寬空白與連接字元、方向記號、字連接符、BOM、標籤字元……），
+// 再加不屬於這一類、一樣顯示不出來的填充字（U+034F 組合字形連接符；U+115F、U+1160、U+3164、U+FFA0 韓文填充字；U+180E 蒙古文母音分隔符在 Unicode 6.3 以前不算格式字元，保險起見也列）：
+// 網頁上看不出來，卻能把 J3 那四個字或照抄的一段拆開，讓兩道檢查都比不到
+const HB_INVISIBLE = /[\p{Cf}\u034F\u115F\u1160\u3164\uFFA0\u180E]/u;
 const HB_INTRO = '白話不是規矩：跟原文有出入時，以原文為準。';
 const HB_NOTE = `白話手冊那一塊出自 ${HANDBOOK_FILE}：節名、一句話、白話、比方、見名詞是手寫的；原文（主句與子點）與把關標籤照條號從規則資料 rules.json 抽，排法跟規矩頁一樣。引的規矩一改（核對碼對不上），整份停下不產生，要先回原文重看白話。`;
 
 /** 比對用的字：拿掉粗體與灰底框的記號、連續空白併成一個、去頭尾空白。 */
 const hbNorm = (s) => String(s).replace(/\*\*|`/gu, '').replace(/\s+/gu, ' ').trim();
+/** J3 那四個字與整段照抄用的字：比對用的字再拿掉所有空白（「一 律」、全形空白隔開的「一　律」也是「一律」）。 */
+const hbFlat = (s) => hbNorm(s).replace(/\s/gu, '');
 /** 規矩一條的全文（主句與每一個子點用換行接起來），照比對用的字。 */
 const ruleFull = (rule) => hbNorm([rule.text, ...(rule.items || []).map((item) => item.text)].join('\n'));
 const ruleMap = (rules) => new Map(rules.sections.flatMap((s) => s.rules.map((r) => [`${s.letter}${r.n}`, r])));
@@ -1381,7 +1389,7 @@ function parseHandbook(md) {
   const hidden = lines.findIndex((line) => HB_INVISIBLE.test(line));
   if (hidden >= 0) {
     const code = lines[hidden].match(HB_INVISIBLE)[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
-    throw new LayoutError(`${HANDBOOK_FILE} 第 ${hidden + 1} 行有看不見的格式字元 U+${code}（零寬空白、方向記號、軟連字號、BOM 這一類）：網頁上看不出來，卻會讓 J3 那四個字與照抄的檢查比不到，說明書不產生`);
+    throw new LayoutError(`${HANDBOOK_FILE} 第 ${hidden + 1} 行有看不見的格式字元 U+${code}（零寬空白、方向記號、軟連字號、BOM、填充字這一類）：網頁上看不出來，卻會讓 J3 那四個字與照抄的檢查比不到，說明書不產生`);
   }
   const doc = parseDoc(md, `${HANDBOOK_FILE} `, { needSections: true });
   // 大標題不上網頁，但它是這份檔是什麼的記號：寫錯一個字多半是貼錯檔
@@ -1428,11 +1436,15 @@ function parseHandbook(md) {
 /**
  * 白話手冊對規則資料與用語對照表的檢查（擁有者 2026-10-12 要求把手冊併進名詞頁；Fable 同日代裁 C）。照這個順序，任何一道不過就停、說明書不產生：
  * 條號不在規則資料裡；核對碼對不上（規矩改過了：一次列出每一處的條號、節名與新的核對碼）；必含的字不在那一條的原文裡；
- * J3 列的四個字：一句話、比方裡有、那一節引的原文卻都沒有，或白話裡有、它接著的那一則原文沒有（白話只講那一條）；
- * 手寫的字跟任何一條規矩的原文、任何一個名詞的解釋連著 HB_COPY 個字一樣；見名詞寫的名詞不在 GLOSSARY.md。回傳每一節，每則原文帶上規則資料裡的那一條。
+ * J3 列的四個字（兩個字中間夾空白也算）：節名、一句話、比方裡有、那一節引的原文卻都沒有，或白話裡有、它接著的那一則原文沒有（白話只講那一條）；
+ * 手寫的字（節名也算：它在展開框上，也是名詞那一頭回來的鈕上的字）跟任何一條規矩的原文、任何一個名詞的解釋連著 HB_COPY 個字一樣，
+ * 或整段原文、整段解釋（拿掉空白後 HB_WHOLE 個字以上）出現在手寫的字裡；見名詞寫的名詞不在 GLOSSARY.md。回傳每一節，每則原文帶上規則資料裡的那一條。
  * 守不到的：核對碼只看得出原文改了、看不出白話還對不對——換碼前有沒有逐節回原文重看（J3），靠自覺；
  * 核對碼只算主句與子點的字：把關標籤（rule.tag）、子點的層級或編號改了，核對碼不變、不會停，白話裡講誰把關（機器擋、靠自覺）的句子
- * 要在標籤改的時候自己回來重看；換句話說的照抄、不到 HB_COPY 個字的照抄、沒用那四個字卻把話說大了，都看不到。
+ * 要在標籤改的時候自己回來重看。核對碼的正規化刻意不看排版（Fable 代裁 C 附的條件：算在正規化後的文字上，免得重排版誤觸）：空白（含主句與子點交界的那個換行）、
+ * 粗體與灰底框的記號改了都不會停；連帶的是灰底框裡字面上的 ** 也會被拿掉，只差這兩個字的兩版原文核對碼一樣（今天沒有一條規矩的灰底框裡有）。
+ * 白話裡講專案現況設定的句子（哪道閘啟用了沒、哪一級表定掃不掃、誰起掃描、借用的隔離盒）不在核對碼裡：規矩沒改、設定改了也不會停，每次更新說明書都要對著設定重看。
+ * 換句話說的照抄、不到 HB_COPY 個字的一段照抄（整段的除外）、不到 HB_WHOLE 個字的整段照抄、沒用那四個字卻把話說大了，都看不到。
  */
 function checkHandbook(entries, rules, gloss) {
   const byId = ruleMap(rules);
@@ -1449,25 +1461,28 @@ function checkHandbook(entries, rules, gloss) {
       if (miss !== undefined) throw new Error(`${at(e)}引的 ${q.id}：必含的「${miss}」不在原文裡`);
     }
   }
-  // 每一節手寫的字（一句話、白話、比方）、訊息裡怎麼稱呼它、J3 只對照哪一條（白話＝它接著的那一則；一句話與比方是 null＝這一節引的每一則）
-  const hand = (e) => [[e.oneLine, '一句話', null], ...e.quotes.filter((q) => q.plain).map((q) => [q.plain, ` ${q.id} 的白話`, q.id]), ...(e.analogy ? [[e.analogy, '比方', null]] : [])];
+  // 每一節手寫的字（節名、一句話、白話、比方）、訊息裡怎麼稱呼它、J3 只對照哪一條（白話＝它接著的那一則；節名、一句話與比方是 null＝這一節引的每一則）
+  const hand = (e) => [[e.name, '節名', null], [e.oneLine, '一句話', null], ...e.quotes.filter((q) => q.plain).map((q) => [q.plain, ` ${q.id} 的白話`, q.id]), ...(e.analogy ? [[e.analogy, '比方', null]] : [])];
   for (const e of entries) {
     for (const [text, what, own] of hand(e)) {
       const ids = own ? [own] : e.quotes.map((q) => q.id);
-      const quoted = ids.map((id) => ruleFull(byId.get(id))).join('\n');
-      const word = HB_ABSOLUTE.find((w) => hbNorm(text).includes(w) && !quoted.includes(w));
+      const quoted = ids.map((id) => hbFlat(ruleFull(byId.get(id))));
+      const word = HB_ABSOLUTE.find((w) => hbFlat(text).includes(w) && !quoted.some((q) => q.includes(w)));
       if (word) throw new Error(`${at(e)}的${what}有「${word}」，${own ? `這一條（${own}）的原文沒有` : `這一節引的原文（${ids.join('、')}）都沒有`}：白話不能比原文說得死（J3），改掉這個字${own ? '（白話只對照它接著的那一則原文）' : '，或改引有這個字的那一條'}`);
     }
   }
   const terms = gloss.sections.filter((sec) => sec.kind === 'terms').flatMap((sec) => sec.terms);
+  const sources = [...[...byId].map(([id, r]) => [`${id} 的原文`, ruleFull(r)]), ...terms.map((t) => [`名詞「${t.term}」的解釋`, hbNorm(t.def)])];
   const copied = new Map();
-  for (const [from, text] of [...[...byId].map(([id, r]) => [`${id} 的原文`, ruleFull(r)]), ...terms.map((t) => [`名詞「${t.term}」的解釋`, hbNorm(t.def)])]) {
+  for (const [from, text] of sources) {
     const chars = Array.from(text);
     for (let i = 0; i + HB_COPY <= chars.length; i += 1) {
       const piece = chars.slice(i, i + HB_COPY).join('');
       if (!copied.has(piece)) copied.set(piece, from);
     }
   }
+  // 整段照抄（比 HB_COPY 短的整段，連著 HB_COPY 個字那一道看不到）：兩邊都拿掉空白再比
+  const wholes = sources.map(([from, text]) => [from, hbFlat(text)]).filter(([, text]) => Array.from(text).length >= HB_WHOLE);
   for (const e of entries) {
     for (const [text, what] of hand(e)) {
       const chars = Array.from(hbNorm(text));
@@ -1475,6 +1490,9 @@ function checkHandbook(entries, rules, gloss) {
         const piece = chars.slice(i, i + HB_COPY).join('');
         if (copied.has(piece)) throw new Error(`${at(e)}的${what}跟${copied.get(piece)}連著 ${HB_COPY} 個字一樣（「${piece}」）：原文由產生器照條號抽、不手打，白話要用自己的話寫`);
       }
+      const flat = hbFlat(text);
+      const whole = wholes.find(([, src]) => flat.includes(src));
+      if (whole) throw new Error(`${at(e)}的${what}跟${whole[0]}整段一樣（「${whole[1]}」）：原文由產生器照條號抽、不手打，白話要用自己的話寫`);
     }
   }
   const names = new Set(terms.map((t) => t.term));

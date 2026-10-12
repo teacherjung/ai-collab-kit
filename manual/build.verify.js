@@ -2642,12 +2642,15 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
     ['有控制字元', ed(oneLine0, `${oneLine0}${String.fromCharCode(1)}`), /tab、控制字元或 U\+2028／U\+2029/u],
     ['有 \\r', ed(oneLine0, `${oneLine0}\r`), /tab、控制字元或 U\+2028／U\+2029/u],
     ['有 U+2028', ed(oneLine0, `${oneLine0}${String.fromCharCode(0x2028)}`), /tab、控制字元或 U\+2028／U\+2029/u],
-    // 看不見的格式字元：每一個都夾進一句話裡試一次（網頁上看不出來，會把 J3 那四個字或照抄的一段拆開）；開頭的 BOM 也算
-    ...[0xad, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0xfeff].map((c) => {
+    // 看不見的字元：每一個都夾進一句話裡試一次（網頁上看不出來，會把 J3 那四個字或照抄的一段拆開）。格式字元整類（\p{Cf}）都停：前八個是原本那份短名單上的，
+    // 後面是名單外的格式字元（阿拉伯字母記號、蒙古文母音分隔符、方向嵌入與隔離、隱形運算子、行間註記，與 BMP 以外的 Kaithi 數字記號、樂譜連桿、標籤字元）；
+    // 最後五個不是格式字元、一樣看不見的填充字（組合字形連接符、韓文填充字）。開頭的 BOM、開頭那一段裡的也算
+    ...[0xad, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0xfeff, 0x61c, 0x180e, 0x202a, 0x202e, 0x2061, 0x2066, 0x2069, 0x206f, 0xfff9, 0x110bd, 0x1d173, 0xe0001, 0xe0041, 0x34f, 0x115f, 0x1160, 0x3164, 0xffa0].map((c) => {
       const hex = c.toString(16).toUpperCase().padStart(4, '0');
-      return [`有 U+${hex}`, ed(oneLine0, oneLine0.replace('：', `：${String.fromCharCode(c)}`)), new RegExp(`第 ${md.split('\n').indexOf(oneLine0) + 1} 行有看不見的格式字元 U\\+${hex}`, 'u')];
+      return [`有 U+${hex}`, ed(oneLine0, oneLine0.replace('：', `：${String.fromCodePoint(c)}`)), new RegExp(`第 ${md.split('\n').indexOf(oneLine0) + 1} 行有看不見的格式字元 U\\+${hex}`, 'u')];
     }),
     ['開頭有 BOM', `${String.fromCharCode(0xfeff)}${md}`, /第 1 行有看不見的格式字元 U\+FEFF/u],
+    ['開頭那一段有 U+2066', md.replace(/^(# 白話手冊\n\n)/u, `$1${String.fromCodePoint(0x2066)}`), /第 3 行有看不見的格式字元 U\+2066/u],
     ['大標題不是白話手冊', md.replace(/^# 白話手冊\n/u, '# 白話手冊草稿\n'), /大標題要剛好是「白話手冊」（現在是「白話手冊草稿」）/u],
     ['節名重複', `${md}\n## ${s0.name}\n\n${oneLine0}\n${qLine(q0)}\n`, new RegExp(`「${name0}」那一節出現兩次`, 'u')],
     ['節名有排版記號', `${md}\n## 有 \`框\` 的節\n\n${oneLine0}\n${qLine(q0)}\n`, /節名裡有排版記號/u],
@@ -2705,6 +2708,17 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
     const line = `- 白話：${hit.q.plain}`;
     content.push({ name: `J3：${hit.q.id} 的白話裡有「${w}」（同一節別則原文有）`, md: ed(line, line.replace('：', `：${w}`)), why: new RegExp(`「${reEsc(hit.s.name)}」那一節的 ${hit.q.id} 的白話有「${w}」，這一條（${hit.q.id}）的原文沒有：白話不能比原文說得死（J3）`, 'u') });
   }
+  // J3 也看節名（展開框上、名詞那一頭回來的鈕上的字；跟一句話一樣對照這一節引的每一則）
+  const sName = noWord('一律');
+  content.push({ name: 'J3：節名裡有「一律」', md: ed(`\n## ${sName.name}\n`, `\n## 一律${sName.name}\n`), why: new RegExp(`「一律${reEsc(sName.name)}」那一節的節名有「一律」，這一節引的原文（${sName.quotes.map((q) => q.id).join('、')}）都沒有：白話不能比原文說得死（J3）`, 'u') });
+  // J3 兩邊都拿掉空白再比：兩個字中間夾半形空白、全形空白、不斷行空白也算那個字（網頁上看得到那格空白，讀起來還是那個字）
+  for (const [field, w, split] of [['一句話', '一律', '一 律'], ['比方', '固定', `固${String.fromCharCode(0x3000)}定`], ['白話', '直到', `直${String.fromCharCode(0xa0)}到`]]) {
+    const s = noWord(w);
+    const [line, what, whose] = field === '白話'
+      ? [`- 白話：${s.quotes[0].plain}`, ` ${s.quotes[0].id} 的白話`, `這一條（${s.quotes[0].id}）的原文沒有`]
+      : [field === '一句話' ? `- 一句話：${s.oneLine}` : `- 比方：${s.analogy}`, field, `這一節引的原文（${s.quotes.map((q) => q.id).join('、')}）都沒有`];
+    content.push({ name: `J3：${field}裡的「${w}」中間夾了空白`, md: ed(line, line.replace('：', `：${split}`)), why: new RegExp(`「${reEsc(s.name)}」那一節的${reEsc(what)}有「${w}」，${reEsc(whose)}：白話不能比原文說得死（J3）`, 'u') });
+  }
   // 照抄：從規矩原文、名詞解釋各挑一段 22 個字（沒有排版記號、條號、J3 那四個字），放進白話、比方
   const rulesAll = [...byId.values()].map(ownFull).join('\n');
   const windows = (p) => Array.from({ length: Array.from(p).length - 19 }, (_, i) => Array.from(p).slice(i, i + 20).join(''));
@@ -2734,12 +2748,41 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
     { name: '比方照抄名詞解釋', md: ed(analogy0, `- 比方：${fromTerm}`), why: new RegExp(`「${name0}」那一節的比方跟名詞「.+」的解釋連著 20 個字一樣`, 'u') },
     { name: '比方結尾照抄某條原文的最後 20 個字', md: ed(analogy0, `${analogy0}${tail[1]}`), why: new RegExp(`「${name0}」那一節的比方跟${tail[0]} 的原文連著 20 個字一樣（「${reEsc(tail[1])}」）`, 'u') },
   );
+  // 節名也算手寫的字：照抄 20 個字也停
+  content.push({ name: '節名照抄規矩原文', md: ed(`\n## ${s0.name}\n`, `\n## ${fromRule}\n`), why: new RegExp(`「${reEsc(fromRule)}」那一節的節名跟[A-K][0-9]+ 的原文連著 20 個字一樣`, 'u') });
+  // 整段照抄：比 20 個字短的整條原文、整則名詞解釋（拿掉空白後 8 個字以上）整段出現在手寫的字裡就停，兩邊都拿掉空白再比
+  const flatOf = (t) => t.split('**').join('').split('`').join('').replace(/\s/gu, '');
+  const shortLen = (t) => Array.from(t).length >= 8 && Array.from(t).length < 20 && usable(t);
+  const shortRule = [...byId].map(([id, r]) => [id, flatOf(ownFull(r))]).find(([, t]) => shortLen(t));
+  const shortDef = g.sections.filter((s) => s.terms).flatMap((s) => s.terms).map((t) => [t.term, flatOf(t.def), t.def]).find(([, t, raw]) => shortLen(t) && /\S\s+\S/u.test(raw));
+  assert.ok(shortRule && shortDef, '前提：找得到一條拿掉空白後不到 20 個字的原文，與一則中間有空白、拿掉空白後不到 20 個字的名詞解釋');
+  const wholeWhy = (where, what, from, t) => new RegExp(`「${reEsc(where)}」那一節的${reEsc(what)}跟${reEsc(from)}整段一樣（「${reEsc(t)}」）：原文由產生器照條號抽、不手打`, 'u');
+  content.push(
+    { name: '白話整段照抄一條不到 20 個字的原文', md: ed(plain0, `${plain0}${shortRule[1]}`), why: wholeWhy(s0.name, ` ${q0.id} 的白話`, `${shortRule[0]} 的原文`, shortRule[1]) },
+    { name: '一句話整段照抄原文、每個字中間夾空白', md: ed(oneLine0, `${oneLine0}${Array.from(shortRule[1]).join(' ')}`), why: wholeWhy(s0.name, '一句話', `${shortRule[0]} 的原文`, shortRule[1]) },
+    { name: '比方整段照抄名詞解釋（解釋裡有空白、照抄的沒有）', md: ed(analogy0, `${analogy0}${shortDef[1]}`), why: wholeWhy(s0.name, '比方', `名詞「${shortDef[0]}」的解釋`, shortDef[1]) },
+    { name: '節名整段照抄一條原文', md: ed(`\n## ${s0.name}\n`, `\n## ${shortRule[1]}\n`), why: wholeWhy(shortRule[1], '節名', `${shortRule[0]} 的原文`, shortRule[1]) },
+  );
+  // 整段的下限是 8 個字：對照表加兩個考題用的名詞，解釋 8 個字的整段照抄就停（下面的對照組：7 個字的照收）
+  const termAt = `- **${s0.terms[0]}**：`;
+  const gloss78 = glossText.split(termAt).join(`- **考題七字**：甲乙丙丁戊己庚\n- **考題八字**：子丑寅卯辰巳午未\n${termAt}`);
+  content.push({ name: '白話整段照抄 8 個字的名詞解釋', md: ed(plain0, `${plain0}子丑寅卯辰巳午未`), glossary: gloss78, why: wholeWhy(s0.name, ` ${q0.id} 的白話`, '名詞「考題八字」的解釋', '子丑寅卯辰巳午未') });
   for (const c of content) {
     assert.ok((c.md && c.md !== md) || c.rules || (c.glossary && c.glossary !== glossText), `「${c.name}」這一發沒有改到來源`);
     assert.throws(() => render(c.md || md, c.rules || o.rules, c.glossary || glossText), (err) => !(err instanceof manual.LayoutError) && c.why.test(err.message), `「${c.name}」應該停下、而且原因要對`);
   }
   // 對照組：連著 19 個字一樣照收；規矩只動空白與粗體記號，核對碼不變、照收
   assert.doesNotThrow(() => render(ed(plain0, `- 白話：${Array.from(fromRule).slice(0, 19).join('')}喔`)), '對照組：連著 19 個字一樣照收');
+  assert.doesNotThrow(() => render(ed(plain0, `${plain0}甲乙丙丁戊己庚`), o.rules, gloss78), '對照組：名詞解釋整段只有 7 個字，照抄照收（整段的下限是 8 個字）');
+  // 對照組：原文裡那兩個字中間有空白（「一 律」），白話寫「一律」照收——J3 兩邊都拿掉空白再比
+  const sSp = noWord('一律');
+  const qSp = sSp.quotes[0];
+  const rSp = byId.get(qSp.id);
+  const spText = `${rSp.text}（一 律）`;
+  const spPlain = `- 白話：${qSp.plain}`;
+  assert.equal(md.split(spPlain).length, 2, '前提：那一則白話在手冊裡剛好一處');
+  const spMd = md.split(`- 原文 ${qSp.id}｜核對碼 ${qSp.code}：`).join(`- 原文 ${qSp.id}｜核對碼 ${ownCode({ ...rSp, text: spText })}：`).split(spPlain).join(spPlain.replace('：', '：一律'));
+  assert.doesNotThrow(() => render(spMd, withRule(qSp.id, { text: spText })), '對照組：原文裡「一 律」中間有空白，白話寫「一律」照收');
   const loose = { ...r0, text: ` ${r0.text.replace(/ /gu, '  ')} `, items: (r0.items || []).map((i) => ({ ...i, text: i.text.split('**').join('').replace(/ /gu, '\n') })) };
   assert.equal(manual.handbookCode(loose), q0.code, '只動空白、粗體記號，核對碼不變');
   assert.doesNotThrow(() => render(md, withRule(q0.id, loose)), '對照組：規矩只動空白與粗體記號照收');
