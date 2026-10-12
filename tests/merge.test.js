@@ -24,7 +24,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mergeRun: realMergeRun, runCommand, parseArgs, UNSET, ENABLED } = require('../tools/merge.js');
+const { mergeRun: realMergeRun, runCommand, parseArgs, rulesAfter, UNSET, ENABLED } = require('../tools/merge.js');
+const { excerpt, read: readRules } = require('../tools/build-rules.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
 const HEAD = 'a'.repeat(40);
 const PEOPLE = [{ role: 'AI 甲', id: 'Alpha' }, { role: 'AI 乙', id: 'Beta' }];
@@ -295,4 +297,18 @@ test('⑪真的預設執行器：按合併鍵時清掉 platform.clearEnv 登記�
   } finally {
     for (const [k, v] of [['KIT_PICK_SITE_TEST', prev.A], ['KIT_KEEP_TEST', prev.B]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
+});
+
+test('⑫跑完印相關規矩原文：合了印 H6（接著驗收）、沒合印 H1（先問紅的是哪一題）；讀不到規矩資料照常、退出碼不變', () => {
+  assert.deepEqual(rulesAfter(0), ['H6']);
+  for (const code of [1, 2]) assert.deepEqual(rulesAfter(code), ['H1'], `退 ${code}`);
+  // 指令列真的接上了：複本裡沒給變更編號＝退 2（用法），後面接 H1 原文
+  const withRules = runInCopy('tools/merge.js', [], { files: ['rules.json'] });
+  assert.equal(withRules.status, 2, withRules.stdout + withRules.stderr);
+  assert.match(withRules.stdout, /^用法：node tools\/merge\.js/u, '工具自己的輸出照舊在前面');
+  assert.ok(withRules.stdout.includes(`\n${excerpt(readRules(), ['H1'])}\n`), `沒印出 H1 原文：\n${withRules.stdout}`);
+  // 複本沒有 rules.json：只多一行指回 RULES.md，退出碼一樣是 2
+  const noRules = runInCopy('tools/merge.js', []);
+  assert.equal(noRules.status, 2, noRules.stdout + noRules.stderr);
+  assert.match(noRules.stdout, /這一步相關的規矩是 H1，但條文印不出來/u);
 });

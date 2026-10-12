@@ -32,11 +32,14 @@ const unfilled = () => JSON.parse(fs.readFileSync(UNFILLED_FILE, 'utf8'));
 /**
  * 搭一份複本、在裡面跑一支工具，跑完就收掉。回 spawnSync 的結果。
  * @param {string} relTool 相對套件根目錄的工具路徑，例如 'tools/gates/check-stacked.js'
+ * files：另外要從本倉庫照搬進複本根目錄的檔（相對路徑，例如 ['rules.json']）；預設只有 tools/ 與設定，
+ * 所以工具在複本裡讀不到規矩資料——要看「讀不到時工具照常」的考題就不給。
  */
-function runInCopy(relTool, args = [], { settings = unfilled(), input } = {}) {
+function runInCopy(relTool, args = [], { settings = unfilled(), input, files = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-copy-'));
   try {
     fs.cpSync(path.join(KIT_ROOT, 'tools'), path.join(dir, 'tools'), { recursive: true });
+    for (const rel of files) fs.copyFileSync(path.join(KIT_ROOT, rel), path.join(dir, rel));
     fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
     const env = gitEnv();
     delete env.NODE_TEST_CONTEXT;

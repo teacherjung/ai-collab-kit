@@ -43,7 +43,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { build, buildRaw, read, validate, inline, literal, plain, countRules, MARK, dataFile, outFile, MIN_RULES } = require('../tools/build-rules.js');
+const { build, buildRaw, excerpt, ruleFooter, parseCli, read, validate, inline, literal, plain, countRules, MARK, dataFile, outFile, MIN_RULES } = require('../tools/build-rules.js');
+const { runInCopy } = require('./helpers/kit-copy.js');
 
 const LIMIT = 7000;
 const machinesFile = path.join(__dirname, '..', 'MACHINES.md');
@@ -154,4 +155,75 @@ test('RULES.md 與 rules.json 產生的結果逐字元相同（本文是產物�
     build(read()),
     `RULES.md 跟 ${path.basename(dataFile)} 對不上：本文是產物，要改規矩請改資料再跑 node tools/build-rules.js`,
   );
+});
+
+// ── 按需印條文（擁有者 2026-10-12 要求做完稽核「按需載入-1」印條文那一半）──
+// 合併、送審、問裁示那幾支工具在輸出後面印相關的幾條原文。要守的是：印出來的就是 RULES.md 裡那一條，
+// 不是另寫的一份（K1 不複述）；印不出來時工具照常、退出碼不變。
+
+test('按需印條文：每一條印出來的就是 RULES.md 裡那幾行（字面編碼逐字相同、解回來就是印的原文）', () => {
+  const data = read();
+  const onDisk = fs.readFileSync(outFile, 'utf8');
+  const ids = allRules(data).map((r) => r.id);
+  assert.ok(ids.length >= MIN_RULES, `只找到 ${ids.length} 條規矩：這一題自己的前提變了`);
+  for (const id of ids) {
+    const md = excerpt(data, [id], { markdown: true });
+    assert.ok(md.startsWith(`【${id}】`), `${id}：印出來的第一行不是這一條的條號`);
+    assert.ok(onDisk.includes(`\n${md}\n`), `${id}：印出來的字面編碼不是 RULES.md 裡那幾行（範本或編碼跟本文分岔了）`);
+    assert.equal(plain(md), excerpt(data, [id]), `${id}：印給人看的原文跟本文那幾行解回來的不一樣`);
+  }
+});
+
+test('按需印條文：給節的字母＝整節照順序；重複的只印一次、照給的順序', () => {
+  const data = read();
+  const section = data.sections.find((s) => s.letter === 'I');
+  assert.ok(section && section.rules.length >= 2, 'I 節不見了或只剩一條：這一題自己的前提變了');
+  const one = (id) => excerpt(data, [id]);
+  assert.equal(excerpt(data, ['I']), section.rules.map((r) => one(`I${r.n}`)).join('\n\n'), '整節要是那一節每一條依序接起來');
+  assert.equal(excerpt(data, ['H6', 'H1', 'H6']), `${one('H6')}\n\n${one('H1')}`, '重複的只印一次、照給的順序');
+  assert.equal(excerpt(data, ['I', 'I1']), excerpt(data, ['I']), '整節已經印過的那一條不再印');
+  assert.ok(!excerpt(data, ['H1']).endsWith('\n'), '最後不帶空行（接在工具輸出後面才不會多空一段）');
+});
+
+test('按需印條文：條號或節不存在、沒給、資料不合契約都丟例外，不印半份', () => {
+  const data = read();
+  for (const bad of [['Z1'], ['H99'], ['h1'], ['H0'], ['H1x'], ['Z'], ['H1', 'Q7']]) {
+    assert.throws(() => excerpt(data, bad), /不認得的條號或節/u, `${bad.join(',')}：要丟例外`);
+  }
+  assert.throws(() => excerpt(data, []), /沒有指定任何條號/u);
+  const broken = JSON.parse(JSON.stringify(data));
+  broken.sections[0].rules[0].text = '有\n換行';
+  assert.throws(() => excerpt(broken, ['A1']), /不合資料契約/u);
+});
+
+test('按需印條文：工具接在後面的那幾行——印得出來接原文；印不出來只印一行指回 RULES.md、不丟例外', () => {
+  const data = read();
+  const ok = ruleFooter(['D1', 'I'], { load: () => data });
+  assert.equal(ok[0], '', '跟工具自己的輸出隔一個空行');
+  assert.match(ok[1], /D1、I 節；從 rules\.json 印出，跟 RULES\.md 同一條/u);
+  assert.equal(ok[2], excerpt(data, ['D1', 'I']));
+  assert.equal(ok.length, 3);
+  const unreadable = ruleFooter(['H1'], { load: () => { throw new Error('ENOENT: 讀不到 rules.json\n第二行'); } });
+  assert.deepEqual(unreadable, ['', '（這一步相關的規矩是 H1，但條文印不出來：ENOENT: 讀不到 rules.json——直接看 RULES.md 那幾條）']);
+  const unknown = ruleFooter(['H99'], { load: () => data });
+  assert.equal(unknown.length, 2);
+  assert.match(unknown[1], /^（這一步相關的規矩是 H99，但條文印不出來：不認得的條號或節「H99」/u);
+});
+
+test('按需印條文：指令列只認「不給參數」與「--rules <條號,…>」，其餘退 2（打錯不會靜靜改去重寫本文）', () => {
+  assert.deepEqual(parseCli([]), { mode: 'write' });
+  assert.deepEqual(parseCli(['--rules', 'H1, H6,,']), { mode: 'print', ids: ['H1', 'H6'] });
+  for (const bad of [['--rules'], ['--rules', ' , '], ['--rule', 'H1'], ['--rules', 'H1', 'H6'], ['H1'], ['--rules=H1']]) {
+    assert.ok(parseCli(bad).error, `${bad.join(' ')}：要當用法錯`);
+  }
+  const printed = runInCopy('tools/build-rules.js', ['--rules', 'H1,H6'], { files: ['rules.json'] });
+  assert.equal(printed.status, 0, printed.stdout + printed.stderr);
+  assert.equal(printed.stdout, `${excerpt(read(), ['H1', 'H6'])}\n`, '印出來的就是那兩條的原文、沒有別的');
+  const typo = runInCopy('tools/build-rules.js', ['--rule', 'H1'], { files: ['rules.json'] });
+  assert.equal(typo.status, 2, typo.stdout + typo.stderr);
+  assert.match(typo.stderr, /用法/u);
+  assert.equal(typo.stdout, '', '用法錯就什麼都不印到標準輸出（複本收掉了，寫沒寫本文這一題看不到）');
+  const unknown = runInCopy('tools/build-rules.js', ['--rules', 'H99'], { files: ['rules.json'] });
+  assert.equal(unknown.status, 2, unknown.stdout + unknown.stderr);
+  assert.match(unknown.stderr, /不認得的條號或節「H99」/u);
 });

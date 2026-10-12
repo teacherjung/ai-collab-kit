@@ -10,7 +10,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { run, riskTableOf, classifyRisk } = require('../tools/risk-tier.js');
+const { run, riskTableOf, classifyRisk, RULES_SHOWN } = require('../tools/risk-tier.js');
+const { excerpt, read: readRules } = require('../tools/build-rules.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -120,4 +121,12 @@ test('⑨算的是哪一個版本照實回（送審產生器拿去跟受審版�
   const moved = run('7', { settings: s, platform: heads(['d'.repeat(40), 'e'.repeat(40)]) });
   assert.equal(moved.code, 2);
   assert.match(moved.lines.join('\n'), /換了版本/u);
+});
+
+test('⑫指令列在輸出後面印 D4、F2、G1 原文（送審前要用的三條）；只多印、退出碼不變', () => {
+  assert.deepEqual(RULES_SHOWN, ['D4', 'F2', 'G1']);
+  const copy = runInCopy('tools/risk-tier.js', ['7'], { files: ['rules.json'] });
+  assert.equal(copy.status, 2, copy.stdout + copy.stderr);
+  assert.match(copy.stdout, /^專案設定裡的風險表沒填好/u, '工具自己的輸出照舊在前面');
+  assert.ok(copy.stdout.includes(`\n${excerpt(readRules(), RULES_SHOWN)}\n`), `沒印出 D4、F2、G1 原文：\n${copy.stdout}`);
 });
