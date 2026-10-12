@@ -1,6 +1,7 @@
 'use strict';
 // 套件說明書網頁的產生器。擁有者 2026-09-27 裁：內容從套件本身自動產生，只有「白話說明」與「優缺點」手寫；
-// 2026-09-30 裁：做成九頁、可以有跳窗、發成私人網頁連結（留痕在套件 #24）；2026-10-05 裁 a：最前面再加一頁「總覽」放優缺點（留痕在套件 #40）。
+// 2026-09-30 裁：做成九頁、可以有跳窗、發成私人網頁連結（留痕在套件 #24）；2026-10-05 裁 a：最前面再加一頁「總覽」放優缺點（留痕在套件 #40）；
+// 2026-10-05 裁 a（留痕在套件 #36）：名詞手冊等規矩告一段落再照當時的規矩重寫、併進名詞頁，他看過改過才算數＝名詞頁最上面的「白話手冊」，手寫的字在 manual/handbook.md。
 // 只給套件倉庫自己用：不在共用路徑裡（tools/kit-lock.js 的 SHARED_PATHS），不會被搬進使用專案。
 // 產生器不自己存檔（擁有者 2026-09-30 裁 a）：網頁印到標準輸出、摘要印到標準錯誤，存到哪裡由跑的人指定；
 // 產出不進版控＝跑的人要存到套件倉庫外（沒有機器擋，靠自覺）。什麼時候跑：只在擁有者明確要求更新網頁時（2026-10-05）——
@@ -8,7 +9,9 @@
 // 下面檢查到的來源形狀不對就丟例外、標準輸出什麼都不印：半套的說明書比沒有更糟（讀的人以為那就是全部）。
 //
 //   node manual/build.js [--stamp <頁尾註記，例如版本碼與日期>] > <套件倉庫外的檔>
+//   node manual/build.js --handbook-codes   （印白話手冊引到的每一條規矩現在的核對碼；重看完白話、要換碼時用）
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const rulesBook = require('../tools/build-rules.js');
@@ -780,6 +783,11 @@ function kindOf(parts) {
   return machine ? 'machine' : 'self';
 }
 
+/** 標籤鈕：點了打開那個標籤的意思與守不到的（規矩頁、機器頁、白話手冊共用）。 */
+function labelChip(name) {
+  return `<button type="button" class="chip chip-${name === SELF ? 'self' : 'machine'}" data-label="${esc(name)}">${esc(name)}</button>`;
+}
+
 /** 子點：同一層、同一種（編號或圓點）連成一份清單，第二層掛在前一個第一層底下。 */
 function itemsHtml(items, roles, where) {
   const groups = [];
@@ -826,7 +834,7 @@ function rulesPage(data, labels, legend, machineRows, tplByRule) {
       rules.push({ id, kind });
       for (const name of new Set(parts.map((part) => part.name))) (usedBy[name] = usedBy[name] || []).push(id);
       const tag = parts
-        .map((part) => `<button type="button" class="chip chip-${part.name === SELF ? 'self' : 'machine'}" data-label="${esc(part.name)}">${esc(part.name)}</button>${part.html}`)
+        .map((part) => `${labelChip(part.name)}${part.html}`)
         .join('；');
       return `<article class="rule" id="rule-${id}" data-kind="${kind}" tabindex="-1">
 <div class="rule-head"><span class="rule-no">${id}</span><span class="rule-kind kind-${kind}">${KIND_TEXT[kind]}</span></div>
@@ -897,7 +905,7 @@ function templateLinks(byRule, id) {
 
 function machinesPage(title, labels, table, ruleIds) {
   const labelDefs = labels
-    .map((l) => `<div class="label-def"><button type="button" class="chip chip-${l.name === SELF ? 'self' : 'machine'}" data-label="${esc(l.name)}">${esc(l.name)}</button><dl class="def"><dt>意思</dt><dd>${mdInline(l.meaning)}</dd><dt>守不到的</dt><dd>${mdInline(l.limits)}</dd></dl></div>`)
+    .map((l) => `<div class="label-def">${labelChip(l.name)}<dl class="def"><dt>意思</dt><dd>${mdInline(l.meaning)}</dd><dt>守不到的</dt><dd>${mdInline(l.limits)}</dd></dl></div>`)
     .join('\n');
   const cards = table.rows
     .map((row) => {
@@ -1317,8 +1325,212 @@ function parseGlossary(md) {
   return { title: doc.title, sections };
 }
 
-/** 一節的內文：版面約定（跟規矩頁同一句網頁上的差別、開頭一段、條列）、說明（照原文段落）、一類名詞（名詞｜解釋）。 */
-function glossaryBody(sec, where, inline) {
+const HANDBOOK_FILE = 'manual/handbook.md';
+// 白話手冊一節裡每一項的開頭；寫到哪一種之後，下一項可以是哪幾種（HB_NEXT[0]＝第一項；照 HB_HEADS 的順序，原文可以有好幾則、每則後面可接一則白話）
+const HB_HEADS = ['一句話：', '原文 ', '白話：', '比方：', '見名詞：'];
+const HB_NEXT = [['一句話：'], ['原文 '], ['原文 ', '白話：', '比方：', '見名詞：'], ['原文 ', '比方：', '見名詞：'], ['見名詞：'], []];
+const HB_ORDER = '一句話（剛好一則）→ 原文（一則以上，每則後面可接一則白話）→ 比方（最多一則）→ 見名詞（最多一則）';
+const HB_QUOTE = /^原文 ([A-Z]\d+)｜核對碼 ([0-9a-f]{8})：必含(.*)$/u;
+// 白話最容易說大的四個字（規矩 J3 子點列的）：一句話、比方裡有、那一節引的原文卻都沒有，或白話裡有、它接著的那一則原文沒有，就停
+const HB_ABSOLUTE = ['一律', '固定', '直到', '只有'];
+// 手寫的字跟規矩原文或名詞解釋連著這麼多個字一樣＝手打了原文：原文要由產生器照條號抽，手打的那一份規矩一改就漂
+const HB_COPY = 20;
+// 看不見的格式字元（軟連字號、零寬空白與連接字元、左右方向記號、字連接符、BOM）：網頁上看不出來，卻能把 J3 那四個字或照抄的一段拆開，讓兩道檢查都比不到
+const HB_INVISIBLE = /[\u00AD\u200B-\u200F\u2060\uFEFF]/u;
+const HB_INTRO = '白話不是規矩：跟原文有出入時，以原文為準。';
+const HB_NOTE = `白話手冊那一塊出自 ${HANDBOOK_FILE}：節名、一句話、白話、比方、見名詞是手寫的；原文（主句與子點）與把關標籤照條號從規則資料 rules.json 抽，排法跟規矩頁一樣。引的規矩一改（核對碼對不上），整份停下不產生，要先回原文重看白話。`;
+
+/** 比對用的字：拿掉粗體與灰底框的記號、連續空白併成一個、去頭尾空白。 */
+const hbNorm = (s) => String(s).replace(/\*\*|`/gu, '').replace(/\s+/gu, ' ').trim();
+/** 規矩一條的全文（主句與每一個子點用換行接起來），照比對用的字。 */
+const ruleFull = (rule) => hbNorm([rule.text, ...(rule.items || []).map((item) => item.text)].join('\n'));
+const ruleMap = (rules) => new Map(rules.sections.flatMap((s) => s.rules.map((r) => [`${s.letter}${r.n}`, r])));
+
+/**
+ * 規矩一條的核對碼：全文（ruleFull）的 sha256 取前 8 個十六進位字。白話手冊每一則原文都記著它（Fable 2026-10-12 代裁 C：必含的字與核對碼都要），
+ * 規矩一改就對不上、說明書停下，讀的人才知道要回去重看白話；只動空白、粗體或灰底框的記號不會變。
+ */
+function handbookCode(rule) {
+  return crypto.createHash('sha256').update(ruleFull(rule), 'utf8').digest('hex').slice(0, 8);
+}
+
+/** 必含、見名詞那種「灰底框用『、』接」的一串：一個以上、框裡不是空的、頭尾沒有空白、拿掉記號後不是空的（只寫 ** 的必含什麼都比得到）、不重複。 */
+function hbList(text, at, what) {
+  if (!text) throw new LayoutError(`${at}：${what}是空的，至少要寫一個`);
+  if (!/^`[^`]+`(?:、`[^`]+`)*$/u.test(text)) throw new LayoutError(`${at}：${what}要寫成灰底框、用「、」接（例如 \`字\`、\`字\`）`);
+  const list = text.slice(1, -1).split('`、`');
+  const bad = list.find((w) => /^\s|\s$/u.test(w));
+  if (bad !== undefined) throw new LayoutError(`${at}：${what}的「${bad}」頭尾有空白`);
+  const blank = list.find((w) => !hbNorm(w));
+  if (blank !== undefined) throw new LayoutError(`${at}：${what}的「${blank}」拿掉粗體記號後是空的`);
+  const dup = list.find((w, i) => list.indexOf(w) !== i);
+  if (dup !== undefined) throw new LayoutError(`${at}：${what}的「${dup}」寫了兩次`);
+  return list;
+}
+
+/**
+ * manual/handbook.md（名詞頁最上面的白話手冊，手寫）。大標題與開頭那一段給維護的人看、不上網頁；開頭不是剛好一段就停。
+ * 每一節＝「## 節名」底下剛好一串「- 」條列（不收子項、段落、表格），一項一行，開頭照這個順序（HB_ORDER）：
+ * 「一句話：」→「原文 條號｜核對碼 八個十六進位字：必含 `字`、`字`」→「白話：」→「比方：」→「見名詞：`名詞`、`名詞`」。
+ * 大標題不是「白話手冊」、有看不見的格式字元（HB_INVISIBLE）、順序不對、認不得的開頭、冒號後面是空的、同一節引同一條兩次、必含或見名詞寫法不對、
+ * 節名重複或有排版記號，都停（LayoutError）。這裡只讀形狀：條號在不在、核對碼與必含對不對、名詞在不在，由 checkHandbook 看。
+ */
+function parseHandbook(md) {
+  if (CONTROL_CHARS.test(md) || CASE_HIDDEN.test(md)) throw new LayoutError(`${HANDBOOK_FILE} 裡有 tab、控制字元或 U+2028／U+2029：網頁顯示不出原文，說明書不產生`);
+  const lines = md.split('\n');
+  const hidden = lines.findIndex((line) => HB_INVISIBLE.test(line));
+  if (hidden >= 0) {
+    const code = lines[hidden].match(HB_INVISIBLE)[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+    throw new LayoutError(`${HANDBOOK_FILE} 第 ${hidden + 1} 行有看不見的格式字元 U+${code}（零寬空白、方向記號、軟連字號、BOM 這一類）：網頁上看不出來，卻會讓 J3 那四個字與照抄的檢查比不到，說明書不產生`);
+  }
+  const doc = parseDoc(md, `${HANDBOOK_FILE} `, { needSections: true });
+  // 大標題不上網頁，但它是這份檔是什麼的記號：寫錯一個字多半是貼錯檔
+  if (doc.title !== '白話手冊') throw new LayoutError(`${HANDBOOK_FILE} 的大標題要剛好是「白話手冊」（現在是「${doc.title}」）`);
+  if (doc.intro.length !== 1 || doc.intro[0].kind !== 'p') throw new LayoutError(`${HANDBOOK_FILE} 大標題底下、第一節之前要剛好一段（給維護的人看的說明，不上網頁）：多寫的字不知道該排到哪裡`);
+  const names = [];
+  return doc.sections.map((sec, s) => {
+    const where = `${HANDBOOK_FILE}「${sec.title}」那一節`;
+    // 節名也是名詞那一頭回來的鈕上的字（鈕裡放不了連結與排版），所以只收純文字
+    if (settingsInline(sec.title, `${where}的節名`) !== esc(sec.title)) throw new LayoutError(`${where}：節名裡有排版記號（灰底框、粗體、跳脫），說明書不排——節名也是名詞那一頭回來的鈕上的字`);
+    if (names.includes(sec.title)) throw new LayoutError(`${where}出現兩次`);
+    names.push(sec.title);
+    if (sec.blocks.length !== 1 || sec.blocks[0].kind !== 'list') throw new LayoutError(`${where}要剛好是一串「- 」條列（不收段落、表格）`);
+    const entry = { id: `hb-${s + 1}`, name: sec.title, oneLine: '', quotes: [], analogy: '', terms: [] };
+    let step = 0;
+    sec.blocks[0].items.forEach((item, k) => {
+      const at = `${where}第 ${k + 1} 項`;
+      if (item.sub.length) throw new LayoutError(`${at}底下有子項，說明書不排`);
+      const head = HB_HEADS.find((h) => item.text.startsWith(h));
+      if (!head) throw new LayoutError(`${at}：開頭要是${HB_HEADS.map((h) => `「${h.slice(0, -1)}」`).join('')}其中一種`);
+      const label = head.slice(0, -1);
+      if (!HB_NEXT[step].includes(head)) throw new LayoutError(`${at}：「${label}」放錯位置（順序是 ${HB_ORDER}）`);
+      step = HB_HEADS.indexOf(head) + 1;
+      const body = item.text.slice(head.length);
+      if (head === '原文 ') {
+        const m = item.text.match(HB_QUOTE);
+        if (!m || (m[3] && !m[3].startsWith(' '))) throw new LayoutError(`${at}：原文那一項要寫成「原文 條號｜核對碼 八個十六進位字：必含 \`字\`、\`字\`」`);
+        if (entry.quotes.some((q) => q.id === m[1])) throw new LayoutError(`${where}：同一節引了 ${m[1]} 兩次`);
+        entry.quotes.push({ id: m[1], code: m[2], must: hbList(m[3].slice(1), `${at}（${m[1]}）`, '必含'), plain: '' });
+      } else if (head === '見名詞：') {
+        entry.terms = hbList(body, at, '見名詞');
+      } else {
+        if (!body || /^\s/u.test(body)) throw new LayoutError(`${at}：「${label}」後面是空的、或開頭是空白`);
+        if (head === '一句話：') entry.oneLine = body;
+        else if (head === '白話：') entry.quotes[entry.quotes.length - 1].plain = body;
+        else entry.analogy = body;
+      }
+    });
+    if (step < 2) throw new LayoutError(`${where}：至少要有「一句話」與一則「原文」`);
+    return entry;
+  });
+}
+
+/**
+ * 白話手冊對規則資料與用語對照表的檢查（擁有者 2026-10-12 要求把手冊併進名詞頁；Fable 同日代裁 C）。照這個順序，任何一道不過就停、說明書不產生：
+ * 條號不在規則資料裡；核對碼對不上（規矩改過了：一次列出每一處的條號、節名與新的核對碼）；必含的字不在那一條的原文裡；
+ * J3 列的四個字：一句話、比方裡有、那一節引的原文卻都沒有，或白話裡有、它接著的那一則原文沒有（白話只講那一條）；
+ * 手寫的字跟任何一條規矩的原文、任何一個名詞的解釋連著 HB_COPY 個字一樣；見名詞寫的名詞不在 GLOSSARY.md。回傳每一節，每則原文帶上規則資料裡的那一條。
+ * 守不到的：核對碼只看得出原文改了、看不出白話還對不對——換碼前有沒有逐節回原文重看（J3），靠自覺；
+ * 核對碼只算主句與子點的字：把關標籤（rule.tag）、子點的層級或編號改了，核對碼不變、不會停，白話裡講誰把關（機器擋、靠自覺）的句子
+ * 要在標籤改的時候自己回來重看；換句話說的照抄、不到 HB_COPY 個字的照抄、沒用那四個字卻把話說大了，都看不到。
+ */
+function checkHandbook(entries, rules, gloss) {
+  const byId = ruleMap(rules);
+  const at = (e) => `${HANDBOOK_FILE}「${e.name}」那一節`;
+  for (const e of entries) {
+    for (const q of e.quotes) if (!byId.has(q.id)) throw new Error(`${at(e)}引的 ${q.id}：條號不在規則資料裡（刪了或改號）：這一節要照現行規矩重寫`);
+  }
+  const stale = entries.flatMap((e) => e.quotes.filter((q) => handbookCode(byId.get(q.id)) !== q.code).map((q) => `${q.id}（「${e.name}」那一節）：新核對碼 ${handbookCode(byId.get(q.id))}`));
+  if (stale.length) throw new Error(`${HANDBOOK_FILE} 引的規矩改過了（核對碼對不上），說明書不產生：\n- ${stale.join('\n- ')}\n逐節回原文重看白話（J3），不能只換核對碼與必含的字；看完再換成新的核對碼（node manual/build.js --handbook-codes 印得出每一條現在的）。`);
+  for (const e of entries) {
+    for (const q of e.quotes) {
+      const full = ruleFull(byId.get(q.id));
+      const miss = q.must.find((w) => !full.includes(hbNorm(w)));
+      if (miss !== undefined) throw new Error(`${at(e)}引的 ${q.id}：必含的「${miss}」不在原文裡`);
+    }
+  }
+  // 每一節手寫的字（一句話、白話、比方）、訊息裡怎麼稱呼它、J3 只對照哪一條（白話＝它接著的那一則；一句話與比方是 null＝這一節引的每一則）
+  const hand = (e) => [[e.oneLine, '一句話', null], ...e.quotes.filter((q) => q.plain).map((q) => [q.plain, ` ${q.id} 的白話`, q.id]), ...(e.analogy ? [[e.analogy, '比方', null]] : [])];
+  for (const e of entries) {
+    for (const [text, what, own] of hand(e)) {
+      const ids = own ? [own] : e.quotes.map((q) => q.id);
+      const quoted = ids.map((id) => ruleFull(byId.get(id))).join('\n');
+      const word = HB_ABSOLUTE.find((w) => hbNorm(text).includes(w) && !quoted.includes(w));
+      if (word) throw new Error(`${at(e)}的${what}有「${word}」，${own ? `這一條（${own}）的原文沒有` : `這一節引的原文（${ids.join('、')}）都沒有`}：白話不能比原文說得死（J3），改掉這個字${own ? '（白話只對照它接著的那一則原文）' : '，或改引有這個字的那一條'}`);
+    }
+  }
+  const terms = gloss.sections.filter((sec) => sec.kind === 'terms').flatMap((sec) => sec.terms);
+  const copied = new Map();
+  for (const [from, text] of [...[...byId].map(([id, r]) => [`${id} 的原文`, ruleFull(r)]), ...terms.map((t) => [`名詞「${t.term}」的解釋`, hbNorm(t.def)])]) {
+    const chars = Array.from(text);
+    for (let i = 0; i + HB_COPY <= chars.length; i += 1) {
+      const piece = chars.slice(i, i + HB_COPY).join('');
+      if (!copied.has(piece)) copied.set(piece, from);
+    }
+  }
+  for (const e of entries) {
+    for (const [text, what] of hand(e)) {
+      const chars = Array.from(hbNorm(text));
+      for (let i = 0; i + HB_COPY <= chars.length; i += 1) {
+        const piece = chars.slice(i, i + HB_COPY).join('');
+        if (copied.has(piece)) throw new Error(`${at(e)}的${what}跟${copied.get(piece)}連著 ${HB_COPY} 個字一樣（「${piece}」）：原文由產生器照條號抽、不手打，白話要用自己的話寫`);
+      }
+    }
+  }
+  const names = new Set(terms.map((t) => t.term));
+  for (const e of entries) {
+    for (const t of e.terms) if (!names.has(t)) throw new Error(`${at(e)}的見名詞「${t}」不在 GLOSSARY.md 的名詞裡（改名或刪了）`);
+  }
+  return entries.map((e) => ({ ...e, quotes: e.quotes.map((q) => ({ ...q, rule: byId.get(q.id) })) }));
+}
+
+/**
+ * 換核對碼用（node manual/build.js --handbook-codes）：manual/handbook.md 引到的每一條，照第一次出現的順序、不重複，一行印「條號 核對碼」。
+ * 只認「- 原文 條號」開頭的行、其餘形狀不看（新加的一則還沒寫碼也印得出來）；條號不在規則資料裡就停。
+ */
+function handbookCodeLines(md, rules) {
+  const problems = rulesBook.validate(rules);
+  if (problems.length) throw new Error(`規則資料不合資料契約，印不出核對碼：\n- ${problems.join('\n- ')}`);
+  const byId = ruleMap(rules);
+  const ids = [];
+  for (const line of md.split('\n')) {
+    const m = line.match(/^- 原文 ([^｜：\s]+)/u);
+    if (m && !ids.includes(m[1])) ids.push(m[1]);
+  }
+  return ids
+    .map((id) => {
+      if (!byId.has(id)) throw new Error(`${HANDBOOK_FILE} 引的 ${id}：條號不在規則資料裡（刪了或改號）：這一節要照現行規矩重寫`);
+      return `${id} ${handbookCode(byId.get(id))}\n`;
+    })
+    .join('');
+}
+
+/**
+ * 名詞頁最上面的白話手冊：一節一個展開框（框上是節名與一句話）；展開是每一則原文（從規則資料抽、跟規矩頁同一套排法，條號點得到那一條）
+ * 與它的白話，再來比方、每一條的把關標籤（點了看標籤的意思）、見名詞（點了跳到底下那個名詞）。手寫的字照名詞頁的行內排版。
+ */
+function handbookBlock(hb, inline, termIds) {
+  const details = hb.entries.map((e) => {
+    const where = `${HANDBOOK_FILE}「${e.name}」那一節`;
+    const quotes = e.quotes.map((q) => {
+      const plain = q.plain ? `\n<p class="hb-plain"><span class="tag-lead">白話</span>${inline(q.plain, `${where} ${q.id} 的白話`)}</p>` : '';
+      return `<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${inline(q.id, `${where}引的條號`)}</p><p class="hb-rule">${rich(q.rule.text, hb.roles, `${q.id} 的主句`)}</p>${itemsHtml(q.rule.items || [], hb.roles, q.id)}</blockquote>${plain}`;
+    });
+    const analogy = e.analogy ? `\n<p class="hb-analogy"><span class="tag-lead">比方</span>${inline(e.analogy, `${where}的比方`)}</p>` : '';
+    const tags = e.quotes
+      .map((q) => `<span class="hb-tag"><span class="hb-tag-id">${q.id}</span>${[...new Set(splitTag(q.rule.tag, hb.labels, hb.roles, `${q.id} 的標籤`).map((p) => p.name))].map(labelChip).join('')}</span>`)
+      .join('');
+    const terms = e.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${e.terms.map((t) => `<button type="button" class="jump" data-jump="${termIds.get(t)}">${esc(t)}</button>`).join('')}</p>` : '';
+    return `<details class="hb-entry" id="${e.id}" tabindex="-1">\n<summary><span class="hb-name">${esc(e.name)}</span><span class="hb-line">${inline(e.oneLine, `${where}的一句話`)}</span></summary>\n${quotes.join('\n')}${analogy}\n<p class="hb-tags"><span class="tag-lead">把關</span>${tags}</p>${terms}\n</details>`;
+  });
+  return `<section class="block handbook" id="hb" tabindex="-1">\n<h2>白話手冊<span class="sec-count">${hb.entries.length} 節</span></h2>\n<p class="muted">${HB_INTRO}</p>\n${details.join('\n')}\n</section>`;
+}
+
+/**
+ * 一節的內文：版面約定（跟規矩頁同一句網頁上的差別、開頭一段、條列）、說明（照原文段落）、一類名詞（名詞｜解釋）。
+ * mark（有白話手冊時給：名詞 → { id：名詞那一格的錨點屬性, back：解釋後面回到白話手冊的鈕 }）。
+ */
+function glossaryBody(sec, where, inline, mark = null) {
   if (sec.kind === 'legend') {
     return `<p class="muted">${LEGEND_WEB_NOTE}</p>\n<p>${inline(sec.lead, `${where}開頭那一段`)}</p>\n<ul class="items">${sec.bullets.map((b, k) => `<li>${inline(b, `${where}第 ${k + 1} 條`)}</li>`).join('')}</ul>`;
   }
@@ -1326,24 +1538,38 @@ function glossaryBody(sec, where, inline) {
   return `<dl class="gloss">\n${sec.terms
     .map((t, k) => {
       const at = `${where}第 ${k + 1} 項「${t.term}」`;
-      return `<dt><strong>${inline(t.term, `${at}的名詞`)}</strong></dt><dd>${inline(t.def, `${at}的解釋`)}</dd>`;
+      const m = mark ? mark(t.term) : { id: '', back: '' };
+      return `<dt${m.id}><strong>${inline(t.term, `${at}的名詞`)}</strong></dt><dd>${inline(t.def, `${at}的解釋`)}${m.back}</dd>`;
     })
     .join('\n')}\n</dl>`;
 }
 
-/** 名詞頁：每一節一塊（照原文的順序），字照名詞頁的行內排版（條號點得到那一條規矩）；跳節鈕只列名詞的那幾類。 */
-function glossaryPage(gloss, ruleIds) {
+/**
+ * 名詞頁：每一節一塊（照原文的順序），字照名詞頁的行內排版（條號點得到那一條規矩）；跳節鈕只列名詞的那幾類。
+ * hb（checkHandbook 回傳的每一節＋規則資料的角色與標籤表）＝最上面加白話手冊、跳節鈕最前面加一顆、頁首那一句先講最上面是白話手冊；
+ * 每一個名詞一個錨點（term-1 起照原文的順序；跟展開框一樣 tabindex="-1"，跳過去時焦點落得上去），讓見名詞點得到，
+ * 解釋後面再列回到白話手冊的鈕（哪幾節的見名詞寫了它）。
+ */
+function glossaryPage(gloss, ruleIds, hb = null) {
   const inline = (text, where) => settingsInline(text, where, null, ruleIds);
   const groups = gloss.sections.filter((sec) => sec.kind === 'terms');
   const total = groups.reduce((n, sec) => n + sec.terms.length, 0);
+  const termIds = new Map(groups.flatMap((sec) => sec.terms).map((t, k) => [t.term, `term-${k + 1}`]));
+  const mark = hb
+    ? (term) => {
+      const from = hb.entries.filter((e) => e.terms.includes(term));
+      const back = from.length ? `<span class="hb-back">白話手冊：${from.map((e) => `<button type="button" class="hb-link" data-jump="${e.id}">${esc(e.name)}</button>`).join('、')}</span>` : '';
+      return { id: ` id="${termIds.get(term)}" tabindex="-1"`, back };
+    }
+    : null;
   const blocks = gloss.sections.map((sec, i) => {
     const where = `GLOSSARY.md「${sec.title}」那一節`;
     const title = inline(sec.title, `${where}的標題`);
-    const body = glossaryBody(sec, where, inline);
+    const body = glossaryBody(sec, where, inline, mark);
     const count = sec.kind === 'terms' ? `<span class="sec-count">${sec.terms.length} 個</span>` : '';
     return { id: `gloss-${i + 1}`, sec, title, html: `<section class="block" id="gloss-${i + 1}" tabindex="-1">\n<h2>${title}${count}</h2>\n${body}\n</section>` };
   });
-  const jumps = blocks
+  const jumps = (hb ? '<button type="button" class="jump" data-jump="hb">白話手冊</button>' : '') + blocks
     .filter((b) => b.sec.kind === 'terms')
     .map((b) => {
       const label = b.title.replace(/<[^>]+>/gu, '').replace(/（.*$/u, '').trim();
@@ -1355,20 +1581,27 @@ function glossaryPage(gloss, ruleIds) {
 <header class="page-head">
 <p class="eyebrow">GLOSSARY.md 的名詞</p>
 <h1>${inline(gloss.title, 'GLOSSARY.md 的大標題')}</h1>
-<p class="page-sum">${total} 個名詞，分 ${groups.length} 類，照對照表的順序。寫到的條號，點了跳到那一條規矩。</p>
+<p class="page-sum">${hb ? `最上面是白話手冊（${hb.entries.length} 節，展開看原文與白話）；底下 ` : ''}${total} 個名詞，分 ${groups.length} 類，照對照表的順序。寫到的條號，點了跳到那一條規矩。</p>
 </header>
 <nav class="jumps" aria-label="跳到某一類">${jumps}</nav>
 <div class="gloss-body">
-${blocks.map((b) => b.html).join('\n')}
+${hb ? `${handbookBlock(hb, inline, termIds)}\n` : ''}${blocks.map((b) => b.html).join('\n')}
 </div>
-<p class="source-note">來源：GLOSSARY.md 整份，照原文的順序：大標題；「${GLOSSARY_LEGEND}」照規矩頁讀它的那一套讀（開頭一段＋條列）；其餘每一節，全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞。這一頁不照 GitHub 的畫法：只排灰底框、粗體、條列，條號（灰底框以外、原文裡前後不緊接半形英數字的 A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與名詞後面那個「：」（名詞與解釋分成兩欄）不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號，或緊接在網址後面的排版記號），以及規則資料裡沒有的條號，會讓整份停下不產生。</p>
+<p class="source-note">來源：GLOSSARY.md 整份，照原文的順序：大標題；「${GLOSSARY_LEGEND}」照規矩頁讀它的那一套讀（開頭一段＋條列）；其餘每一節，全是段落的照原文排成說明，每一項都是粗體的名詞接「：」與解釋的清單排成一類名詞。這一頁不照 GitHub 的畫法：只排灰底框、粗體、條列，條號（灰底框以外、原文裡前後不緊接半形英數字的 A〜K 加數字）排成點得到那一條規矩的連結；其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與名詞後面那個「：」（名詞與解釋分成兩欄）不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的寫法（例如會變成斜體、刪除線、HTML 的記號，或緊接在網址後面的排版記號），以及規則資料裡沒有的條號，會讓整份停下不產生。${hb ? HB_NOTE : ''}</p>
 </section>`;
-  return { html, terms: total, groups: groups.length };
+  return { html, terms: total, groups: groups.length, handbook: hb ? hb.entries.length : 0 };
 }
 
-/** GLOSSARY.md（原文）→ 名詞頁的 HTML 與數字；認不得的形狀、行內記號、不在規則資料裡的條號都在這裡停。 */
-function renderGlossary(md, ruleIds) {
-  return glossaryPage(parseGlossary(md), ruleIds);
+/**
+ * GLOSSARY.md（原文）→ 名詞頁的 HTML 與數字；認不得的形狀、行內記號、不在規則資料裡的條號都在這裡停。
+ * hb（整份產生時給：{ md：manual/handbook.md 的原文, rules：規則資料, labels：MACHINES.md 的標籤表 }）＝最上面加白話手冊，它的形狀或檢查（checkHandbook）不過也停；
+ * 不給就只排對照表。
+ */
+function renderGlossary(md, ruleIds, hb = null) {
+  const gloss = parseGlossary(md);
+  if (!hb) return glossaryPage(gloss, ruleIds);
+  const entries = checkHandbook(parseHandbook(hb.md), hb.rules, gloss);
+  return glossaryPage(gloss, ruleIds, { entries, roles: hb.rules.roles || [], labels: hb.labels });
 }
 
 const PLAIN_FILE = 'manual/plain.md';
@@ -1630,6 +1863,24 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 .rule-ref{color:var(--accent);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 /* 名詞、解釋、說明與版面約定照原文留空白：連續空白不合併（跟設定頁、案例頁同一條） */
 .gloss :is(dt,dd),.gloss-body .block :is(h2,p,li){white-space:pre-wrap}
+/* 名詞頁最上面的白話手冊：一節一個展開框；原文放引用框（主句、子點跟規矩頁同一套），手寫的字照原文留空白（跟白話說明同一條）；
+   跳過去時焦點落在展開框或名詞上（給鍵盤與報讀器），不畫框線，跟名詞頁各節一樣 */
+.hb-entry{border-bottom:1px solid var(--line);padding:10px 0;scroll-margin-top:16px}
+.hb-entry:focus,.gloss dt:focus{outline:none}
+.hb-entry summary{cursor:pointer;line-height:1.7}
+.hb-name{font-weight:700;margin-right:10px}
+.hb-line{color:var(--muted)}
+.hb-entry :is(summary,.hb-plain,.hb-analogy){white-space:pre-wrap}
+.hb-quote{margin:12px 0 0;padding:8px 14px;border-left:3px solid var(--line);background:var(--surface)}
+.hb-src,.hb-rule{margin:0}
+.hb-rule{font-weight:600}
+.hb-plain,.hb-analogy{margin:8px 0 0;max-width:62ch}
+.hb-tags,.hb-terms{margin:8px 0 0;font-size:15px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.hb-tag{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;margin-right:8px}
+.hb-tag-id{font-family:var(--display);font-weight:700;color:var(--ink)}
+.hb-back{display:block;margin-top:4px;font-size:14px;color:var(--muted)}
+.hb-link{border:0;background:none;padding:0;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-align:left}
+.gloss dt{scroll-margin-top:16px}
 @media (max-width:900px){
   .gloss{grid-template-columns:minmax(0,1fr)}
   .gloss dt{padding-bottom:0;border-bottom:0}
@@ -1644,7 +1895,7 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
   .side nav a{flex:0 0 auto;padding:6px 12px}
   .stamp{display:none}
   main{padding-block:24px 72px}
-  .rule,.rule-section,.mrow,.settings-body .block,.gloss-body .block{scroll-margin-top:120px}
+  .rule,.rule-section,.mrow,.settings-body .block,.gloss-body .block,.hb-entry,.gloss dt{scroll-margin-top:120px}
   .label-def{grid-template-columns:minmax(0,1fr)}
   table.case-index th,table.case-index td{padding:6px 8px}
   table.case-index td:first-child{font-size:13px}
@@ -1658,6 +1909,7 @@ table.case-index td:first-child{white-space:nowrap;font-variant-numeric:tabular-
 // 不靠「焦點回到原來那顆鈕」帶回去（有的瀏覽器點鈕不給焦點）；從一則案例跳到另一則時，記的仍是最早那一刻。
 // 網址指到頁裡的某個位置（例如 #rule-B1；網頁自己的連結只帶頁名，這種是手打或外面貼來的）：切到它所在的那一頁、捲到它；頁名、位置都不是＝總覽。
 // 名詞頁、白話說明與優缺點的條號是行內連結（<a>）：左鍵點（按著 Cmd 也一樣）、按 Enter 不照它的網址走，跟條號鈕一樣在原分頁切到規矩頁、捲到那一條；中鍵照瀏覽器的做法開新分頁，網址只帶到規矩頁。
+// 白話手冊的一節收在 <details> 裡：跳到它或它裡面的東西（跳節鈕、名詞那一頭回來的鈕、網址），先展開再捲——收著的框裡的東西捲不到。
 const JS = `
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1727,6 +1979,7 @@ const JS = `
     filters.forEach(function(f){ var on = f.getAttribute('data-filter') === kind; f.classList.toggle('is-on', on); f.setAttribute('aria-pressed', String(on)); });
   }
   function reveal(el){
+    var box = el.closest('details'); if (box) box.open = true;
     if (el.hidden || (el.closest('.rule-section') || el).hidden) setFilter('all');
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   }
@@ -1756,12 +2009,14 @@ const JS = `
 })();
 `;
 
+function readText(root, rel) {
+  const file = path.join(root, rel);
+  if (!fs.existsSync(file)) throw new Error(`讀不到 ${rel}：說明書不產生`);
+  return fs.readFileSync(file, 'utf8');
+}
+
 function readSources(root) {
-  const read = (rel) => {
-    const file = path.join(root, rel);
-    if (!fs.existsSync(file)) throw new Error(`讀不到 ${rel}：說明書不產生`);
-    return fs.readFileSync(file, 'utf8');
-  };
+  const read = (rel) => readText(root, rel);
   return {
     rules: JSON.parse(read('rules.json')),
     machines: read('MACHINES.md'),
@@ -1773,6 +2028,7 @@ function readSources(root) {
     readme: read('README.md'),
     cases: readCases(root),
     plain: read(PLAIN_FILE),
+    handbook: read(HANDBOOK_FILE),
   };
 }
 
@@ -1804,7 +2060,7 @@ function build(sources, { stamp } = {}) {
   const settings = renderSettings(settingsMarkdown(sources.settingsTemplate));
   const adoptSections = parseAdopt(sources.readme);
   const adopt = adoptPage(adoptSections);
-  const glossary = renderGlossary(sources.glossary, ruleIds);
+  const glossary = renderGlossary(sources.glossary, ruleIds, { md: sources.handbook, rules: sources.rules, labels });
   const casebook = parseCases(sources.cases, ruleIds);
   const cases = casesPage(casebook);
   const plain = parsePlain(sources.plain);
@@ -1852,6 +2108,7 @@ ${main}
     templatesLaidOut: popups.laidOut,
     adoptSections: adoptSections.length,
     glossaryTerms: glossary.terms,
+    handbookEntries: glossary.handbook,
     cases: casebook.cases.length,
     plainPages: plain.pages.size,
   };
@@ -1862,26 +2119,35 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--out') throw new Error('產生器不自己存檔：把輸出導到套件倉庫外的檔，例如 node manual/build.js > <倉庫外的檔>');
-    if (flag !== '--stamp') throw new Error(`不認得的參數：${flag}（只有 --stamp）`);
+    if (flag === '--handbook-codes') {
+      out.handbookCodes = true;
+      continue;
+    }
+    if (flag !== '--stamp') throw new Error(`不認得的參數：${flag}（只有 --stamp、--handbook-codes）`);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} 後面要接值`);
     out.stamp = value;
     i += 1;
   }
+  if (out.handbookCodes && out.stamp !== undefined) throw new Error('--handbook-codes 只印核對碼、不產生網頁，不跟 --stamp 一起用');
   return out;
 }
 
 if (require.main === module) {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const result = build(readSources(ROOT), { stamp: args.stamp });
-    process.stdout.write(result.html);
-    const c = result.counts;
-    process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；名詞 ${result.glossaryTerms} 個；案例 ${result.cases} 則；白話說明 ${result.plainPages} 頁）\n`);
+    if (args.handbookCodes) {
+      process.stdout.write(handbookCodeLines(readText(ROOT, HANDBOOK_FILE), JSON.parse(readText(ROOT, 'rules.json'))));
+    } else {
+      const result = build(readSources(ROOT), { stamp: args.stamp });
+      process.stdout.write(result.html);
+      const c = result.counts;
+      process.stderr.write(`產好說明書：${result.pages} 頁（規矩 ${c.total} 條：${KIND_TEXT.machine} ${c.machine}、${KIND_TEXT.mixed} ${c.mixed}、${KIND_TEXT.self} ${c.self}；機器表 ${result.machineRows} 列；工具 ${result.tools} 支；考題 ${result.tests} 支；範本 ${result.templates} 份、${result.templateItems} 則說明、跳窗排版 ${result.templatesLaidOut} 份；套用 ${result.adoptSections} 節；名詞 ${result.glossaryTerms} 個；白話手冊 ${result.handbookEntries} 節；案例 ${result.cases} 則；白話說明 ${result.plainPages} 頁）\n`);
+    }
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
 }
 
-module.exports = { parsePlain, withPlain, PLAIN_FILE, PLAIN_LISTS, build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS, parseGlossary, renderGlossary, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
+module.exports = { parsePlain, withPlain, PLAIN_FILE, PLAIN_LISTS, parseHandbook, checkHandbook, handbookCode, handbookCodeLines, HANDBOOK_FILE, build, readSources, readTools, readTests, readTemplates, firstSentence, parseTemplates, parseSettingsDoc, renderSettings, templateView, LayoutError, parseAdopt, renderAdopt, ADOPT_HEADINGS, readCases, parseCases, renderCases, CASE_FIELDS, parseGlossary, renderGlossary, settingsInline, tableCells, NON_RULE_KEYS, parseArgs, parseLabels, parseLegend, parseMachineRows, parseMachinesTitle, splitTag, mdInline, esc, PAGES, KIND_TEXT, MACHINE_FIELDS, ROOT };
