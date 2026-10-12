@@ -12,15 +12,21 @@
 // 案例頁（cases/ 每一則：索引表的順序、日期、標題、條號，跳窗的每一欄與行內記號、指到別則的連結，索引的說明與末尾小節）、
 // 名詞頁（GLOSSARY.md 每一節照原文的順序：版面約定、說明的每一段、每一類的每一個名詞與解釋，行內記號與點得到規矩的條號）；
 // 白話說明（manual/plain.md：每一頁開頭那一段、來源那一行補的那一句）與總覽頁（排第一、打開先看到它、優缺點每一項）；
+// 名詞頁最上面的白話手冊（manual/handbook.md：每一節的節名、一句話、每則原文照規則資料、白話、比方、把關標籤、見名詞與名詞那一頭回來的鈕；
+// 核對碼、必含的字、J3 那四個字、照抄原文或名詞解釋、見名詞找不到，各有一發真的停下）；
 // 讀來源那一步讀到的原文跟磁碟上的一模一樣；以及來源形狀不對時停下不產生。
 // 頁面內容的預期值由考題自己直接讀磁碟上的正本（disk）、自己解析（#26 r1 R1）；產生器 readSources() 讀到的只拿來餵產生器，⑫ 另外核它跟磁碟一模一樣。
-// 守不到的：網頁上的互動（切頁、跳窗開關、篩選、跳到某一條）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
+// 白話手冊的鈕點了落在哪（見名詞、名詞那一頭回來的鈕、網址跳過去：展開、捲過去、焦點落上去；跳節鈕只捲）由 ㉒ 的第二題在 node:vm 裡
+// 跑網頁最後那一段程式驗，DOM 是考題自己的替身（fakePage），不是瀏覽器。
+// 守不到的：其餘網頁上的互動（切頁、跳窗開關、篩選、跳到規矩頁某一條）沒有考題——這一支不開瀏覽器；更新網頁時另外用無畫面瀏覽器量一次。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { execFileSync, spawnSync } = require('node:child_process');
 const manual = require('./build.js');
 const rulesBook = require('../tools/build-rules.js');
@@ -66,6 +72,35 @@ function withoutPlain(html) {
   }
   return html.replace(BLOCK, '').split(`${PLAIN_NOTE}</p>`).join('</p>');
 }
+// 白話手冊（manual/handbook.md，手寫）：名詞頁來源那一行補的句子、跳節鈕、那一塊的外框寫死在這裡，不拿產生器的字當答案
+const HB_NOTE = '白話手冊那一塊出自 manual/handbook.md：節名、一句話、白話、比方、見名詞是手寫的；原文（主句與子點）與把關標籤照條號從規則資料 rules.json 抽，排法跟規矩頁一樣。引的規矩一改（核對碼對不上），整份停下不產生，要先回原文重看白話。';
+const HB_JUMP = '<button type="button" class="jump" data-jump="hb">白話手冊</button>';
+const HB_BLOCK = /<section class="block handbook" id="hb" tabindex="-1">\n[\s\S]*?\n<\/section>\n/u;
+// 名詞頁頁首那一句前面補的、講最上面是白話手冊的那一截（節數由 ㉒ 核）
+const HB_SUM = /<p class="page-sum">最上面是白話手冊（\d+ 節，展開看原文與白話）；底下 /gu;
+
+/**
+ * 拿掉名詞頁上白話手冊加的東西（那一塊、跳節鈕、頁首那一句前面補的那一截、來源那一行補的句子、名詞的錨點、解釋後面回到白話手冊的鈕）：
+ * ⑲ 只比對照表排出來的部分，白話手冊由 ㉒ 比。拿之前先核：那一塊、跳節鈕、頁首那一截、來源那一句各剛好一個，名詞的錨點從 term-1 起照順序連號。
+ */
+function withoutHandbook(html) {
+  assert.equal((html.match(new RegExp(HB_BLOCK.source, 'gu')) || []).length, 1, '白話手冊那一塊要剛好一個');
+  assert.equal(html.split(HB_JUMP).length - 1, 1, '白話手冊的跳節鈕要剛好一顆');
+  assert.equal((html.match(HB_SUM) || []).length, 1, '名詞頁頁首那一句前面要剛好補一截白話手冊');
+  assert.equal(html.split(HB_NOTE).length - 1, 1, '名詞頁來源那一行要剛好補一句白話手冊的來源');
+  const ids = [...html.matchAll(/<dt id="term-(\d+)" tabindex="-1">/gu)].map((m) => Number(m[1]));
+  assert.deepEqual(ids, ids.map((_, k) => k + 1), '名詞的錨點要從 term-1 起照順序連號');
+  return html
+    .replace(HB_BLOCK, '')
+    .split(HB_JUMP)
+    .join('')
+    .replace(HB_SUM, '<p class="page-sum">')
+    .split(HB_NOTE)
+    .join('')
+    .replace(/<dt id="term-\d+" tabindex="-1">/gu, '<dt>')
+    .replace(/<span class="hb-back">[^\n]*?<\/span>/gu, '');
+}
+
 /** 產生整份網頁，交出拿掉白話說明的那一份（給只比自動產生部分的考題用）。 */
 const bare = (src, opts) => {
   const built = manual.build(src, opts);
@@ -534,13 +569,14 @@ test('⑦ 網頁格式：<title> 在前 8KB、不自帶 doctype／html／body、
 
 test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不自己存檔（--out 退 1）；不認得的參數、缺值都退 1；來源壞掉退 1 且標準輸出什麼都不印', () => {
   const script = path.join(__dirname, 'build.js');
-  const run = (args, s = script) => spawnSync(process.execPath, [s, ...args], { encoding: 'utf8' });
+  // 網頁會超過 spawnSync 預設的 1 MiB 輸出上限（超過時子行程被砍掉、退出碼是 null），上限放寬
+  const run = (args, s = script) => spawnSync(process.execPath, [s, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const ok = run(['--stamp', '測試']);
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(ok.stdout, manual.build(sources(), { stamp: '測試' }).html, '標準輸出要剛好是整份網頁、沒有別的字');
   assert.match(ok.stderr, /產好說明書：10 頁/u);
   const laidOut = Object.values(JSON.parse(ok.stdout.match(/id="template-data">([\s\S]*?)<\/script>/u)[1])).filter((e) => e.html.includes('<div class="tpl-body">')).length;
-  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；名詞 ${ownGlossary(disk('GLOSSARY.md')).sections.reduce((n, s) => n + (s.terms ? s.terms.length : 0), 0)} 個；案例 ${ownCaseSources().files.length} 則；白話說明 ${ownPlain(disk('manual/plain.md')).filter((sec) => sec.paras.length).length} 頁）\n$`, 'u'));
+  assert.match(ok.stderr, new RegExp(`考題 ${ownTests().length} 支；範本 ${fs.readdirSync(path.join(manual.ROOT, 'templates')).length} 份、${ownTemplates(disk('MACHINES.md')).length} 則說明、跳窗排版 ${laidOut} 份；套用 ${ADOPT_HEADS.filter((h) => ownReadmeSection(disk('README.md'), h)).length} 節；名詞 ${ownGlossary(disk('GLOSSARY.md')).sections.reduce((n, s) => n + (s.terms ? s.terms.length : 0), 0)} 個；白話手冊 ${ownHandbook(disk('manual/handbook.md')).length} 節；案例 ${ownCaseSources().files.length} 則；白話說明 ${ownPlain(disk('manual/plain.md')).filter((sec) => sec.paras.length).length} 頁）\n$`, 'u'));
   const out = run(['--out', 'x.html']);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /產生器不自己存檔/u);
@@ -554,7 +590,7 @@ test('⑧ 命令列：網頁印到標準輸出、摘要印到標準錯誤；不�
   try {
     // 來源壞掉：在複本裡把版面約定拿掉再跑
     const kit = path.join(dir, 'kit');
-    for (const rel of ['manual/build.js', 'manual/plain.md', 'rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) {
+    for (const rel of ['manual/build.js', 'manual/plain.md', 'manual/handbook.md', 'rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md']) {
       fs.mkdirSync(path.dirname(path.join(kit, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(kit, rel));
     }
@@ -696,11 +732,12 @@ test('⑪ 規矩頁的「機器表」連結：每一條列出的列＝機器表�
   assert.equal(new Set(titles).size, titles.length, '兩列機器的跳窗標題一樣，分不出是哪一列');
 });
 
-test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md、案例簿、手寫的白話說明與優缺點）', () => {
+test('⑫ 讀來源那一步：readSources() 讀到的每一份原文都跟磁碟上的一模一樣（規則資料、MACHINES.md、GLOSSARY.md、工具、考題、範本的檔名與原文、空白設定範本、README.md、案例簿、手寫的白話說明與優缺點、手寫的白話手冊）', () => {
   const src = sources();
   const o = own();
-  assert.deepEqual(Object.keys(src).sort(), ['cases', 'glossary', 'machines', 'plain', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
+  assert.deepEqual(Object.keys(src).sort(), ['cases', 'glossary', 'handbook', 'machines', 'plain', 'readme', 'rules', 'settingsTemplate', 'templates', 'tests', 'tools'], 'readSources 多讀或少讀了一份來源：要連這一題一起改');
   assert.equal(src.plain, disk('manual/plain.md'), 'manual/plain.md 讀進來跟磁碟上的不一樣');
+  assert.equal(src.handbook, disk('manual/handbook.md'), 'manual/handbook.md 讀進來跟磁碟上的不一樣');
   const ownCases = ownCaseSources();
   assert.ok(ownCases.files.length >= 100, '考題自己列到的案例太少');
   assert.deepEqual(src.cases, ownCases, '案例簿（index.json、每一則的檔名、順序、原文）讀進來跟磁碟上的不一樣');
@@ -1248,7 +1285,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   assert.throws(() => manual.build({ ...src, settingsTemplate: '{}' }), /空白設定範本產生不出設定說明/u);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-settings-'));
   try {
-    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md']) {
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md', 'manual/handbook.md']) {
       fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
     }
@@ -2064,7 +2101,8 @@ function checkGlossaryPage(html, md, where) {
 test('⑲ 名詞頁：GLOSSARY.md 每一節照原文的順序排（版面約定照規矩頁的讀法；說明一段一段；一類名詞一節，每一個名詞與解釋照原文），寫到的條號點得到那一條規矩；整頁不多不少；認不得的形狀與不在規則資料裡的條號就停', () => {
   const src = sources();
   const built = bare(src);
-  const { html } = built;
+  // 白話手冊加的東西先拿掉（拿之前核剛好各一個），由 ㉒ 逐節比
+  const html = withoutHandbook(built.html);
   const ruleIds = own().rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
   const pageHtml = html.match(/<section class="page" id="page-glossary" data-page="glossary" hidden>[\s\S]*?<p class="source-note">來源：GLOSSARY\.md [^<]*<\/p>\n<\/section>/u)[0];
   const g = checkGlossaryPage(pageHtml, disk('GLOSSARY.md'), '名詞頁');
@@ -2324,7 +2362,7 @@ test('⑳ 白話說明：manual/plain.md 每一頁各一節（總覽也算一頁
   // 讀不到手寫檔就停
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-plain-'));
   try {
-    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md']) {
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md', 'manual/handbook.md']) {
       fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
       fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
     }
@@ -2375,5 +2413,566 @@ test('㉑ 總覽頁：排在最前面、打開網頁先看到它（只有它沒�
   assert.ok(rich.includes('<ul class="items"><li><strong>粗</strong> 與 <code>框</code> 與 <a href="#rules" class="rule-ref" data-goto="rule-B1">B1</a> 條號 &lt;一&gt; &amp; &quot;二&quot; 兩  格</li>'), '優缺點的行內排版（寫死的樣本）');
   for (const [name, text, why] of [['不存在的條號', '看 K99 這條', /條號 K99 不在規則資料裡/u], ['連結的寫法', '見 [連結](x)', /「\[」GitHub 可能當成連結/u], ['HTML', '見 <b>x</b>', /「<」後面緊接著半形字元/u], ['斜體', '見 _斜_', /「_」後面緊接著字/u]]) {
     assert.throws(() => manual.build({ ...sources(), plain: withPro(text) }), (err) => err instanceof manual.LayoutError && why.test(err.message), `優缺點「${name}」應該停下（LayoutError）、而且原因要對`);
+  }
+});
+
+// ── 白話手冊（㉒）：預期值由考題自己讀 manual/handbook.md、自己算核對碼；原文的主句與子點跟規矩頁那張卡比（① 已照規則資料逐條核過卡） ──
+
+/**
+ * 考題自己讀 manual/handbook.md（不用產生器的 parseHandbook／parseDoc）：「## 」開頭的行切成節，節裡「- 」開頭的行照開頭分——
+ * 一句話、原文（條號、核對碼、必含＝灰底框用「、」接）、白話（接在上一則原文）、比方、見名詞（灰底框用「、」接）。認不得的行＝考題自己的前提壞了。
+ */
+function ownHandbook(md) {
+  const list = (v) => v.slice(1, -1).split('`、`');
+  const secs = [];
+  for (const line of md.split('\n')) {
+    if (line.startsWith('## ')) {
+      secs.push({ name: line.slice(3), oneLine: '', quotes: [], analogy: '', terms: [] });
+      continue;
+    }
+    if (!line.startsWith('- ') || !secs.length) continue;
+    const s = secs[secs.length - 1];
+    const t = line.slice(2);
+    const q = t.match(/^原文 ([A-K][0-9]+)｜核對碼 ([0-9a-f]{8})：必含 (.+)$/u);
+    if (q) s.quotes.push({ id: q[1], code: q[2], must: list(q[3]), plain: '' });
+    else if (t.startsWith('一句話：')) s.oneLine = t.slice(4);
+    else if (t.startsWith('白話：')) s.quotes[s.quotes.length - 1].plain = t.slice(3);
+    else if (t.startsWith('比方：')) s.analogy = t.slice(3);
+    else if (t.startsWith('見名詞：')) s.terms = list(t.slice(4));
+    else assert.fail(`考題自己的讀法：「${t}」認不得——產生器應該已經停下`);
+  }
+  return secs;
+}
+/** 考題自己算核對碼（不用產生器的 handbookCode）：主句與子點用換行接，拿掉 ** 與反引號、連續空白併成一個、去頭尾，取 sha256 的前 8 個十六進位字。 */
+const ownFull = (rule) => [rule.text, ...(rule.items || []).map((i) => i.text)].join('\n').split('**').join('').split('`').join('').replace(/\s+/gu, ' ').trim();
+const ownCode = (rule) => crypto.createHash('sha256').update(ownFull(rule), 'utf8').digest('hex').slice(0, 8);
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+// 規矩 J3 子點列的四個字（寫死，不拿產生器的常數當答案）
+const HB_WORDS = ['一律', '固定', '直到', '只有'];
+
+test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最上面（展開框上是節名與一句話；每則原文照規則資料、跟規矩頁那張卡一樣，接它的白話；比方、每一條的把關標籤、見名詞），名詞那一頭有錨點與回來的鈕；核對碼、必含、J3 那四個字、照抄原文或名詞解釋、見名詞找不到、形狀不對、讀不到，都停', () => {
+  const src = sources();
+  const o = own();
+  const roles = o.rules.roles;
+  const labels = manual.parseLabels(src.machines);
+  const names = ownLabels(o.machines).map((l) => l.name);
+  const ruleIds = o.rules.sections.flatMap((s) => s.rules.map((r) => `${s.letter}${r.n}`));
+  const byId = new Map(o.rules.sections.flatMap((s) => s.rules.map((r) => [`${s.letter}${r.n}`, r])));
+  const md = disk('manual/handbook.md');
+  const secs = ownHandbook(md);
+  assert.ok(secs.length >= 10, '前提：考題自己讀到的白話手冊太少');
+
+  // 核對碼：寫死的樣本（換算法要連這一題一起改）；每一條規矩，產生器算的跟考題自己算的一樣；手冊上寫的碼＝現在的碼、必含的字都在原文裡
+  assert.equal(manual.handbookCode({ text: '甲  **擁有者**\n乙', items: [{ text: '`丙`' }] }), 'f3a56be6', '核對碼的算法變了（寫死的樣本：「甲 擁有者 乙 丙」的 sha256 前 8 個字）');
+  for (const [id, r] of byId) assert.equal(manual.handbookCode(r), ownCode(r), `${id} 的核對碼跟考題自己算的不一樣`);
+  for (const s of secs) {
+    assert.ok(s.oneLine && s.quotes.length, `前提：「${s.name}」有一句話與至少一則原文`);
+    for (const q of s.quotes) {
+      assert.ok(byId.has(q.id), `「${s.name}」引的 ${q.id} 不在規則資料裡`);
+      assert.equal(q.code, ownCode(byId.get(q.id)), `「${s.name}」引的 ${q.id}：手冊上的核對碼不是現在的`);
+      assert.ok(q.must.length, `「${s.name}」引的 ${q.id}：沒有必含的字`);
+      for (const w of q.must) assert.ok(ownFull(byId.get(q.id)).includes(w), `「${s.name}」引的 ${q.id}：必含的「${w}」不在原文裡`);
+    }
+    // 真的手冊照字面比；行內排版（粗體、灰底框、條號、要跳脫的字）由下面的對照組驗
+    for (const t of [s.name, s.oneLine, ...s.quotes.map((q) => q.plain), s.analogy].filter(Boolean)) assert.doesNotMatch(t, /[*`<>&"\\]|[A-K][0-9]/u, `前提：「${s.name}」手寫的字沒有行內記號、要跳脫的字或條號（有的話這一題的預期要跟著改）`);
+  }
+  assert.ok(secs.some((s) => [s.oneLine, ...s.quotes.map((q) => q.plain), s.analogy].some((t) => HB_WORDS.some((w) => t.includes(w)))), '前提：真的手冊裡有用到 J3 那四個字、那一節引的原文也有的（照收，才驗得到「原文有就照收」）');
+
+  // 頁面：每一節逐字比（考題自己排預期）；原文的主句與子點＝規矩頁那張卡上的（① 已核過卡），主句另外跟規則資料直接比
+  const built = manual.build(src);
+  const { html } = built;
+  assert.equal(built.handbookEntries, secs.length, '回傳的白話手冊節數');
+  const page = html.slice(html.indexOf('<section class="page" id="page-glossary"'), html.indexOf('<section class="page" id="page-cases"'));
+  const g = ownGlossary(disk('GLOSSARY.md'));
+  const terms = g.sections.filter((s) => s.terms).flatMap((s) => s.terms.map((t) => t.term));
+  const termId = (t) => `term-${terms.indexOf(t) + 1}`;
+  const chip = (n) => `<button type="button" class="chip chip-${n === '靠自覺' ? 'self' : 'machine'}" data-label="${escT(n)}">${escT(n)}</button>`;
+  const ref = (id) => `<a href="#rules" class="rule-ref" data-goto="rule-${id}">${id}</a>`;
+  const cardBody = (id) => {
+    const c = card(html, id);
+    const body = c.slice(c.indexOf('<p class="rule-text">') + '<p class="rule-text">'.length, c.indexOf('\n<p class="rule-tag">'));
+    assert.ok(body.startsWith(`${expectHtml(byId.get(id).text, roles)}</p>`), `${id}：卡上的主句不是規則資料（前提）`);
+    assert.equal((body.match(/<li>/gu) || []).length, (byId.get(id).items || []).length, `${id}：卡上的子點個數（前提）`);
+    return body;
+  };
+  const tagsOf = (id) => {
+    const want = [...new Set(ownTagNames(byId.get(id).tag, names))];
+    assert.deepEqual([...new Set(manual.splitTag(byId.get(id).tag, labels, roles).map((p) => p.name))], want, `${id}：把關標籤的名字跟考題自己切的不一樣`);
+    return `<span class="hb-tag"><span class="hb-tag-id">${id}</span>${want.map(chip).join('')}</span>`;
+  };
+  const want = secs.map((s, i) => {
+    const quotes = s.quotes.map((q) => `<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref(q.id)}</p><p class="hb-rule">${cardBody(q.id)}</blockquote>${q.plain ? `\n<p class="hb-plain"><span class="tag-lead">白話</span>${escT(q.plain)}</p>` : ''}`);
+    for (const t of s.terms) assert.ok(terms.includes(t), `「${s.name}」的見名詞「${t}」不在考題自己讀的 GLOSSARY.md 裡`);
+    const see = s.terms.length ? `\n<p class="hb-terms"><span class="tag-lead">見名詞</span>${s.terms.map((t) => `<button type="button" class="jump" data-goto="${termId(t)}">${escT(t)}</button>`).join('')}</p>` : '';
+    return `<details class="hb-entry" id="hb-${i + 1}" tabindex="-1">\n<summary><span class="hb-name">${escT(s.name)}</span><span class="hb-line">${escT(s.oneLine)}</span></summary>\n${quotes.join('\n')}${s.analogy ? `\n<p class="hb-analogy"><span class="tag-lead">比方</span>${escT(s.analogy)}</p>` : ''}\n<p class="hb-tags"><span class="tag-lead">把關</span>${s.quotes.map((q) => tagsOf(q.id)).join('')}</p>${see}\n</details>`;
+  });
+  const got = [...page.matchAll(/<details class="hb-entry" id="hb-\d+" tabindex="-1">[\s\S]*?<\/details>/gu)].map((m) => m[0]);
+  assert.deepEqual(got, want, '白話手冊逐節不對（節名、一句話、原文、白話、比方、把關、見名詞、順序）');
+  assert.ok(page.includes(`<div class="gloss-body">\n<section class="block handbook" id="hb" tabindex="-1">\n<h2>白話手冊<span class="sec-count">${secs.length} 節</span></h2>\n<p class="muted">白話不是規矩：跟原文有出入時，以原文為準。</p>\n${want.join('\n')}\n</section>\n<section class="block" id="gloss-1"`), '白話手冊那一塊排在名詞頁最上面（對照表之前），外框與開頭那一句不多不少');
+  assert.ok(page.includes(`<nav class="jumps" aria-label="跳到某一類">${HB_JUMP}<button`), '跳節鈕最前面那顆是白話手冊');
+  assert.ok(page.includes(`<p class="page-sum">最上面是白話手冊（${secs.length} 節，展開看原文與白話）；底下 ${terms.length} 個名詞，分 ${g.sections.filter((s) => s.terms).length} 類，照對照表的順序。寫到的條號，點了跳到那一條規矩。</p>`), '名詞頁頁首那一句先講最上面是白話手冊（節數），再講底下的名詞數與類數');
+  assert.ok(page.includes(`${HB_NOTE}${PLAIN_NOTE}</p>`), '名詞頁來源那一行補白話手冊的來源（白話說明那一句之前）');
+  for (const s of secs) for (const q of s.quotes) assert.ok(!html.includes(q.code), `核對碼不上網頁（${q.id} 的 ${q.code}）`);
+
+  // 名詞那一頭：每一個名詞一個錨點（照原文的順序從 term-1 起）；見名詞寫了它的那幾節，解釋後面各一顆回來的鈕（照節的順序）
+  const dts = [...page.matchAll(/<dt( id="term-\d+" tabindex="-1")?>([\s\S]*?)<\/dt><dd>([\s\S]*?)<\/dd>/gu)];
+  assert.equal(dts.length, terms.length, '前提：名詞頁的名詞數');
+  const backs = [];
+  dts.forEach(([, idAttr, dt, dd], k) => {
+    assert.equal(idAttr, ` id="term-${k + 1}" tabindex="-1"`, `第 ${k + 1} 個名詞要有錨點 term-${k + 1}（tabindex="-1"：跳過去時焦點落得上去）`);
+    assert.equal(strip(dt), escT(glossVisible(ownGlossInline(terms[k]))), `錨點 term-${k + 1} 不在「${terms[k]}」那一格`);
+    const from = secs.map((s, i) => [s, i]).filter(([s]) => s.terms.includes(terms[k]));
+    if (!from.length) {
+      assert.ok(!dd.includes('hb-back'), `「${terms[k]}」沒有一節的見名詞寫它，不該有回來的鈕`);
+      return;
+    }
+    const back = dd.match(/<span class="hb-back">[^\n]*?<\/span>$/u);
+    assert.equal(back && back[0], `<span class="hb-back">白話手冊：${from.map(([s, i]) => `<button type="button" class="hb-link" data-goto="hb-${i + 1}">${escT(s.name)}</button>`).join('、')}</span>`, `「${terms[k]}」解釋後面回到白話手冊的鈕不對`);
+    for (const m of back[0].matchAll(/data-goto="(hb-\d+)"/gu)) backs.push(`${m[1]}→term-${k + 1}`);
+  });
+  // 兩頭配對：每一節見名詞的鈕跳到的名詞，那個名詞也有鈕跳回這一節；反過來也一樣
+  const forth = [];
+  for (const m of page.matchAll(/<details class="hb-entry" id="(hb-\d+)" tabindex="-1">([\s\S]*?)<\/details>/gu)) for (const j of m[2].matchAll(/class="jump" data-goto="(term-\d+)"/gu)) forth.push(`${m[1]}→${j[1]}`);
+  assert.ok(forth.length >= 30, '前提：見名詞的鈕太少');
+  assert.deepEqual([...forth].sort(), [...backs].sort(), '見名詞的鈕與名詞那一頭回來的鈕要一對一');
+
+  // 樣式（點了落在哪由下一題在 node:vm 裡跑網頁那一段程式驗）
+  const css = html.match(/<style>([\s\S]*?)<\/style>/u)[1];
+  assert.match(css, /\n\.hb-entry :is\(summary,\.hb-plain,\.hb-analogy\)\{white-space:pre-wrap\}/u, '手寫的字照原文留空白（連續空白不合併，跟白話說明同一條）');
+  assert.match(css, /\n\.hb-entry\{[^}]*scroll-margin-top:16px[^}]*\}/u, '跳過去時展開框不貼頂');
+  assert.ok(css.includes('\n.hb-entry:focus,.gloss dt:focus{outline:none}\n.hb-entry:focus-visible,.gloss dt:focus-visible{outline:2px solid var(--accent);outline-offset:4px}\n'), '跳過去時焦點落在展開框或名詞上：滑鼠點的不畫框線（跟名詞頁各節一樣），鍵盤走到的照規矩頁那樣畫焦點框（Codex r2 前的對抗驗證）');
+  assert.match(css, /\n\.hb-quote\{[^}]*border-left:[^}]*\}/u, '原文放在引用框裡');
+  for (const sel of ['.hb-name', '.hb-line', '.hb-tags', '.hb-back', '.hb-link']) assert.ok(css.includes(`\n${sel}{`) || css.includes(`\n${sel},`), `少了 ${sel} 的樣式`);
+  // 不給白話手冊就只排對照表（名詞頁的考題 ⑲ 用的就是這一條路）
+  const plainGloss = manual.renderGlossary(disk('GLOSSARY.md'), ruleIds).html;
+  assert.ok(!plainGloss.includes('class="block handbook"') && !plainGloss.includes('id="term-') && !plainGloss.includes('hb-back') && !plainGloss.includes(HB_JUMP) && !plainGloss.includes('最上面是白話手冊'), '不給白話手冊時，名詞頁跟原本一樣');
+
+  // 命令列：--handbook-codes 照第一次出現的順序、不重複，一行印「條號 核對碼」；跟 --stamp 一起用就停
+  const script = path.join(__dirname, 'build.js');
+  const codes = spawnSync(process.execPath, [script, '--handbook-codes'], { encoding: 'utf8' });
+  assert.equal(codes.status, 0, codes.stderr);
+  assert.equal(codes.stdout, [...new Set(secs.flatMap((s) => s.quotes.map((q) => q.id)))].map((id) => `${id} ${ownCode(byId.get(id))}\n`).join(''), '--handbook-codes 印的不對');
+  assert.equal(codes.stderr, '');
+  const both = spawnSync(process.execPath, [script, '--handbook-codes', '--stamp', 'x'], { encoding: 'utf8' });
+  assert.equal(both.status, 1);
+  assert.equal(both.stdout, '');
+  assert.match(both.stderr, /不跟 --stamp 一起用/u);
+  assert.equal(manual.handbookCodeLines('# 白話手冊\n\n## 甲\n\n- 原文 B1：必含 `還沒送出也算`\n- 原文 B1｜核對碼 00000000：必含 `x`\n', o.rules), `B1 ${ownCode(byId.get('B1'))}\n`, '新加的一則還沒寫碼也印得出來、同一條只印一次');
+  assert.throws(() => manual.handbookCodeLines('- 原文 K99｜核對碼 00000000：必含 `x`\n', o.rules), /K99：條號不在規則資料裡（刪了或改號）/u);
+  const brokenRules = { ...o.rules, sections: [] };
+  assert.ok(rulesBook.validate(brokenRules).length, '前提：規則書產生器的資料契約挑得出這份的錯');
+  assert.throws(() => manual.handbookCodeLines(md, brokenRules), /規則資料不合資料契約，印不出核對碼/u, '--handbook-codes 先驗規則資料：不合資料契約就停，不印半套的碼');
+
+  // 對照組：節名要跳脫；一句話、白話、比方照名詞頁的行內排版（粗體、灰底框、條號、要跳脫的字、$&、連續空白）；沒有白話、比方的一節；兩節都見同一個名詞
+  const codeOf = (id) => ownCode(byId.get(id));
+  const render = (hbMd, rules = o.rules, glossary = disk('GLOSSARY.md')) => manual.renderGlossary(glossary, ruleIds, { md: hbMd, rules, labels });
+  const RICH = [
+    '# 白話手冊',
+    '',
+    '對照組的維護說明，一段。',
+    '',
+    '## 甲 <一> & "二"',
+    '',
+    '- 一句話：**粗體** 與 `灰底框` 與 B1 條號 <一> & "二" 與 $& 照字面',
+    `- 原文 B1｜核對碼 ${codeOf('B1')}：必含 \`還沒送出也算\``,
+    "- 白話：價錢 $& 與 $' 照字面，見 B2。",
+    `- 原文 B2｜核對碼 ${codeOf('B2')}：必含 \`不存在合法來源\`、\`拒絕並直接回報\``,
+    '- 比方：兩  格 **粗** `框`',
+    '- 見名詞：`「禁區」`、`「錢」`',
+    '',
+    '## 乙',
+    '',
+    '- 一句話：一則原文，沒有白話與比方。',
+    `- 原文 C2｜核對碼 ${codeOf('C2')}：必含 \`一個目的\``,
+    '- 見名詞：`「錢」`',
+  ].join('\n');
+  const rich = render(RICH);
+  assert.equal(rich.handbook, 2, '對照組：回傳的節數');
+  const r1 = rich.html.match(/<details class="hb-entry" id="hb-1" tabindex="-1">[\s\S]*?<\/details>/u)[0];
+  assert.ok(r1.startsWith('<details class="hb-entry" id="hb-1" tabindex="-1">\n<summary><span class="hb-name">甲 &lt;一&gt; &amp; &quot;二&quot;</span><span class="hb-line"><strong>粗體</strong> 與 <code>灰底框</code> 與 <a href="#rules" class="rule-ref" data-goto="rule-B1">B1</a> 條號 &lt;一&gt; &amp; &quot;二&quot; 與 $&amp; 照字面</span></summary>\n'), '對照組：節名要跳脫、一句話照名詞頁的行內排版（寫死的樣本）');
+  assert.ok(r1.includes(`</blockquote>\n<p class="hb-plain"><span class="tag-lead">白話</span>價錢 $&amp; 與 $' 照字面，見 ${ref('B2')}。</p>\n<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref('B2')}</p>`), '對照組：白話接在它那則原文後面，$&、$\' 照字面、條號點得到（寫死的樣本）');
+  assert.ok(r1.includes('\n<p class="hb-analogy"><span class="tag-lead">比方</span>兩  格 <strong>粗</strong> <code>框</code></p>\n<p class="hb-tags">'), '對照組：比方照排、連續空白照留（寫死的樣本）');
+  assert.equal(rich.html.match(/<details class="hb-entry" id="hb-2" tabindex="-1">[\s\S]*?<\/details>/u)[0], `<details class="hb-entry" id="hb-2" tabindex="-1">\n<summary><span class="hb-name">乙</span><span class="hb-line">一則原文，沒有白話與比方。</span></summary>\n<blockquote class="hb-quote"><p class="hb-src"><span class="tag-lead">原文</span>${ref('C2')}</p><p class="hb-rule">${cardBody('C2')}</blockquote>\n<p class="hb-tags"><span class="tag-lead">把關</span>${tagsOf('C2')}</p>\n<p class="hb-terms"><span class="tag-lead">見名詞</span><button type="button" class="jump" data-goto="${termId('「錢」')}">「錢」</button></p>\n</details>`, '對照組：沒有白話、比方的一節');
+  assert.ok(rich.html.includes(`<dt id="${termId('「錢」')}" tabindex="-1"><strong>「錢」</strong></dt>`) && rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-goto="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button>、<button type="button" class="hb-link" data-goto="hb-2">乙</button></span></dd>'), '對照組：兩節都見「錢」，回來的鈕兩顆、照節的順序、節名要跳脫（寫死的樣本）');
+  assert.ok(rich.html.includes('<span class="hb-back">白話手冊：<button type="button" class="hb-link" data-goto="hb-1">甲 &lt;一&gt; &amp; &quot;二&quot;</button></span></dd>'), '對照組：只有一節見「禁區」，回來的鈕一顆');
+
+  // 認不得的形狀就停（排版那一種例外、原因要對）：每一發只改第一節的一處
+  assert.doesNotThrow(() => render(md), '對照組：真的手冊照收');
+  const s0 = secs[0];
+  const [q0, q1] = s0.quotes;
+  assert.ok(q1 && q0.plain && q1.plain && s0.analogy && s0.terms.length && secs.length >= 2, '前提：第一節有兩則以上的原文（都有白話）、比方、見名詞');
+  const qLine = (q) => `- 原文 ${q.id}｜核對碼 ${q.code}：必含 ${q.must.map((w) => `\`${w}\``).join('、')}`;
+  const oneLine0 = `- 一句話：${s0.oneLine}`;
+  const plain0 = `- 白話：${q0.plain}`;
+  const analogy0 = `- 比方：${s0.analogy}`;
+  const terms0 = `- 見名詞：${s0.terms.map((t) => `\`${t}\``).join('、')}`;
+  const ed = (from, to) => {
+    assert.equal(md.split(from).length, 2, `「${from.slice(0, 30)}」在手冊裡要剛好一處（前提）`);
+    return md.split(from).join(to);
+  };
+  const name0 = reEsc(s0.name);
+  const layout = [
+    ['原文那一項沒有核對碼', ed(qLine(q0), qLine(q0).replace(/｜核對碼 [0-9a-f]{8}/u, '')), /原文那一項要寫成「原文 條號｜核對碼 八個十六進位字：必含/u],
+    ['核對碼只有七個字', ed(qLine(q0), qLine({ ...q0, code: q0.code.slice(0, 7) })), /原文那一項要寫成/u],
+    ['必含是空的', ed(qLine(q0), qLine(q0).replace(/：必含 .*$/u, '：必含')), /必含是空的，至少要寫一個/u],
+    ['必含沒有灰底框', ed(qLine(q0), qLine(q0).replace(/：必含 .*$/u, `：必含 ${q0.must[0]}`)), /必含要寫成灰底框、用「、」接/u],
+    ['必含寫了兩次', ed(qLine(q0), `${qLine(q0)}、\`${q0.must[0]}\``), /必含的「.+」寫了兩次/u],
+    ['同一節引同一條兩次', ed(qLine(q1), qLine(q0)), new RegExp(`「${name0}」那一節：同一節引了 ${q0.id} 兩次`, 'u')],
+    ['一句話在原文後面', ed(`${oneLine0}\n${qLine(q0)}`, `${qLine(q0)}\n${oneLine0}`), /第 1 項：「原文」放錯位置（順序是 一句話（剛好一則）→ 原文/u],
+    ['兩句一句話', ed(oneLine0, `${oneLine0}\n${oneLine0}`), /第 2 項：「一句話」放錯位置/u],
+    ['一則原文接兩則白話', ed(plain0, `${plain0}\n${plain0}`), /第 4 項：「白話」放錯位置/u],
+    ['比方在見名詞後面', ed(`${analogy0}\n${terms0}`, `${terms0}\n${analogy0}`), /「比方」放錯位置/u],
+    ['兩則比方', ed(analogy0, `${analogy0}\n${analogy0}`), /「比方」放錯位置/u],
+    ['兩則見名詞', ed(terms0, `${terms0}\n${terms0}`), /「見名詞」放錯位置/u],
+    ['一句話後直接白話', ed(oneLine0, `${oneLine0}\n- 白話：先寫的。`), /第 2 項：「白話」放錯位置/u],
+    ['必含開頭有空白', ed(qLine(q0), qLine({ ...q0, must: [` ${q0.must[0]}`, ...q0.must.slice(1)] })), new RegExp(`必含的「 ${reEsc(q0.must[0])}」頭尾有空白`, 'u')],
+    ['必含結尾有空白', ed(qLine(q0), qLine({ ...q0, must: [...q0.must.slice(0, -1), `${q0.must[q0.must.length - 1]} `] })), new RegExp(`必含的「${reEsc(q0.must[q0.must.length - 1])} 」頭尾有空白`, 'u')],
+    ['必含前面沒空一格', ed(qLine(q0), qLine(q0).replace('：必含 ', '：必含')), /原文那一項要寫成「原文 條號｜核對碼 八個十六進位字：必含/u],
+    ['必含只有粗體記號', ed(qLine(q0), `${qLine(q0)}、\`**\``), /必含的「\*\*」拿掉粗體記號後是空的/u],
+    ['認不得的開頭', ed(plain0, `- 註：${q0.plain}`), /開頭要是「一句話」「原文」「白話」「比方」「見名詞」其中一種/u],
+    ['白話是空的', ed(plain0, '- 白話：'), /「白話」後面是空的、或開頭是空白/u],
+    ['見名詞是空的', ed(terms0, '- 見名詞：'), /見名詞是空的/u],
+    ['見名詞沒有灰底框', ed(terms0, `- 見名詞：${s0.terms[0]}`), /見名詞要寫成灰底框/u],
+    ['子項', ed(plain0, `${plain0}\n  1. 子項`), /第 3 項底下有子項/u],
+    ['清單底下接縮排的續行', ed(plain0, `${plain0}\n  續寫的一行`), /清單後面直接接了別的東西/u],
+    ['清單後面又一段', ed(`${terms0}\n`, `${terms0}\n\n多寫的一段。\n`), new RegExp(`「${name0}」那一節要剛好是一串「- 」條列`, 'u')],
+    ['開頭多一段', ed(`\n\n## ${s0.name}\n`, `\n\n多寫的一段。\n\n## ${s0.name}\n`), /大標題底下、第一節之前要剛好一段/u],
+    ['開頭沒有那一段', md.replace(/^(# [^\n]*\n\n)[^\n]*\n\n/u, '$1'), /大標題底下、第一節之前要剛好一段/u],
+    ['有 tab', ed(oneLine0, oneLine0.replace('：', '：\t')), /tab、控制字元或 U\+2028／U\+2029/u],
+    ['有控制字元', ed(oneLine0, `${oneLine0}${String.fromCharCode(1)}`), /tab、控制字元或 U\+2028／U\+2029/u],
+    ['有 \\r', ed(oneLine0, `${oneLine0}\r`), /tab、控制字元或 U\+2028／U\+2029/u],
+    ['有 U+2028', ed(oneLine0, `${oneLine0}${String.fromCharCode(0x2028)}`), /tab、控制字元或 U\+2028／U\+2029/u],
+    // 看不見的字元：每一個都夾進一句話裡試一次（網頁上看不出來，會把 J3 那四個字或照抄的一段拆開）。格式字元整類（\p{Cf}）都停：前八個是原本那份短名單上的，
+    // 後面是名單外的格式字元（阿拉伯字母記號、蒙古文母音分隔符、方向嵌入與隔離、隱形運算子、行間註記，與 BMP 以外的 Kaithi 數字記號、樂譜連桿、標籤字元）；
+    // 最後五個不是格式字元、一樣看不見的填充字（組合字形連接符、韓文填充字）。開頭的 BOM、開頭那一段裡的也算
+    ...[0xad, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0xfeff, 0x61c, 0x180e, 0x202a, 0x202e, 0x2061, 0x2066, 0x2069, 0x206f, 0xfff9, 0x110bd, 0x1d173, 0xe0001, 0xe0041, 0x34f, 0x115f, 0x1160, 0x3164, 0xffa0].map((c) => {
+      const hex = c.toString(16).toUpperCase().padStart(4, '0');
+      return [`有 U+${hex}`, ed(oneLine0, oneLine0.replace('：', `：${String.fromCodePoint(c)}`)), new RegExp(`第 ${md.split('\n').indexOf(oneLine0) + 1} 行有看不見的格式字元 U\\+${hex}`, 'u')];
+    }),
+    ['開頭有 BOM', `${String.fromCharCode(0xfeff)}${md}`, /第 1 行有看不見的格式字元 U\+FEFF/u],
+    ['開頭那一段有 U+2066', md.replace(/^(# 白話手冊\n\n)/u, `$1${String.fromCodePoint(0x2066)}`), /第 3 行有看不見的格式字元 U\+2066/u],
+    ['大標題不是白話手冊', md.replace(/^# 白話手冊\n/u, '# 白話手冊草稿\n'), /大標題要剛好是「白話手冊」（現在是「白話手冊草稿」）/u],
+    ['節名重複', `${md}\n## ${s0.name}\n\n${oneLine0}\n${qLine(q0)}\n`, new RegExp(`「${name0}」那一節出現兩次`, 'u')],
+    ['節名有排版記號', `${md}\n## 有 \`框\` 的節\n\n${oneLine0}\n${qLine(q0)}\n`, /節名裡有排版記號/u],
+    ['只有一句話的一節', `${md}\n## 空的一節\n\n${oneLine0}\n`, /「空的一節」那一節：至少要有「一句話」與一則「原文」/u],
+    ['一節裡是段落', `${md}\n## 空的一節\n\n一段話。\n`, /「空的一節」那一節要剛好是一串「- 」條列/u],
+  ];
+  for (const [name, text, why] of layout) {
+    assert.notEqual(text, md, `「${name}」這一發沒有改到來源`);
+    assert.throws(() => render(text), (err) => err instanceof manual.LayoutError && why.test(err.message), `「${name}」應該停下（LayoutError）、而且原因要對`);
+  }
+
+  // 規矩與名詞對不上就停（不是排版那一種例外）：每一道各一發真的停下
+  const withRule = (id, patch, base = o.rules) => ({ ...base, sections: base.sections.map((sec) => ({ ...sec, rules: sec.rules.map((r) => (`${sec.letter}${r.n}` === id ? { ...r, ...patch } : r)) })) });
+  const r0 = byId.get(q0.id);
+  const changed = withRule(q0.id, { text: `${r0.text}（多一句）` });
+  const newCode = ownCode({ ...r0, text: `${r0.text}（多一句）` });
+  assert.notEqual(newCode, q0.code, '前提：改了一句，核對碼就變');
+  const staleLines = secs.flatMap((s) => s.quotes.filter((q) => q.id === q0.id).map(() => `${q0.id}（「${s.name}」那一節）：新核對碼 ${newCode}`));
+  // 兩條一起改（第一節的第一則、最後一節的第一則）：每一處都要列、照節的順序，不能只列第一處
+  const sLast = secs[secs.length - 1];
+  const idB = sLast.quotes[0].id;
+  const rB = byId.get(idB);
+  assert.notEqual(idB, q0.id, '前提：第一節與最後一節的第一則引的不是同一條');
+  const twoCodes = new Map([[q0.id, newCode], [idB, ownCode({ ...rB, text: `${rB.text}（多一句）` })]]);
+  const twoLines = secs.flatMap((s) => s.quotes.filter((q) => twoCodes.has(q.id)).map((q) => `${q.id}（「${s.name}」那一節）：新核對碼 ${twoCodes.get(q.id)}`));
+  assert.ok(twoLines.length >= 2 && twoLines[0].startsWith(`${q0.id}（`) && twoLines[twoLines.length - 1].startsWith(`${idB}（「${sLast.name}」`), '前提：兩條分在頭尾兩節');
+  const lastMust = q0.must[q0.must.length - 1];
+  assert.ok(!ownFull(r0).includes(`${lastMust}嗎`), '前提：改過的必含字不在原文裡');
+  const glossText = disk('GLOSSARY.md');
+  assert.equal(glossText.split(`- **${s0.terms[0]}**：`).length, 2, '前提：第一節見的第一個名詞在 GLOSSARY.md 剛好一處');
+  const content = [
+    { name: '條號不在規則資料裡', md: ed(qLine(q0), qLine({ ...q0, id: 'K99' })), why: new RegExp(`「${name0}」那一節引的 K99：條號不在規則資料裡（刪了或改號）：這一節要照現行規矩重寫`, 'u') },
+    { name: '規矩改了（核對碼對不上）：列出條號、節名、新核對碼', rules: changed, why: new RegExp(`引的規矩改過了（核對碼對不上），說明書不產生：\\n- ${reEsc(staleLines.join('\n- '))}\\n逐節回原文重看白話（J3）`, 'u') },
+    { name: '兩條規矩一起改：每一處都列、照節的順序', rules: withRule(idB, { text: `${rB.text}（多一句）` }, changed), why: new RegExp(`說明書不產生：\\n- ${reEsc(twoLines.join('\n- '))}\\n逐節回原文重看白話（J3）`, 'u') },
+    { name: '手冊上的核對碼打錯', md: ed(qLine(q0), qLine({ ...q0, code: q0.code === '00000000' ? '11111111' : '00000000' })), why: new RegExp(`\\n- ${q0.id}（「${name0}」那一節）：新核對碼 ${q0.code}\\n`, 'u') },
+    { name: '必含的字不在原文裡', md: ed(qLine(q0), qLine({ ...q0, must: [...q0.must.slice(0, -1), `${lastMust}嗎`] })), why: new RegExp(`「${name0}」那一節引的 ${q0.id}：必含的「${reEsc(lastMust)}嗎」不在原文裡`, 'u') },
+    { name: '見名詞的名詞在 GLOSSARY.md 改名了', glossary: glossText.split(`- **${s0.terms[0]}**：`).join(`- **${s0.terms[0]}改**：`), why: new RegExp(`「${name0}」那一節的見名詞「${reEsc(s0.terms[0])}」不在 GLOSSARY\\.md 的名詞裡（改名或刪了）`, 'u') },
+  ];
+  // J3：四個字輪流加進一句話、白話、比方，那一節引的原文都沒有那個字（一句話、比方對照這一節引的每一則；白話只對照它接著的那一則）
+  const noWord = (w) => secs.find((x) => !x.quotes.some((q) => ownFull(byId.get(q.id)).includes(w)) && x.quotes[0].plain && x.analogy);
+  HB_WORDS.forEach((w, k) => {
+    const s = noWord(w);
+    assert.ok(s, `前提：有一節引的原文都沒有「${w}」`);
+    const all = `這一節引的原文（${s.quotes.map((q) => q.id).join('、')}）都沒有`;
+    const [field, line, whose] = [['一句話', `- 一句話：${s.oneLine}`, all], [` ${s.quotes[0].id} 的白話`, `- 白話：${s.quotes[0].plain}`, `這一條（${s.quotes[0].id}）的原文沒有`], ['比方', `- 比方：${s.analogy}`, all]][k % 3];
+    content.push({ name: `J3：${field.trim()}裡有「${w}」`, md: ed(line, line.replace('：', `：${w}`)), why: new RegExp(`「${reEsc(s.name)}」那一節的${reEsc(field)}有「${w}」，${reEsc(whose)}：白話不能比原文說得死（J3）`, 'u') });
+  });
+  // J3 先拿掉粗體記號再比：「固**定**」也是「固定」
+  const sBold = noWord('固定');
+  content.push({ name: 'J3：粗體記號把「固定」拆開也算', md: ed(`- 一句話：${sBold.oneLine}`, `- 一句話：固**定**${sBold.oneLine}`), why: new RegExp(`「${reEsc(sBold.name)}」那一節的一句話有「固定」，這一節引的原文（${sBold.quotes.map((q) => q.id).join('、')}）都沒有`, 'u') });
+  // J3 的白話只對照它接著的那一則：同一節別則原文有那個字也不算（每個字各找第一處；「只有」現在是「誰做什麼」那一節：A1 有、A3 沒有）
+  for (const w of HB_WORDS) {
+    const hit = secs.flatMap((s) => s.quotes.filter((q) => q.plain && !ownFull(byId.get(q.id)).includes(w) && s.quotes.some((x) => ownFull(byId.get(x.id)).includes(w))).map((q) => ({ s, q })))[0];
+    assert.ok(hit, `前提：有一節別則原文有「${w}」、某一則有白話的原文沒有`);
+    const line = `- 白話：${hit.q.plain}`;
+    content.push({ name: `J3：${hit.q.id} 的白話裡有「${w}」（同一節別則原文有）`, md: ed(line, line.replace('：', `：${w}`)), why: new RegExp(`「${reEsc(hit.s.name)}」那一節的 ${hit.q.id} 的白話有「${w}」，這一條（${hit.q.id}）的原文沒有：白話不能比原文說得死（J3）`, 'u') });
+  }
+  // J3 也看節名（展開框上、名詞那一頭回來的鈕上的字；跟一句話一樣對照這一節引的每一則）
+  const sName = noWord('一律');
+  content.push({ name: 'J3：節名裡有「一律」', md: ed(`\n## ${sName.name}\n`, `\n## 一律${sName.name}\n`), why: new RegExp(`「一律${reEsc(sName.name)}」那一節的節名有「一律」，這一節引的原文（${sName.quotes.map((q) => q.id).join('、')}）都沒有：白話不能比原文說得死（J3）`, 'u') });
+  // J3 兩邊都拿掉空白再比：兩個字中間夾半形空白、全形空白、不斷行空白也算那個字（網頁上看得到那格空白，讀起來還是那個字）
+  for (const [field, w, split] of [['一句話', '一律', '一 律'], ['比方', '固定', `固${String.fromCharCode(0x3000)}定`], ['白話', '直到', `直${String.fromCharCode(0xa0)}到`]]) {
+    const s = noWord(w);
+    const [line, what, whose] = field === '白話'
+      ? [`- 白話：${s.quotes[0].plain}`, ` ${s.quotes[0].id} 的白話`, `這一條（${s.quotes[0].id}）的原文沒有`]
+      : [field === '一句話' ? `- 一句話：${s.oneLine}` : `- 比方：${s.analogy}`, field, `這一節引的原文（${s.quotes.map((q) => q.id).join('、')}）都沒有`];
+    content.push({ name: `J3：${field}裡的「${w}」中間夾了空白`, md: ed(line, line.replace('：', `：${split}`)), why: new RegExp(`「${reEsc(s.name)}」那一節的${reEsc(what)}有「${w}」，${reEsc(whose)}：白話不能比原文說得死（J3）`, 'u') });
+  }
+  // 照抄：從規矩原文、名詞解釋各挑一段 22 個字（沒有排版記號、條號、J3 那四個字），放進白話、比方
+  const rulesAll = [...byId.values()].map(ownFull).join('\n');
+  const windows = (p) => Array.from({ length: Array.from(p).length - 19 }, (_, i) => Array.from(p).slice(i, i + 20).join(''));
+  const usable = (p) => !/[*`<>&"\\_~[\]]|[A-K][0-9]/u.test(p) && !HB_WORDS.some((w) => p.includes(w)) && !/^\s|\s$/u.test(p);
+  const pick = (texts, ok) => {
+    for (const t of texts) {
+      const a = Array.from(t);
+      for (let i = 0; i + 22 <= a.length; i += 1) {
+        const p = a.slice(i, i + 22).join('');
+        if (usable(p) && ok(p)) return p;
+      }
+    }
+    return null;
+  };
+  const fromRule = pick([...byId.values()].map(ownFull), () => true);
+  const defs = g.sections.filter((s) => s.terms).flatMap((s) => s.terms.map((t) => t.def.split('**').join('').split('`').join('').replace(/\s+/gu, ' ').trim()));
+  const fromTerm = pick(defs, (p) => !windows(p).some((x) => rulesAll.includes(x)));
+  assert.ok(fromRule && fromTerm, '前提：找得到可以照抄的一段');
+  // 照抄的邊界：某條原文的最後 20 個字接在比方的最尾巴＝兩頭的最後一段都要比到（原文那頭、手寫那頭各差一就漏）。
+  // 挑只在那一條出現一次、名詞解釋裡沒有的，接上去也不會多出 J3 那四個字
+  const tail = [...byId]
+    .map(([id, r]) => [id, Array.from(ownFull(r)).slice(-20).join('')])
+    .find(([, t]) => usable(t) && rulesAll.split(t).length === 2 && !defs.join('\n').includes(t) && HB_WORDS.every((w) => s0.analogy.includes(w) || !`${s0.analogy}${t}`.includes(w)));
+  assert.ok(tail, '前提：找得到一條原文的最後 20 個字可以接在比方後面');
+  content.push(
+    { name: '白話照抄規矩原文', md: ed(plain0, `- 白話：${fromRule}`), why: new RegExp(`「${name0}」那一節的 ${q0.id} 的白話跟[A-K][0-9]+ 的原文連著 20 個字一樣`, 'u') },
+    { name: '比方照抄名詞解釋', md: ed(analogy0, `- 比方：${fromTerm}`), why: new RegExp(`「${name0}」那一節的比方跟名詞「.+」的解釋連著 20 個字一樣`, 'u') },
+    { name: '比方結尾照抄某條原文的最後 20 個字', md: ed(analogy0, `${analogy0}${tail[1]}`), why: new RegExp(`「${name0}」那一節的比方跟${tail[0]} 的原文連著 20 個字一樣（「${reEsc(tail[1])}」）`, 'u') },
+  );
+  // 節名也算手寫的字：照抄 20 個字也停
+  content.push({ name: '節名照抄規矩原文', md: ed(`\n## ${s0.name}\n`, `\n## ${fromRule}\n`), why: new RegExp(`「${reEsc(fromRule)}」那一節的節名跟[A-K][0-9]+ 的原文連著 20 個字一樣`, 'u') });
+  // 整段照抄：比 20 個字短的整條原文、整則名詞解釋（拿掉空白後 8 個字以上）整段出現在手寫的字裡就停，兩邊都拿掉空白再比
+  const flatOf = (t) => t.split('**').join('').split('`').join('').replace(/\s/gu, '');
+  const shortLen = (t) => Array.from(t).length >= 8 && Array.from(t).length < 20 && usable(t);
+  const shortRule = [...byId].map(([id, r]) => [id, flatOf(ownFull(r))]).find(([, t]) => shortLen(t));
+  const shortDef = g.sections.filter((s) => s.terms).flatMap((s) => s.terms).map((t) => [t.term, flatOf(t.def), t.def]).find(([, t, raw]) => shortLen(t) && /\S\s+\S/u.test(raw));
+  assert.ok(shortRule && shortDef, '前提：找得到一條拿掉空白後不到 20 個字的原文，與一則中間有空白、拿掉空白後不到 20 個字的名詞解釋');
+  const wholeWhy = (where, what, from, t) => new RegExp(`「${reEsc(where)}」那一節的${reEsc(what)}跟${reEsc(from)}整段一樣（「${reEsc(t)}」）：原文由產生器照條號抽、不手打`, 'u');
+  content.push(
+    { name: '白話整段照抄一條不到 20 個字的原文', md: ed(plain0, `${plain0}${shortRule[1]}`), why: wholeWhy(s0.name, ` ${q0.id} 的白話`, `${shortRule[0]} 的原文`, shortRule[1]) },
+    { name: '一句話整段照抄原文、每個字中間夾空白', md: ed(oneLine0, `${oneLine0}${Array.from(shortRule[1]).join(' ')}`), why: wholeWhy(s0.name, '一句話', `${shortRule[0]} 的原文`, shortRule[1]) },
+    { name: '比方整段照抄名詞解釋（解釋裡有空白、照抄的沒有）', md: ed(analogy0, `${analogy0}${shortDef[1]}`), why: wholeWhy(s0.name, '比方', `名詞「${shortDef[0]}」的解釋`, shortDef[1]) },
+    { name: '節名整段照抄一條原文', md: ed(`\n## ${s0.name}\n`, `\n## ${shortRule[1]}\n`), why: wholeWhy(shortRule[1], '節名', `${shortRule[0]} 的原文`, shortRule[1]) },
+  );
+  // 整段的下限是 8 個字：對照表加兩個考題用的名詞，解釋 8 個字的整段照抄就停（下面的對照組：7 個字的照收）
+  const termAt = `- **${s0.terms[0]}**：`;
+  const gloss78 = glossText.split(termAt).join(`- **考題七字**：甲乙丙丁戊己庚\n- **考題八字**：子丑寅卯辰巳午未\n${termAt}`);
+  content.push({ name: '白話整段照抄 8 個字的名詞解釋', md: ed(plain0, `${plain0}子丑寅卯辰巳午未`), glossary: gloss78, why: wholeWhy(s0.name, ` ${q0.id} 的白話`, '名詞「考題八字」的解釋', '子丑寅卯辰巳午未') });
+  for (const c of content) {
+    assert.ok((c.md && c.md !== md) || c.rules || (c.glossary && c.glossary !== glossText), `「${c.name}」這一發沒有改到來源`);
+    assert.throws(() => render(c.md || md, c.rules || o.rules, c.glossary || glossText), (err) => !(err instanceof manual.LayoutError) && c.why.test(err.message), `「${c.name}」應該停下、而且原因要對`);
+  }
+  // 對照組：連著 19 個字一樣照收；規矩只動空白與粗體記號，核對碼不變、照收
+  assert.doesNotThrow(() => render(ed(plain0, `- 白話：${Array.from(fromRule).slice(0, 19).join('')}喔`)), '對照組：連著 19 個字一樣照收');
+  assert.doesNotThrow(() => render(ed(plain0, `${plain0}甲乙丙丁戊己庚`), o.rules, gloss78), '對照組：名詞解釋整段只有 7 個字，照抄照收（整段的下限是 8 個字）');
+  // 對照組：原文裡那兩個字中間有空白（「一 律」），白話寫「一律」照收——J3 兩邊都拿掉空白再比
+  const sSp = noWord('一律');
+  const qSp = sSp.quotes[0];
+  const rSp = byId.get(qSp.id);
+  const spText = `${rSp.text}（一 律）`;
+  const spPlain = `- 白話：${qSp.plain}`;
+  assert.equal(md.split(spPlain).length, 2, '前提：那一則白話在手冊裡剛好一處');
+  const spMd = md.split(`- 原文 ${qSp.id}｜核對碼 ${qSp.code}：`).join(`- 原文 ${qSp.id}｜核對碼 ${ownCode({ ...rSp, text: spText })}：`).split(spPlain).join(spPlain.replace('：', '：一律'));
+  assert.doesNotThrow(() => render(spMd, withRule(qSp.id, { text: spText })), '對照組：原文裡「一 律」中間有空白，白話寫「一律」照收');
+  const loose = { ...r0, text: ` ${r0.text.replace(/ /gu, '  ')} `, items: (r0.items || []).map((i) => ({ ...i, text: i.text.split('**').join('').replace(/ /gu, '\n') })) };
+  assert.equal(manual.handbookCode(loose), q0.code, '只動空白、粗體記號，核對碼不變');
+  assert.doesNotThrow(() => render(md, withRule(q0.id, loose)), '對照組：規矩只動空白與粗體記號照收');
+  // 整份產生時也停
+  assert.throws(() => manual.build({ ...src, handbook: ed(qLine(q0), qLine({ ...q0, id: 'K99' })) }), /K99：條號不在規則資料裡（刪了或改號）/u, '整份產生時條號不在也停');
+  assert.throws(() => manual.build({ ...src, rules: changed }), new RegExp(`新核對碼 ${newCode}`, 'u'), '整份產生時規矩改了也停');
+  // 讀不到手冊就停
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-handbook-'));
+  try {
+    for (const rel of ['rules.json', 'MACHINES.md', 'GLOSSARY.md', 'README.md', 'manual/plain.md', 'manual/handbook.md']) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.copyFileSync(path.join(manual.ROOT, rel), path.join(dir, rel));
+    }
+    for (const d of ['tools', 'tests', 'templates', 'cases']) fs.cpSync(path.join(manual.ROOT, d), path.join(dir, d), { recursive: true });
+    assert.doesNotThrow(() => manual.readSources(dir), '對照組：複本本身要讀得到');
+    fs.rmSync(path.join(dir, 'manual', 'handbook.md'));
+    assert.throws(() => manual.readSources(dir), /讀不到 manual\/handbook\.md：說明書不產生/u);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 考題自己的 DOM 替身（不是瀏覽器，不加套件）：把產生的整份網頁照標籤切成一棵樹（<script>、<style> 裡的字整段當內文、不往裡切；
+ * 標籤對不上就丟），在新的 node:vm 環境裡跑網頁最後那一段 <script>，跟用網址 hash 打開網頁一樣。每個元素只有那一段程式用得到的東西：
+ * 屬性、hidden、classList、closest／querySelector(All)（只認 tag、.class、[屬性]、[屬性="值"] 單一個；認不得就丟，免得替身默默答錯）、
+ * textContent；展開框打開、scrollIntoView、focus、window.scrollTo 照發生的順序記進 log（帶選項的寫成 JSON，跨 vm 也比得了）。
+ * click(el)＝先把焦點放在被點的鈕上（跟按下去一樣），再交給網頁登記的點擊處理。
+ */
+function fakePage(html, hash) {
+  const log = [];
+  const ids = new Map();
+  const listeners = { document: {}, window: {} };
+  const on = (bag) => (type, fn) => (bag[type] = bag[type] || []).push(fn);
+  const note = (what, el, opt) => log.push(opt === undefined ? `${what}:${el.id}` : `${what}:${el.id} ${JSON.stringify(opt)}`);
+  const classes = (el) => (el.attrs.class || '').split(/\s+/u).filter(Boolean);
+  const matches = (el, sel) => {
+    let m;
+    if ((m = sel.match(/^\[([a-z-]+)\]$/u))) return m[1] in el.attrs;
+    if ((m = sel.match(/^\[([a-z-]+)="([^"]*)"\]$/u))) return el.attrs[m[1]] === m[2];
+    if ((m = sel.match(/^\.([a-z][a-z0-9-]*)$/u))) return classes(el).includes(m[1]);
+    if (/^[a-z][a-z0-9]*$/u.test(sel)) return el.tag === sel;
+    throw new Error(`DOM 替身認不得的選擇器「${sel}」：網頁那一段程式改了，替身要跟著補`);
+  };
+  const below = (el) => el.children.flatMap((c) => [c, ...below(c)]);
+  const document = { activeElement: null, addEventListener: on(listeners.document) };
+  const make = (tag, attrs, parent) => {
+    const el = {
+      tag,
+      attrs,
+      parent,
+      children: [],
+      id: attrs.id || '',
+      hidden: 'hidden' in attrs,
+      getAttribute: (k) => (k in el.attrs ? el.attrs[k] : null),
+      setAttribute: (k, v) => { el.attrs[k] = String(v); },
+      removeAttribute: (k) => { delete el.attrs[k]; },
+      classList: {
+        add: (c) => { el.attrs.class = [...new Set([...classes(el), c])].join(' '); },
+        remove: (c) => { el.attrs.class = classes(el).filter((x) => x !== c).join(' '); },
+        toggle: (c, on) => (((on === undefined ? !classes(el).includes(c) : on) ? el.classList.add(c) : el.classList.remove(c)), classes(el).includes(c)),
+        contains: (c) => classes(el).includes(c),
+      },
+      closest: (sel) => { for (let x = el; x && x.tag !== '#root'; x = x.parent) if (matches(x, sel)) return x; return null; },
+      querySelector: (sel) => below(el).find((x) => matches(x, sel)) || null,
+      querySelectorAll: (sel) => below(el).filter((x) => matches(x, sel)),
+      get textContent() { const inner = html.slice(el.start, el.end); return el.raw ? inner : unescT(strip(inner)); },
+      scrollIntoView: (opt) => note('scroll', el, opt),
+      focus: (opt) => { note('focus', el, opt); document.activeElement = el; },
+    };
+    if (tag === 'details') {
+      let open = 'open' in attrs;
+      Object.defineProperty(el, 'open', { get: () => open, set: (v) => { if (v && !open) note('open', el); open = Boolean(v); } });
+    }
+    return el;
+  };
+  const root = make('#root', {}, null);
+  let cur = root;
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)>/gu;
+  for (let m = tagRe.exec(html); m; m = tagRe.exec(html)) {
+    const tag = m[2].toLowerCase();
+    if (m[1]) {
+      if (cur.tag !== tag) throw new Error(`DOM 替身讀網頁：第 ${m.index} 個字的 </${tag}> 對不到 <${cur.tag}>`);
+      cur.end = m.index;
+      cur = cur.parent;
+      continue;
+    }
+    const attrs = {};
+    for (const a of m[3].matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/gu)) attrs[a[1]] = a[2] === undefined ? '' : unescT(a[2]);
+    const el = make(tag, attrs, cur);
+    cur.children.push(el);
+    el.start = tagRe.lastIndex;
+    if (attrs.id) ids.set(attrs.id, el);
+    if (tag === 'link' || tag === 'meta' || tag === 'br') continue;
+    if (tag === 'script' || tag === 'style') {
+      el.raw = true;
+      el.end = html.indexOf(`</${tag}>`, el.start);
+      tagRe.lastIndex = el.end + tag.length + 3;
+      continue;
+    }
+    cur = el;
+  }
+  if (cur !== root) throw new Error(`DOM 替身讀網頁：<${cur.tag}> 沒有收尾`);
+  document.documentElement = make('html', {}, null);
+  document.getElementById = (id) => ids.get(id) || null;
+  document.querySelector = root.querySelector;
+  document.querySelectorAll = root.querySelectorAll;
+  const location = { hash };
+  const window = { scrollY: 0, matchMedia: () => ({ matches: false }), addEventListener: on(listeners.window), scrollTo: (x, y) => log.push(`scrollTo:${x},${y}`) };
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)];
+  vm.runInNewContext(scripts[scripts.length - 1][1], { window, document, location });
+  const click = (target) => {
+    document.activeElement = target;
+    for (const fn of listeners.document.click || []) fn({ target, preventDefault() {} });
+  };
+  return { log, document, location, byId: (id) => ids.get(id) || null, all: root.querySelectorAll, click };
+}
+
+test('㉒ 白話手冊的鈕點了落在哪（node:vm 跑網頁最後那一段程式、DOM 是考題自己的替身，不是瀏覽器）：見名詞跳到那個名詞、名詞那一頭的鈕跳回那一節，都跟網址跳過去一樣——展開、捲過去，焦點最後落上去；名詞頁的跳節鈕只捲、焦點留在鈕上', () => {
+  const { html } = manual.build(sources());
+  const secs = ownHandbook(disk('manual/handbook.md'));
+  const g = ownGlossary(disk('GLOSSARY.md'));
+  const terms = g.sections.filter((s) => s.terms).flatMap((s) => s.terms.map((t) => t.term));
+  // 落地＝捲過去（平滑、貼齊上緣），焦點最後落上去（不再捲一次）；在收著的展開框裡的，先展開
+  const SCROLL = JSON.stringify({ behavior: 'smooth', block: 'start' });
+  const FOCUS = JSON.stringify({ preventScroll: true });
+  const landing = (el) => [...(el.tag === 'details' ? [`open:${el.id}`] : []), `scroll:${el.id} ${SCROLL}`, `focus:${el.id} ${FOCUS}`];
+
+  const p = fakePage(html, '#glossary');
+  assert.deepEqual(p.all('[data-page]').filter((x) => !x.hidden).map((x) => x.id), ['page-glossary'], '前提：網址是 #glossary，開著的只有名詞頁');
+  const detailsAll = p.all('details');
+  assert.equal(detailsAll.filter((d) => d.attrs.class === 'hb-entry').length, secs.length, '前提：白話手冊的展開框一節一個');
+  const press = (btn, target, what) => {
+    for (const d of detailsAll) d.open = false;
+    const box = btn.closest('details');
+    if (box) box.open = true; // 點得到收在展開框裡的鈕＝那一節是展開的
+    p.log.length = 0;
+    p.click(btn);
+    return `${what}「${btn.textContent}」→ ${target.id}`;
+  };
+
+  // (a) 見名詞：每一顆（照考題自己讀的手冊與 GLOSSARY.md 算它該去哪個名詞，不看鈕上寫的屬性）
+  const see = p.all('.hb-terms').flatMap((x) => x.querySelectorAll('button'));
+  assert.equal(see.length, secs.reduce((n, s) => n + s.terms.length, 0), '前提：見名詞的鈕一顆不少');
+  for (const btn of see) {
+    const k = terms.indexOf(btn.textContent);
+    assert.ok(k >= 0, `前提：見名詞的鈕「${btn.textContent}」是 GLOSSARY.md 的名詞`);
+    const target = p.byId(`term-${k + 1}`);
+    assert.equal(target.tag, 'dt', '前提：名詞的錨點在名詞那一格');
+    const at = press(btn, target, '見名詞');
+    assert.deepEqual(p.log, landing(target), `${at}：要捲過去、焦點最後落在那個名詞上（跟網址跳過去一樣）`);
+    assert.equal(p.document.activeElement, target, `${at}：焦點要離開鈕、落在那個名詞上`);
+    assert.equal(p.location.hash, '#glossary', `${at}：同一頁，不換網址`);
+    assert.equal(p.byId('modal').hidden, true, `${at}：跳窗維持關著`);
+  }
+
+  // (b) 名詞那一頭回來的鈕：每一顆（照它在哪個名詞的解釋後面、鈕上的節名，算它該回哪一節；那一節本來收著）
+  const back = p.all('.hb-back').flatMap((x) => x.querySelectorAll('button'));
+  assert.equal(back.length, see.length, '前提：回來的鈕跟見名詞的鈕一樣多');
+  for (const btn of back) {
+    const i = secs.findIndex((s) => s.name === btn.textContent);
+    assert.ok(i >= 0, `前提：回來的鈕「${btn.textContent}」是白話手冊的一節`);
+    const dd = btn.closest('dd');
+    const dt = dd.parent.children[dd.parent.children.indexOf(dd) - 1];
+    assert.ok(secs[i].terms.includes(terms[Number(dt.id.slice('term-'.length)) - 1]), `前提：「${btn.textContent}」那一節的見名詞有 ${dt.id} 這個名詞`);
+    const target = p.byId(`hb-${i + 1}`);
+    assert.equal(target.tag, 'details', '前提：一節是一個展開框');
+    const at = press(btn, target, '回手冊');
+    assert.deepEqual(p.log, landing(target), `${at}：要先展開、再捲過去，焦點最後落在那一節上（跟網址跳過去一樣）`);
+    assert.equal(target.open, true, `${at}：那一節要展開`);
+    assert.equal(p.document.activeElement, target, `${at}：焦點要離開鈕、落在那一節上`);
+    assert.equal(p.location.hash, '#glossary', `${at}：同一頁，不換網址`);
+    assert.equal(p.byId('modal').hidden, true, `${at}：跳窗維持關著`);
+  }
+
+  // 對照組：網址直接指到一節、一個名詞，打開網頁時落地的樣子跟上面點鈕一模一樣
+  for (const id of ['hb-2', 'term-1']) {
+    const q = fakePage(html, `#${id}`);
+    assert.deepEqual(q.log, landing(q.byId(id)), `網址 #${id}：展開、捲過去、焦點落上去`);
+    assert.equal(q.document.activeElement, q.byId(id), `網址 #${id}：焦點落在它上面`);
+  }
+
+  // 對照組：名詞頁的跳節鈕（data-jump）照舊只捲過去，焦點留在鈕上——這一支只改見名詞與回來的鈕
+  const bar = p.byId('page-glossary').querySelector('.jumps').querySelectorAll('button');
+  assert.ok(bar.length >= 6 && bar[0].textContent === '白話手冊', '前提：名詞頁的跳節鈕，第一顆是白話手冊');
+  for (const btn of bar) {
+    const target = p.byId(btn.getAttribute('data-jump'));
+    assert.ok(target, `前提：跳節鈕「${btn.textContent}」是 data-jump、指得到一塊`);
+    const at = press(btn, target, '跳節鈕');
+    assert.deepEqual(p.log, [`scroll:${target.id} ${SCROLL}`], `${at}：只捲過去，不搬焦點`);
+    assert.equal(p.document.activeElement, btn, `${at}：焦點留在鈕上`);
   }
 });
