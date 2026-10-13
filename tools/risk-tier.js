@@ -16,7 +16,8 @@
 // files 上的整檔改什麼都收、commentOnly 上的只改註解才收、never 上的一律不收；有一個路徑不收，整支就不走。
 // 「只改註解」用保守的規則判（他裁選 a，不引進外部的程式解析器）：改到的每一行，改前在舊版、改後在新版都是整行註解——
 // // 開頭、或在原本就開著的 /* 區塊裡的 * 開頭、或整行就是一段 /* … */；不准改到帶 /*、*/ 的行（那會挪動區塊的起訖），
-// 帶 @ 或工具指示字（eslint、istanbul 這類）的註解一律不收（型別與指示是給機器讀的）；新增、刪除、改名、只改權限的檔都不收。
+// 帶 @ 或工具指示字（eslint、istanbul 這類）的註解一律不收（型別與指示是給機器讀的）；行中夾著 CR、U+2028、U+2029 的不收
+// （JavaScript 在那裡也換行，// 後面就成了程式）；新增、刪除、改名、只改權限的檔都不收。
 // 版本內容讀本機 git（主幹那一版與受審版本的共同祖先 → 受審版本）；本機沒有那兩個版本＝判不出、不走。
 // ⚠️ 判「只改註解」守不到的：多行字串或範本字串裡剛好長得像註解的一行（會被當成註解收下）；字串、正規式或 // 註解裡的 /*、*/
 //    會讓「在不在區塊裡」判錯；程式把自己的原始碼當資料讀（例如考題讀工具的檔頭）——這些靠輕審那一輪的複審者核、雲端三關照跑。
@@ -124,7 +125,10 @@ function closedBelow(lines, i) {
 
 /** 這一版的第 i 行（從 0 算）是不是整行註解；判不準的一律不是。 */
 function wholeLineComment(lines, i) {
-  const t = String(lines[i] === undefined ? '' : lines[i]).trim();
+  const raw = String(lines[i] === undefined ? '' : lines[i]).replace(/\r$/u, '');   // CRLF 檔的行尾那一個 CR 不算
+  // git 只用 LF 分行，JavaScript 在 CR、U+2028、U+2029 也會換行：// 註解在那裡就結束、後面可以是程式（Codex #96 r1 R1）
+  if (/[\r\u2028\u2029]/u.test(raw)) return false;
+  const t = raw.trim();
   if (MACHINE_COMMENT.test(t)) return false;   // 空行落到最後的 false：多行字串裡的空行也是字串的一部分
   const opens = count(t, '/*');
   const closes = count(t, '*/');

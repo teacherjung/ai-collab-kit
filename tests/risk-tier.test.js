@@ -156,6 +156,8 @@ module.exports = { f };
 `;
 // 字串裡有 /*、下面接一行 * 開頭的程式續行：往上找會以為在區塊裡，要靠「下面有沒有收尾記號」擋。
 const FAKE_OPEN_JS = "'use strict';\nconst mark = '/*';\nconst y = 1\n  * 2;\nmodule.exports = { y, mark };\n";
+// 行尾是 CRLF 的檔：每一行最後那一個 CR 是正常的行尾，不是夾在行中的換行字元
+const CRLF_JS = "'use strict';\r\n// 說明\r\nmodule.exports = 1;\r\n";
 const LANE = { files: ['^BACKLOG\\.md$', '^cases/'], commentOnly: ['^tools/.+\\.js$'], never: ['^tools/forbidden'] };
 function laneRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'risk-lane-'));
@@ -165,8 +167,10 @@ function laneRepo() {
     return r.stdout.trim();
   };
   sh('init', '-q', '-b', 'main');
+  sh('config', 'core.autocrlf', 'false');
   fs.mkdirSync(path.join(dir, 'tools'));
   fs.mkdirSync(path.join(dir, 'cases'));
+  fs.writeFileSync(path.join(dir, 'tools', 'crlf.js'), CRLF_JS);
   fs.writeFileSync(path.join(dir, 'tools', 'x.js'), BASE_JS);
   fs.writeFileSync(path.join(dir, 'tools', 'forbidden-tools.js'), BASE_JS);
   fs.writeFileSync(path.join(dir, 'tools', 'z.js'), FAKE_OPEN_JS);
@@ -218,6 +222,9 @@ test('⑬快速通道（AI）：清單上的檔、只改註解的收；結果帶
       assert.equal(got.r.result.fastLaneAI, true, `${what}：${got.line}`);
       assert.match(got.line, /只改註解的 tools\/x\.js/u, what);
     }
+    // 行尾是 CRLF 的檔照樣判得出只改註解（行尾那一個 CR 不算夾在行中）
+    got = lane(repo, ['tools/crlf.js'], repo.head((dir) => fs.writeFileSync(path.join(dir, 'tools', 'crlf.js'), CRLF_JS.replace('// 說明', '// 改過的說明'))));
+    assert.equal(got.r.result.fastLaneAI, true, `CRLF 檔只改註解：${got.line}`);
   } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
 });
 
@@ -232,6 +239,9 @@ test('⑬快速通道（AI）：改到程式或判不準的一律不走，並印
       ['工具指示註解', (t) => t.replace('// 為什麼：第一行說明', '// eslint-disable-next-line'), /新版第 2 行/u],
       ['加空行', (t) => t.replace('module.exports', '\nmodule.exports'), /新版第 12 行/u],
       ['// 註解裡寫了 */', (t) => t.replace('第一行說明', '說明 */ 這樣'), /新版第 2 行/u],
+      ['// 註解行裡夾一個 CR，後面接程式', (t) => t.replace('// 為什麼：第一行說明', '// 為什麼：第一行說明\rglobalThis.probe = 2;'), /新版第 2 行/u],
+      ['// 註解行裡夾一個 U+2028，後面接程式', (t) => t.replace('// 為什麼：第一行說明', '// 為什麼：第一行說明\u2028globalThis.probe = 2;'), /新版第 2 行/u],
+      ['// 註解行裡夾一個 U+2029，後面接程式', (t) => t.replace('// 為什麼：第一行說明', '// 為什麼：第一行說明\u2029globalThis.probe = 2;'), /新版第 2 行/u],
       ['區塊裡加一整行 /* … */（會提早關掉外面的區塊）', (t) => t.replace(' * 區塊說明第二行\n', ' * 區塊說明第二行\n /* 裡面 */\n'), /新版第 6 行/u],
     ]) {
       const got = lane(repo, ['tools/x.js'], repo.head(editJs(fn)));

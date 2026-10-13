@@ -133,19 +133,23 @@ function roundsOf(comments, reviewer, source, roles) {
 
 /**
  * 這一位（角色＋來源字串，跟 roundsOf 同一個讀法）在這一支有沒有連續兩輪都沒「通過」（F12：快速通道（AI）連兩輪沒過，改走一般流程）。
- * 每一輪取最晚貼的那一則結論；輪次要相鄰（第 k 輪與第 k＋1 輪）。讀不出時間的那一則排最前面（不會被當成最晚那一則）。
+ * 每一輪算不算「通過」照結論閘的判法，不另寫一套（Codex #96 r1 R2）：把那一輪這一位貼的結論單獨交給結論閘看——
+ * 缺固定小標的「通過」不算、同一輪相反結論或對不同版本各給結論＝衝突、算阻擋；那一輪沒有一則算數的「通過」＝沒過。輪次要相鄰。
  */
 function twoMissesInARow(comments, reviewer, source, roles) {
-  const time = (c) => { const v = parseInstant(c.createdAt); return v === null ? -Infinity : v; };
   const want = String(source).trim().replace(/\s+/gu, ' ');
-  const latest = new Map();
+  const rounds = new Map();
   for (const c of comments) {
     const h = headerOf(c.body, roles);
     if (!h || h.role !== reviewer || h.source !== want) continue;
-    const seen = latest.get(h.round);
-    if (!seen || time(c) >= time(seen.c)) latest.set(h.round, { c, h });
+    if (!rounds.has(h.round)) rounds.set(h.round, []);
+    rounds.get(h.round).push(c);
   }
-  return [...latest.keys()].some((k) => latest.get(k).h.blocking && latest.has(k + 1) && latest.get(k + 1).h.blocking);
+  const passedIn = (k) => {
+    const state = evaluateVerdicts(rounds.get(k), '', reviewer, roles).reviewers[`${reviewer}（${want}）`];
+    return Boolean(state) && !state.blocking;
+  };
+  return [...rounds.keys()].some((k) => rounds.has(k + 1) && !passedIn(k) && !passedIn(k + 1));
 }
 
 function git(cwd, args) {

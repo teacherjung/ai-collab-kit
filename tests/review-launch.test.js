@@ -614,6 +614,13 @@ test('⑩快速通道（AI）：第 1 輪起只核差異、提示寫明為什麼
     assert.ok(out.prompt.includes('本輪範圍：全審（'), out.prompt);
     assert.ok(out.prompt.includes('這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（F12）'), out.prompt);
 
+    // 兩輪都阻擋之後，同一輪補一則「通過」（缺小標的、或小標齊全但跟阻擋同輪＝衝突）：結論閘都還擋著，第 3 輪照分級表（Codex #96 r1 R2）
+    const bareLate = verdict('Beta', 2, r.head, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r2｜結論：通過\n` });
+    for (const late of [bareLate, verdict('Beta', 2, r.head, '通過')]) {
+      const blockedThenLate = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '需修改後再審'), late];
+      out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: blockedThenLate })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+      assert.ok(out.prompt.includes('本輪範圍：全審（'), `同輪補上的「通過」不能解除兩輪的上限：\n${out.prompt}`);
+    }
     // 第 1 輪沒過、第 2 輪通過：之後回頭改的第 3 輪仍走快速通道（不是「連兩輪沒過」）
     const passed = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '通過')];
     out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: passed })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
@@ -632,7 +639,11 @@ test('⑩連兩輪沒「通過」：輪次要相鄰、每輪取最晚貼的那�
   assert.equal(twoMissesInARow([miss(1), miss(2)], 'Beta', 'beta CLI', roles), true);
   assert.equal(twoMissesInARow([miss(1), pass(2)], 'Beta', 'beta CLI', roles), false);
   assert.equal(twoMissesInARow([miss(1), miss(3)], 'Beta', 'beta CLI', roles), false, '輪次不相鄰不算連兩輪');
-  assert.equal(twoMissesInARow([miss(1), miss(2), pass(2)], 'Beta', 'beta CLI', roles), false, '同一輪後貼的「通過」蓋過先貼的');
+  assert.equal(twoMissesInARow([miss(1), miss(2), pass(2)], 'Beta', 'beta CLI', roles), true, '同一輪先阻擋、後通過＝相反結論、衝突，照結論閘算沒過（Codex #96 r1 R2）');
+  const bare = (round) => verdict('Beta', round, sha, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：通過\n` });
+  assert.equal(twoMissesInARow([miss(1), miss(2), bare(3)], 'Beta', 'beta CLI', roles), true, '缺固定小標的「通過」不算數，前兩輪照樣是連兩輪沒過');
+  assert.equal(twoMissesInARow([miss(1), bare(2)], 'Beta', 'beta CLI', roles), true, '那一輪只有缺小標的「通過」＝沒有算數的通過');
+  assert.equal(twoMissesInARow([miss(1), pass(2), miss(3)], 'Beta', 'beta CLI', roles), false, '對照組：中間那一輪是算數的通過');
   assert.equal(twoMissesInARow([miss(1), verdict('Alpha', 2, sha, '需修改後再審')], 'Beta', 'beta CLI', roles), false, '別位的不算');
   assert.equal(twoMissesInARow([miss(1), miss(2)], 'Beta', 'beta 新來源', roles), false, '換了來源就是另一位');
 });
