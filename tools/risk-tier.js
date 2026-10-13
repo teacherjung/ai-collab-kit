@@ -10,16 +10,28 @@
 // 守不到的：內容碰不碰到升級條件（要讀內容才知道，這支只印出條件提醒）；有沒有照印出來的級別送審；
 // 「只升不降」：它只看這支當下動到的檔、不記前幾輪算過的級別，拿掉一個高風險的檔就會印出比較輕的級別。
 // 退出碼：0＝算出來了／2＝算不出來（風險表沒填好、平台問不到、沒有路徑）。⚠️ 不是閘。
-// 指令列在輸出後面印 D4（級別怎麼定）、F2（審多深）、G1（掃不掃）的原文：送審前要用的就是這三條。只多印，不改退出碼。
+// 指令列在輸出後面印 D4（級別怎麼定）、F2（審多深）、G1（掃不掃）、F12（快速通道）的原文：送審前要用的就是這幾條。只多印，不改退出碼。
+//
+// 也判這一支能不能走「快速通道（AI）」（F12；擁有者 2026-10-13 裁）：每個路徑都要在專案設定 fastLane.ai 的清單上——
+// files 上的整檔改什麼都收、commentOnly 上的只改註解才收、never 上的一律不收；有一個路徑不收，整支就不走。
+// 「只改註解」用保守的規則判（他裁選 a，不引進外部的程式解析器）：改到的每一行，改前在舊版、改後在新版都是整行註解——
+// // 開頭、或在原本就開著的 /* 區塊裡的 * 開頭、或整行就是一段 /* … */；不准改到帶 /*、*/ 的行（那會挪動區塊的起訖），
+// 帶 @ 或工具指示字（eslint、istanbul 這類）的註解一律不收（型別與指示是給機器讀的）；新增、刪除、改名、只改權限的檔都不收。
+// 版本內容讀本機 git（主幹那一版與受審版本的共同祖先 → 受審版本）；本機沒有那兩個版本＝判不出、不走。
+// ⚠️ 判「只改註解」守不到的：多行字串或範本字串裡剛好長得像註解的一行（會被當成註解收下）；字串、正規式或 // 註解裡的 /*、*/
+//    會讓「在不在區塊裡」判錯；程式把自己的原始碼當資料讀（例如考題讀工具的檔頭）——這些靠輕審那一輪的複審者核、雲端三關照跑。
 'use strict';
-const { ask } = require('./platform.js');
+const { ask, PlatformError } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
 const { changedPaths } = require('./acceptance-tier.js');
 const { RISK_TIERS } = require('./build-settings.js');
 const { ruleFooter } = require('./build-rules.js');
+const { spawnSync } = require('node:child_process');
+const { gitEnv } = require('./git-env.js');
 
 /** 送審前印的那幾條（按需印條文）。 */
-const RULES_SHOWN = ['D4', 'F2', 'G1'];
+const RULES_SHOWN = ['D4', 'F2', 'G1', 'F12'];
+const UNSET = '未設定';
 
 /**
  * 讀設定裡的風險表；形狀不對＝null。
@@ -56,7 +68,156 @@ function classifyRisk(paths, table) {
   return { level, hits, unknown: hits.filter((h) => !h.known).map((h) => h.path) };
 }
 
-function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
+/**
+ * 讀「快速通道（AI）」的清單（F12）。三張都要有：files、commentOnly、never（never 可以是空陣列＝明說沒有要排除的）。
+ * 有一張含「未設定」或整段沒登記＝null（專案沒登記、不走）；形狀不對＝{ broken: 一句原因 }（不走，而且要說出來）。
+ */
+function fastLaneTableOf(settings) {
+  const ai = ((settings || {}).fastLane || {}).ai;
+  if (ai === undefined) return null;
+  if (!ai || typeof ai !== 'object' || Array.isArray(ai)) return { broken: 'fastLane.ai 不是物件' };
+  const table = {};
+  for (const key of ['files', 'commentOnly', 'never']) {
+    const list = ai[key];
+    if (!Array.isArray(list)) return { broken: `fastLane.ai.${key} 不是陣列` };
+    if (list.includes(UNSET)) return null;
+    table[key] = [];
+    for (const pattern of list) {
+      if (typeof pattern !== 'string' || !pattern.startsWith('^')) return { broken: `fastLane.ai.${key} 有一筆樣式沒以 ^ 開頭（${JSON.stringify(pattern)}）` };
+      try { table[key].push(new RegExp(pattern, 'u')); } catch { return { broken: `fastLane.ai.${key} 有一筆不是合法正規式（${pattern}）` }; }
+    }
+  }
+  return table;
+}
+
+/** 本機跑 git（先清掉 GIT_ 那一族，E4）：{ ok, out }。 */
+function gitIn(cwd) {
+  return (args) => {
+    const r = spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    return { ok: !r.error && r.status === 0, out: r.stdout || '' };
+  };
+}
+
+// 型別、工具指示這類給機器讀的註解（K3 第 2 種）：改了可能改到檢查的行為，不算「只改說明」
+const MACHINE_COMMENT = /@|^\/\/\s*#|\b(eslint|jshint|jscs|istanbul|c8|prettier|tslint|globals?)\b/iu;
+const count = (text, token) => text.split(token).length - 1;
+
+/** 從第 i 行往上找最近一個帶 /* 或 *\/ 的行：最後出現的是 /* ＝在區塊裡。 */
+function insideBlock(lines, i) {
+  for (let j = i - 1; j >= 0; j -= 1) {
+    const open = lines[j].lastIndexOf('/*');
+    const close = lines[j].lastIndexOf('*/');
+    if (open >= 0 || close >= 0) return open > close;
+  }
+  return false;
+}
+
+/** 從第 i 行往下找最近一個帶 /* 或 *\/ 的行：最先出現的是 *\/ ＝區塊在下面收尾。 */
+function closedBelow(lines, i) {
+  for (let j = i + 1; j < lines.length; j += 1) {
+    const open = lines[j].indexOf('/*');
+    const close = lines[j].indexOf('*/');
+    if (open >= 0 || close >= 0) return close >= 0 && (open < 0 || close < open);
+  }
+  return false;
+}
+
+/** 這一版的第 i 行（從 0 算）是不是整行註解；判不準的一律不是。 */
+function wholeLineComment(lines, i) {
+  const t = String(lines[i] === undefined ? '' : lines[i]).trim();
+  if (MACHINE_COMMENT.test(t)) return false;   // 空行落到最後的 false：多行字串裡的空行也是字串的一部分
+  const opens = count(t, '/*');
+  const closes = count(t, '*/');
+  if (t.startsWith('//')) return opens === 0 && closes === 0;
+  if (t.startsWith('*')) return opens === 0 && closes === 0 && insideBlock(lines, i) && closedBelow(lines, i);
+  if (t.startsWith('/*') && t.endsWith('*/') && opens === 1 && closes === 1) return !insideBlock(lines, i);
+  return false;
+}
+
+/**
+ * 讀 git diff -U0 的輸出：改掉的行（舊版的行號，從 0 算）與加上的行（新版的行號）。
+ * 標頭裡有權限、新增、刪除、改名、二進位的字樣＝{ error }；一個區塊都沒有＝{ error }（例如只改了權限）。
+ */
+function changedLinesOf(diff) {
+  const lines = String(diff).split('\n');
+  let i = 0;
+  for (; i < lines.length && !lines[i].startsWith('@@'); i += 1) {
+    if (/^(old mode|new mode|deleted file mode|new file mode|similarity index|dissimilarity index|rename from|rename to|copy from|copy to|Binary files|GIT binary patch)/u.test(lines[i])) {
+      return { error: '改的不只是內容（權限、新增、刪除、改名或二進位）' };
+    }
+  }
+  if (i >= lines.length) return { error: '沒有改到任何一行' };
+  const removed = [];
+  const added = [];
+  while (i < lines.length) {
+    if (lines[i] === '' && i === lines.length - 1) break;
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/u.exec(lines[i]);
+    if (!m) return { error: '改動的格式讀不懂' };
+    const [oldStart, newStart] = [Number(m[1]), Number(m[3])];
+    const [oldCount, newCount] = [m[2] === undefined ? 1 : Number(m[2]), m[4] === undefined ? 1 : Number(m[4])];
+    i += 1;
+    let o = 0;
+    let n = 0;
+    while (o < oldCount || n < newCount) {
+      const l = lines[i];
+      if (l === undefined) return { error: '改動的格式讀不懂' };
+      if (l.startsWith('\\')) { i += 1; continue; }
+      if (l.startsWith('-') && o < oldCount) { removed.push(oldStart - 1 + o); o += 1; }
+      else if (l.startsWith('+') && n < newCount) { added.push(newStart - 1 + n); n += 1; }
+      else return { error: '改動的格式讀不懂' };
+      i += 1;
+    }
+    while (i < lines.length && lines[i].startsWith('\\')) i += 1;
+  }
+  return { removed, added };
+}
+
+/** 一個檔從 base 到 head 是不是只改了註解：{ ok } 或 { ok: false, why }。 */
+function commentOnlyFile(file, { git, base, head }) {
+  if (!/\.(c|m)?js$/u.test(file)) return { ok: false, why: '只會判 JavaScript 的註解' };
+  const before = git(['cat-file', 'blob', `${base}:${file}`]);
+  const after = git(['cat-file', 'blob', `${head}:${file}`]);
+  if (!before.ok || !after.ok) return { ok: false, why: '新增或刪掉的檔不算只改註解' };
+  const diff = git(['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '-U0', base, head, '--', file]);
+  if (!diff.ok) return { ok: false, why: '讀不到改動' };
+  const changed = changedLinesOf(diff.out);
+  if (changed.error) return { ok: false, why: changed.error };
+  const oldLines = before.out.split('\n');
+  const newLines = after.out.split('\n');
+  const badOld = changed.removed.find((k) => !wholeLineComment(oldLines, k));
+  if (badOld !== undefined) return { ok: false, why: `舊版第 ${badOld + 1} 行不是判得出的整行註解` };
+  const badNew = changed.added.find((k) => !wholeLineComment(newLines, k));
+  if (badNew !== undefined) return { ok: false, why: `新版第 ${badNew + 1} 行不是判得出的整行註解` };
+  return { ok: true };
+}
+
+/**
+ * 這一支能不能走「快速通道（AI）」（F12）：{ ok, off?, reasons, files, comments }。
+ * 每個路徑：never 上的不收 → files 上的收 → commentOnly 上的要只改註解才收 → 其餘不收。有一個不收，整支不走。
+ */
+function fastLaneAI(paths, table, { git, base, head }) {
+  if (!table) return { ok: false, off: true, reasons: ['專案設定沒登記 fastLane.ai'] };
+  if (table.broken) return { ok: false, reasons: [`專案設定的 fastLane.ai 壞了：${table.broken}`] };
+  const reasons = [];
+  const files = [];
+  const comments = [];
+  let mergeBase = null;
+  for (const p of paths) {
+    if (table.never.some((re) => re.test(p))) { reasons.push(`${p} 在一律不收的清單上`); continue; }
+    if (table.files.some((re) => re.test(p))) { files.push(p); continue; }
+    if (!table.commentOnly.some((re) => re.test(p))) { reasons.push(`${p} 不在清單上`); continue; }
+    if (mergeBase === null) {
+      const found = base && head ? git(['merge-base', base, head]) : { ok: false };
+      mergeBase = found.ok ? found.out.trim() : '';
+    }
+    if (!mergeBase) { reasons.push(`${p}：本機找不到主幹與受審版本的共同祖先（先 git fetch），判不出`); continue; }
+    const r = commentOnlyFile(p, { git, base: mergeBase, head });
+    if (r.ok) comments.push(p); else reasons.push(`${p}：${r.why}`);
+  }
+  return { ok: reasons.length === 0, reasons, files, comments };
+}
+
+function run(changeId, { settings = readSettings(), platform = { ask }, git = gitIn(process.cwd()) } = {}) {
   if (!changeId) return { code: 2, lines: ['用法：node tools/risk-tier.js <變更編號>'] };
   const table = riskTableOf(settings);
   if (!table) return { code: 2, lines: [`專案設定裡的風險表沒填好（risk.families 要有，每一筆的樣式以 ^ 開頭、是合法正規式，級別只能是 ${RISK_TIERS.join('／')}）：算不出來。`] };
@@ -73,10 +234,28 @@ function run(changeId, { settings = readSettings(), platform = { ask } } = {}) {
   const row = (settings.reviewTiers || {})[r.level];
   if (row) lines.push(`  照複審與掃描分級表（${r.level}）：全審 ${row.full}；只核差異 ${row.diffOnly}；通過後照 F6 回頭改的那一輪 ${row.afterPassFix}；掃描 ${row.scan}`);
   else lines.push(`  ⚠️ 複審與掃描分級表沒有「${r.level}」那一列：全審幾輪、掃不掃查不到。`);
+  const laneTable = fastLaneTableOf(settings);
+  let baseTip = null;
+  if (laneTable && !laneTable.broken && paths.some((p) => laneTable.commentOnly.some((re) => re.test(p)))) {
+    try { baseTip = platform.ask('branchSha', { branch: got.baseBranch }, { settings }).sha; } catch (e) {
+      if (!(e instanceof PlatformError || (e && e.name === 'PlatformError'))) throw e;
+    }
+  }
+  const lane = fastLaneAI(paths, laneTable, { git, base: baseTip, head: got.headSha });
+  if (lane.ok) {
+    const what = [lane.files.length ? `清單上的檔 ${lane.files.join('、')}` : '', lane.comments.length ? `只改註解的 ${lane.comments.join('、')}` : ''].filter(Boolean).join('；');
+    lines.push(`  快速通道（AI）：可以（${what}）——複審者第 1 輪起只核差異、不掃描；連兩輪沒「通過」，下一輪起照上面那一級走一般流程（F12）。`);
+  } else if (lane.off) {
+    lines.push('  快速通道（AI）：專案設定沒登記清單（fastLane.ai），不走（F12）。');
+  } else {
+    const shown = lane.reasons.slice(0, 5).join('；');
+    const more = lane.reasons.length > 5 ? `；另有 ${lane.reasons.length - 5} 個路徑也不收` : '';
+    lines.push(`  快速通道（AI）：不走——${shown}${more}（F12：判不出就照一般流程）。`);
+  }
   lines.push(table.raise.length
     ? `  內容碰到任一條升級條件，整支就算高（${table.raise.join('；')}）；實作者只能往重調，往下只有裁示者能改；每次送審重算、只升不降，這支工具不記前幾輪的級別（D4）。`
     : '  ⚠️ 專案設定沒填升級條件：內容要不要往重調，只能靠實作者與複審者自己判斷（D4）。');
-  return { code: 0, lines, result: { ...r, head: got.headSha } };   // head：算的是哪一個版本（送審產生器拿去跟受審版本對）
+  return { code: 0, lines, result: { ...r, head: got.headSha, fastLaneAI: lane.ok } };   // head：算的是哪一個版本（送審產生器拿去跟受審版本對）；fastLaneAI：能不能走快速通道（AI）
 }
 
 if (require.main === module) {
@@ -86,4 +265,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { run, riskTableOf, classifyRisk, RULES_SHOWN };
+module.exports = { run, riskTableOf, classifyRisk, fastLaneTableOf, fastLaneAI, commentOnlyFile, changedLinesOf, wholeLineComment, gitIn, RULES_SHOWN };

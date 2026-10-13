@@ -326,6 +326,23 @@
    "scan": "不掃"
   }
  },
+ "fastLane": {
+  "ai": {
+   "files": [
+    "^BACKLOG\\.md$",
+    "^cases/"
+   ],
+   "commentOnly": [
+    "^tools/.+\\.js$",
+    "^tests/.+\\.js$"
+   ],
+   "never": [
+    "^tools/(forbidden-tools|guard-copy|canary-server|claude-pin)\\.js$",
+    "^tests/(forbidden-[a-z-]+|guard-copy[a-z-]*|canary-server|claude-pin)\\.test\\.js$",
+    "^tests/helpers/guard-rig\\.js$"
+   ]
+  }
+ },
  "reviewers": [
   {
    "participant": "Claude",

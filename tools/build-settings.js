@@ -71,12 +71,12 @@ function build(data) {
   // 預設分工（A1）只排版、沒有機器讀它；要在這裡明寫——產生器不認得的欄位不會自己出現在說明書裡
   const division = data.defaultDivision || {};
   out.push(`預設分工（規矩 A1；裁示者沒有逐支指定時，PR說明的「實作者」「複審者」兩欄照這個填）：實作者＝${plain(division.implementer, '預設分工的實作者')}；複審者＝${plain(division.reviewer, '預設分工的複審者')}`, '');
-  // 擁有者另登一欄、不從參與者的角色字樣去猜：裁示者可以由擁有者指定給別人（A1），文字快速通道（F12）的複審者卻一定是擁有者
+  // 擁有者另登一欄、不從參與者的角色字樣去猜：裁示者可以由擁有者指定給別人（A1），快速通道（擁有者）（F12）的複審者卻一定是擁有者
   const owner = data.owner === undefined ? '未設定' : data.owner;
   if (typeof owner === 'string' && owner.trim() !== '未設定' && !(data.participants || []).some((p) => p && typeof p.id === 'string' && p.id.trim() === owner.trim())) {
     throw new Error(`擁有者「${owner}」不是上表登記的識別值`);
   }
-  out.push(`擁有者（規矩 A1；文字快速通道由他當複審者，F12，結論閘認他的「通過」不要求固定小標）：${plain(owner, '擁有者識別值')}`, '');
+  out.push(`擁有者（規矩 A1；快速通道（擁有者）由他當複審者，F12，結論閘認他的「通過」不要求固定小標）：${plain(owner, '擁有者識別值')}`, '');
   out.push('## 二、來源字串標準表（結論標頭的來源欄；寫作義務：跨輪次一字不改、不含會變的東西）', '');
   out.push('| 審查工具或工作階段 | 逐字來源字串 |', '|---|---|');
   for (const s of data.sources) {
@@ -205,6 +205,21 @@ function build(data) {
     const cell = (k, what) => plain(row[k] || '未設定', `${t}風險的${what}`);
     out.push(`| ${t} | ${cell('full', '全審')} | ${cell('diffOnly', '只核差異')} | ${cell('afterPassFix', '通過後那一輪')} | ${cell('scan', '掃描')} |`);
   }
+  // 快速通道（AI）收哪些檔（F12）：分級腳本照這三張判；任一張含「未設定」＝專案沒登記、不走
+  const lane = (data.fastLane || {}).ai || {};
+  out.push('', '快速通道（AI）收的檔（規矩 F12；分級腳本照這三張判，有一張是「未設定」＝不走；不掃描、複審者第 1 輪起只核差異）：', '');
+  const laneList = (key, what) => {
+    const list = lane[key] === undefined ? ['未設定'] : lane[key];   // 沒登記＝不走（跟上面幾張表一樣，沒填就印「未設定」）
+    if (!Array.isArray(list)) throw new Error(`快速通道（AI）的 ${key} 不是陣列`);
+    for (const pattern of list) {
+      if (pattern !== '未設定' && (typeof pattern !== 'string' || !pattern.startsWith('^'))) throw new Error(`快速通道（AI）的 ${key} 有一筆樣式沒以 ^ 開頭：${JSON.stringify(pattern)}`);
+      if (pattern !== '未設定') { try { new RegExp(pattern, 'u'); } catch { throw new Error(`快速通道（AI）的 ${key} 有一筆不是合法正規式：${pattern}`); } }
+    }
+    out.push(`- ${what}：${list.length ? list.map((x) => plain(x, `快速通道（AI）的 ${key}`)).join('、') : '（沒有）'}`);
+  };
+  laneList('files', '整檔改什麼都收（正規式）');
+  laneList('commentOnly', '只改註解才收（正規式；整行註解、不動 /* */ 的起訖、不收帶 @ 的）');
+  laneList('never', '一律不收（正規式；先比這一張）');
   out.push('', '## 十一、複審者的模型與怎麼起（規矩 F1、F11；每個 AI 一列，換新模型改這裡——有釘值題的專案連釘值題一起改，套件倉庫自己的是 kit-only/settings-pin.test.js）', '');
   const reviewers = data.reviewers || [{}];
   const ids = (data.participants || []).map((p) => p.id);
