@@ -14,13 +14,14 @@
 //
 // 也判這一支能不能走「快速通道（AI）」（F12；擁有者 2026-10-13 裁）：每個路徑都要在專案設定 fastLane.ai 的清單上——
 // files 上的整檔改什麼都收、commentOnly 上的只改註解才收、never 上的一律不收；有一個路徑不收，整支就不走。
-// 「只改註解」用保守的規則判（他裁選 a，不引進外部的程式解析器）：改到的每一行，改前在舊版、改後在新版都是整行註解——
-// // 開頭、或在原本就開著的 /* 區塊裡的 * 開頭、或整行就是一段 /* … */；不准改到帶 /*、*/ 的行（那會挪動區塊的起訖），
-// 帶 @ 或工具指示字（eslint、istanbul 這類）的註解一律不收（型別與指示是給機器讀的）；行中夾著 CR、U+2028、U+2029 的不收
-// （JavaScript 在那裡也換行，// 後面就成了程式）；新增、刪除、改名、只改權限的檔，符號連結與子模組都不收。
+// 「只改註解」用保守的規則判（他裁選 a，不引進外部的程式解析器）：只認 // 開頭的整行註解——改到的每一行，改前在舊版、改後在新版
+// 都要是；行裡不准有 */（落在別人的區塊裡會把區塊收掉），給機器讀的（帶 @、# 指示、eslint、istanbul 這類工具名）不收，行中夾著 CR、U+2028、U+2029 的不收
+// （JavaScript 在那裡也換行，// 後面就成了程式）；兩版都要是同一種一般檔案（新增、刪除、改名、改權限、符號連結、子模組都不收）。
+// 為什麼不收 /* … */ 區塊註解：判一行在不在區塊裡、區塊在哪裡收尾，等於重做 JavaScript 怎麼讀程式，複審與掃描一輪輪鑽出新寫法
+// （#96 r1 行中換行字元、r3 符號連結、掃描 1-1 一行 /*/）；答過連三輪自問表後收成只認這一種寫法。
 // 版本內容讀本機 git（主幹那一版與受審版本的共同祖先 → 受審版本）；本機沒有那兩個版本＝判不出、不走。
-// ⚠️ 判「只改註解」守不到的：多行字串或範本字串裡剛好長得像註解的一行（會被當成註解收下）；字串、正規式或 // 註解裡的 /*、*/
-//    會讓「在不在區塊裡」判錯；程式把自己的原始碼當資料讀（例如考題讀工具的檔頭）——這些靠輕審那一輪的複審者核、雲端三關照跑。
+// ⚠️ 判「只改註解」守不到的：多行字串或範本字串裡剛好長得像 // 註解的一行（會被當成註解收下）；程式把自己的原始碼當資料讀
+//    （例如考題讀工具的檔頭）——這些靠輕審那一輪的複審者核、雲端三關照跑。這道判斷防的是把改程式誤當成改註解的手誤。
 'use strict';
 const { ask, PlatformError } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
@@ -101,41 +102,16 @@ function gitIn(cwd) {
 
 // 型別、工具指示這類給機器讀的註解（K3 第 2 種）：改了可能改到檢查的行為，不算「只改說明」
 const MACHINE_COMMENT = /@|^\/\/\s*#|\b(eslint|jshint|jscs|istanbul|c8|prettier|tslint|globals?)\b/iu;
-const count = (text, token) => text.split(token).length - 1;
-
-/** 從第 i 行往上找最近一個帶 /* 或 *\/ 的行：最後出現的是 /* ＝在區塊裡。 */
-function insideBlock(lines, i) {
-  for (let j = i - 1; j >= 0; j -= 1) {
-    const open = lines[j].lastIndexOf('/*');
-    const close = lines[j].lastIndexOf('*/');
-    if (open >= 0 || close >= 0) return open > close;
-  }
-  return false;
-}
-
-/** 從第 i 行往下找最近一個帶 /* 或 *\/ 的行：最先出現的是 *\/ ＝區塊在下面收尾。 */
-function closedBelow(lines, i) {
-  for (let j = i + 1; j < lines.length; j += 1) {
-    const open = lines[j].indexOf('/*');
-    const close = lines[j].indexOf('*/');
-    if (open >= 0 || close >= 0) return close >= 0 && (open < 0 || close < open);
-  }
-  return false;
-}
-
-/** 這一版的第 i 行（從 0 算）是不是整行註解；判不準的一律不是。 */
+// 這一版的第 i 行（從 0 算）是不是 // 開頭的整行註解；判不準的一律不是。
+// 只認這一種寫法：區塊註解要判在不在區塊裡、哪裡收尾，等於重做 JavaScript 怎麼讀程式（#96 掃描 1-1 之後收窄）。
 function wholeLineComment(lines, i) {
   const raw = String(lines[i] === undefined ? '' : lines[i]).replace(/\r$/u, '');   // CRLF 檔的行尾那一個 CR 不算
   // git 只用 LF 分行，JavaScript 在 CR、U+2028、U+2029 也會換行：// 註解在那裡就結束、後面可以是程式（Codex #96 r1 R1）
   if (/[\r\u2028\u2029]/u.test(raw)) return false;
   const t = raw.trim();
-  if (MACHINE_COMMENT.test(t)) return false;   // 空行落到最後的 false：多行字串裡的空行也是字串的一部分
-  const opens = count(t, '/*');
-  const closes = count(t, '*/');
-  if (t.startsWith('//')) return opens === 0 && closes === 0;
-  if (t.startsWith('*')) return opens === 0 && closes === 0 && insideBlock(lines, i) && closedBelow(lines, i);
-  if (t.startsWith('/*') && t.endsWith('*/') && opens === 1 && closes === 1) return !insideBlock(lines, i);
-  return false;
+  // 行裡有 */：這一行要是落在別人的區塊註解裡，會把區塊提早收掉、後面變成程式，不收（/* 在 // 註解裡什麼都不做，不用擋）；
+  // 空行落到這裡也是不收（多行字串裡的空行是字串的一部分）
+  return t.startsWith('//') && !t.includes('*/') && !MACHINE_COMMENT.test(t);
 }
 
 /**
@@ -256,7 +232,7 @@ function run(changeId, { settings = readSettings(), platform = { ask }, git = gi
   const lane = fastLaneAI(paths, laneTable, { git, base: baseTip, head: got.headSha });
   if (lane.ok) {
     const what = [lane.files.length ? `清單上的檔 ${lane.files.join('、')}` : '', lane.comments.length ? `只改註解的 ${lane.comments.join('、')}` : ''].filter(Boolean).join('；');
-    lines.push(`  快速通道（AI）：可以（${what}）——複審者第 1 輪起只核差異、不掃描；連兩輪沒「通過」，下一輪起照上面那一級走一般流程（F12）。`);
+    lines.push(`  快速通道（AI）：可以（${what}）——複審者第 1 輪起只核差異、不掃描，取代上面那一列的全審與掃描；連兩輪沒「通過」，下一輪起照上面那一級走一般流程（F12）。`);
   } else if (lane.off) {
     lines.push('  快速通道（AI）：專案設定沒登記清單（fastLane.ai），不走（F12）。');
   } else {

@@ -330,7 +330,7 @@
   "ai": {
    "files": [
     "^BACKLOG\\.md$",
-    "^cases/"
+    "^cases/[^/]+\\.md$"
    ],
    "commentOnly": [
     "^tools/.+\\.js$",
@@ -338,7 +338,7 @@
    ],
    "never": [
     "^tools/(forbidden-tools|guard-copy|canary-server|claude-pin)\\.js$",
-    "^tests/(forbidden-[a-z-]+|guard-copy[a-z-]*|canary-server|claude-pin)\\.test\\.js$",
+    "^tests/(forbidden-tools|forbidden-defaults|guard-copy|guard-copy-claude|canary-server|claude-pin|placement)\\.test\\.js$",
     "^tests/helpers/guard-rig\\.js$"
    ]
   }

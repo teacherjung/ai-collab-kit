@@ -323,7 +323,9 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   }
   const lines = [
     `送審產生器｜變更 ${id}｜複審者 ${reviewer}（來源 ${entry.source}）｜r${round}｜受審 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
-    `  風險級別：${tier}（照表算的；要往重調或裁示者改級，提示的風險級別與本輪範圍兩格要一起照分級表改）；本輪範圍：${scope}`,
+    `  風險級別：${tier}（${lane && !exhausted
+      ? '照表算的；這一支走快速通道（AI）：本輪範圍照 F12 只核差異、不照分級表，往重調或裁示者改級只改風險級別那一格'
+      : '照表算的；要往重調或裁示者改級，提示的風險級別與本輪範圍兩格要一起照分級表改'}）；本輪範圍：${scope}`,
     lane ? `  快速通道（AI）：${exhausted ? '這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（要掃的照 G1 掃）' : '分級腳本判可以，這一輪只核差異、不掃描'}（F12）` : null,
     `  上一輪的結論：${values.previous}；相關裁示：${values.rulings}`,
     `  審查樹：${tree}（HEAD ${head.slice(0, 7)}）`,

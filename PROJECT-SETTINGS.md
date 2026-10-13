@@ -152,9 +152,9 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 快速通道（AI）收的檔（規矩 F12；分級腳本照這三張判，有一張是「未設定」＝不走；不掃描、複審者第 1 輪起只核差異）：
 
-- 整檔改什麼都收（正規式）：\^BACKLOG\\\.md\$、\^cases\/
-- 只改註解才收（正規式；整行註解、不動 /* */ 的起訖、不收帶 @ 的）：\^tools\/\.\+\\\.js\$、\^tests\/\.\+\\\.js\$
-- 一律不收（正規式；先比這一張）：\^tools\/\(forbidden\-tools\|guard\-copy\|canary\-server\|claude\-pin\)\\\.js\$、\^tests\/\(forbidden\-\[a\-z\-\]\+\|guard\-copy\[a\-z\-\]\*\|canary\-server\|claude\-pin\)\\\.test\\\.js\$、\^tests\/helpers\/guard\-rig\\\.js\$
+- 整檔改什麼都收（正規式）：\^BACKLOG\\\.md\$、\^cases\/\[\^\/\]\+\\\.md\$
+- 只改註解才收（正規式；只認 // 開頭的整行註解，不收帶 @ 或工具指示的）：\^tools\/\.\+\\\.js\$、\^tests\/\.\+\\\.js\$
+- 一律不收（正規式；先比這一張）：\^tools\/\(forbidden\-tools\|guard\-copy\|canary\-server\|claude\-pin\)\\\.js\$、\^tests\/\(forbidden\-tools\|forbidden\-defaults\|guard\-copy\|guard\-copy\-claude\|canary\-server\|claude\-pin\|placement\)\\\.test\\\.js\$、\^tests\/helpers\/guard\-rig\\\.js\$
 
 ## 十一、複審者的模型與怎麼起（規矩 F1、F11；每個 AI 一列，換新模型改這裡——有釘值題的專案連釘值題一起改，套件倉庫自己的是 kit-only/settings-pin.test.js）
 

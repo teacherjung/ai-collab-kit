@@ -602,6 +602,7 @@ test('⑩快速通道（AI）：第 1 輪起只核差異、提示寫明為什麼
     assert.ok(out.prompt.includes('風險級別：高（照表算的；分級腳本判這一支走快速通道（AI）：第 1 輪起只核差異、不掃描（F12））'), out.prompt);
     assert.ok(out.prompt.includes('本輪範圍：只核差異（'), '高風險照表要全審，走快速通道（AI）第 1 輪就只核差異');
     assert.ok(out.lines.includes('  快速通道（AI）：分級腳本判可以，這一輪只核差異、不掃描（F12）'), out.lines.join('\n'));
+    assert.ok(out.lines.some((l) => l.includes('本輪範圍照 F12 只核差異、不照分級表，往重調或裁示者改級只改風險級別那一格')), '改級提醒不能叫人把範圍改回照分級表（#96 掃描 2-2）');
 
     // 對照組：同一支、沒登記清單＝照表全審
     out = launch('7', 'Beta', { settings: settingsFor(), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });

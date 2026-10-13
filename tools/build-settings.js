@@ -218,7 +218,7 @@ function build(data) {
     out.push(`- ${what}：${list.length ? list.map((x) => plain(x, `快速通道（AI）的 ${key}`)).join('、') : '（沒有）'}`);
   };
   laneList('files', '整檔改什麼都收（正規式）');
-  laneList('commentOnly', '只改註解才收（正規式；整行註解、不動 /* */ 的起訖、不收帶 @ 的）');
+  laneList('commentOnly', '只改註解才收（正規式；只認 // 開頭的整行註解，不收帶 @ 或工具指示的）');
   laneList('never', '一律不收（正規式；先比這一張）');
   out.push('', '## 十一、複審者的模型與怎麼起（規矩 F1、F11；每個 AI 一列，換新模型改這裡——有釘值題的專案連釘值題一起改，套件倉庫自己的是 kit-only/settings-pin.test.js）', '');
   const reviewers = data.reviewers || [{}];
