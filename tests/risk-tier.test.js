@@ -8,7 +8,7 @@
 //   ⑨一個檔對上幾個家族取最重的、跟表的順序無關（#32 r2：取第一個對上的話，^docs/ 低排在 ^docs/contracts/ 高前面就把高算成低）。
 //   ⑬快速通道（AI）（F12）：清單上的檔整檔都收、只改註解的收（// 行、原本開著的 /* 區塊裡的 * 行、整行一段 /* … */）；
 //     用 /*、*/ 把程式包成註解、改程式、* 開頭的程式續行、帶 @ 的型別註解、空行、新增或刪掉的檔、只改權限、一律不收清單上的檔、
-//     本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器。
+//     本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器；讀 git 前清掉 GIT_ 那一族（E4）。
 // ⚠️ 守不到的：內容碰不碰到升級條件（要讀內容）；表本身分得對不對；有沒有照印出來的級別送審；只升不降（工具不記前幾輪）；
 //    「只改註解」的盲點（多行字串裡長得像註解的一行、字串裡的 /*、*/）——那些在工具檔頭與機器表寫明，這裡不假裝守得到。
 'use strict';
@@ -279,6 +279,22 @@ test('⑬快速通道（AI）：清單沒登記或是「未設定」＝不走；
     const docsOnly = { ask: (op) => (op === 'change' ? { changedFileCount: '1', headSha: head, baseBranch: 'main' } : op === 'changedFiles' ? [f('BACKLOG.md')] : (() => { throw new PlatformError('不該問'); })()) };
     assert.equal(run('7', { settings: { ...settings, fastLane: { ai: LANE } }, platform: docsOnly, git: gitIn(repo.dir) }).code, 0);
   } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
+});
+
+test('⑬快速通道（AI）讀 git 前先清掉 GIT_ 那一族（E4）：GIT_DIR 指到另一個倉庫，照樣讀這一個倉庫', () => {
+  const repo = laneRepo();
+  const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'risk-lane-decoy-'));
+  const saved = process.env.GIT_DIR;
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: decoy, env: gitEnv() });
+    const head = repo.head(editJs((t) => t.replace('第一行說明', '改過')));
+    process.env.GIT_DIR = path.join(decoy, '.git');
+    const got = lane(repo, ['tools/x.js'], head);
+    assert.equal(got.r.result.fastLaneAI, true, `GIT_DIR 指到別處時讀錯了倉庫：${got.line}`);
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+    fs.rmSync(decoy, { recursive: true, force: true }); fs.rmSync(repo.dir, { recursive: true, force: true });
+  }
 });
 
 test('⑬讀 git diff -U0：區塊的行號、沒有換行結尾的標記；標頭有權限或新增字樣、一個區塊都沒有＝讀不出', () => {
