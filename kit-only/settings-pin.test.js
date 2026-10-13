@@ -93,3 +93,18 @@ test('借用的掃描：佔位只有一個寫法（<理財工作樹>）、設定
     assert.deepEqual(fs.readdirSync(listDir), [], '借用時不該寫清單檔');
   } finally { fs.rmSync(listDir, { recursive: true, force: true }); }
 });
+
+test('快速通道（AI）一律不收的清單，蓋住機器表 B1 那一列點名的每一支 .js（F12：禁區清單、判斷與攔截器的檔不收）', { skip: IN_KIT ? false : '不是套件倉庫：這一支只釘套件自己的值' }, () => {
+  // 為什麼：清單是手寫的正規式，B1 那一列加了一支攔截器的考題、清單沒跟上，那一支只改註解就會走輕審（#96 掃描 1-2 抓到 placement 漏了）
+  const never = read().fastLane.ai.never.map((p) => new RegExp(p, 'u'));
+  const row = fs.readFileSync(path.join(ROOT, 'MACHINES.md'), 'utf8').split('\n').filter((l) => l.startsWith('| B1 |'));
+  assert.equal(row.length, 1, '機器表要剛好一列 B1：這一題自己的前提變了');
+  const files = [...new Set([...row[0].matchAll(/`((?:tools|tests)\/[^`]+\.js)`/gu)].map((m) => m[1]))];
+  assert.ok(files.length >= 5, `B1 那一列只抽到 ${files.length} 支 .js：列的形狀變了`);
+  const missed = files.filter((f) => !never.some((re) => re.test(f)));
+  assert.deepEqual(missed, [], `這幾支在機器表 B1 那一列、卻沒被 fastLane.ai.never 擋：${missed.join('、')}——改 settings.json 的清單`);
+  // 案例簿只收案例檔與它產生的兩份 .md；cases/index.json 是產生器讀的設定（摘要挑哪一則），不是「不是規定的字」（#96 掃描 1-4）
+  const files2 = read().fastLane.ai.files.map((p) => new RegExp(p, 'u'));
+  for (const f of ['BACKLOG.md', 'cases/README.md', 'cases/DIGEST.md', 'cases/fast-lane-two-lanes.md']) assert.ok(files2.some((re) => re.test(f)), `${f} 應該收`);
+  for (const f of ['cases/index.json', 'cases/x.js', 'README.md', 'rules.json']) assert.ok(!files2.some((re) => re.test(f)), `${f} 不該整檔收`);
+});

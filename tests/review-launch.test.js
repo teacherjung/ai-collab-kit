@@ -13,7 +13,9 @@
 //     開樹前就登記著的（登記了、目錄暫時不在）保住，排除原因後重跑送得出去；
 //   ⑥收樹：兩棵都在、乾淨、HEAD 沒變、沒上鎖才收；有一棵不對＝退 1、都留著；收到一半＝照實說收了哪一棵、記進紀錄、重跑只收剩下的；
 //     找不到＝退 2；暫存區比開樹晚的逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；
-//   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2。
+//   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2；
+//   ⑩分級腳本判能走快速通道（AI）（F12）：本輪範圍＝只核差異、提示寫明為什麼；這一位連兩輪沒「通過」（輪次相鄰；每一輪算不算
+//     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的。
 'use strict';
 const test = require('node:test');
@@ -23,7 +25,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, fill, promptPart, scopeOf, roundsOf, parseArgs, templateProblems, freshEntries, FILL } = require('../tools/review-launch.js');
+const { main, launch, close, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL } = require('../tools/review-launch.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -572,4 +574,77 @@ test('⑤c同一輪兩個送審交錯：後到的那一個（先看到不在、�
     fs.existsSync = realExists;
     for (const d of [r.dir, dir]) fs.rmSync(d, { recursive: true, force: true });
   }
+});
+
+/** 暫存倉庫：tools/x.js 的基底一顆、只改了註解的受審版本一顆（分級腳本會判能走快速通道（AI））。 */
+function commentRepo() {
+  const dir = tmp('review-launch-lane-');
+  sh(dir, 'init', '-q', '-b', 'main');
+  sh(dir, 'config', 'maintenance.auto', 'false');
+  fs.mkdirSync(path.join(dir, 'tools'));
+  fs.writeFileSync(path.join(dir, 'tools', 'x.js'), "'use strict';\n// 說明\nmodule.exports = 1;\n");
+  sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base');
+  const base = sh(dir, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(dir, 'tools', 'x.js'), "'use strict';\n// 改過的說明\nmodule.exports = 1;\n");
+  sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'head');
+  const head = sh(dir, 'rev-parse', 'HEAD');
+  return { dir, base, head };
+}
+const LANE_SETTINGS = { fastLane: { ai: { files: [], commentOnly: ['^tools/.+\\.js$'], never: [] } } };
+
+test('⑩快速通道（AI）：第 1 輪起只核差異、提示寫明為什麼；連兩輪沒「通過」改回照分級表；通過後回頭改的那一輪仍走', () => {
+  const r = commentRepo();
+  const dir = tmp('review-launch-out-');
+  const cleanup = () => spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+  try {
+    let out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir, template: TEMPLATE });
+    assert.equal(out.code, 0, out.lines.join('\n'));
+    assert.ok(out.prompt.includes('風險級別：高（照表算的；分級腳本判這一支走快速通道（AI）：第 1 輪起只核差異、不掃描（F12））'), out.prompt);
+    assert.ok(out.prompt.includes('本輪範圍：只核差異（'), '高風險照表要全審，走快速通道（AI）第 1 輪就只核差異');
+    assert.ok(out.lines.includes('  快速通道（AI）：分級腳本判可以，這一輪只核差異、不掃描（F12）'), out.lines.join('\n'));
+    assert.ok(out.lines.some((l) => l.includes('本輪範圍照 F12 只核差異、不照分級表，往重調或裁示者改級只改風險級別那一格')), '改級提醒不能叫人把範圍改回照分級表（#96 掃描 2-2）');
+
+    // 對照組：同一支、沒登記清單＝照表全審
+    out = launch('7', 'Beta', { settings: settingsFor(), platform: fakePlatform(answersFor(r)), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+    assert.ok(out.prompt.includes('風險級別：高（照表算的）') && out.prompt.includes('本輪範圍：全審（'), '沒登記清單就照分級表');
+
+    // 連兩輪沒「通過」：第 3 輪起照分級表（高＝全審）
+    const misses = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '需修改後再審')];
+    out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: misses })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+    assert.match(out.prompt, /輪次：r3\n/u);
+    assert.ok(out.prompt.includes('本輪範圍：全審（'), out.prompt);
+    assert.ok(out.prompt.includes('這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（F12）'), out.prompt);
+
+    // 兩輪都阻擋之後，同一輪補一則「通過」（缺小標的、或小標齊全但跟阻擋同輪＝衝突）：結論閘都還擋著，第 3 輪照分級表（Codex #96 r1 R2）
+    const bareLate = verdict('Beta', 2, r.head, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r2｜結論：通過\n` });
+    for (const late of [bareLate, verdict('Beta', 2, r.head, '通過')]) {
+      const blockedThenLate = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '需修改後再審'), late];
+      out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: blockedThenLate })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+      assert.ok(out.prompt.includes('本輪範圍：全審（'), `同輪補上的「通過」不能解除兩輪的上限：\n${out.prompt}`);
+    }
+    // 第 1 輪沒過、第 2 輪通過：之後回頭改的第 3 輪仍走快速通道（不是「連兩輪沒過」）
+    const passed = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '通過')];
+    out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: passed })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+    assert.ok(out.prompt.includes('本輪範圍：只核差異（'), out.prompt);
+  } finally {
+    cleanup();
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
+  }
+});
+
+test('⑩連兩輪沒「通過」：輪次要相鄰、每輪算不算通過照結論閘（缺小標不算、同輪相反＝衝突）；別位或換了來源的不算', () => {
+  const roles = ['Alpha', 'Beta'];
+  const sha = 'a'.repeat(40);
+  const miss = (round) => verdict('Beta', round, sha, '需修改後再審');
+  const pass = (round) => verdict('Beta', round, sha, '通過');
+  assert.equal(twoMissesInARow([miss(1), miss(2)], 'Beta', 'beta CLI', roles), true);
+  assert.equal(twoMissesInARow([miss(1), pass(2)], 'Beta', 'beta CLI', roles), false);
+  assert.equal(twoMissesInARow([miss(1), miss(3)], 'Beta', 'beta CLI', roles), false, '輪次不相鄰不算連兩輪');
+  assert.equal(twoMissesInARow([miss(1), miss(2), pass(2)], 'Beta', 'beta CLI', roles), true, '同一輪先阻擋、後通過＝相反結論、衝突，照結論閘算沒過（Codex #96 r1 R2）');
+  const bare = (round) => verdict('Beta', round, sha, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：通過\n` });
+  assert.equal(twoMissesInARow([miss(1), miss(2), bare(3)], 'Beta', 'beta CLI', roles), true, '缺固定小標的「通過」不算數，前兩輪照樣是連兩輪沒過');
+  assert.equal(twoMissesInARow([miss(1), bare(2)], 'Beta', 'beta CLI', roles), true, '那一輪只有缺小標的「通過」＝沒有算數的通過');
+  assert.equal(twoMissesInARow([miss(1), pass(2), miss(3)], 'Beta', 'beta CLI', roles), false, '對照組：中間那一輪是算數的通過');
+  assert.equal(twoMissesInARow([miss(1), verdict('Alpha', 2, sha, '需修改後再審')], 'Beta', 'beta CLI', roles), false, '別位的不算');
+  assert.equal(twoMissesInARow([miss(1), miss(2)], 'Beta', 'beta 新來源', roles), false, '換了來源就是另一位');
 });
