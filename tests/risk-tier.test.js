@@ -8,7 +8,7 @@
 //   ⑨一個檔對上幾個家族取最重的、跟表的順序無關（#32 r2：取第一個對上的話，^docs/ 低排在 ^docs/contracts/ 高前面就把高算成低）。
 //   ⑬快速通道（AI）（F12）：清單上的檔整檔都收、只改註解的收（// 行、原本開著的 /* 區塊裡的 * 行、整行一段 /* … */）；
 //     用 /*、*/ 把程式包成註解、改程式、* 開頭的程式續行、帶 @ 的型別註解、空行、新增或刪掉的檔、只改權限、一律不收清單上的檔、
-//     本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器；讀 git 前清掉 GIT_ 那一族（E4）。
+//     符號連結（指向路徑以 // 開頭也一樣）、本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器；讀 git 前清掉 GIT_ 那一族（E4）。
 // ⚠️ 守不到的：內容碰不碰到升級條件（要讀內容）；表本身分得對不對；有沒有照印出來的級別送審；只升不降（工具不記前幾輪）；
 //    「只改註解」的盲點（多行字串裡長得像註解的一行、字串裡的 /*、*/）——那些在工具檔頭與機器表寫明，這裡不假裝守得到。
 'use strict';
@@ -260,11 +260,29 @@ test('⑬快速通道（AI）：改到程式或判不準的一律不走，並印
     assert.match(lane(repo, ['tools/forbidden-tools.js'], guard).line, /tools\/forbidden-tools\.js 在一律不收的清單上/u);
     // 新增的檔、不在清單上的檔
     const added = repo.head((dir) => fs.writeFileSync(path.join(dir, 'tools', 'new.js'), '// 只有註解\n'));
-    assert.match(lane(repo, ['tools/new.js'], added).line, /新增或刪掉的檔不算只改註解/u);
+    assert.match(lane(repo, ['tools/new.js'], added).line, /tools\/new\.js：不是兩版都同樣是一般檔案/u);
     assert.match(lane(repo, ['README.md'], added).line, /README\.md 不在清單上/u);
+    // 符號連結改指向另一支程式：連結的內容是它指去哪裡，用 // 開頭的絕對路徑寫，逐行看像註解（Codex #96 r3 R5）
+    fs.writeFileSync(path.join(repo.dir, 'a-target.js'), 'module.exports = 11;\n');
+    fs.writeFileSync(path.join(repo.dir, 'b-target.js'), 'module.exports = 29;\n');
+    repo.sh('checkout', '-q', '--detach', repo.base);
+    fs.symlinkSync(`/${path.join(repo.dir, 'a-target.js')}`, path.join(repo.dir, 'tools', 'link.js'));
+    repo.sh('add', '-A'); repo.sh('commit', '-q', '-m', 'link base');
+    const linkBase = repo.sh('rev-parse', 'HEAD');
+    fs.unlinkSync(path.join(repo.dir, 'tools', 'link.js'));
+    fs.symlinkSync(`/${path.join(repo.dir, 'b-target.js')}`, path.join(repo.dir, 'tools', 'link.js'));
+    repo.sh('add', '-A'); repo.sh('commit', '-q', '-m', 'link head');
+    const linkHead = repo.sh('rev-parse', 'HEAD');
+    assert.match(repo.sh('ls-tree', linkHead, '--', 'tools/link.js'), /^120000 /u, '前提：受審版本裡它是符號連結');
+    const linkLane = run('7', { settings: { ...settings, fastLane: { ai: LANE } }, platform: lanePlatform(['tools/link.js'], linkHead, linkBase), git: gitIn(repo.dir) });
+    assert.equal(linkLane.result.fastLaneAI, false, linkLane.lines.join('\n'));
+    assert.match(linkLane.lines.join('\n'), /tools\/link\.js：不是兩版都同樣是一般檔案/u);
     // 只改權限：一行都沒改
     const mode = repo.head((dir) => fs.chmodSync(path.join(dir, 'tools', 'x.js'), 0o755));
-    assert.match(lane(repo, ['tools/x.js'], mode).line, /改的不只是內容/u);
+    assert.match(lane(repo, ['tools/x.js'], mode).line, /tools\/x\.js：不是兩版都同樣是一般檔案/u);
+    // 內容變成二進位（夾了 NUL）：git 不給逐行的改動，標頭寫 Binary files
+    const binary = repo.head(editJs((t) => t.replace('// 為什麼：第一行說明', '// 為什麼：第一行說明\u0000')));
+    assert.match(lane(repo, ['tools/x.js'], binary).line, /tools\/x\.js：改的不只是內容/u);
   } finally { fs.rmSync(repo.dir, { recursive: true, force: true }); }
 });
 

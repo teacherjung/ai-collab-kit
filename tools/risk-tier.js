@@ -17,7 +17,7 @@
 // 「只改註解」用保守的規則判（他裁選 a，不引進外部的程式解析器）：改到的每一行，改前在舊版、改後在新版都是整行註解——
 // // 開頭、或在原本就開著的 /* 區塊裡的 * 開頭、或整行就是一段 /* … */；不准改到帶 /*、*/ 的行（那會挪動區塊的起訖），
 // 帶 @ 或工具指示字（eslint、istanbul 這類）的註解一律不收（型別與指示是給機器讀的）；行中夾著 CR、U+2028、U+2029 的不收
-// （JavaScript 在那裡也換行，// 後面就成了程式）；新增、刪除、改名、只改權限的檔都不收。
+// （JavaScript 在那裡也換行，// 後面就成了程式）；新增、刪除、改名、只改權限的檔，符號連結與子模組都不收。
 // 版本內容讀本機 git（主幹那一版與受審版本的共同祖先 → 受審版本）；本機沒有那兩個版本＝判不出、不走。
 // ⚠️ 判「只改註解」守不到的：多行字串或範本字串裡剛好長得像註解的一行（會被當成註解收下）；字串、正規式或 // 註解裡的 /*、*/
 //    會讓「在不在區塊裡」判錯；程式把自己的原始碼當資料讀（例如考題讀工具的檔頭）——這些靠輕審那一輪的複審者核、雲端三關照跑。
@@ -179,9 +179,17 @@ function changedLinesOf(diff) {
 /** 一個檔從 base 到 head 是不是只改了註解：{ ok } 或 { ok: false, why }。 */
 function commentOnlyFile(file, { git, base, head }) {
   if (!/\.(c|m)?js$/u.test(file)) return { ok: false, why: '只會判 JavaScript 的註解' };
+  // 兩版都要是一般檔案：符號連結的內容是它指去哪裡，指向路徑剛好以 // 開頭就會被當成註解（Codex #96 r3 R5）；子模組也不收
+  const modeOf = (rev) => {
+    const r = git(['ls-tree', '--full-tree', rev, '--', file]);
+    const m = r.ok ? /^(\d{6}) blob /u.exec(r.out) : null;
+    return m ? m[1] : null;
+  };
+  const [modeBefore, modeAfter] = [modeOf(base), modeOf(head)];
+  if (!['100644', '100755'].includes(modeBefore) || modeAfter !== modeBefore) return { ok: false, why: '不是兩版都同樣是一般檔案（符號連結、子模組、新增刪除或改了權限）' };
   const before = git(['cat-file', 'blob', `${base}:${file}`]);
   const after = git(['cat-file', 'blob', `${head}:${file}`]);
-  if (!before.ok || !after.ok) return { ok: false, why: '新增或刪掉的檔不算只改註解' };
+  if (!before.ok || !after.ok) return { ok: false, why: '讀不到檔案內容' };
   const diff = git(['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '-U0', base, head, '--', file]);
   if (!diff.ok) return { ok: false, why: '讀不到改動' };
   const changed = changedLinesOf(diff.out);
