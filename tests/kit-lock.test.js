@@ -7,9 +7,11 @@
 //   --sync、--write 在本機跑、從本機套件倉庫的那一版取清單內容。
 // 守得到的：--check 多出來、少掉、改內容、改權限各自紅並指名路徑；舊格式的空例外段照收、有內容＝退 2；清單壞掉、git 失敗＝退 2；
 //   --sync 查到已提交、暫存區、工作樹、沒追蹤、被忽略、改名、清單被手改過（改一筆、少一筆、改權限）、共用路徑上一層是連結
-//   （指到專案裡或樹外）、只差大小寫的同名路徑、跳過工作樹或假設沒改的標記、套件新檔會被專案忽略，任何一樣都不換檔（連 --apply 也是），
+//   （指到專案裡或樹外）、已追蹤的共用資料夾裡另有倉庫的 .git、清單寫不進去、只差大小寫的同名路徑、跳過工作樹或假設沒改的標記、
+//   套件新檔會被專案忽略，任何一樣都不換檔（連 --apply 也是），
 //   一個檔都不動（樹外也是）；查過才換、換完工作樹＝套件那一版、專案自己的檔（含 docs/、cases/ 底下的鄰居）逐位元組不變；
-//   換到一半對不上、刪檔失敗時印的還原指令真的還原得回來；版本不在套件主幹上（主幹名照套件設定）、往回同步、清單指到沒合併的版本、
+//   換到一半對不上、刪檔失敗、換完寫清單失敗時印的還原指令，原字串交給 shell 跑（路徑有空白、$、單引號）真的還原得回來；
+//   套件舊版的共用範圍比新版小時，清單照舊版的範圍核（不把新加進範圍的檔誤判成清單少列）；版本不在套件主幹上（主幹名照套件設定）、往回同步、清單指到沒合併的版本、
 //   跑的工具不是那一版的、沒有 origin/<主幹>＝拒絕；--write 只收第一次裝（歷史裡有過清單也拒）；--touch 的分類；一行固定提醒；
 //   帶不帶只看設定的登記，登記跟清單在不在對不上就紅。
 // ⚠️ 守不到的：同一支 PR 連清單、工具、這一題一起改（絆線不是鎖）；--check 不驗清單內容真的出自套件；套件有沒有新的；
@@ -48,7 +50,7 @@ const KIT_FILES = {
 };
 
 /** 一個假套件倉庫（主幹＝origin/main）＋一個照它同步好、提交過的專案；家目錄指到暫存區（規矩 E4：git 一律拿清過的環境）。 */
-function makeRepos(t) {
+function makeRepos(t, { projName = 'proj' } = {}) {
   const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-lock-')));
   t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
   const env = { ...gitEnv(), HOME: scratch, GIT_CEILING_DIRECTORIES: scratch, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
@@ -63,7 +65,7 @@ function makeRepos(t) {
     if (mode) fs.chmodSync(path.join(dir, rel), mode);
   };
   const kit = path.join(scratch, 'kit');
-  const root = path.join(scratch, 'proj');
+  const root = path.join(scratch, projName);
   fs.mkdirSync(kit);
   fs.mkdirSync(root);
   const kgit = gitIn(kit);
@@ -360,6 +362,8 @@ test('--sync 擋下會被蓋掉或刪掉的東西：已提交、暫存、未暫�
   const short1 = r.v1.slice(0, 7);
   /** 回到乾淨的 base：先還原、再拿掉上一輪留下的標記（檔案要在索引裡才拿得掉）、再還原一次，清掉沒追蹤的與樹外那一份。 */
   const resetTo = (sha) => {
+    fs.rmSync(path.join(r.root, 'tools', '.git'), { recursive: true, force: true });
+    if (fs.existsSync(path.join(r.root, lock.LOCK_FILE))) fs.chmodSync(path.join(r.root, lock.LOCK_FILE), 0o644);
     r.git('reset', '-q', '--hard', sha);
     for (const [flag, file] of [['--no-skip-worktree', 'MACHINES.md'], ['--no-assume-unchanged', 'GLOSSARY.md']]) r.git('update-index', flag, file);
     r.git('reset', '-q', '--hard', sha);
@@ -411,6 +415,14 @@ test('--sync 擋下會被蓋掉或刪掉的東西：已提交、暫存、未暫�
       r.git('update-index', '--add', '--cacheinfo', `100644,${r.blobOf('// 大小寫不同的同名檔\n', true)},Tools/own.js`);
       r.git('commit', '-q', '-m', '大小寫不同的同名檔');
     }, /^ {2}・Tools\/own\.js：只差大小寫的同名路徑/mu],
+    ['已追蹤的共用資料夾裡另開一個倉庫（外層 git 看不到它的 .git）', () => {
+      const inner = (...args) => assert.equal(spawnSync('git', args, { cwd: path.join(r.root, 'tools'), env: r.env }).status, 0, `內層 git ${args[0]}`);
+      inner('init', '-q');
+      inner('add', '-A');
+      inner('commit', '-q', '-m', '只在內層的提交');
+      assert.equal(r.git('status', '--porcelain', '--ignored=matching', '--', 'tools').trim(), '', '前提：外層 git 完全看不到它');
+    }, /^ {2}・tools\/\.git：共用路徑底下另有一個倉庫的 git 紀錄/mu],
+    ['清單寫不進去（唯讀）', () => { fs.chmodSync(path.join(r.root, lock.LOCK_FILE), 0o444); }, /^ {2}・kit-lock\.json：寫不進去（權限）/mu],
     ['跳過工作樹的標記藏起來的改動', () => { r.git('update-index', '--skip-worktree', 'MACHINES.md'); r.put('MACHINES.md', '# 藏起來的改動\n'); }, /^ {2}・MACHINES\.md：標了跳過工作樹或假設沒改/mu],
     ['假設沒改的標記藏起來的改動', () => { r.git('update-index', '--assume-unchanged', 'GLOSSARY.md'); r.put('GLOSSARY.md', '# 藏起來的改動\n'); }, /^ {2}・GLOSSARY\.md：標了跳過工作樹或假設沒改/mu],
   ]) {
@@ -498,8 +510,19 @@ test('--sync 的主幹名照套件那一版已提交的設定（不寫死 main�
   assert.throws(() => r.doSync(v2), (e) => e instanceof lock.LockError && /沒有 origin\/trunk/u.test(e.message), '只有 origin/main、沒有 origin/trunk：不拿 main 頂替');
 });
 
-test('--sync --apply 換到一半對不上（套件那一版打包時少了檔）：退 2、印的還原指令真的把專案還原到同步前（連套件新加的檔一起清掉）', (t) => {
-  const r = makeRepos(t);
+/** 把訊息裡印的還原指令原字串交給 shell 跑（不是拿參數陣列直接叫 git）；X 設成別的值，路徑裡的 $X 被展開就會找錯資料夾。 */
+function runPrinted(r, msg) {
+  const lines = lock.restoreLines(r.root, lock.readLock(r.root));
+  for (const line of lines) {
+    assert.ok(msg.includes(line), `訊息要逐字印出這一行還原指令：${line}\n${msg}`);
+    const p = spawnSync('/bin/sh', ['-c', line], { env: { ...r.env, X: 'somewhere-else' }, encoding: 'utf8' });
+    assert.equal(p.status, 0, `照貼的還原指令要跑得過：${line}\n${p.stderr}`);
+  }
+  return lines;
+}
+
+test('--sync --apply 換到一半對不上（套件那一版打包時少了檔）：退 2、印的還原指令照貼給 shell 跑（路徑有空白、$、單引號）真的把專案還原到同步前（連套件新加的檔一起清掉）', (t) => {
+  const r = makeRepos(t, { projName: "my proj $X it's" });
   r.write();
   r.commit('清單');
   // 套件在根目錄加了 export-ignore：git archive 打包時會漏掉 templates/c.md，解開後跟那一版的 ls-tree 對不上
@@ -508,11 +531,9 @@ test('--sync --apply 換到一半對不上（套件那一版打包時少了檔�
   let msg = '';
   assert.throws(() => r.doSync(v2, { apply: true }), (e) => { msg = e.message; return e instanceof lock.LockError; });
   assert.match(msg, new RegExp(`解開之後工作樹跟套件 ${v2.slice(0, 7)} 還有 1 個對不上：templates/c\\.md：少掉`, 'u'));
-  const cmds = lock.restoreCommands(lock.readLock(r.root));
-  for (const args of cmds) assert.ok(msg.includes(`git -C ${JSON.stringify(r.root)} ${args.join(' ')}`), `訊息要印出還原指令：${args.join(' ')}`);
-  assert.ok(!cmds[0].includes('cases/DIGEST.md'), '已提交的版本沒有的共用路徑不放進 checkout（git checkout 會退非零）');
+  assert.ok(!lock.restoreCommands(lock.readLock(r.root))[0].includes('cases/DIGEST.md'), '已提交的版本沒有的共用路徑不放進 checkout（git checkout 會退非零）');
   assert.ok(fs.existsSync(path.join(r.root, 'templates', 'new2.md')), '前提：套件新加的檔已經解開了（還原要把它清掉）');
-  for (const args of cmds) r.git(...args);
+  runPrinted(r, msg);
   assert.deepEqual(snapshot(r.root), before, '照印的指令還原＝同步前一模一樣');
   assert.equal(r.git('status', '--porcelain').trim(), '', '還原後工作樹乾淨');
 });
@@ -531,8 +552,46 @@ test('--sync --apply 刪共用路徑刪到一半失敗（唯讀資料夾）：�
   assert.throws(() => r.doSync(v2, { apply: true }), (e) => { msg = e.message; return e instanceof lock.LockError; });
   assert.match(msg, /刪共用路徑時失敗（E[A-Z]+）。工作樹已經動過/u);
   fs.chmodSync(locked, 0o755);
-  for (const args of lock.restoreCommands(lock.readLock(r.root))) r.git(...args);
+  runPrinted(r, msg);
   assert.deepEqual(snapshot(r.root), before, '照印的指令還原＝同步前一模一樣');
+});
+
+test('--sync --apply 換完寫新清單失敗：退 2、說共用檔已經換了而清單還是舊的、印還原指令，照貼還原回到同步前', (t) => {
+  const r = makeRepos(t);
+  r.write();
+  r.commit('清單');
+  const v2 = r.nextKit(() => r.putKit('tools/a.js', '// v2\n'), 'v2');
+  const before = snapshot(r.root);
+  const real = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).endsWith(lock.LOCK_FILE)) { const e = new Error('寫不進去（考題造的）'); e.code = 'EIO'; throw e; }
+    return real.call(fs, file, ...rest);
+  };
+  let msg = '';
+  try {
+    assert.throws(() => r.doSync(v2, { apply: true }), (e) => { msg = e.message; return e instanceof lock.LockError; });
+  } finally { fs.writeFileSync = real; }
+  assert.match(msg, new RegExp(`共用檔已經換成套件 ${v2.slice(0, 7)}，寫新清單卻失敗（EIO），清單還是舊的那一版`, 'u'));
+  assert.equal(fs.readFileSync(path.join(r.root, 'tools', 'a.js'), 'utf8'), '// v2\n', '前提：共用檔真的已經換了');
+  runPrinted(r, msg);
+  assert.deepEqual(snapshot(r.root), before, '照印的指令還原＝同步前一模一樣');
+});
+
+test('--sync：套件舊版的共用範圍比新版小（新版才把舊版就有的檔納入），清單照舊版自己的範圍核，不誤判成清單少列', (t) => {
+  const r = makeRepos(t);
+  const narrow = KIT_FILES['tools/kit-lock.js'].replace(", 'cases/DIGEST.md']", ']');
+  assert.notEqual(narrow, KIT_FILES['tools/kit-lock.js'], '前提：造得出一份共用範圍較小的舊工具');
+  const vOld = r.nextKit(() => { r.putKit('tools/kit-lock.js', narrow); r.putKit('cases/DIGEST.md', '# 舊版就有、但還不是共用檔\n'); }, '舊版：範圍不含 cases/DIGEST.md');
+  // 專案照舊版同步（舊範圍不含 cases/DIGEST.md）：舊工具寫的清單只列舊範圍的檔
+  r.put('tools/kit-lock.js', narrow);
+  r.saveLock({ repo: 'acct/kit', version: vOld, syncedAt: '2026-10-01', entries: lsTree(r, vOld).filter((e) => e.path !== 'cases/DIGEST.md') });
+  r.commit('照舊版同步');
+  const v2 = r.nextKit(() => { r.putKit('tools/kit-lock.js', KIT_FILES['tools/kit-lock.js']); r.putKit('tools/a.js', '// v2\n'); }, '新版：範圍加了 cases/DIGEST.md');
+  const res = r.doSync(v2);
+  assert.equal(res.ok, true, `舊版範圍裡清單沒少列：照常過\n${res.lines.join('\n')}`);
+  assert.ok(res.lines.includes('  ・cases/DIGEST.md：套件這一版新加'), res.lines.join('\n'));
+  assert.equal(r.doSync(v2, { apply: true }).ok, true);
+  assert.ok(fs.existsSync(path.join(r.root, 'cases', 'own.md')), '專案自己的案例檔留著');
 });
 
 // 擁有者 2026-09-29 裁 a：不判斷這次動到沒有，每次都印同一行固定提醒；有沒有動到由實作者看 PR 對主幹的差異告訴擁有者。

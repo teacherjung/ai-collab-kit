@@ -8,8 +8,9 @@
 //   要擋「覆蓋掉專案的改動」，檢查與換檔必須在同一個指令裡、檢查在任何刪除之前。預設只檢查（預演），加 --apply 才換檔。
 // 為什麼同步前要分開查已提交、暫存區、工作樹、沒追蹤、被忽略：換檔會整個刪掉共用路徑；同步前確認這五處都跟清單一樣，
 //   刪掉的東西已提交的版本（HEAD）都還有，換到一半失敗也能從 HEAD 整個還原。
-// 為什麼還要查共用路徑的上一層是不是連結、大小寫不同的同名路徑、跳過工作樹的標記、專案會忽略的新檔：這幾種 git 的路徑比對看不到，
-//   刪檔卻會穿過去或碰到（2026-10-15 送審前自審實際重現：上一層是連結時刪到連結目標裡專案自己的檔，樹外的檔還原不回來）。
+// 為什麼還要查共用路徑的上一層是不是連結、裡面有沒有別的倉庫的 .git、大小寫不同的同名路徑、跳過工作樹的標記、專案會忽略的新檔、
+//   清單寫不寫得進去：這幾種 git 的路徑比對看不到，刪檔卻會穿過去或碰到，或換到一半才失敗（2026-10-15 送審前自審與 #106 r1 複審
+//   實際重現：上一層是連結時刪到連結目標裡專案自己的檔、已追蹤的資料夾裡另開的倉庫被整個刪掉，都還原不回來）。
 // 為什麼要核清單出自套件（雙向、用套件舊版自己的共用路徑）、兩個版本都在套件主幹上、只往前、跑的是那一版的工具：清單可以被手改
 //   （絆線不是鎖），手改過的清單（改一筆或少一筆）會讓「專案改過的」看起來沒改；沒審過的本機提交不該被同步進專案；往回同步會把
 //   錢的攔截器換回舊版；共用路徑（SHARED_PATHS）寫在這支工具裡、各版可能不同，用別版的工具同步，換的範圍就跟那一版對不上。
@@ -17,7 +18,7 @@
 // 守到哪裡（tests/kit-lock.test.js 釘）：--check 拿清單每一筆跟工作樹比權限＋blob，多出來、少掉、改內容、改權限各自紅並指名路徑；
 //   清單不在、壞掉或形狀不對、舊格式留下的例外段還有內容、git 失敗＝退 2（不猜）。
 //   --sync：上面那些全部成立才換；任何一樣不成立＝退 1、一個檔都不動、清單不動。--apply 換完再比一次工作樹＝套件新那一版，
-//   對不上、或刪檔解包失敗＝退 2 並印還原指令。
+//   對不上、刪檔解包失敗、或換完寫清單失敗＝退 2 並印照貼就能跑的還原指令（路徑有空白、$、單引號也照字面）。
 //   --write：只用在第一次裝（工作樹上、或這棵樹的歷史裡出現過清單＝拒寫），工作樹要剛好等於套件那一版。
 //   --touch：列出給的路徑裡哪些落在共用路徑（大小寫不分、../ 與 ./ 先整理），命中退 1；只列，沒接進任何閘。
 //   --sync、--write 每次都印一行固定提醒：攔截器相關的 5 樣，動到任一樣合併後要換複本、重按信任。
@@ -351,6 +352,28 @@ function parentHazards(root) {
   return out;
 }
 
+/**
+ * 共用路徑底下（不跟著連結走）任何一層叫 .git 的資料夾或檔：另一個倉庫的紀錄。外層 git 的 status、ls-files 都不列它，
+ * 換檔卻會整個刪掉，而且不在 HEAD 裡、還原不回來（2026-10-15 #106 r1 複審實際重現：已追蹤的 tools/ 裡另開倉庫）。
+ */
+function nestedGit(root) {
+  const out = [];
+  const walk = (rel) => {
+    let st;
+    try { st = fs.lstatSync(path.join(root, rel)); } catch { return; }
+    if (path.posix.basename(rel) === '.git') { out.push(rel); return; }
+    if (!st.isDirectory() || st.isSymbolicLink()) return;
+    for (const name of fs.readdirSync(path.join(root, rel))) walk(`${rel}/${name}`);
+  };
+  for (const p of SHARED_PATHS) walk(p);
+  return out.sort();
+}
+
+/** 清單寫得進去嗎（換完要寫新清單；寫不進去要在動手之前就知道）。 */
+function lockWritable(root) {
+  try { fs.accessSync(path.join(root, LOCK_FILE), fs.constants.W_OK); return true; } catch { return false; }
+}
+
 /** 大小寫不同、但在大小寫不分的磁碟上就是共用路徑的那些路徑（已提交、暫存、沒追蹤、被忽略都算）：換檔會一起刪掉。 */
 function caseTwins(root) {
   const head = git(root, ['ls-tree', '-r', '-z', '--name-only', '--full-tree', 'HEAD']).split('\0');
@@ -390,6 +413,8 @@ function precheck(root, prev, prevSha, kit, target) {
   const old = parseTree(git(kit, ['ls-tree', '-r', '-z', '--full-tree', prevSha, '--', ...oldScope]), `套件 ${prevSha}`);
   for (const d of compare(prev.entries, old)) problems.push(`${d.path}：${LOCK_KIND[d.kind]}——跟套件 ${short} 那一版對不上（清單被手改過？）`);
   problems.push(...parentHazards(root));
+  for (const p of nestedGit(root)) problems.push(`${p}：共用路徑底下另有一個倉庫的 git 紀錄——外層 git 看不到它，換檔會整個刪掉、還原不回來；先搬出共用路徑`);
+  if (!lockWritable(root)) problems.push(`${LOCK_FILE}：寫不進去（權限）——換完檔要寫新清單，先讓它寫得進去`);
   for (const p of caseTwins(root)) problems.push(`${p}：只差大小寫的同名路徑——在大小寫不分的磁碟上它就是共用路徑，換檔會一起刪掉`);
   for (const p of hiddenFlags(root)) problems.push(`${p}：標了跳過工作樹或假設沒改（git update-index），git 看不到它的改動——先拿掉標記（--no-skip-worktree／--no-assume-unchanged）`);
   const head = headEntries(root);
@@ -411,9 +436,16 @@ function restoreCommands(previous) {
   return [['checkout', 'HEAD', '--', ...tracked], ['clean', '-fdx', '--', ...SHARED_PATHS]];
 }
 
+/** 給 shell 的字：只有字母、數字與 _ / . , : = - 照原樣，其餘包單引號——裡面的 $、反引號、空白都照字面（JSON 的雙引號擋不住 shell 展開；#106 r1 複審抓到）。 */
+const shellQuote = (s) => (/^[A-Za-z0-9_/.,:=-]+$/u.test(String(s)) ? String(s) : `'${String(s).replace(/'/gu, "'\\''")}'`);
+
+/** 照貼就能跑的還原指令，一行一條。 */
+function restoreLines(root, previous) {
+  return restoreCommands(previous).map((args) => ['git', '-C', root, ...args].map(shellQuote).join(' '));
+}
+
 function restoreHint(root, previous) {
-  const cmds = restoreCommands(previous).map((args) => `git -C ${JSON.stringify(root)} ${args.join(' ')}`);
-  return `工作樹已經動過。同步前已確認共用路徑底下的東西都跟已提交的版本一樣、也沒有沒追蹤或被忽略的檔，可以整個還原：${cmds.join('，再 ')}`;
+  return `工作樹已經動過。同步前已確認共用路徑底下的東西都跟已提交的版本一樣、也沒有沒追蹤或被忽略的檔，可以整個還原（在終端機照貼這兩行）：\n${restoreLines(root, previous).join('\n')}`;
 }
 
 /** 套件那一版共用路徑的 tar（只含那一版真的有的共用路徑；git archive 遇到不存在的路徑會退非零）。 */
@@ -427,8 +459,8 @@ function kitArchive(kit, target) {
 
 /** 整批換：先刪掉共用路徑（git archive 只新增與覆蓋、不會刪），再解開套件那一版，最後比一次工作樹＝那一版。 */
 function replace(root, target, archive, previous) {
-  const hazards = parentHazards(root);
-  if (hazards.length) throw new LockError(`動手之前又查了一次，共用路徑的上一層不對（一個檔都還沒動）：${hazards.join('；')}`);
+  const hazards = [...parentHazards(root), ...nestedGit(root).map((p) => `${p}：另一個倉庫的 git 紀錄`)];
+  if (hazards.length) throw new LockError(`動手之前又查了一次，共用路徑不對（一個檔都還沒動）：${hazards.join('；')}`);
   try {
     for (const p of SHARED_PATHS) fs.rmSync(path.join(root, p), { recursive: true, force: true });
   } catch (e) {
@@ -478,7 +510,11 @@ function sync(root = ROOT, { kit, version, date, repo, apply = false } = {}) {
     return { ok: true, lines };
   }
   replace(root, target, archive, previous);
-  fs.writeFileSync(path.join(root, LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
+  try {
+    fs.writeFileSync(path.join(root, LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
+  } catch (e) {
+    throw new LockError(`共用檔已經換成套件 ${target.sha.slice(0, 7)}，寫新清單卻失敗（${(e && e.code) || (e && e.message) || '不明'}），清單還是舊的那一版。${restoreHint(root, previous)}`);
+  }
   lines.push(FIXED, `寫好 ${LOCK_FILE}：套件 ${repoName} ${target.sha}（${syncedAt}），${target.list.length} 筆`);
   return { ok: true, lines, lock };
 }
@@ -596,4 +632,4 @@ if (require.main === module) {
   process.exit(r.code);
 }
 
-module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, SELF_REL, underShared, underSharedFolded, touchesShared, normalizeTouch, touch, sharedPathsIn, FINGERPRINT_SHARED, CODEX_TEMPLATE, FIXED, LockError, entries, headEntries, uncommitted, parentHazards, caseTwins, hiddenFlags, kitEntries, kitVersion, readLock, validateLock, compare, check, precheck, restoreCommands, sync, write, declaration, parseArgs, main };
+module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, SELF_REL, underShared, underSharedFolded, touchesShared, normalizeTouch, touch, sharedPathsIn, FINGERPRINT_SHARED, CODEX_TEMPLATE, FIXED, LockError, entries, headEntries, uncommitted, parentHazards, caseTwins, hiddenFlags, kitEntries, kitVersion, readLock, validateLock, compare, check, precheck, restoreCommands, restoreLines, nestedGit, sync, write, declaration, parseArgs, main };
