@@ -250,7 +250,7 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   assert.equal(again.status, 0, again.stderr);
   assert.equal(again.stdout, `${fp}\n`, '標準輸出＝指紋一行');
   assert.match(again.stderr, /原本就在、自洽，沒有動它/u);
-  assert.match(again.stderr, /自我試跑：過（\/bin\/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕（HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））/u,
+  assert.match(again.stderr, /自我試跑：過（\/bin\/sh -c 與 -lc 各一遍：放行候選的 JSON 輸入被放行、該擋的假名印出拒絕（HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））/u,
     '已經在：前兩項是這個家跑的，第三項是另開的暫存目錄跑的');
   assert.match(again.stderr, /這棵樹現在的四個檔：同一個指紋/u);
   assert.deepEqual(snapshot(baseOf(home)), before, '已經在而且自洽：一個位元組、一個修改時間都不可以變');
@@ -266,7 +266,7 @@ test('③--claude 落地：位置、四個唯讀檔、沒有暫存殘留；再�
   const first = tool(src, ['--claude'], { home: firstHome });
   assert.deepEqual([first.status, first.stdout], [0, `${fp}\n`], first.stderr);
   assert.match(first.stderr, /（新落地）/u);
-  assert.match(first.stderr, /自我試跑：過（落地前先用這個家跑 \/bin\/sh -lc ':'，標準輸出是空的；之後兩次，每次 \/bin\/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕（第一次 HOME 指到暫存骨架、落地後第二次 HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））/u,
+  assert.match(first.stderr, /自我試跑：過（落地前先用這個家跑 \/bin\/sh -lc ':'，標準輸出是空的；之後兩次，每次 \/bin\/sh -c 與 -lc 各一遍：放行候選的 JSON 輸入被放行、該擋的假名印出拒絕（第一次 HOME 指到暫存骨架、落地後第二次 HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））/u,
     '新落地：落地前那一次、兩次試跑，第三項是另開的暫存目錄跑的');
   assert.deepEqual(fs.readdirSync(baseOf(firstHome)), [fp]);
 

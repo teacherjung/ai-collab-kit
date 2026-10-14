@@ -785,8 +785,8 @@ function mainClaude(args, env) {
   try { sameAsTree = treeFingerprint() === r.fp; } catch { /* 這棵樹算不出指紋：下面照實說 */ }
   // 改過一個位元組的副本是擺在另開的暫存目錄、HOME 指到那裡跑的（selfTest 的 dupRoot），不是這個家
   const tried = r.existed
-    ? '自我試跑：過（/bin/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕（HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））。'
-    : '自我試跑：過（落地前先用這個家跑 /bin/sh -lc \':\'，標準輸出是空的；之後兩次，每次 /bin/sh -c 與 -lc 各一遍：無害假名放行、該擋的假名印出拒絕'
+    ? '自我試跑：過（/bin/sh -c 與 -lc 各一遍：放行候選的 JSON 輸入被放行、該擋的假名印出拒絕（HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））。'
+    : '自我試跑：過（落地前先用這個家跑 /bin/sh -lc \':\'，標準輸出是空的；之後兩次，每次 /bin/sh -c 與 -lc 各一遍：放行候選的 JSON 輸入被放行、該擋的假名印出拒絕'
       + '（第一次 HOME 指到暫存骨架、落地後第二次 HOME 指到這個家）；改過一個位元組的副本退 2（HOME 指到另開的暫存目錄））。';
   process.stdout.write(`${r.fp}\n`);
   process.stderr.write([...summary, tried, ...left,
