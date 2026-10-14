@@ -1,24 +1,32 @@
-// 共用檔清單（釘住套件版本）：使用專案根目錄一份 kit-lock.json，記下同步時取的是套件哪一版、那一版每個共用檔的權限＋blob＋路徑，
-// 以及「專案自己先改了套件的檔」的例外（哪個檔、為什麼、誰負責搬回套件、從哪天起）。
+// 共用檔清單（釘住套件版本）：使用專案根目錄一份 kit-lock.json，記下同步時取的是套件哪一版、那一版每個共用檔的權限＋blob＋路徑。
+// 協作套件的檔只在套件改（規矩 D5）：使用專案不改、不刪，也不在共用路徑底下加檔；要改就去套件改，合併後整批同步回來。
 //
-// 為什麼（擁有者 2026-09-29 裁）：套件的檔預設在套件改、再同步回專案；專案先改只當記錄過的例外，記錄要機器比對。原專案 #641 在專案
-// 就地改了 6 個共用檔，PR 說明與留言沒有一處提到套件，是後來有人手動比對兩份程式才發現、套件約 34 小時後才補上——沒有任何機器在看
-// 「專案有沒有改到套件的檔」；同步到哪一版也只記在文字裡，機器讀不到。
-// 為什麼 --write 要讀套件本身（2026-09-29 自審抓到）：照 git archive 解開的同步只會新增與覆蓋、不會刪，工作樹可能留著套件已經刪掉的檔、
-// 或專案自己多放的檔；拿工作樹當「套件那一版」寫清單，例外會靜靜消失。所以清單的內容一律從套件那一版取，工作樹跟它不一樣又沒記例外＝拒寫。
+// 為什麼（擁有者 2026-10-15 裁 A：「一律不能改，沒有例外」）：原專案 #641 在專案就地改了 6 個共用檔、PR 說明與留言沒有一處提到套件，
+//   兩邊約 34 小時內容不同；#643 標題是同步、實際逐段挑著搬，做出套件從沒有過的版本。2026-09-29 立的「先在專案改要記例外」從沒被用過，
+//   2026-10-14 隔離重現又量到它的洞：記了例外再照舊法整批覆蓋、跑 --write，專案的改動被換掉、例外被清掉，--check 照樣全綠。
+// 為什麼同步改成一個指令（--sync），不再是「手動刪檔解包、事後 --write」：事後寫清單時，覆蓋已經發生了，專案自己的改動在那之前就沒了；
+//   要擋「覆蓋掉專案的改動」，檢查與換檔必須在同一個指令裡、檢查在任何刪除之前。預設只檢查（預演），加 --apply 才換檔。
+// 為什麼同步前要分開查已提交、暫存區、工作樹、沒追蹤、被忽略：換檔會整個刪掉共用路徑；同步前確認這五處都跟清單一樣，
+//   刪掉的東西主幹上都還有，換到一半失敗也能從主幹整個還原。
+// 為什麼要核清單出自套件、版本在套件主幹上、跑的是那一版的工具：清單可以被手改（絆線不是鎖），手改過的清單會讓「專案改過的」看起來沒改；
+//   沒審過的本機提交不該被同步進專案；共用路徑（SHARED_PATHS）寫在這支工具裡，用別版的工具同步，換的範圍就跟那一版對不上。
 //
-// 守到哪裡（tests/kit-lock.test.js 釘）：--check 拿清單每一筆跟工作樹比權限＋blob；多出來、少掉、改內容、改權限的檔，每一個都要有一筆
-//   例外對上（路徑一字不差，大小寫也算）；例外指的檔已經跟清單一樣、或根本不存在＝紅；清單不在、壞掉或形狀不對、git 失敗＝退 2（不猜）。
-//   --write 從本機套件倉庫的那一版取清單內容（版本不在＝退 2），工作樹跟它不一樣的每個檔都要在上一份清單裡有例外，沒有＝拒寫；
-//   印出跟上一份差在哪、保留與清掉了哪些例外，外加一行固定提醒：列出攔截器相關的 5 樣，動到任一樣合併後要換複本、重按信任。
+// 守到哪裡（tests/kit-lock.test.js 釘）：--check 拿清單每一筆跟工作樹比權限＋blob，多出來、少掉、改內容、改權限各自紅並指名路徑；
+//   清單不在、壞掉或形狀不對、舊格式留下的例外段還有內容、git 失敗＝退 2（不猜）。
+//   --sync：清單出自套件那一版、已提交與暫存區與工作樹都跟清單一樣、共用路徑底下沒有沒追蹤或被忽略的檔，全部成立才換；任何一樣不成立＝退 1、
+//   一個檔都不動、清單不動。--apply 換完再比一次工作樹＝套件新那一版，對不上＝退 2 並印還原指令。
+//   --write：只用在第一次裝（已經有清單＝拒寫），工作樹要剛好等於套件那一版。--touch：列出給的路徑裡哪些落在共用路徑（大小寫不分、
+//   ../ 與 ./ 先整理），只列不擋。--sync、--write 每次都印一行固定提醒：攔截器相關的 5 樣，動到任一樣合併後要換複本、重按信任。
 // 為什麼提醒是固定的一行、不判斷這次動到沒有（擁有者 2026-09-29 裁 a）：複審 r1〜r4 連四輪在「自動判斷動到沒有」這一族抓到問題
 //   （推算與直接量各有漏的情境）；原專案的釘指紋等式題在指紋變了卻沒重印那一行時本來就會紅。這次要不要換，由實作者看這支 PR 對主幹的差異告訴擁有者。
 // ⚠️ 擋不住的：同一支 PR 連清單、這支工具或考題一起改（絆線不是鎖；改動留在 diff 裡給複審者看）；
-//   --check 不驗清單裡的版本碼與 blob 真的出自套件（使用專案的雲端讀不到私有的套件；--write 那一刻有驗，之後手改清單就只剩複審）；
-//   套件那邊有沒有新的（要讀得到套件）；被 .gitignore 忽略的檔；SHARED_PATHS 以外的檔（例如從範本抄出來的 .github/workflows）；
-//   settings.json（專案自己的值，連同 forbidden 那一塊都不在清單）；例外的 why／who 只驗非空單行，是不是真的負責人不驗；
+//   --check 不驗清單裡的版本碼與 blob 真的出自套件（使用專案的雲端讀不到私有的套件；--sync、--write 那一刻有驗，之後手改清單就只剩複審）；
+//   不走 --sync、自己動手刪檔解包（有寫入權限就做得到，這不是作業系統的防寫）；--sync 檢查之後、換檔之前另一個行程改了共用路徑
+//   （檢查與換檔之間只隔套件的打包）；別的工作樹、別台電腦上還沒推的改動；套件那邊有沒有新的（要讀得到套件）；
+//   --check 看不到被 .gitignore 忽略的檔（--sync 看得到）；SHARED_PATHS 以外的檔（例如從範本抄出來的 .github/workflows）；
+//   settings.json（專案自己的值，連同 forbidden 那一塊都不在清單）；--touch 只看給它的路徑，專案裡指進共用路徑的連結看不到；
 //   各機器換行轉換或 filter 設定不同時，blob 可能對不上（假紅；套件共用檔目前沒有 CR、也沒有 .gitattributes）；
-//   權限照磁碟判（擁有者的執行位元，跟 git 一樣），不看 core.fileMode；分不出「專案多改了」還是「套件有新的沒跟上」。
+//   權限照磁碟判（擁有者的執行位元，跟 git 一樣），不看 core.fileMode；--check 分不出「專案多改了」還是「套件有新的沒跟上」。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,9 +38,11 @@ const { realDate } = require('./pending-rulings.js');
 const ROOT = path.join(__dirname, '..');
 const LOCK_FILE = 'kit-lock.json';
 /** 機器表那一列的名字（settings.json 的 machines；考題拿它決定帶不帶）。 */
-const MACHINE = '共用檔清單（釘住套件版本；專案改到套件的檔要記例外）';
+const MACHINE = '共用檔清單（釘住套件版本；套件的檔只在套件改，同步前先查專案有沒有自己改過）';
 /** 共用檔＝README「搬進一個專案」第 1 步要取的路徑。README 那一步另列了一份給人看，兩份沒有考題比對：改一邊要同一支改另一邊。 */
 const SHARED_PATHS = ['tools', 'tests', 'templates', 'rules.json', 'RULES.md', 'MACHINES.md', 'GLOSSARY.md', 'docs/money-guard-two-pattern-tables.md', 'cases/DIGEST.md'];
+/** 這支工具在套件裡的路徑：--sync、--write 要核跑的這一份跟套件那一版的同一個檔一樣。 */
+const SELF_REL = 'tools/kit-lock.js';
 /** 進錢的攔截器指紋的共用檔＝guard-copy.js 的 COPY_FILES 扣掉 settings.json（那份是專案自己的值、不在清單）。 */
 const FINGERPRINT_SHARED = COPY_FILES.filter((p) => underShared(p));
 /** Codex 全域層的接線範本：改了要照 guard-copy.js 檔頭⓪〜⑥重抽、重按信任（它不進指紋，所以另列）；跟 guard-copy.js 的 TEMPLATE_REL 同一個，考題釘著。 */
@@ -41,11 +51,14 @@ const HEX40 = /^[0-9a-f]{40}$/u;
 const REPO = /^[^\s/]+\/[^\s/]+$/u;
 const MODES = new Set(['100644', '100755', '120000']);
 const LINE_BREAK = /[\n\r\u0085\u2028\u2029\v\f]/u;
+const BIG = 256 * 1024 * 1024;
 const USAGE = `用法：node tools/kit-lock.js --check
-      node tools/kit-lock.js --write --kit <本機套件倉庫的路徑> --version <套件版本碼> [--repo <帳號/倉庫名>] [--date YYYY-MM-DD]
-（--root <目錄>：考題用，指定哪一棵樹；預設是這支工具所在的那棵樹）`;
+      node tools/kit-lock.js --touch [<要改的路徑>…]
+      node <套件>/tools/kit-lock.js --sync --root <使用專案的根目錄> --kit <套件> --version <套件版本碼> [--apply] [--repo <帳號/倉庫名>] [--date YYYY-MM-DD]
+      node tools/kit-lock.js --write --kit <本機套件倉庫的路徑> --version <套件版本碼> --repo <帳號/倉庫名> [--date YYYY-MM-DD]（只用在第一次裝）
+（--root <目錄>：指定哪一棵樹；預設是這支工具所在的那棵樹）`;
 
-/** 清單或環境的問題（不在、壞掉、形狀不對、git 起不來、版本找不到、工作樹跟套件對不上又沒例外）：一律不猜、退 2。 */
+/** 清單或環境的問題（不在、壞掉、形狀不對、git 起不來、版本找不到或不在主幹上、工作樹跟套件對不上）：一律不猜、退 2。 */
 class LockError extends Error {}
 
 function underShared(rel) {
@@ -99,23 +112,50 @@ function entries(root = ROOT) {
   return out;
 }
 
-/** 套件那一版的共用檔（清單內容的唯一來源）：版本在本機套件倉庫找不到＝退 2。 */
-function kitEntries(kit, version) {
-  if (typeof version !== 'string' || !/^[0-9a-f]{7,40}$/u.test(version)) throw new LockError('--version 要給套件的版本碼（7〜40 位小寫十六進位）');
-  if (typeof kit !== 'string' || !fs.existsSync(kit)) throw new LockError('--write 要給 --kit <本機套件倉庫的路徑>：清單的內容從套件那一版取，不從這棵樹抄');
-  const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${version}^{commit}`], { cwd: kit, env: gitEnv(), encoding: 'utf8' });
-  if (r.error || r.status !== 0) throw new LockError(`本機套件倉庫（${kit}）裡找不到版本 ${version}：複本可能還沒 fetch（先 git -C <套件> fetch），或版本碼打錯`);
-  const sha = r.stdout.trim();
-  const out = git(kit, ['ls-tree', '-r', '-z', '--full-tree', sha, '--', ...SHARED_PATHS]);
-  const list = out.split('\0').filter(Boolean).map((line) => {
+/** git ls-tree -r -z 的輸出 → [{mode, blob, path}]；子模組（gitlink）或別的型別＝退 2。where 只用在訊息。 */
+function parseTree(out, where) {
+  return out.split('\0').filter(Boolean).map((line) => {
     const tab = line.indexOf('\t');
     const [mode, type, blob] = line.slice(0, tab).split(' ');
     const rel = line.slice(tab + 1);
-    if (type !== 'blob' || !MODES.has(mode)) throw new LockError(`套件 ${sha} 的 ${rel} 是 ${type}（${mode}）：清單只收一般檔案與連結`);
+    if (type !== 'blob' || !MODES.has(mode)) throw new LockError(`${where}的 ${rel} 是 ${type}（${mode}）：清單只收一般檔案與連結`);
+    if (LINE_BREAK.test(rel)) throw new LockError(`${where}的 ${JSON.stringify(rel)}：檔名含換行，清單不收`);
     return { mode, blob, path: rel };
   }).sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+/** 套件那一版的共用檔（清單內容的唯一來源）：版本在本機套件倉庫找不到＝退 2。 */
+function kitEntries(kit, version) {
+  if (typeof version !== 'string' || !/^[0-9a-f]{7,40}$/u.test(version)) throw new LockError('--version 要給套件的版本碼（7〜40 位小寫十六進位）');
+  if (typeof kit !== 'string' || !fs.existsSync(kit)) throw new LockError('要給 --kit <本機套件倉庫的路徑>：清單的內容從套件那一版取，不從這棵樹抄');
+  const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${version}^{commit}`], { cwd: kit, env: gitEnv(), encoding: 'utf8' });
+  if (r.error || r.status !== 0) throw new LockError(`本機套件倉庫（${kit}）裡找不到版本 ${version}：複本可能還沒 fetch（先 git -C <套件> fetch），或版本碼打錯`);
+  const sha = r.stdout.trim();
+  const list = parseTree(git(kit, ['ls-tree', '-r', '-z', '--full-tree', sha, '--', ...SHARED_PATHS]), `套件 ${sha}`);
   if (!list.length) throw new LockError(`套件 ${sha} 在共用路徑底下一個檔都沒有：版本碼對嗎？`);
   return { sha, list };
+}
+
+/**
+ * 要同步進專案的那一版：除了 kitEntries，還要在套件主幹上（origin/<套件設定的 mainBranch>），而且跑的這支工具＝那一版的 tools/kit-lock.js。
+ * 主幹名從套件倉庫自己的 settings.json 讀（不寫死 main）；本機沒有 origin/<主幹>＝退 2 叫人先 fetch。
+ */
+function kitVersion(kit, version) {
+  const got = kitEntries(kit, version);
+  let main;
+  try { main = JSON.parse(fs.readFileSync(path.join(kit, 'settings.json'), 'utf8')).mainBranch; } catch (e) { throw new LockError(`讀不到套件倉庫的 settings.json（要它的 mainBranch 才知道主幹叫什麼）：${e.message}`); }
+  if (typeof main !== 'string' || !/^[^\s~^:?*[\\]+$/u.test(main)) throw new LockError('套件倉庫 settings.json 的 mainBranch 不是分支名');
+  const ref = `refs/remotes/origin/${main}`;
+  const has = spawnSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd: kit, env: gitEnv(), encoding: 'utf8' });
+  if (has.error || has.status !== 0) throw new LockError(`本機套件倉庫沒有 origin/${main}：先 git -C <套件> fetch，再重跑`);
+  const anc = spawnSync('git', ['merge-base', '--is-ancestor', got.sha, ref], { cwd: kit, env: gitEnv(), encoding: 'utf8' });
+  if (anc.error || ![0, 1].includes(anc.status)) throw new LockError(`git merge-base 退 ${anc.status}：${(anc.stderr || '').trim() || '（沒有訊息）'}`);
+  if (anc.status === 1) throw new LockError(`套件版本 ${got.sha.slice(0, 7)} 不在套件主幹（origin/${main}）上：只同步合併過的版本；剛合併的先 git -C <套件> fetch 再重跑`);
+  const self = got.list.find((e) => e.path === SELF_REL);
+  if (!self) throw new LockError(`套件 ${got.sha.slice(0, 7)} 沒有 ${SELF_REL}：不是這支工具認得的套件版本`);
+  const mine = git(kit, ['hash-object', '--', __filename]).trim();
+  if (mine !== self.blob) throw new LockError(`跑的這一份 ${SELF_REL} 跟套件 ${got.sha.slice(0, 7)} 那一版的不一樣：用套件那一版的工具跑（node <套件>/tools/kit-lock.js …，套件那棵樹要在這一版、而且這個檔沒改過）`);
+  return got;
 }
 
 function plain(value, what) {
@@ -138,9 +178,9 @@ function pathField(value, what) {
   return value;
 }
 
-function exactKeys(obj, keys, what) {
+function exactKeys(obj, keys, what, optional = []) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new LockError(`${LOCK_FILE} 形狀不對：${what} 要是物件`);
-  const have = Object.keys(obj).sort().join(',');
+  const have = Object.keys(obj).filter((k) => !optional.includes(k)).sort().join(',');
   const want = [...keys].sort().join(',');
   if (have !== want) throw new LockError(`${LOCK_FILE} 形狀不對：${what} 的欄位要剛好是 ${keys.join('、')}（現在：${have || '（空）'}）`);
 }
@@ -151,14 +191,16 @@ function sortedUnique(paths, what) {
   }
 }
 
-/** 清單的形狀，逐欄驗；驗不過就丟 LockError（不猜、不補）。 */
+/**
+ * 清單的形狀，逐欄驗；驗不過就丟 LockError（不猜、不補）。
+ * exceptions：2026-10-15 以前寫的清單都帶這一欄；空陣列照收（下一次 --sync 寫的清單就沒有這一欄），有內容＝例外已取消、退 2。
+ */
 function validateLock(lock) {
-  exactKeys(lock, ['repo', 'version', 'syncedAt', 'entries', 'exceptions'], '清單');
+  exactKeys(lock, ['repo', 'version', 'syncedAt', 'entries'], '清單', ['exceptions']);
   if (!REPO.test(plain(lock.repo, 'repo'))) throw new LockError(`${LOCK_FILE} 形狀不對：repo 要是「帳號/倉庫名」`);
   if (!HEX40.test(plain(lock.version, 'version'))) throw new LockError(`${LOCK_FILE} 形狀不對：version 要是 40 位小寫十六進位的套件版本碼`);
   dateField(lock.syncedAt, 'syncedAt');
   if (!Array.isArray(lock.entries)) throw new LockError(`${LOCK_FILE} 形狀不對：entries 要是陣列`);
-  if (!Array.isArray(lock.exceptions)) throw new LockError(`${LOCK_FILE} 形狀不對：exceptions 要是陣列`);
   lock.entries.forEach((e, i) => {
     exactKeys(e, ['mode', 'blob', 'path'], `entries[${i}]`);
     if (!MODES.has(e.mode)) throw new LockError(`${LOCK_FILE} 形狀不對：entries[${i}].mode「${e.mode}」不是 100644、100755 或 120000`);
@@ -166,20 +208,18 @@ function validateLock(lock) {
     pathField(e.path, `entries[${i}].path`);
   });
   sortedUnique(lock.entries.map((e) => e.path), 'entries');
-  lock.exceptions.forEach((x, i) => {
-    exactKeys(x, ['path', 'why', 'who', 'since'], `exceptions[${i}]`);
-    pathField(x.path, `exceptions[${i}].path`);
-    plain(x.why, `exceptions[${i}].why`);
-    plain(x.who, `exceptions[${i}].who`);
-    dateField(x.since, `exceptions[${i}].since`);
-  });
-  sortedUnique(lock.exceptions.map((x) => x.path), 'exceptions');
+  if ('exceptions' in lock) {
+    if (!Array.isArray(lock.exceptions)) throw new LockError(`${LOCK_FILE} 形狀不對：exceptions（舊格式留下的欄）要是空陣列`);
+    if (lock.exceptions.length) {
+      throw new LockError(`${LOCK_FILE} 的 exceptions 還有 ${lock.exceptions.length} 筆：例外已經取消（擁有者 2026-10-15，規矩 D5）——協作套件的檔只在套件改。先把這些改動搬到套件（或在這裡改回清單那一版），再把這一欄拿掉`);
+    }
+  }
   return lock;
 }
 
 function readLock(root = ROOT) {
   const file = path.join(root, LOCK_FILE);
-  if (!fs.existsSync(file)) throw new LockError(`沒有 ${LOCK_FILE}：這棵樹沒帶共用檔清單（套件倉庫自己是上游；使用專案同步後跑 --write 建）`);
+  if (!fs.existsSync(file)) throw new LockError(`沒有 ${LOCK_FILE}：這棵樹沒帶共用檔清單（套件倉庫自己是上游；使用專案第一次裝跑 --write 建）`);
   let parsed;
   try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { throw new LockError(`${LOCK_FILE} 讀不成 JSON：${e.message}`); }
   return validateLock(parsed);
@@ -200,68 +240,173 @@ function compare(current, locked) {
   return diffs.sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
+const CHECK_FIX = '協作套件的檔只在套件改（規矩 D5）：在這裡改回清單那一版（改過的從主幹取回、多出來的移出共用路徑、少掉的補回），要改就去套件改、合併後用 --sync 整批同步回來；改完重跑 node tools/kit-lock.js --check';
+
 function check(root = ROOT) {
   const lock = readLock(root);
-  const current = entries(root);
-  const diffs = compare(current, lock.entries);
-  const excepted = new Set(lock.exceptions.map((x) => x.path));
-  const differing = new Set(diffs.map((d) => d.path));
-  const known = new Set([...current.map((e) => e.path), ...lock.entries.map((e) => e.path)]);
+  const diffs = compare(entries(root), lock.entries);
+  const problems = diffs.map((d) => `${d.path}：${d.kind}`);
+  return { ok: problems.length === 0, problems, fix: CHECK_FIX, repo: lock.repo, version: lock.version, syncedAt: lock.syncedAt, count: lock.entries.length, diffs };
+}
+
+/** --touch 的路徑：反斜線當斜線、先整理 ./ 與 ../；絕對路徑、跑出專案、空的、含換行＝退 2。回整理過的相對路徑。 */
+function normalizeTouch(raw) {
+  if (typeof raw !== 'string' || raw.trim() === '' || raw.includes('\u0000') || LINE_BREAK.test(raw)) throw new LockError(`--touch 的路徑不能是空的或含換行：${JSON.stringify(raw)}`);
+  const s = raw.replace(/\\/gu, '/');
+  if (s.startsWith('/') || /^[A-Za-z]:/u.test(s)) throw new LockError(`--touch 要給相對於專案根目錄的路徑：${raw}`);
+  const n = path.posix.normalize(s).replace(/\/+$/u, '');
+  if (n === '.' || n === '' || n === '..' || n.startsWith('../')) throw new LockError(`--touch 的路徑要落在專案裡、而且是具體的檔或資料夾：${raw}`);
+  return n;
+}
+
+/** 落在共用路徑上嗎：大小寫不分（大小寫不分的磁碟上 Tools/a.js 就是 tools/a.js）；給的是資料夾、裡面有共用路徑也算。 */
+function touchesShared(rel) {
+  const l = rel.toLowerCase();
+  return SHARED_PATHS.some((s) => { const k = s.toLowerCase(); return l === k || l.startsWith(`${k}/`) || k.startsWith(`${l}/`); });
+}
+
+/** 開工時：這一支打算改的路徑，哪些是協作套件的檔、哪些是專案自己的。 */
+function touch(paths) {
+  const list = paths.map(normalizeTouch);
+  return { shared: list.filter(touchesShared), own: list.filter((p) => !touchesShared(p)) };
+}
+
+/** 已提交的那一份（HEAD）在共用路徑底下的檔。 */
+function headEntries(root) {
+  return parseTree(git(root, ['ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', ...SHARED_PATHS]), '這棵樹已提交的版本');
+}
+
+const STATUS_WHAT = { '??': '沒追蹤的檔', '!!': '被 .gitignore 忽略的檔' };
+
+/** 共用路徑底下還沒提交的東西：暫存區或工作樹有改、沒追蹤、被忽略，各一行。 */
+function uncommitted(root) {
+  const out = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching', '--', ...SHARED_PATHS]).split('\0');
+  const found = [];
+  for (let i = 0; i < out.length; i += 1) {
+    const rec = out[i];
+    if (!rec) continue;
+    const xy = rec.slice(0, 2);
+    const rel = rec.slice(3);
+    if (/[RC]/u.test(xy)) i += 1;   // 改名與複製後面多一段原路徑
+    const what = STATUS_WHAT[xy] || `還沒提交的改動（git status：${xy.replace(/ /gu, '·')}）`;
+    found.push({ path: rel, what });
+  }
+  return found;
+}
+
+const SYNC_KIND = { 少掉: '少了這個檔', 內容不同: '內容跟清單不同', 權限不同: '權限跟清單不同', 多出來: '多出清單沒有的檔' };
+
+/**
+ * 換檔之前的檢查：清單出自套件那一版、已提交與暫存區與工作樹都跟清單一樣、共用路徑底下沒有沒追蹤或被忽略的檔。
+ * 回不成立的每一條（空陣列＝可以換）；清單或環境的問題丟 LockError。
+ */
+function precheck(root, prev, kit) {
   const problems = [];
-  for (const d of diffs) {
-    if (!excepted.has(d.path)) {
-      problems.push(`${d.path}：${d.kind}，清單裡沒有這一筆例外——套件的檔預設在套件改再同步；真的要在這裡先改，把它記進 ${LOCK_FILE} 的 exceptions（path、why、who、since），之後搬回套件`);
-    }
+  let old;
+  try { old = kitEntries(kit, prev.version); } catch (e) {
+    if (e instanceof LockError) throw new LockError(`清單記的套件版本 ${prev.version.slice(0, 7)} 在本機套件倉庫找不到，核不了清單是不是出自套件：${e.message}`);
+    throw e;
   }
-  for (const x of lock.exceptions) {
-    if (differing.has(x.path)) continue;
-    problems.push(known.has(x.path)
-      ? `${x.path}：例外過期——這個檔已經跟清單一樣（搬回套件同步過了？），把這一筆例外拿掉`
-      : `${x.path}：例外指到的檔不在工作樹、也不在清單（路徑打錯了？大小寫也算）`);
+  const kitOld = new Map(old.list.map((e) => [e.path, e]));
+  for (const e of prev.entries) {
+    const k = kitOld.get(e.path);
+    if (!k || k.blob !== e.blob || k.mode !== e.mode) problems.push(`${e.path}：清單記的跟套件 ${prev.version.slice(0, 7)} 那一版${k ? '不一樣' : '沒有這個檔'}（清單被手改過？）`);
   }
-  return { ok: problems.length === 0, problems, repo: lock.repo, version: lock.version, syncedAt: lock.syncedAt, count: lock.entries.length, diffs, exceptions: lock.exceptions };
+  for (const d of compare(headEntries(root), prev.entries)) problems.push(`${d.path}：已提交的版本${SYNC_KIND[d.kind]}`);
+  for (const u of uncommitted(root)) problems.push(`${u.path}：${u.what}`);
+  for (const d of compare(entries(root), prev.entries)) problems.push(`${d.path}：工作樹上${SYNC_KIND[d.kind]}`);
+  return [...new Set(problems)];
 }
 
 const WRITE_KIND = { 多出來: '套件這一版新加', 少掉: '套件這一版刪掉', 內容不同: '內容不同', 權限不同: '權限不同' };
 const STEP3 = '照 README「搬進一個專案」第 3 步：Claude 側＝④（同一支PR重印釘指紋那一行，合併後每台機器補複本、按測試鈕）；Codex 全域層＝⓪〜⑥（先關掉所有 Codex、重抽、按信任、按測試鈕）';
+const FIXED = `提醒（固定）：這支同步若動到 ${[...FINGERPRINT_SHARED, 'settings.json 的 forbidden 那一塊', CODEX_TEMPLATE].join('、')} 任一樣，合併後要換複本、重按信任——${STEP3}；這次有沒有動到，看這支 PR 對主幹的 git diff`;
+const SYNC_STOP = '同步停下來了，一個檔都沒動、清單也沒動：上面這些是專案自己的改動（或清單被手改過），整批換檔會把它們蓋掉（規矩 D5）。先告訴擁有者；要留的改動先搬到協作套件、合併後再同步，不要的改回清單那一版（刪任何東西先問擁有者）。改完重跑同一行 --sync';
 
-/** 同步完跑：清單內容從本機套件倉庫的那一版取；工作樹跟它不一樣又沒有例外＝拒寫。 */
+/** 換到一半失敗時的還原：已提交的版本有的共用路徑從 HEAD 取回（git checkout 遇到 HEAD 沒有的路徑會退非零，所以只列有的），再清掉共用路徑底下多出來的。 */
+function restoreCommands(previous) {
+  const tracked = SHARED_PATHS.filter((p) => previous.entries.some((e) => e.path === p || e.path.startsWith(`${p}/`)));
+  return [['checkout', 'HEAD', '--', ...tracked], ['clean', '-fdx', '--', ...SHARED_PATHS]];
+}
+
+function restoreHint(root, previous) {
+  const cmds = restoreCommands(previous).map((args) => `git -C ${JSON.stringify(root)} ${args.join(' ')}`);
+  return `工作樹已經動過。同步前已確認共用路徑底下的東西都跟已提交的版本一樣、也沒有沒追蹤或被忽略的檔，可以整個還原：${cmds.join('，再 ')}`;
+}
+
+/** 套件那一版共用路徑的 tar（只含那一版真的有的共用路徑；git archive 遇到不存在的路徑會退非零）。 */
+function kitArchive(kit, target) {
+  const present = SHARED_PATHS.filter((p) => target.list.some((e) => e.path === p || e.path.startsWith(`${p}/`)));
+  const r = spawnSync('git', ['archive', '--format=tar', target.sha, '--', ...present], { cwd: kit, env: gitEnv(), maxBuffer: BIG });
+  if (r.error) throw new LockError(`git 起不來：${r.error.message}`);
+  if (r.status !== 0) throw new LockError(`git archive 退 ${r.status}：${String(r.stderr || '').trim() || '（沒有訊息）'}`);
+  return r.stdout;
+}
+
+/** 整批換：先刪掉共用路徑（git archive 只新增與覆蓋、不會刪），再解開套件那一版，最後比一次工作樹＝那一版。 */
+function replace(root, target, archive, previous) {
+  for (const p of SHARED_PATHS) fs.rmSync(path.join(root, p), { recursive: true, force: true });
+  const r = spawnSync('tar', ['-x', '-f', '-', '-C', root], { input: archive, maxBuffer: BIG });
+  if (r.error || r.status !== 0) throw new LockError(`解開套件那一版失敗（tar ${r.error ? r.error.message : `退 ${r.status}：${String(r.stderr || '').trim()}`}）。${restoreHint(root, previous)}`);
+  const after = compare(entries(root), target.list);
+  if (after.length) throw new LockError(`解開之後工作樹跟套件 ${target.sha.slice(0, 7)} 還有 ${after.length} 個對不上：${after.slice(0, 5).map((d) => `${d.path}：${d.kind}`).join('、')}。${restoreHint(root, previous)}`);
+}
+
+function changeLines(list, previous) {
+  const changes = compare(list, previous.entries);
+  return [`跟上一份清單（${previous.version.slice(0, 7)}，${previous.syncedAt}）比：套件這一版有 ${changes.length} 個共用檔不一樣`, ...changes.map((d) => `  ・${d.path}：${WRITE_KIND[d.kind]}`)];
+}
+
+function saveLock(root, lock) {
+  fs.writeFileSync(path.join(root, LOCK_FILE), `${JSON.stringify(validateLock(lock), null, 2)}\n`);
+}
+
+/**
+ * 同步（已經有清單的使用專案升到套件的另一版）：先查、查過才換。apply＝false 只檢查（預演）；true 才刪共用路徑、解開那一版、寫新清單。
+ * 回 { ok, lines, lock }；ok＝false 表示查到專案自己的改動或清單被手改過，什麼都沒動。
+ */
+function sync(root = ROOT, { kit, version, date, repo, apply = false } = {}) {
+  const prefix = git(root, ['rev-parse', '--show-prefix']).trim();
+  if (prefix) throw new LockError(`--root 要是使用專案倉庫的最上層（現在在它的 ${prefix} 底下）`);
+  const previous = readLock(root);
+  const target = kitVersion(kit, version);
+  const repoName = repo || previous.repo;
+  if (typeof repoName !== 'string' || !REPO.test(repoName)) throw new LockError('--repo 要是「帳號/倉庫名」');
+  const syncedAt = date || localDate();
+  if (!realDate(syncedAt)) throw new LockError('--date 要是真的日子（YYYY-MM-DD）');
+  const archive = apply ? kitArchive(kit, target) : null;
+  const blockers = precheck(root, previous, kit);
+  if (blockers.length) return { ok: false, lines: [`同步前檢查：查到 ${blockers.length} 處跟清單（套件 ${previous.version.slice(0, 7)}）不一樣`, ...blockers.map((b) => `  ・${b}`), SYNC_STOP] };
+  const lines = ['同步前檢查：已提交、暫存區、工作樹都跟清單一樣，共用路徑底下沒有沒追蹤或被忽略的檔', ...changeLines(target.list, previous)];
+  if (!apply) {
+    lines.push(`預演：沒有動任何檔。確認後在同一行加 --apply 才換檔（換成套件 ${target.sha.slice(0, 7)}）`);
+    return { ok: true, lines };
+  }
+  replace(root, target, archive, previous);
+  const lock = { repo: repoName, version: target.sha, syncedAt, entries: target.list };
+  saveLock(root, lock);
+  lines.push(FIXED, `寫好 ${LOCK_FILE}：套件 ${repoName} ${target.sha}（${syncedAt}），${target.list.length} 筆`);
+  return { ok: true, lines, lock };
+}
+
+/** 第一次裝：清單內容從本機套件倉庫的那一版取；已經有清單＝拒寫（之後用 --sync）；工作樹跟那一版不一樣＝拒寫。 */
 function write(root = ROOT, { version, repo, date, kit } = {}) {
-  const { sha, list } = kitEntries(kit, version);
-  const file = path.join(root, LOCK_FILE);
-  const previous = fs.existsSync(file) ? readLock(root) : null;
-  const repoName = repo || (previous && previous.repo);
-  if (typeof repoName !== 'string' || !REPO.test(repoName)) throw new LockError('第一次寫清單要給 --repo <帳號/倉庫名>');
+  if (fs.existsSync(path.join(root, LOCK_FILE))) throw new LockError(`已經有 ${LOCK_FILE}：--write 只用在第一次裝；之後同步用 --sync（先查專案有沒有自己改過的共用檔，查過才換檔）`);
+  const { sha, list } = kitVersion(kit, version);
+  if (typeof repo !== 'string' || !REPO.test(repo)) throw new LockError('第一次寫清單要給 --repo <帳號/倉庫名>');
   const syncedAt = date || localDate();
   if (!realDate(syncedAt)) throw new LockError('--date 要是真的日子（YYYY-MM-DD）');
   const drift = compare(entries(root), list);
-  const prevEx = new Map((previous ? previous.exceptions : []).map((x) => [x.path, x]));
-  const unexplained = drift.filter((d) => !prevEx.has(d.path));
-  if (unexplained.length) {
+  if (drift.length) {
     throw new LockError([
-      `工作樹跟套件 ${sha} 有 ${unexplained.length} 個共用檔不一樣，上一份清單也沒記例外——沒寫清單：`,
-      ...unexplained.map((d) => `  ・${d.path}：${d.kind}`),
-      '同步要整批換：先刪掉共用路徑再解開套件那一版（git archive 只新增與覆蓋、不會刪）；真的是專案先改的，先把它記成例外再寫。',
+      `工作樹跟套件 ${sha} 有 ${drift.length} 個共用檔不一樣——沒寫清單：`,
+      ...drift.map((d) => `  ・${d.path}：${d.kind}`),
+      '第一次裝要整批取同一版：先刪掉共用路徑再解開套件那一版（git archive 只新增與覆蓋、不會刪），共用路徑底下不放專案自己的檔，再重跑 --write。',
     ].join('\n'));
   }
-  const drifting = new Set(drift.map((d) => d.path));
-  const kept = (previous ? previous.exceptions : []).filter((x) => drifting.has(x.path));
-  const cleared = (previous ? previous.exceptions : []).filter((x) => !drifting.has(x.path));
-  const lines = [];
-  if (previous) {
-    const changes = compare(list, previous.entries);
-    lines.push(`跟上一份清單（${previous.version.slice(0, 7)}，${previous.syncedAt}）比：套件這一版有 ${changes.length} 個共用檔不一樣`);
-    for (const d of changes) lines.push(`  ・${d.path}：${WRITE_KIND[d.kind]}`);
-  } else {
-    lines.push(`第一次寫清單：套件 ${sha.slice(0, 7)} 有 ${list.length} 個共用檔`);
-  }
-  lines.push(`提醒（固定）：這支同步若動到 ${[...FINGERPRINT_SHARED, 'settings.json 的 forbidden 那一塊', CODEX_TEMPLATE].join('、')} 任一樣，合併後要換複本、重按信任——${STEP3}；這次有沒有動到，看這支 PR 對主幹的 git diff`);
-  if (kept.length) lines.push(`例外保留 ${kept.length} 筆（工作樹仍跟套件這一版不同）：${kept.map((x) => `${x.path}（${x.who}）`).join('、')}`);
-  if (cleared.length) lines.push(`例外清掉 ${cleared.length} 筆（工作樹已跟套件這一版相同）：${cleared.map((x) => x.path).join('、')}——改動若還沒搬回套件，就是在這次同步被換掉了，看 git diff 確認`);
-  const lock = validateLock({ repo: repoName, version: sha, syncedAt, entries: list, exceptions: kept });
-  fs.writeFileSync(file, `${JSON.stringify(lock, null, 2)}\n`);
-  lines.push(`寫好 ${LOCK_FILE}：套件 ${repoName} ${sha}（${syncedAt}），${list.length} 筆、例外 ${kept.length} 筆`);
-  return { lock, lines };
+  const lock = { repo, version: sha, syncedAt, entries: list };
+  saveLock(root, lock);
+  return { lock, lines: [`第一次寫清單：套件 ${sha.slice(0, 7)} 有 ${list.length} 個共用檔`, FIXED, `寫好 ${LOCK_FILE}：套件 ${repo} ${sha}（${syncedAt}），${list.length} 筆`] };
 }
 
 /** 帶不帶只看設定的登記；清單在不在只拿來對帳（跟案例簿那一列同一種開關）。 */
@@ -271,7 +416,7 @@ function declaration(machines, lockPresent) {
   const { state } = rows[0];
   if (state === '已啟用') {
     return lockPresent ? { run: true, problem: null, reason: null }
-      : { run: true, problem: `「${MACHINE}」登記已啟用，${LOCK_FILE} 卻不在：同步後跑 node tools/kit-lock.js --write --kit <本機套件倉庫> --version <套件版本碼> --repo <帳號/倉庫名> 建清單；不帶清單就把這一列改回已安裝未啟用`, reason: null };
+      : { run: true, problem: `「${MACHINE}」登記已啟用，${LOCK_FILE} 卻不在：第一次裝跑 node tools/kit-lock.js --write --kit <本機套件倉庫> --version <套件版本碼> --repo <帳號/倉庫名> 建清單；不帶清單就把這一列改回已安裝未啟用`, reason: null };
   }
   if (state === '已安裝未啟用') {
     return lockPresent ? { run: true, problem: `「${MACHINE}」登記已安裝未啟用，${LOCK_FILE} 卻在：清單建好了就把這一列改成已啟用（改完跑 node tools/build-settings.js）`, reason: null }
@@ -284,41 +429,58 @@ function declaration(machines, lockPresent) {
   return { run: true, problem: `「${MACHINE}」只能登記已啟用、已安裝未啟用或未移植，現在是「${state}」`, reason: null };
 }
 
+const MODE_FLAGS = ['--check', '--write', '--sync', '--touch'];
+const TAKES = { check: [], touch: [], write: ['version', 'repo', 'date', 'kit'], sync: ['version', 'repo', 'date', 'kit', 'apply'] };
+
 function parseArgs(argv) {
-  const out = { mode: null, version: null, repo: null, date: null, kit: null, root: null };
+  const out = { mode: null, version: null, repo: null, date: null, kit: null, root: null, apply: null, paths: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => { i += 1; if (i >= argv.length) throw new LockError(`${a} 後面要接值`); return argv[i]; };
-    if (a === '--check' || a === '--write') { if (out.mode) throw new LockError('--check 與 --write 只能給一個'); out.mode = a.slice(2); }
+    if (MODE_FLAGS.includes(a)) { if (out.mode) throw new LockError(`${MODE_FLAGS.join('、')} 只能給一個`); out.mode = a.slice(2); }
     else if (a === '--version') out.version = next();
     else if (a === '--repo') out.repo = next();
     else if (a === '--date') out.date = next();
     else if (a === '--kit') out.kit = next();
     else if (a === '--root') out.root = next();
-    else throw new LockError(`看不懂的參數：${a}`);
+    else if (a === '--apply') out.apply = true;
+    else if (a.startsWith('-')) throw new LockError(`看不懂的參數：${a}`);
+    else out.paths.push(a);
   }
-  if (!out.mode) throw new LockError('要給 --check 或 --write');
-  if (out.mode === 'check') {
-    const extra = ['version', 'repo', 'date', 'kit'].filter((k) => out[k] !== null);
-    if (extra.length) throw new LockError(`--check 不收 ${extra.map((k) => `--${k}`).join('、')}（那是 --write 用的）`);
-  }
+  if (!out.mode) throw new LockError(`要給 ${MODE_FLAGS.join('、')} 其中一個`);
+  const extra = ['version', 'repo', 'date', 'kit', 'apply'].filter((k) => out[k] !== null && !TAKES[out.mode].includes(k));
+  if (extra.length) throw new LockError(`--${out.mode} 不收 ${extra.map((k) => `--${k}`).join('、')}`);
+  if (out.paths.length && out.mode !== 'touch') throw new LockError(`只有 --touch 收路徑（多了：${out.paths.join(' ')}）`);
   return out;
+}
+
+function touchLines(paths) {
+  if (!paths.length) return { code: 0, lines: ['共用路徑（協作套件的檔，只在套件改；規矩 D5）：', ...SHARED_PATHS.map((p) => `  ・${p}`), '開工時把這一支要改的路徑接在 --touch 後面，列出哪些落在這裡'] };
+  const r = touch(paths);
+  const lines = [`開工查共用檔：給了 ${paths.length} 個路徑，${r.shared.length} 個落在協作套件的檔`];
+  for (const p of r.shared) lines.push(`  ・套件的：${p}`);
+  for (const p of r.own) lines.push(`  ・專案的：${p}`);
+  if (r.shared.length) lines.push('落在套件的那幾個不在這裡改（規矩 D5）：告訴擁有者，改去協作套件做，合併後用 --sync 整批同步回來；專案自己的照常改');
+  return { code: r.shared.length ? 1 : 0, lines };
 }
 
 function main(argv = process.argv.slice(2)) {
   let a;
   try { a = parseArgs(argv); } catch (e) { return { code: 2, lines: [e.message, USAGE] }; }
   const root = a.root ? path.resolve(a.root) : ROOT;
+  const kit = a.kit && path.resolve(a.kit);
   try {
-    if (a.mode === 'write') return { code: 0, lines: write(root, { ...a, kit: a.kit && path.resolve(a.kit) }).lines };
+    if (a.mode === 'touch') return touchLines(a.paths);
+    if (a.mode === 'write') return { code: 0, lines: write(root, { ...a, kit }).lines };
+    if (a.mode === 'sync') { const r = sync(root, { ...a, kit, apply: a.apply === true }); return { code: r.ok ? 0 : 1, lines: r.lines }; }
     const r = check(root);
-    const lines = [`共用檔清單｜套件 ${r.repo} ${r.version.slice(0, 7)}（${r.syncedAt}）：${r.count} 筆；工作樹跟清單不一樣的 ${r.diffs.length} 個、例外 ${r.exceptions.length} 筆`];
-    for (const x of r.exceptions) lines.push(`  例外：${x.path}（${x.who}，${x.since} 起）：${x.why}`);
-    if (r.ok) { lines.push(r.diffs.length ? '不一樣的每一個都有例外對上。' : '全部相同。'); return { code: 0, lines }; }
+    const lines = [`共用檔清單｜套件 ${r.repo} ${r.version.slice(0, 7)}（${r.syncedAt}）：${r.count} 筆；工作樹跟清單不一樣的 ${r.diffs.length} 個`];
+    if (r.ok) { lines.push('全部相同。'); return { code: 0, lines }; }
     for (const p of r.problems) lines.push(`  ・${p}`);
+    lines.push(r.fix);
     return { code: 1, lines };
   } catch (e) {
-    // 1 只留給「工作樹跟清單對不上」；其餘一律退 2（清單或環境的問題，不猜）
+    // 1 只留給「查到不一樣」（--check 的工作樹對不上清單、--sync 查到專案自己的改動、--touch 落在套件的檔）；其餘一律退 2（清單或環境的問題，不猜）
     if (e instanceof LockError) return { code: 2, lines: [e.message] };
     return { code: 2, lines: [`共用檔清單：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來`] };
   }
@@ -330,4 +492,4 @@ if (require.main === module) {
   process.exit(r.code);
 }
 
-module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, underShared, FINGERPRINT_SHARED, CODEX_TEMPLATE, LockError, entries, kitEntries, readLock, validateLock, compare, check, write, declaration, parseArgs, main };
+module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, SELF_REL, underShared, touchesShared, normalizeTouch, touch, FINGERPRINT_SHARED, CODEX_TEMPLATE, FIXED, LockError, entries, headEntries, uncommitted, kitEntries, kitVersion, readLock, validateLock, compare, check, precheck, restoreCommands, sync, write, declaration, parseArgs, main };

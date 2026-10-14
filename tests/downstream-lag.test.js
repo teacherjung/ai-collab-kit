@@ -134,19 +134,19 @@ test('①②③④沒裝清單：用設定裡人填的版本；落後幾支、�
   } finally { clean(k); }
 });
 
-test('①裝了清單：用清單的版本、不用設定那一格；記的例外標在檔名後面；清單寫壞＝算不出來', () => {
+test('①裝了清單：用清單的版本、不用設定那一格；舊格式的空例外段照收、例外段有內容＝算不出來；清單寫壞＝算不出來', () => {
   const k = kit();
   try {
-    const lock = { repo: 'acme/kit', version: k.S1, syncedAt: '2026-10-01', entries: [], exceptions: [{ path: 'tools/b.js', why: '等不及套件', who: 'Alpha', since: '2026-10-02' }] };
+    const lock = { repo: 'acme/kit', version: k.S1, syncedAt: '2026-10-01', entries: [], exceptions: [] };
     const r = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k, { lock })), root: k.dir });
     assert.equal(r.code, 0, r.lines.join('\n'));
     const out = r.lines.join('\n');
     assert.match(out, new RegExp(`記的套件版本 ${k.S1.slice(0, 7)}，來源＝它的 kit-lock\\.json（同步日 2026-10-01）`, 'u'), out);
     assert.match(out, /落後 2 支（其中動到共用路徑 1 支）/u, out);
-    assert.ok(r.lines.includes('    ・不同：tools/b.js（它改過：跟它記的那一版也不同；記了例外：Alpha，等不及套件）'), out);
+    assert.ok(r.lines.includes('    ・不同：tools/b.js（它改過：跟它記的那一版也不同）'), out);
     assert.ok(r.lines.includes('    ・不同：tools/a.js（它改過：跟它記的那一版也不同）'), '它記的是 S1（a2），它那邊是 a1＝它改過');
 
-    for (const [what, bad] of [['不是 JSON', '{壞掉'], ['形狀不對', { ...lock, version: 'abc' }]]) {
+    for (const [what, bad] of [['不是 JSON', '{壞掉'], ['形狀不對', { ...lock, version: 'abc' }], ['例外段還有內容（例外已取消）', { ...lock, exceptions: [{ path: 'tools/b.js', why: '等不及套件', who: 'Alpha', since: '2026-10-02' }] }]]) {
       const b = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k, { lock: bad })), root: k.dir });
       assert.equal(b.code, 2, `${what}：${b.lines.join('\n')}`);
       assert.match(b.lines.join('\n'), /下游甲（acme\/app 的 main）：算不出來——它的 kit-lock\.json/u, what);
