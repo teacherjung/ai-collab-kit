@@ -195,6 +195,152 @@ test('⑯allowedTools：兩張樣式表的後一候選不可被前一候選遮�
   assert.equal(decide(control, cfg).deny, false, EXACT_REPAIR);
 });
 
+test('⑯allowedTools：首段候選的射程限制，合成名字未登記拒絕而精確登記放行', () => {
+  const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, 'helpers', 'unfilled-settings.json'), 'utf8')).forbidden;
+  const cfg = { ...defaults, name: '錢', allowedTools: [] };
+  // 保留預設詞表，避免縮減詞表冒充候選射程；這些字串不代表平台工具或實際能力。
+  for (const tool of [
+    'mcp__convert__to_cash', 'mcp__transfer__funds', 'mcp__withdraw__cash',
+    'mcp__transfer_funds__ping', 'mcp__withdraw_cash__list_items', 'mcp__get_convert_to_cash__ping',
+  ]) {
+    const unregistered = decide(tool, cfg);
+    assert.equal(unregistered.deny, true, `${tool}；${EXACT_REPAIR}`);
+    assert.equal(unregistered.kind, 'registry', `${tool}；${EXACT_REPAIR}`);
+    assert.match(unregistered.why, /沒有登記/u, `${tool}；${EXACT_REPAIR}`);
+    assert.deepEqual(decide(tool, { ...cfg, allowedTools: [tool] }), { deny: false }, `${tool}；${EXACT_REPAIR}`);
+  }
+  const tail = 'mcp__probe_exact__transfer_funds';
+  const rejected = decide(tail, { ...cfg, allowedTools: [tail] });
+  assert.equal(rejected.deny, true, EXACT_REPAIR);
+  assert.equal(rejected.kind, undefined, EXACT_REPAIR);
+  assert.match(rejected.why, /家族網（transfer_funds）/u, EXACT_REPAIR);
+});
+
+function assertExactCaseConflict(result, context) {
+  assert.equal(result.deny, true, `${context}；${EXACT_REPAIR}`);
+  assert.equal(result.kind, undefined, `${context}；${EXACT_REPAIR}`);
+  for (const part of ['allowedTools', 'servers', '大小寫', '設定壞掉', 'docs/money-guard-two-pattern-tables.md', 'settings.json', 'guard-copy', 'JSON 自我試跑']) {
+    assert.equal(result.why.includes(part), true, `${context}：理由缺 ${part}；${EXACT_REPAIR}`);
+  }
+  assert.doesNotMatch(result.why, /已確認交易事故/u, EXACT_REPAIR);
+}
+
+test('⑯allowedTools：金融名稱大小寫衝突遍歷完整邊界、含雙底線登記名與重複位置', () => {
+  for (const [server, tool] of [
+    ['MCP', 'mcp__new__get_record'],
+    ['broker-x', 'mcp__BROKER-X__get_record'],
+    ['broker-x', 'mcp__outer__BROKER-X__get_record'],
+    ['broker-x', 'mcp__outer__inner__BROKER-X__get_record'],
+    ['broker-x', 'mcp__outer__BROKER-X'],
+    ['broker-x', 'mcp__outer___BROKER-X__get_record'],
+    ['broker-x', 'mcp__BROKER-X___get_record'],
+    ['Broker-X', 'mcp__broker-x__get_record'],
+    ['broker__paper', 'mcp__BROKER__paper__get_record'],
+    ['broker__paper', 'mcp__outer__broker__PAPER__get_record'],
+    ['broker__paper', 'mcp__outer__BROKER__PAPER'],
+    ['broker-x', 'mcp__broker-x__BROKER-X__get_record'],
+    ['broker-x', 'mcp__BROKER-X__broker-x__get_record'],
+    ['broker-x', 'mcp__xBROKER-X__BROKER-X__get_record'],
+    ['a__a', 'mcp__a__a__A__get_record'],
+  ]) {
+    // 查無關的 safe 名字，避免金融白名單或家族拒絕冒充整份設定驗證。
+    const cfg = { ...FORBIDDEN, servers: [server], allowedTools: [tool] };
+    assertExactCaseConflict(decide('mcp__other__get_record', cfg), `${server} / ${tool}`);
+  }
+});
+
+test('⑯allowedTools：任一清單項與任一金融登記的大小寫衝突先於所有工具判定', () => {
+  const normal = ['mcp__new__get_record', 'mcp__bundle__docs__fetch_record'];
+  const conflict = 'mcp__BROKER-X__get_record';
+  for (let at = 0; at <= normal.length; at += 1) {
+    const allowedTools = [...normal];
+    allowedTools.splice(at, 0, conflict);
+    for (const servers of [['broker-x', 'later-bank'], ['earlier-bank', 'broker-x']]) {
+      const cfg = { ...FORBIDDEN, servers, allowedTools };
+      for (const tool of [
+        ...normal, conflict, 'mcp__other__get_record', 'mcp__other__harmless_looking_tool',
+        'mcp__broker-x__get_watchlist', 'mcp__broker-x__unlisted', 'kit__new__get_record',
+      ]) assertExactCaseConflict(decide(tool, cfg), `項目 ${at} / ${servers.join(',')} / ${tool}`);
+    }
+  }
+});
+
+test('⑯allowedTools：前項或前一金融登記同字樣命中不能遮住後面的大小寫衝突', () => {
+  for (const allowedTools of [
+    ['mcp__broker-x__get_watchlist', 'mcp__LATER-BANK__get_record'],
+    ['mcp__broker-x__LATER-BANK__get_record'],
+  ]) {
+    const cfg = { ...FORBIDDEN, servers: ['broker-x', 'later-bank'], allowedTools };
+    assertExactCaseConflict(decide('mcp__other__get_record', cfg), allowedTools.join(','));
+  }
+});
+
+test('⑯allowedTools：非完整金融邊界與非大小寫差異不誤判設定衝突', () => {
+  for (const [server, tool] of [
+    ['broker-x', 'mcp__xBROKER-X__get_record'],
+    ['broker-x', 'mcp__BROKER-X_v2__get_record'],
+    ['broker-x', 'mcp__prefix_BROKER-X__get_record'],
+    ['broker-x', 'mcp__BROKER-Xsuffix__get_record'],
+    ['broker-x', 'mcp__broker_x__get_record'],
+    ['broker-x', 'mcp__broker.x__get_record'],
+    ['broker__paper', 'mcp__BROKER_PAPER__get_record'],
+    ['broker__paper', 'mcp__BROKER__PAPER_extra__get_record'],
+    ['broker__paper', 'mcp__xBROKER__PAPER__get_record'],
+  ]) assert.deepEqual(decide(tool, { ...FORBIDDEN, servers: [server], allowedTools: [tool] }), { deny: false }, `${server} / ${tool}；${EXACT_REPAIR}`);
+});
+
+test('⑯allowedTools：同字樣金融項合法且仍受白名單、尾名大小寫與家族判定', () => {
+  for (const server of ['broker-x', 'Broker-X', 'broker__paper']) {
+    const read = `mcp__${server}__get_watchlist`;
+    const unlisted = `mcp__${server}__unlisted`;
+    const family = `mcp__${server}__view_create_order`;
+    const extra = `mcp__${server}__get_swap_cash`;
+    const caseTail = `mcp__${server}__GET_WATCHLIST`;
+    const cfg = { ...FORBIDDEN, servers: [server], allowedTools: [read, unlisted, family, extra, caseTail] };
+    assert.deepEqual(decide(read, cfg), { deny: false }, `${server}；${EXACT_REPAIR}`);
+    for (const tool of [unlisted, caseTail]) {
+      const d = decide(tool, cfg);
+      assert.equal(d.deny, true, `${tool}；${EXACT_REPAIR}`);
+      assert.equal(d.kind, undefined, EXACT_REPAIR);
+      assert.match(d.why, /採白名單制/u, EXACT_REPAIR);
+      assert.doesNotMatch(d.why, /設定壞掉/u, EXACT_REPAIR);
+    }
+    assert.deepEqual(decide(caseTail, { ...cfg, allowlist: ['GET_WATCHLIST'] }), { deny: false }, EXACT_REPAIR);
+    for (const [tool, tail, why] of [[family, 'view_create_order', /家族網/u], [extra, 'get_swap_cash', /額外樣式/u]]) {
+      const d = decide(tool, { ...cfg, allowlist: [tail] });
+      assert.equal(d.deny, true, `${tool}；${EXACT_REPAIR}`);
+      assert.equal(d.kind, undefined, EXACT_REPAIR);
+      assert.match(d.why, why, EXACT_REPAIR);
+    }
+  }
+});
+
+test('⑯allowedTools：缺欄與空欄不把金融名稱變體改判為設定衝突', () => {
+  for (const tool of ['mcp__BROKER-X__get_watchlist', 'mcp__outer__BROKER-X__get_record', 'mcp__outer__BROKER-X']) {
+    const missing = decide(tool, FORBIDDEN);
+    assert.equal(missing.deny, true, `${tool}；${EXACT_REPAIR}`);
+    assert.equal(missing.kind, 'registry', EXACT_REPAIR);
+    assert.match(missing.why, /沒有登記/u, EXACT_REPAIR);
+    assert.doesNotMatch(missing.why, /設定壞掉/u, EXACT_REPAIR);
+    assert.deepEqual(decide(tool, { ...FORBIDDEN, allowedTools: [] }), missing, EXACT_REPAIR);
+  }
+});
+
+test('⑯allowedTools：指令入口用合成設定拒絕全清單衝突，正常精確放行不印', () => {
+  const normal = 'mcp__new__get_record';
+  const cfg = { ...FORBIDDEN, allowedTools: [normal, 'mcp__BROKER-X__get_record'] };
+  for (const tool of [normal, 'mcp__other__get_record', 'kit__new__get_record']) {
+    const result = cli(JSON.stringify({ tool_name: tool }), { forbidden: cfg });
+    assert.equal(result.code, 0, EXACT_REPAIR);
+    assert.notEqual(result.output, '', EXACT_REPAIR);
+    const output = JSON.parse(result.output).hookSpecificOutput;
+    assert.equal(output.hookEventName, 'PreToolUse', EXACT_REPAIR);
+    assert.equal(output.permissionDecision, 'deny', EXACT_REPAIR);
+    assert.match(output.permissionDecisionReason, /allowedTools[\s\S]*大小寫[\s\S]*設定壞掉/u, EXACT_REPAIR);
+  }
+  assert.deepEqual(cli(JSON.stringify({ tool_name: normal }), { forbidden: { ...cfg, allowedTools: [normal] } }), { code: 0, output: '' }, EXACT_REPAIR);
+});
+
 test('⑯allowedTools：指令入口精確放行不印，未登記與家族拒絕仍輸出鉤子決定', () => {
   const tools = ['mcp__new__get_record', 'mcp__new__view_create_order'];
   const settings = { forbidden: { ...FORBIDDEN, allowedTools: tools } };

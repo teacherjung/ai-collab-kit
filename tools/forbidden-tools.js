@@ -151,6 +151,18 @@ function decide(toolName, forbidden) {
   const safeLower = new Set(safeServers.map((s) => s.toLowerCase()));
   const both = servers.filter((s) => safeLower.has(s.toLowerCase()));
   if (both.length) return { deny: true, why: `專案設定裡禁區清單的「${both[0]}」同時登記在 servers（碰${f.name}）與 safeServers（不碰${f.name}；大小寫不分）：設定壞掉，一律拒絕` };
+  // 同字樣命中不能遮住後面的大小寫變體；判準與限制見正本「兩張樣式表」。
+  for (const name of exactNames) {
+    const foldedName = name.toLowerCase();
+    for (const server of servers) {
+      for (const after of boundaryHits(foldedName, server.toLowerCase())) {
+        const at = name.length - after.length - server.length;
+        if (name.slice(at, at + server.length) !== server) {
+          return { deny: true, why: `allowedTools 與 servers 的金融登記名「${server}」有大小寫衝突：設定壞掉；請核對 settings.json 的 forbidden.allowedTools 與正本 docs/money-guard-two-pattern-tables.md，不改寫原始名字來放行；${EXACT_RECHECK}` };
+        }
+      }
+    }
+  }
   const allow = new Set(lists.allowlist);
   const deny = new Set(lists.deny);
   let patterns, patternsReadSafe;

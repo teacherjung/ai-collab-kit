@@ -1215,3 +1215,36 @@ test('完整工具名登記：固定複本承接精確清單，未知名與篡�
     blocks(hook(cmd, { home, tool: exact }), MISMATCH, '請檢查固定複本的指紋檢查後重跑本題');
   }
 }));
+
+
+test('完整工具名登記：金融大小寫衝突使固定複本自測失敗，無衝突對照成功', () => withScratch((scratch) => {
+  // 合成來源與假家目錄隔離安裝自測；只把名字當 JSON 輸入，不呼叫連接器。
+  const repair = '檢查 tools/forbidden-tools.js 的設定驗證及 tools/guard-copy.js 自我試跑，重跑 node --test tests/guard-copy-claude.test.js';
+  const exact = 'mcp__probe_apps__notes__get_note';
+  for (const withSafe of [false, true]) for (const conflict of [false, true]) {
+    const forbidden = { ...FAKE, safeServers: withSafe ? ['other'] : [],
+      allowedTools: [exact, conflict ? 'mcp__FAKEBROKER__get_quote' : 'mcp__fakebroker__get_quote'] };
+    const src = sourceRepo(scratch, { forbidden });
+    const home = fakeHome(scratch);
+    const r = tool(src, ['--claude', '--from', 'HEAD'], { home });
+    const copyDir = path.join(baseOf(home), treeFingerprint(src));
+    if (conflict) {
+      assert.deepEqual([r.status, r.stdout], [1, ''], `${repair}：${r.stderr}`);
+      assert.match(r.stderr, /自我試跑沒過[\s\S]*放行候選一個都沒有被乾淨地放行/u, repair);
+      // 安裝自測的 stdout 摘錄會截短；拒絕理由另讀同一合成來源的完整 JSON。
+      const probe = spawnSync(process.execPath, [path.join(src, 'tools', 'forbidden-tools.js')],
+        { cwd: scratch, env: { ...base, HOME: home }, input: JSON.stringify({ tool_name: exact }), encoding: 'utf8' });
+      assert.deepEqual([probe.status, probe.stderr], [0, ''], repair);
+      const result = JSON.parse(probe.stdout).hookSpecificOutput;
+      assert.equal(result.permissionDecision, 'deny', repair);
+      assert.match(result.permissionDecisionReason, /allowedTools[\s\S]*servers[\s\S]*大小寫衝突[\s\S]*設定壞掉/u, repair);
+      assert.doesNotMatch(r.stderr, /自我試跑：過/u, repair);
+      assert.equal(fs.existsSync(copyDir), false, repair);
+    } else {
+      assert.equal(r.status, 0, `${repair}：${r.stderr}`);
+      assert.match(r.stdout, /^[a-f0-9]{64}\n$/u, repair);
+      assert.match(r.stderr, /自我試跑：過/u, repair);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyDir, 'settings.json'), 'utf8')).forbidden, forbidden, repair);
+    }
+  }
+}));

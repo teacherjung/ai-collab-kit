@@ -544,3 +544,30 @@ test('完整工具名登記：固定複本承接精確清單，未知名與篡�
     blocks(hook(cmd, { tool: exact }), MISMATCH, '請檢查固定複本的指紋檢查後重跑本題');
   }
 }));
+
+
+test('完整工具名登記：金融大小寫衝突使固定複本自測失敗，無衝突對照成功', () => withScratch((scratch) => {
+  // 合成來源與假家目錄隔離安裝自測；只把名字當 JSON 輸入，不呼叫連接器。
+  const repair = '檢查 tools/forbidden-tools.js 的設定驗證及 tools/guard-copy.js 自我試跑，重跑 node --test tests/guard-copy.test.js';
+  const exact = 'mcp__probe_apps__notes__get_note';
+  for (const withSafe of [false, true]) for (const conflict of [false, true]) {
+    const forbidden = { ...FAKE, safeServers: withSafe ? ['other'] : [],
+      allowedTools: [exact, conflict ? 'mcp__FAKEBROKER__get_quote' : 'mcp__fakebroker__get_quote'] };
+    const src = sourceRepo(scratch, { forbidden });
+    const home = fs.mkdtempSync(path.join(scratch, 'home-'));
+    const copyDir = path.join(scratch, `case-copy-${withSafe}-${conflict}`);
+    const r = spawnSync(process.execPath, [path.join(src, 'tools', 'guard-copy.js'), '--from', 'HEAD', '--to', copyDir],
+      { cwd: scratch, env: { ...base, HOME: home, KIT_GUARD_COPY_ALLOW_TEMP: '1' }, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyDir, 'settings.json'), 'utf8')).forbidden, forbidden, repair);
+    if (conflict) {
+      assert.deepEqual([r.status, r.stdout], [1, ''], `${repair}：${r.stderr}`);
+      assert.match(r.stderr, /自我試跑沒過[\s\S]*allowedTools[\s\S]*大小寫衝突/u, repair);
+      assert.match(r.stderr, /不印接線/u, repair);
+      assert.doesNotMatch(r.stderr, /自我試跑：過/u, repair);
+    } else {
+      assert.equal(r.status, 0, `${repair}：${r.stderr}`);
+      assert.equal(JSON.parse(r.stdout).matcher, '^mcp__', repair);
+      assert.match(r.stderr, /自我試跑：過/u, repair);
+    }
+  }
+}));
