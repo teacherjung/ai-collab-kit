@@ -1,7 +1,7 @@
 // 守下游落後（擁有者 2026-10-07 第 11 題裁「現在就做。（建議）」；只列不擋、開工時手動跑）。
 //
 // 守得到的：
-//   ①版本從哪來：使用專案主幹上有 kit-lock.json 就用它的 version（形狀照 kit-lock.js 驗、記的例外標在檔名後面），沒有才用設定裡人填的那一格；
+//   ①版本從哪來：使用專案主幹上有 kit-lock.json 就用它的 version（形狀照 kit-lock.js 驗：沒有例外段的新格式、舊格式的空例外段都照算，例外段有內容＝那一個算不出來），沒有才用設定裡人填的那一格；
 //     兩樣都沒有、清單寫壞＝那一個算不出來（退 2），不猜；
 //   ②落後幾支＝它記的版本到套件主幹的提交數，另數動到共用路徑的、逐支列出（沒動到共用路徑的不列）；
 //   ③共用檔三類：不同（再分「套件後來改了」與「它改過」）、只在套件（「套件後來加的」與「它刪掉了」）、只在它那邊（「套件後來刪了」與「它自己加的」）；
@@ -137,7 +137,11 @@ test('①②③④沒裝清單：用設定裡人填的版本；落後幾支、�
 test('①裝了清單：用清單的版本、不用設定那一格；舊格式的空例外段照收、例外段有內容＝算不出來；清單寫壞＝算不出來', () => {
   const k = kit();
   try {
-    const lock = { repo: 'acme/kit', version: k.S1, syncedAt: '2026-10-01', entries: [], exceptions: [] };
+    const lock = { repo: 'acme/kit', version: k.S1, syncedAt: '2026-10-01', entries: [] };
+    for (const old of [{ ...lock, exceptions: [] }]) {
+      const o = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k, { lock: old })), root: k.dir });
+      assert.equal(o.code, 0, `舊格式（空例外段）照算：${o.lines.join('\n')}`);
+    }
     const r = run({ settings: settingsFor([project({ versionWithoutLock: k.V })]), platform: platformFor(k, theirs(k, { lock })), root: k.dir });
     assert.equal(r.code, 0, r.lines.join('\n'));
     const out = r.lines.join('\n');
