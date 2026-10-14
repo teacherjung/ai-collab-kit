@@ -35,7 +35,12 @@ const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
 const TEMPLATE = fs.readFileSync(path.join(__dirname, '..', 'templates', 'review-request.md'), 'utf8');
 const TIERS = unfilled().reviewTiers;
 
-function tmp(prefix) { return fs.mkdtempSync(path.join(os.tmpdir(), prefix)); }
+// tmp() 開的暫存資料夾記進 made、整支跑完（不論成敗）一起收（#79 兩支考題的同一種收法）：快速通道那一題把 tmp() 直接當參數傳，
+// 該題的 finally 拿不到那些路徑；別題在收尾前就失敗時也靠這裡收。只收 made 上的，暫存區別的東西不碰。
+// 守不到：跑到一半被強制結束（收尾沒機會跑）的那一次；不經 tmp() 開的不在 made 上（例如共用輔助 runInCopy 自己開、自己收）。
+const made = [];
+function tmp(prefix) { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; }
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 function sh(cwd, ...args) {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, env: gitEnv(), encoding: 'utf8' });
   assert.equal(r.status, 0, `git ${args.join(' ')}：${r.stderr}`);
