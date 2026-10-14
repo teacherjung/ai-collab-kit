@@ -35,7 +35,11 @@ const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
 const TEMPLATE = fs.readFileSync(path.join(__dirname, '..', 'templates', 'review-request.md'), 'utf8');
 const TIERS = unfilled().reviewTiers;
 
-function tmp(prefix) { return fs.mkdtempSync(path.join(os.tmpdir(), prefix)); }
+// 這支考題開的暫存資料夾都經 tmp() 記下、整支跑完（不論成敗）一起收：有幾題把 tmp() 直接當參數傳、沒有 finally 收得到（#79 兩支考題的同一種收法）；
+// 只收自己開的，暫存區別的東西不碰。守不到：跑到一半被強制結束（收尾沒機會跑）的那一次。
+const made = [];
+function tmp(prefix) { const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix)); made.push(d); return d; }
+test.after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 function sh(cwd, ...args) {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, env: gitEnv(), encoding: 'utf8' });
   assert.equal(r.status, 0, `git ${args.join(' ')}：${r.stderr}`);
