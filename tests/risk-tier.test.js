@@ -154,7 +154,7 @@ function f(a) {
 /* 整行區塊 */
 module.exports = { f };
 `;
-// 字串裡有 /*、下面接一行 * 開頭的程式續行：往上找會以為在區塊裡，要靠「下面有沒有收尾記號」擋。
+// 字串裡有 /*、下面接一行 * 開頭的程式續行：留著當反例，防判法改回「往上找區塊開頭」時被字串裡的 /* 騙；現在擋下它的是那一行不是 // 開頭（#96 掃描後收窄）。
 const FAKE_OPEN_JS = "'use strict';\nconst mark = '/*';\nconst y = 1\n  * 2;\nmodule.exports = { y, mark };\n";
 // 行尾是 CRLF 的檔：每一行最後那一個 CR 是正常的行尾，不是夾在行中的換行字元
 const CRLF_JS = "'use strict';\r\n// 說明\r\nmodule.exports = 1;\r\n";
@@ -250,7 +250,7 @@ test('⑬快速通道（AI）：改到程式或判不準的一律不走，並印
       assert.match(got.line, /^ {2}快速通道（AI）：不走——tools\/x\.js：/u, what);
       assert.match(got.line, want, `${what}：${got.line}`);
     }
-    // 字串裡的 /* 會讓往上找判成「在區塊裡」：下面沒有 */ 收尾，* 開頭的程式續行照樣不收
+    // 字串裡的 /* 後面接 * 開頭的程式續行：那一行不是 // 開頭，照樣不收
     const fake = repo.head((dir) => fs.writeFileSync(path.join(dir, 'tools', 'z.js'), FAKE_OPEN_JS.replace('  * 2;', '  * 3;')));
     assert.match(lane(repo, ['tools/z.js'], fake).line, /tools\/z\.js：舊版第 4 行不是判得出的整行註解/u);
     // 一個路徑不收，整支就不走（另一個是清單上的檔也一樣）
