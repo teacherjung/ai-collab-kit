@@ -15,7 +15,7 @@
 //   清單不在、壞掉或形狀不對、舊格式留下的例外段還有內容、git 失敗＝退 2（不猜）。
 //   --sync：清單出自套件那一版、已提交與暫存區與工作樹都跟清單一樣、共用路徑底下沒有沒追蹤或被忽略的檔，全部成立才換；任何一樣不成立＝退 1、
 //   一個檔都不動、清單不動。--apply 換完再比一次工作樹＝套件新那一版，對不上＝退 2 並印還原指令。
-//   --write：只用在第一次裝（已經有清單＝拒寫），工作樹要剛好等於套件那一版。--touch：列出給的路徑裡哪些落在共用路徑（大小寫不分、
+//   --write：只用在第一次裝（工作樹上或已提交的版本裡已經有清單＝拒寫），工作樹要剛好等於套件那一版。--touch：列出給的路徑裡哪些落在共用路徑（大小寫不分、
 //   ../ 與 ./ 先整理），只列不擋。--sync、--write 每次都印一行固定提醒：攔截器相關的 5 樣，動到任一樣合併後要換複本、重按信任。
 // 為什麼提醒是固定的一行、不判斷這次動到沒有（擁有者 2026-09-29 裁 a）：複審 r1〜r4 連四輪在「自動判斷動到沒有」這一族抓到問題
 //   （推算與直接量各有漏的情境）；原專案的釘指紋等式題在指紋變了卻沒重印那一行時本來就會紅。這次要不要換，由實作者看這支 PR 對主幹的差異告訴擁有者。
@@ -392,6 +392,10 @@ function sync(root = ROOT, { kit, version, date, repo, apply = false } = {}) {
 /** 第一次裝：清單內容從本機套件倉庫的那一版取；已經有清單＝拒寫（之後用 --sync）；工作樹跟那一版不一樣＝拒寫。 */
 function write(root = ROOT, { version, repo, date, kit } = {}) {
   if (fs.existsSync(path.join(root, LOCK_FILE))) throw new LockError(`已經有 ${LOCK_FILE}：--write 只用在第一次裝；之後同步用 --sync（先查專案有沒有自己改過的共用檔，查過才換檔）`);
+  // 工作樹上刪掉清單再跑 --write＝繞過 --sync 的同步前檢查：已提交的版本裡有清單就不算第一次裝（還沒有任何提交的新倉庫照算第一次）
+  const head = spawnSync('git', ['cat-file', '-e', `HEAD:${LOCK_FILE}`], { cwd: root, env: gitEnv(), encoding: 'utf8' });
+  if (head.error) throw new LockError(`git 起不來：${head.error.message}`);
+  if (head.status === 0) throw new LockError(`這棵樹已提交的版本裡有 ${LOCK_FILE}：不是第一次裝，同步用 --sync（工作樹上的清單被刪了就先從已提交的版本取回）`);
   const { sha, list } = kitVersion(kit, version);
   if (typeof repo !== 'string' || !REPO.test(repo)) throw new LockError('第一次寫清單要給 --repo <帳號/倉庫名>');
   const syncedAt = date || localDate();

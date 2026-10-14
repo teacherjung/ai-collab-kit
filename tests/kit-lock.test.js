@@ -141,7 +141,7 @@ test('--write（第一次裝）：清單內容＝套件那一版的 ls-tree（�
   assert.equal(lock.check(r.root).ok, true, '只有群組或其他人的執行位元＝不算改權限');
 });
 
-test('--write 拒寫：已經有清單（之後要用 --sync）、工作樹跟套件那一版對不上、版本找不到或不在主幹上、跑的不是那一版的工具；清單不動', (t) => {
+test('--write 拒寫：已經有清單或已提交過清單（之後要用 --sync）、工作樹跟套件那一版對不上、版本找不到或不在主幹上、跑的不是那一版的工具；清單不動', (t) => {
   const r = makeRepos(t);
   // 套件 v2 刪掉 templates/c.md；只覆蓋、不先刪共用路徑＝舊檔留著
   const v2 = r.nextKit(() => r.kgit('rm', '-q', 'templates/c.md'), 'v2 刪檔');
@@ -179,6 +179,11 @@ test('--write 拒寫：已經有清單（之後要用 --sync）、工作樹跟�
   const before = fs.readFileSync(path.join(r.root, lock.LOCK_FILE), 'utf8');
   assert.throws(() => r.write({ version: v2 }), (e) => e instanceof lock.LockError && /已經有 kit-lock\.json：--write 只用在第一次裝；之後同步用 --sync/u.test(e.message));
   assert.equal(fs.readFileSync(path.join(r.root, lock.LOCK_FILE), 'utf8'), before, '拒寫時清單一個位元組都不動');
+  // 已提交過清單、工作樹上把它刪掉再 --write＝想繞過 --sync 的同步前檢查：照樣拒寫
+  r.commit('清單');
+  fs.rmSync(path.join(r.root, lock.LOCK_FILE));
+  assert.throws(() => r.write({ version: v2 }), (e) => e instanceof lock.LockError && /已提交的版本裡有 kit-lock\.json：不是第一次裝，同步用 --sync/u.test(e.message));
+  assert.ok(!fs.existsSync(path.join(r.root, lock.LOCK_FILE)), '拒寫時不留清單');
 });
 
 test('--check：改內容、多一個檔、少一個檔、改權限各自紅並指名路徑、說去哪改；被忽略的檔看不到（照實）；共用路徑以外不比', (t) => {
