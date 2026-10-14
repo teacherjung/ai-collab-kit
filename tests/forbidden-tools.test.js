@@ -107,7 +107,8 @@ test('⑯allowedTools：壞欄位或任一壞項先於已登記與逐字拒絕�
       const d = decide(tool, { ...FORBIDDEN, allowedTools });
       assert.equal(d.deny, true, `${JSON.stringify(allowedTools)}；${EXACT_REPAIR}`);
       assert.match(d.why, /allowedTools[\s\S]*設定壞掉/u, EXACT_REPAIR);
-      assert.match(d.why, /settings\.json[\s\S]*node --test tests\/forbidden-tools\.test\.js/u, EXACT_REPAIR);
+      assert.match(d.why, /settings\.json[\s\S]*guard-copy[\s\S]*JSON 自我試跑[\s\S]*不實際呼叫工具/u, EXACT_REPAIR);
+      assert.doesNotMatch(d.why, /node --test/u, EXACT_REPAIR);
     }
   }
 });
@@ -172,6 +173,8 @@ test('⑯allowedTools：只有精確清單時，MCP 有效且未知名字拒絕�
   assert.equal(unknown.deny, true, EXACT_REPAIR);
   assert.equal(unknown.kind, 'registry', EXACT_REPAIR);
   assert.match(unknown.why, /沒有登記[\s\S]*allowedTools/u, EXACT_REPAIR);
+  assert.match(unknown.why, /核對原始名字與授權[\s\S]*guard-copy[\s\S]*JSON 自我試跑/u, EXACT_REPAIR);
+  assert.doesNotMatch(unknown.why, /node --test/u, EXACT_REPAIR);
   assert.doesNotMatch(unknown.why, /名單還沒填|沒有任何一條有效規則/u, EXACT_REPAIR);
   for (const nonMcp of ['read_item', 'kit__new__get_record']) {
     const d = decide(nonMcp, cfg);

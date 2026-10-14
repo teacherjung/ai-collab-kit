@@ -117,6 +117,11 @@ Codex 側與別的對話的工具名沒量。
 同連接器的其餘工具兩欄都當沒登記擋——都看得見；打成不存在的名字＝那個連接器全擋、看得見
 （`mcp` 本身、`mcp__` 開頭、全是符號的由文法擋掉，也看得見）。
 
+把會動到錢的工具誤填進 `allowedTools`，也不能靠名字判斷保證攔住：逐字拒絕與金融連接器判定仍先走，
+但若金融連接器沒有正確登記、逐字拒絕也沒命中，精確登記會越過「未登記」那一關，只剩家族網與兩張樣式表判斷；
+帶唯讀前綴的候選仍豁免 `patterns`。例如「後一候選」考題的對照名字 `mcp__probe_exact__get_convert_to_cash`，
+在該題的預設詞表與精確登記下會放行；名字真實能力與登記是否正確仍須另外核對（`tests/forbidden-tools.test.js`）。
+
 ⚠️ `patternsReadSafe` **不是**「全部都是動作緊接錢名詞」：搬進去的原第 4、5 條仍有
 `_?\w*?securit[a-z]*` 與反向的「名詞→動詞」式（`get_preview_cached_securities_status`、
 `get_securities_preview_status` 都命中）。只有新加的 `(convert|swap)_<錢名詞>` 那一條要相鄰。

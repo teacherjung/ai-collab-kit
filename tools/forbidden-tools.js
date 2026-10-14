@@ -109,6 +109,8 @@ function safeConnectorOf(toolName, safeServers) {
 
 /** 登記制的訊息尾巴：改了 forbidden 那一塊之後的手續（正本＝套件 README「搬進一個專案」第 3 步）。 */
 const AFTER_EDIT = '改完照套件 README「搬進一個專案」第 3 步：同一支變更重印釘指紋那一行、每台機器補複本、重按信任';
+// 合成設定的考題驗不到專案改好的清單；安裝自測也不能代替原始名字與授權的核對。
+const EXACT_RECHECK = '修改清單後照 tools/guard-copy.js 檔頭的對應裝法；合併後以該版本重跑固定複本 guard-copy 指令的 JSON 自我試跑（不實際呼叫工具；不驗名單是否完整），並完成該側安裝與無害測試鈕驗收';
 
 /**
  * ⚠️ **唯讀前綴豁免的範圍、代價與射程＝「兩張樣式表」**，正本在
@@ -135,7 +137,7 @@ function decide(toolName, forbidden) {
   }
   const exactNames = f.allowedTools === undefined ? [] : f.allowedTools;
   if (!Array.isArray(exactNames) || [...exactNames].some((name) => !isFullMcpName(name))) {
-    return { deny: true, why: '禁區清單的 allowedTools 設定壞掉：請修正 settings.json 的 forbidden.allowedTools 為完整 MCP 原始工具名的字串陣列（mcp__ 開頭、連接器與工具各段非空、合法字元且不超過 200 字元），重跑 node --test tests/forbidden-tools.test.js；修改清單後的安裝手續見套件 README「搬進一個專案」第 3 步' };
+    return { deny: true, why: `禁區清單的 allowedTools 設定壞掉：請修正 settings.json 的 forbidden.allowedTools 為完整 MCP 原始工具名的字串陣列（mcp__ 開頭、連接器與工具各段非空、合法字元且不超過 200 字元）；${EXACT_RECHECK}` };
   }
   const allowedTools = new Set(exactNames);
   // 登記名的形狀（兩欄同一把尺）：填成名字裡的別段不是打錯（三種為什麼不收＝badRegistryName 上方），所以當設定壞掉擋下、說出登記名是哪一段
@@ -237,7 +239,7 @@ function decide(toolName, forbidden) {
       return { deny: true, kind, why: `連接器工具「${toolName}」沒有登記：它的連接器（${REGISTRY_NAME_HINT}；這個名字的是「${seg}」）不在 settings.json 的 forbidden.servers 也不在 forbidden.safeServers——沒登記的連接器一律拒絕（裁示者 2026-09-26）。${moneyNote}；${AFTER_EDIT}` };
     }
     const registrationHint = allowedTools.size
-      ? '完整名字也不在 settings.json 的 forbidden.allowedTools；核對原始名字與授權後修正該欄，重跑 node --test tests/forbidden-tools.test.js'
+      ? `完整名字也不在 settings.json 的 forbidden.allowedTools；核對原始名字與授權後修正該欄；${EXACT_RECHECK}`
       : '要用它，先把連接器的登記名填進其中一欄';
     return { deny: true, kind, why: `連接器工具「${toolName}」沒有登記：它的連接器（${REGISTRY_NAME_HINT}；這個名字的是「${seg}」）不在 settings.json 的 forbidden.servers（會動到${f.name}的連接器，白名單制）也不在 forbidden.safeServers（不會動到${f.name}的連接器，整個放行）——沒登記的連接器一律拒絕（裁示者 2026-09-26）。${registrationHint}；${AFTER_EDIT}（${b3Note}）` };
   }
