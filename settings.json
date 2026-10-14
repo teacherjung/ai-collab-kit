@@ -239,6 +239,7 @@
   "name": "未設定",
   "servers": [],
   "safeServers": [],
+  "allowedTools": [],
   "allowlist": [],
   "deny": [],
   "verbs": [],

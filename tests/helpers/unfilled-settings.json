@@ -185,6 +185,7 @@
    "computer-use",
    "openaiDeveloperDocs"
   ],
+  "allowedTools": [],
   "allowlist": [
    "get_account_balances",
    "get_account_orders",
