@@ -362,8 +362,8 @@ test('--sync 擋下會被蓋掉或刪掉的東西：已提交、暫存、未暫�
   const short1 = r.v1.slice(0, 7);
   /** 回到乾淨的 base：先還原、再拿掉上一輪留下的標記（檔案要在索引裡才拿得掉）、再還原一次，清掉沒追蹤的與樹外那一份。 */
   const resetTo = (sha) => {
-    fs.rmSync(path.join(r.root, 'tools', '.git'), { recursive: true, force: true });
-    if (fs.existsSync(path.join(r.root, lock.LOCK_FILE))) fs.chmodSync(path.join(r.root, lock.LOCK_FILE), 0o644);
+    fs.chmodSync(r.root, 0o755);
+    for (const name of ['.git', '.GIT']) fs.rmSync(path.join(r.root, 'tools', name), { recursive: true, force: true });
     r.git('reset', '-q', '--hard', sha);
     for (const [flag, file] of [['--no-skip-worktree', 'MACHINES.md'], ['--no-assume-unchanged', 'GLOSSARY.md']]) r.git('update-index', flag, file);
     r.git('reset', '-q', '--hard', sha);
@@ -422,7 +422,14 @@ test('--sync 擋下會被蓋掉或刪掉的東西：已提交、暫存、未暫�
       inner('commit', '-q', '-m', '只在內層的提交');
       assert.equal(r.git('status', '--porcelain', '--ignored=matching', '--', 'tools').trim(), '', '前提：外層 git 完全看不到它');
     }, /^ {2}・tools\/\.git：共用路徑底下另有一個倉庫的 git 紀錄/mu],
-    ['清單寫不進去（唯讀）', () => { fs.chmodSync(path.join(r.root, lock.LOCK_FILE), 0o444); }, /^ {2}・kit-lock\.json：寫不進去（權限）/mu],
+    ['大小寫不分的磁碟上的 .GIT（另一個倉庫，名字只差大小寫）', () => {
+      const inner = (...args) => assert.equal(spawnSync('git', args, { cwd: path.join(r.root, 'tools'), env: r.env }).status, 0, `內層 git ${args[0]}`);
+      inner('init', '-q');
+      inner('add', '-A');
+      inner('commit', '-q', '-m', '只在內層的提交');
+      fs.renameSync(path.join(r.root, 'tools', '.git'), path.join(r.root, 'tools', '.GIT'));
+    }, /^ {2}・tools\/\.GIT：共用路徑底下另有一個倉庫的 git 紀錄/mu],
+    ['專案根目錄寫不進去（新清單寫不了）', () => { fs.chmodSync(r.root, 0o555); }, /^ {2}・kit-lock\.json：專案根目錄寫不進去（權限）/mu],
     ['跳過工作樹的標記藏起來的改動', () => { r.git('update-index', '--skip-worktree', 'MACHINES.md'); r.put('MACHINES.md', '# 藏起來的改動\n'); }, /^ {2}・MACHINES\.md：標了跳過工作樹或假設沒改/mu],
     ['假設沒改的標記藏起來的改動', () => { r.git('update-index', '--assume-unchanged', 'GLOSSARY.md'); r.put('GLOSSARY.md', '# 藏起來的改動\n'); }, /^ {2}・GLOSSARY\.md：標了跳過工作樹或假設沒改/mu],
   ]) {
@@ -556,25 +563,49 @@ test('--sync --apply 刪共用路徑刪到一半失敗（唯讀資料夾）：�
   assert.deepEqual(snapshot(r.root), before, '照印的指令還原＝同步前一模一樣');
 });
 
-test('--sync --apply 換完寫新清單失敗：退 2、說共用檔已經換了而清單還是舊的、印還原指令，照貼還原回到同步前', (t) => {
+test('--sync --apply 換完寫新清單失敗（寫到一半、或最後換名失敗）：清單還是原來那一份、不留暫存檔，訊息說共用檔已換、印的還原照貼回到同步前', (t) => {
+  for (const how of ['寫到一半', '換名失敗']) {
+    const r = makeRepos(t);
+    r.write();
+    r.commit('清單');
+    const v2 = r.nextKit(() => r.putKit('tools/a.js', '// v2\n'), 'v2');
+    const before = snapshot(r.root);
+    const lockBefore = fs.readFileSync(path.join(r.root, lock.LOCK_FILE));
+    const realWrite = fs.writeFileSync;
+    const realRename = fs.renameSync;
+    const boom = () => { const e = new Error('寫不進去（考題造的）'); e.code = 'EFBIG'; return e; };
+    if (how === '寫到一半') {
+      fs.writeFileSync = (file, data, ...rest) => {
+        if (!String(file).includes(lock.LOCK_FILE)) return realWrite.call(fs, file, data, ...rest);
+        realWrite.call(fs, file, String(data).slice(0, 13), ...rest);   // 先寫進 13 個字元、再失敗
+        throw boom();
+      };
+    } else {
+      fs.renameSync = (from, to) => { if (String(to).endsWith(lock.LOCK_FILE)) throw boom(); return realRename.call(fs, from, to); };
+    }
+    let msg = '';
+    try {
+      assert.throws(() => r.doSync(v2, { apply: true }), (e) => { msg = e.message; return e instanceof lock.LockError; });
+    } finally { fs.writeFileSync = realWrite; fs.renameSync = realRename; }
+    assert.match(msg, new RegExp(`共用檔已經換成套件 ${v2.slice(0, 7)}，寫新清單卻失敗（EFBIG），清單還是舊的那一版`, 'u'), how);
+    assert.equal(fs.readFileSync(path.join(r.root, 'tools', 'a.js'), 'utf8'), '// v2\n', `${how}：前提：共用檔真的已經換了`);
+    assert.deepEqual(fs.readFileSync(path.join(r.root, lock.LOCK_FILE)), lockBefore, `${how}：正式清單一個位元組都沒變（訊息說「還是舊的那一版」是真的）`);
+    assert.deepEqual(fs.readdirSync(r.root).filter((n) => n.includes(lock.LOCK_FILE) && n !== lock.LOCK_FILE), [], `${how}：不留暫存檔`);
+    runPrinted(r, msg);
+    assert.deepEqual(snapshot(r.root), before, `${how}：照印的指令還原＝同步前一模一樣`);
+    assert.equal(lock.check(r.root).ok, true, `${how}：還原後 --check 綠`);
+  }
+});
+
+test('名字像 .git 的都算另一個倉庫的紀錄（大小寫、看不見的字元、結尾點與空白、短檔名），長得像但不是的不算', (t) => {
+  const zw = String.fromCharCode(0x200c);
+  for (const name of ['.git', '.GIT', '.Git', '.git.', '.git ', 'GIT~1', `.g${zw}it`]) assert.equal(lock.gitLikeName(name), true, JSON.stringify(name));
+  for (const name of ['.gitignore', '.github', 'git', '.gitattributes', 'digit']) assert.equal(lock.gitLikeName(name), false, JSON.stringify(name));
   const r = makeRepos(t);
-  r.write();
-  r.commit('清單');
-  const v2 = r.nextKit(() => r.putKit('tools/a.js', '// v2\n'), 'v2');
-  const before = snapshot(r.root);
-  const real = fs.writeFileSync;
-  fs.writeFileSync = (file, ...rest) => {
-    if (String(file).endsWith(lock.LOCK_FILE)) { const e = new Error('寫不進去（考題造的）'); e.code = 'EIO'; throw e; }
-    return real.call(fs, file, ...rest);
-  };
-  let msg = '';
-  try {
-    assert.throws(() => r.doSync(v2, { apply: true }), (e) => { msg = e.message; return e instanceof lock.LockError; });
-  } finally { fs.writeFileSync = real; }
-  assert.match(msg, new RegExp(`共用檔已經換成套件 ${v2.slice(0, 7)}，寫新清單卻失敗（EIO），清單還是舊的那一版`, 'u'));
-  assert.equal(fs.readFileSync(path.join(r.root, 'tools', 'a.js'), 'utf8'), '// v2\n', '前提：共用檔真的已經換了');
-  runPrinted(r, msg);
-  assert.deepEqual(snapshot(r.root), before, '照印的指令還原＝同步前一模一樣');
+  fs.mkdirSync(path.join(r.root, 'tests', 'deep', '.Git'), { recursive: true });
+  fs.writeFileSync(path.join(r.root, 'templates', 'GIT~1'), 'gitdir: x\n');
+  fs.symlinkSync(r.root, path.join(r.root, 'tools', 'loop'));   // 不跟著連結走（不然會繞回自己）
+  assert.deepEqual(lock.nestedGit(r.root), ['templates/GIT~1', 'tests/deep/.Git']);
 });
 
 test('--sync：套件舊版的共用範圍比新版小（新版才把舊版就有的檔納入），清單照舊版自己的範圍核，不誤判成清單少列', (t) => {

@@ -9,7 +9,7 @@
 // 為什麼同步前要分開查已提交、暫存區、工作樹、沒追蹤、被忽略：換檔會整個刪掉共用路徑；同步前確認這五處都跟清單一樣，
 //   刪掉的東西已提交的版本（HEAD）都還有，換到一半失敗也能從 HEAD 整個還原。
 // 為什麼還要查共用路徑的上一層是不是連結、裡面有沒有別的倉庫的 .git、大小寫不同的同名路徑、跳過工作樹的標記、專案會忽略的新檔、
-//   清單寫不寫得進去：這幾種 git 的路徑比對看不到，刪檔卻會穿過去或碰到，或換到一半才失敗（2026-10-15 送審前自審與 #106 r1 複審
+//   新清單寫不寫得進去：這幾種 git 的路徑比對看不到，刪檔卻會穿過去或碰到，或換到一半才失敗（2026-10-15 送審前自審與 #106 r1 複審
 //   實際重現：上一層是連結時刪到連結目標裡專案自己的檔、已追蹤的資料夾裡另開的倉庫被整個刪掉，都還原不回來）。
 // 為什麼要核清單出自套件（雙向、用套件舊版自己的共用路徑）、兩個版本都在套件主幹上、只往前、跑的是那一版的工具：清單可以被手改
 //   （絆線不是鎖），手改過的清單（改一筆或少一筆）會讓「專案改過的」看起來沒改；沒審過的本機提交不該被同步進專案；往回同步會把
@@ -353,15 +353,25 @@ function parentHazards(root) {
 }
 
 /**
- * 共用路徑底下（不跟著連結走）任何一層叫 .git 的資料夾或檔：另一個倉庫的紀錄。外層 git 的 status、ls-files 都不列它，
- * 換檔卻會整個刪掉，而且不在 HEAD 裡、還原不回來（2026-10-15 #106 r1 複審實際重現：已追蹤的 tools/ 裡另開倉庫）。
+ * 名字在某種磁碟上會被 git 當成 .git：大小寫不分（.GIT）、Mac 會略過的看不見字元、Windows 會去掉的結尾點與空白、Windows 的短檔名（GIT~1）。
+ * 寧可多擋：r2 複審實際重現大小寫不分的磁碟上 .GIT 照樣是倉庫紀錄，r1 修的只比小寫。
+ */
+const IGNORABLE = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/gu;
+function gitLikeName(name) {
+  const n = name.replace(IGNORABLE, '').toLowerCase().replace(/[. ]+$/u, '');
+  return n === '.git' || /^git~\d+$/u.test(n);
+}
+
+/**
+ * 共用路徑底下（不跟著連結走）任何一層名字像 .git 的資料夾或檔：另一個倉庫的紀錄。外層 git 的 status、ls-files 都不列它，
+ * 換檔卻會整個刪掉，而且不在 HEAD 裡、還原不回來（2026-10-15 #106 r1、r2 複審實際重現：已追蹤的 tools/ 裡另開倉庫）。
  */
 function nestedGit(root) {
   const out = [];
   const walk = (rel) => {
     let st;
     try { st = fs.lstatSync(path.join(root, rel)); } catch { return; }
-    if (path.posix.basename(rel) === '.git') { out.push(rel); return; }
+    if (gitLikeName(path.posix.basename(rel))) { out.push(rel); return; }
     if (!st.isDirectory() || st.isSymbolicLink()) return;
     for (const name of fs.readdirSync(path.join(root, rel))) walk(`${rel}/${name}`);
   };
@@ -369,9 +379,25 @@ function nestedGit(root) {
   return out.sort();
 }
 
-/** 清單寫得進去嗎（換完要寫新清單；寫不進去要在動手之前就知道）。 */
+/** 新清單寫得進去嗎：先寫同一層的暫存檔再整個換上去，要的是專案根目錄可寫（換完才發現寫不進去就來不及了）。 */
 function lockWritable(root) {
-  try { fs.accessSync(path.join(root, LOCK_FILE), fs.constants.W_OK); return true; } catch { return false; }
+  try { fs.accessSync(root, fs.constants.W_OK); return true; } catch { return false; }
+}
+
+/**
+ * 寫清單：先在同一層寫好暫存檔、再一次換名蓋上去。寫到一半失敗時正式清單還是原來那一份、暫存檔清掉
+ * （#106 r2 複審實際重現：直接覆寫時寫到一半失敗，清單被截斷、還原指令又不含它）。
+ */
+function saveLockFile(root, lock) {
+  const file = path.join(root, LOCK_FILE);
+  const tmp = path.join(root, `.${LOCK_FILE}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(lock, null, 2)}\n`, { flag: 'wx' });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 清不掉就留著：它不在共用路徑、也不是清單本身 */ }
+    throw e;
+  }
 }
 
 /** 大小寫不同、但在大小寫不分的磁碟上就是共用路徑的那些路徑（已提交、暫存、沒追蹤、被忽略都算）：換檔會一起刪掉。 */
@@ -414,7 +440,7 @@ function precheck(root, prev, prevSha, kit, target) {
   for (const d of compare(prev.entries, old)) problems.push(`${d.path}：${LOCK_KIND[d.kind]}——跟套件 ${short} 那一版對不上（清單被手改過？）`);
   problems.push(...parentHazards(root));
   for (const p of nestedGit(root)) problems.push(`${p}：共用路徑底下另有一個倉庫的 git 紀錄——外層 git 看不到它，換檔會整個刪掉、還原不回來；先搬出共用路徑`);
-  if (!lockWritable(root)) problems.push(`${LOCK_FILE}：寫不進去（權限）——換完檔要寫新清單，先讓它寫得進去`);
+  if (!lockWritable(root)) problems.push(`${LOCK_FILE}：專案根目錄寫不進去（權限）——換完檔要在這裡寫新清單，先讓它寫得進去`);
   for (const p of caseTwins(root)) problems.push(`${p}：只差大小寫的同名路徑——在大小寫不分的磁碟上它就是共用路徑，換檔會一起刪掉`);
   for (const p of hiddenFlags(root)) problems.push(`${p}：標了跳過工作樹或假設沒改（git update-index），git 看不到它的改動——先拿掉標記（--no-skip-worktree／--no-assume-unchanged）`);
   const head = headEntries(root);
@@ -511,7 +537,7 @@ function sync(root = ROOT, { kit, version, date, repo, apply = false } = {}) {
   }
   replace(root, target, archive, previous);
   try {
-    fs.writeFileSync(path.join(root, LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
+    saveLockFile(root, lock);
   } catch (e) {
     throw new LockError(`共用檔已經換成套件 ${target.sha.slice(0, 7)}，寫新清單卻失敗（${(e && e.code) || (e && e.message) || '不明'}），清單還是舊的那一版。${restoreHint(root, previous)}`);
   }
@@ -543,7 +569,7 @@ function write(root = ROOT, { version, repo, date, kit } = {}) {
     ].join('\n'));
   }
   const lock = validateLock({ repo, version: sha, syncedAt, entries: list });
-  fs.writeFileSync(path.join(root, LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
+  saveLockFile(root, lock);
   return { lock, lines: [`第一次寫清單：套件 ${sha.slice(0, 7)} 有 ${list.length} 個共用檔`, FIXED, `寫好 ${LOCK_FILE}：套件 ${repo} ${sha}（${syncedAt}），${list.length} 筆`] };
 }
 
@@ -632,4 +658,4 @@ if (require.main === module) {
   process.exit(r.code);
 }
 
-module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, SELF_REL, underShared, underSharedFolded, touchesShared, normalizeTouch, touch, sharedPathsIn, FINGERPRINT_SHARED, CODEX_TEMPLATE, FIXED, LockError, entries, headEntries, uncommitted, parentHazards, caseTwins, hiddenFlags, kitEntries, kitVersion, readLock, validateLock, compare, check, precheck, restoreCommands, restoreLines, nestedGit, sync, write, declaration, parseArgs, main };
+module.exports = { LOCK_FILE, MACHINE, SHARED_PATHS, SELF_REL, underShared, underSharedFolded, touchesShared, normalizeTouch, touch, sharedPathsIn, FINGERPRINT_SHARED, CODEX_TEMPLATE, FIXED, LockError, entries, headEntries, uncommitted, parentHazards, caseTwins, hiddenFlags, kitEntries, kitVersion, readLock, validateLock, compare, check, precheck, restoreCommands, restoreLines, nestedGit, gitLikeName, sync, write, declaration, parseArgs, main };
