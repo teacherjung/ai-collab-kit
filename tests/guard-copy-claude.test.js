@@ -748,7 +748,7 @@ test('⑫登入設定往標準輸出印字：落地前先量到＝不落地；�
   // (b) 落地之後才開始印字：落地後用這個家再試跑沒過＝撤掉這一次落地的那一份
   const late = chattyOnceLanded(fakeHome(scratch));
   const rl = buildClaude({ from: 'HEAD', root: src, home: late, allowTemp: true });
-  assert.match(rl.failure || '', /\/bin\/sh -lc：無害的假名一個都沒有被乾淨地放行[\s\S]*PROFILE-SAYS-HELLO/u, `落地之後在這個家試跑要沒過（${rl.failure}）`);
+  assert.match(rl.failure || '', /\/bin\/sh -lc：放行候選一個都沒有被乾淨地放行[\s\S]*PROFILE-SAYS-HELLO/u, `落地之後在這個家試跑要沒過（${rl.failure}）`);
   assert.deepEqual([rl.existed, rl.landedThenFailed, rl.withdrawn, rl.stagingLeft], [false, true, true, undefined]);
   assert.ok(!fs.existsSync(rl.copyDir), '這一次落地的那一份要撤掉');
   assert.deepEqual(fs.readdirSync(baseOf(late)), [], '基底目錄裡什麼都沒留（暫存骨架也清掉）');
@@ -1185,5 +1185,33 @@ test('⑳拒絕形狀同時有兩個問題時，說的是檢查順序在前面�
     assert.match(r.failure, p.says, `${p.why}：要說前面那一句（${r.failure}）`);
     assert.doesNotMatch(r.failure, p.notSays, `${p.why}：不可以說後面那一句——檢查順序被換掉了（${r.failure}）`);
     assert.ok(!fs.existsSync(r.copyDir), `${p.why}：試跑沒過不可以落地`);
+  }
+}));
+
+test('完整工具名登記：固定複本承接精確清單，未知名與篡改仍拒絕', () => withScratch((scratch) => {
+  // 只把合成名字送進鉤子的 JSON；不呼叫任何連接器。
+  const exact = 'mcp__probe_apps__notes__get_note';
+  const denied = 'mcp__probe_apps__notes__get_blocked';
+  const unknown = 'mcp__probe_apps__notes__get_new_note';
+  for (const withDeny of [true, false]) {
+    const forbidden = { name: '測試禁區', allowedTools: withDeny ? [denied, exact] : [exact], ...(withDeny ? { deny: [denied] } : {}) };
+    const { home, copyDir, cmd } = landed(scratch, { forbidden }, withDeny ? {} : { denyProbe: unknown });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(copyDir, 'settings.json'), 'utf8')).forbidden, forbidden,
+      '請檢查 tools/guard-copy.js 抽取 forbidden 後重跑本題');
+    for (const flag of ['-c', '-lc']) {
+      allows(hook(cmd, { home, tool: exact, flag }), '請檢查完整名是否原樣進入固定複本，重跑本題');
+      const missing = hook(cmd, { home, tool: unknown, flag });
+      denies(missing, '未知同組名：請檢查登記判斷後重跑本題');
+      assert.match(missing.stdout, /沒有登記/u, '請核未知名拒絕理由，避免設定壞掉造成假綠；重跑本題');
+      if (withDeny) {
+        const blocked = hook(cmd, { home, tool: denied, flag });
+        denies(blocked, '逐字拒絕：請檢查 deny 順序後重跑本題');
+        assert.match(blocked.stdout, /在拒絕清單上/u, '請核 deny 拒絕理由，重跑本題');
+      }
+    }
+    const file = path.join(copyDir, 'settings.json');
+    fs.chmodSync(file, 0o644);
+    fs.appendFileSync(file, ' ');
+    blocks(hook(cmd, { home, tool: exact }), MISMATCH, '請檢查固定複本的指紋檢查後重跑本題');
   }
 }));

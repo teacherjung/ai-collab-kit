@@ -15,18 +15,7 @@
 //   ⑦只填名字、沒有任何有效規則＝拒絕（r1 High③）；清單欄位型別錯＝拒絕；
 //   ⑧連接器名含 __ 也比得到（r1 High④）；order__create 跟 order_create 是同一個字；
 //   ⑨規則要合各欄位的文法：含空白、非法字元的規則不可能匹配合法工具名，留著只會把「有規則」判成真（r2 High②）＝拒絕；
-//   ⑮登記制（裁示者 2026-09-26／27）：mcp__ 開頭的名字所屬的連接器沒登記＝擋（訊息含登記方法）、登記為不碰錢（safeServers）＝整個放行、
-//     逐字拒絕仍勝過 safeServers（測試鈕）、碰錢的仍走白名單、名單空＝全擋、同名兩欄＝擋、登記名比對看分段邊界、
-//     不是 mcp__ 開頭的名字走舊路徑（對照組）；safeServers 算進「有效規則」——但只對 mcp__ 名字（舊路徑上它永遠比不到，只填它＝零規則＝擋）；
-//     只登記碰錢連接器、safeServers 空著時沒登記的理由是「沒有登記」不是「名單空」；登記名不是連接器的名字（mcp 本身、mcp__ 開頭、
-//     全是底線／點／連字號）＝設定壞掉、全擋、訊息說登記名是哪一段；同名兩欄大小寫不分；沒登記的訊息說出登記名是名字裡的哪一段；
-//     指令入口：登記制的拒絕、名字不像禁區的不說誤觸或冒名、照 B3 先通報擁有者（碰禁區的仍接 B2「一律視為誤觸或冒名」那句尾巴）；
-//     名字像禁區的 kind 是 registry-money、接自己那一句尾巴（疑似誤觸或冒名、立即回報擁有者、登記前先問擁有者；
-//     ⑮②g，裁示者 2026-09-27、2026-09-28 裁 b；像不像怎麼判＝「兩張樣式表」）。
-//     ⚠️ 登記制帶來的變化：mcp__ 名字只有碰錢連接器白名單上的工具靠家族網與兩張樣式表決定擋不擋，所以本檔測家族網的名字
-//     一律改走那條路（onMoney：放進白名單、看雙保險擋不擋），自造的假連接器 other 登記為不碰錢。
-//     ⚠️ 也因此「擋」的斷言失去辨識力：沒登記也會擋，所以 ⑧⑩ 那幾發「認出這是碰錢連接器才擋得住」的名字要看理由
-//     （白名單那句獨有的「採白名單制」；「沒有登記」那句括號裡也有「白名單制」四個字，不能只比那四個字）。
+//   ⑮既有連接器登記與⑯完整工具名登記的判準、訊息與家族網射程＝正本「兩張樣式表」。
 // ⚠️ 守不到的：只認工具名不看參數；詞表沒列到的動詞或名詞擋不住；沒啟用的那一方等於沒有；
 //   登記為不碰錢的連接器（標準形狀的名字）整個放行（會對外送東西但不碰錢的那一級靠自覺）；登記名對不對、漏登記某個連接器機器看不到
 //   （填成工具名那一段是合法形狀、文法擋不了，但它不會靜靜放行：不碰錢那一欄當「分不清」擋、碰錢那一欄讓同連接器其餘工具當沒登記擋，⑮②e；
@@ -60,11 +49,160 @@ const FORBIDDEN = {
   patternsReadSafe: ['(^|_)(convert|swap)_(fund|money|cash|crypto)s?(_|$)'],
 };
 
-/**
- * 「家族網擋不擋這個工具名」——登記制之後（2026-09-26）要這樣問：mcp__ 名字只有碰錢連接器**白名單上**的工具
- * 才走到家族網與兩張樣式表（沒登記的整個擋、不碰錢的整個放行），所以把它放進白名單、看雙保險擋不擋。
- * 這就是真流量會走的那條路（⑪ 那一題的形狀）；不帶 mcp__ 的自造名字走舊路徑，只在 ⑮ 當對照組。
- */
+const EXACT_REPAIR = '檢查 tools/forbidden-tools.js 的 allowedTools 路徑與正本「兩張樣式表」，重跑 node --test tests/forbidden-tools.test.js';
+
+test('⑯allowedTools：缺欄與空陣列沿用既有判定', () => {
+  for (const cfg of [FORBIDDEN, { ...FORBIDDEN, allowedTools: [] }]) {
+    for (const [tool, denied] of [
+      ['mcp__other__create_order', false],
+      ['mcp__other__harmless_looking_tool', true],
+      ['mcp__broker-x__get_watchlist', false],
+      ['mcp__broker-x__unlisted', true],
+      ['mcp__new__get_record', true],
+      ['kit__new__get_record', false],
+      ['kit__new__create_order', true],
+    ]) assert.equal(decide(tool, cfg).deny, denied, `${tool}；${EXACT_REPAIR}`);
+  }
+});
+
+test('⑯allowedTools：完整原始名逐字匹配，多層名稱與合法字元不改寫', () => {
+  for (const tool of ['mcp__plain__read_item', 'mcp__bundle__docs__fetch_record', 'mcp__Mixed.Name-v1__Get_Item', `mcp__x__${'a'.repeat(192)}`]) {
+    assert.equal(tool.length <= 200, true, `核對本題長度夾具；${EXACT_REPAIR}`);
+    const cfg = { ...FORBIDDEN, allowedTools: [tool] };
+    assert.deepEqual(decide(tool, cfg), { deny: false }, `${tool}；${EXACT_REPAIR}`);
+  }
+  const tool = 'mcp__bundle__Docs__read_Item';
+  const cfg = { ...FORBIDDEN, allowedTools: [tool] };
+  for (const other of [
+    'mcp__bundle__docs__read_Item', 'mcp__bundle__Docs__read_item',
+    'mcp__bundle__Docs__read-Item', 'mcp__bundle__Docs__read.Item',
+    'mcp__bundle_Docs_read_Item', 'mcp__outer__bundle__Docs__read_Item',
+    `${tool}_more`, `${tool}__more`, 'mcp__bundle__Docs__new_tool',
+  ]) {
+    const d = decide(other, cfg);
+    assert.equal(d.deny, true, `${other}；${EXACT_REPAIR}`);
+    assert.equal(d.kind, 'registry', `${other}；${EXACT_REPAIR}`);
+  }
+});
+
+test('⑯allowedTools：壞欄位或任一壞項先於已登記與逐字拒絕判壞設定', () => {
+  const valid = 'mcp__new__get_record';
+  const invalidItems = [
+    '', '未設定', 'plain', 'mcp__plain', 'mcp__', 'mcp____read_item',
+    'mcp__plain__', 'mcp__plain____read_item', 'mcp__plain__middle____read_item',
+    'MCP__plain__read_item', 'mcp__plain__read item', 'mcp__plain__*',
+    'mcp__plain__read_item\n', `mcp__x__${'a'.repeat(193)}`,
+    null, undefined, 0, true, {}, [],
+  ];
+  const invalidLists = [null, '', false, 0, {}, valid, new Array(1)];
+  for (const bad of invalidItems) {
+    for (let at = 0; at <= 2; at += 1) {
+      const values = [valid, 'mcp__bundle__docs__fetch_record'];
+      values.splice(at, 0, bad);
+      invalidLists.push(values);
+    }
+  }
+  for (const allowedTools of invalidLists) {
+    for (const tool of ['mcp__other__get_record', 'mcp__other__harmless_looking_tool']) {
+      const d = decide(tool, { ...FORBIDDEN, allowedTools });
+      assert.equal(d.deny, true, `${JSON.stringify(allowedTools)}；${EXACT_REPAIR}`);
+      assert.match(d.why, /allowedTools[\s\S]*設定壞掉/u, EXACT_REPAIR);
+      assert.match(d.why, /settings\.json[\s\S]*node --test tests\/forbidden-tools\.test\.js/u, EXACT_REPAIR);
+    }
+  }
+});
+
+test('⑯allowedTools：精確命中不能跳過其餘設定檢查與逐字拒絕', () => {
+  const tool = 'mcp__new__get_record';
+  const cfg = { ...FORBIDDEN, allowedTools: [tool] };
+  for (const bad of [{ servers: null }, { patterns: ['('] }, { patternsReadSafe: ['('] }, { servers: ['other'] }]) {
+    const d = decide(tool, { ...cfg, ...bad });
+    assert.equal(d.deny, true, EXACT_REPAIR);
+    assert.match(d.why, /設定壞掉/u, EXACT_REPAIR);
+  }
+  const denied = decide(tool, { ...cfg, deny: [tool] });
+  assert.equal(denied.deny, true, EXACT_REPAIR);
+  assert.match(denied.why, /在拒絕清單上/u, EXACT_REPAIR);
+  assert.equal(decide(tool, cfg).deny, false, EXACT_REPAIR);
+});
+
+test('⑯allowedTools：金融分段與每個命中仍按既有白名單判定', () => {
+  for (const tool of ['mcp__broker-x__unlisted', 'mcp__outer__broker-x__unlisted', 'mcp__new__broker-x']) {
+    const d = decide(tool, { ...FORBIDDEN, allowedTools: [tool] });
+    assert.equal(d.deny, true, `${tool}；${EXACT_REPAIR}`);
+    assert.match(d.why, /採白名單制|沒有指定工具名/u, `${tool}；${EXACT_REPAIR}`);
+  }
+  const both = 'mcp__broker-x__broker-y__get_record';
+  const cfg = { ...FORBIDDEN, servers: ['broker-x', 'broker-y'], allowlist: ['broker-y__get_record'], allowedTools: [both] };
+  assert.match(decide(both, cfg).why, /連接器「broker-y」[\s\S]*採白名單制/u, EXACT_REPAIR);
+  assert.equal(decide(both, { ...cfg, allowlist: [...cfg.allowlist, 'get_record'] }).deny, false, EXACT_REPAIR);
+  const allowed = 'mcp__outer__broker-x__get_watchlist';
+  assert.equal(decide(allowed, { ...FORBIDDEN, allowedTools: [allowed] }).deny, false, EXACT_REPAIR);
+  const family = 'mcp__broker-x__view_create_order';
+  assert.match(decide(family, { ...FORBIDDEN, allowedTools: [family], allowlist: ['view_create_order'] }).why, /家族網/u, EXACT_REPAIR);
+});
+
+test('⑯allowedTools：精確命中後仍依兩張樣式表判定，既有 safeServers 語意保留', () => {
+  for (const [tail, field, reason] of [
+    ['view_create_order', 'verbs', /家族網/u],
+    ['view_order_create', 'verbs', /家族網/u],
+    ['get_swap_cash', 'patternsReadSafe', /額外樣式/u],
+    ['withdraw', 'patterns', /額外樣式/u],
+  ]) {
+    const tool = `mcp__new__${tail}`;
+    const cfg = { ...FORBIDDEN, allowedTools: [tool] };
+    const d = decide(tool, cfg);
+    assert.equal(d.deny, true, `${tool}；${EXACT_REPAIR}`);
+    assert.match(d.why, reason, `${tool}；${EXACT_REPAIR}`);
+    assert.equal(d.kind, undefined, `${tool}；${EXACT_REPAIR}`);
+    assert.equal(decide(tool, { ...cfg, [field]: [] }).deny, false, `${tool}；${EXACT_REPAIR}`);
+  }
+  for (const tool of ['mcp__new__get_deposit', 'mcp__other__create_order']) {
+    assert.equal(decide(tool, { ...FORBIDDEN, allowedTools: [tool] }).deny, false, `${tool}；${EXACT_REPAIR}`);
+  }
+  const unseenSafe = 'mcp__other__new_order_create';
+  assert.equal(decide(unseenSafe, { ...FORBIDDEN, allowedTools: ['mcp__new__read_item'] }).deny, false, EXACT_REPAIR);
+});
+
+test('⑯allowedTools：只有精確清單時，MCP 有效且未知名字拒絕，非 MCP 不算有規則', () => {
+  const tool = 'mcp__new__get_record';
+  const cfg = { name: 'test zone', allowedTools: [tool] };
+  assert.deepEqual(decide(tool, cfg), { deny: false }, EXACT_REPAIR);
+  const unknown = decide('mcp__new__unknown', cfg);
+  assert.equal(unknown.deny, true, EXACT_REPAIR);
+  assert.equal(unknown.kind, 'registry', EXACT_REPAIR);
+  assert.match(unknown.why, /沒有登記[\s\S]*allowedTools/u, EXACT_REPAIR);
+  assert.doesNotMatch(unknown.why, /名單還沒填|沒有任何一條有效規則/u, EXACT_REPAIR);
+  for (const nonMcp of ['read_item', 'kit__new__get_record']) {
+    const d = decide(nonMcp, cfg);
+    assert.equal(d.deny, true, EXACT_REPAIR);
+    assert.match(d.why, /沒有任何一條有效規則/u, EXACT_REPAIR);
+  }
+});
+
+test('⑯allowedTools：兩張樣式表的後一候選不可被前一候選遮住', () => {
+  const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, 'helpers', 'unfilled-settings.json'), 'utf8')).forbidden;
+  const tool = 'mcp__probe_exact__get__convert_to_cash';
+  const control = 'mcp__probe_exact__get_convert_to_cash';
+  const cfg = { ...defaults, name: '錢', allowedTools: [tool, control] };
+  const d = decide(tool, cfg);
+  assert.equal(d.deny, true, EXACT_REPAIR);
+  assert.equal(d.kind, undefined, EXACT_REPAIR);
+  assert.match(d.why, /額外樣式（convert_to_cash）/u, EXACT_REPAIR);
+  assert.equal(decide(control, cfg).deny, false, EXACT_REPAIR);
+});
+
+test('⑯allowedTools：指令入口精確放行不印，未登記與家族拒絕仍輸出鉤子決定', () => {
+  const tools = ['mcp__new__get_record', 'mcp__new__view_create_order'];
+  const settings = { forbidden: { ...FORBIDDEN, allowedTools: tools } };
+  assert.equal(cli(JSON.stringify({ tool_name: tools[0] }), settings).output, '', EXACT_REPAIR);
+  for (const tool of ['mcp__new__unknown', tools[1]]) {
+    const out = JSON.parse(cli(JSON.stringify({ tool_name: tool }), settings).output);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', EXACT_REPAIR);
+  }
+});
+
+/** 這個夾具用金融白名單路徑隔離家族判定，避免未登記拒絕冒充家族拒絕；判準見正本「兩張樣式表」。 */
 const onMoney = (tool, f = FORBIDDEN) => decide(`mcp__broker-x__${tool}`, { ...f, allowlist: [...(f.allowlist || []), tool] });
 
 test('①輸入不合法＝拒絕；②清單沒設＝拒絕', () => {
