@@ -8,9 +8,11 @@
 //   ⑨一個檔對上幾個家族取最重的、跟表的順序無關（#32 r2：取第一個對上的話，^docs/ 低排在 ^docs/contracts/ 高前面就把高算成低）。
 //   ⑬快速通道（AI）（F12）：清單上的檔整檔都收、只改 // 開頭整行註解的收（CRLF 檔也一樣）；區塊註解一律不收（#96 掃描後收窄）；
 //     用 /*、*/ 把程式包成註解、改程式、* 開頭的程式續行、帶 @ 的型別註解、空行、新增或刪掉的檔、只改權限、一律不收清單上的檔、
-//     符號連結（指向路徑以 // 開頭也一樣）、本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器；讀 git 前清掉 GIT_ 那一族（E4）。
+//     符號連結（指向路徑以 // 開頭也一樣）、本機找不到版本、清單沒登記或壞了——都判不走並印出原因；一個路徑不收整支就不走；結果帶回送審產生器；讀 git 前清掉 GIT_ 那一族（E4）；
+//     問平台主幹那一顆時，分支名照平台回的這支 PR 的基底分支傳（假平台的基底刻意不叫 main、問別的名字就問不到；#96 r5 R6）。
 // ⚠️ 守不到的：內容碰不碰到升級條件（要讀內容）；表本身分得對不對；有沒有照印出來的級別送審；只升不降（工具不記前幾輪）；
-//    「只改註解」的盲點（多行字串或範本字串裡長得像 // 註解的一行）——寫在工具檔頭與機器表，這裡不假裝守得到。
+//    「只改註解」的盲點（多行字串或範本字串裡長得像 // 註解的一行）——寫在工具檔頭與機器表，這裡不假裝守得到；
+//    快速通道假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -188,12 +190,17 @@ function laneRepo() {
   return { dir, base, head, sh };
 }
 const editJs = (fn, file = 'x.js') => (dir) => fs.writeFileSync(path.join(dir, 'tools', file), fn(BASE_JS));
-/** 假平台：change 帶受審版本與基底分支，branchSha 回主幹那一顆。 */
+// 基底分支刻意不叫 main（專案設定的主幹名）：傳錯名字、傳空的，或拿設定的主幹名去問，都問不到主幹那一顆（#96 r5 R6）
+const LANE_BASE_BRANCH = 'trunk';
+/** 假平台：change 帶受審版本與基底分支，branchSha 只認那個基底分支名、回主幹那一顆。 */
 const lanePlatform = (paths, head, base) => ({
-  ask: (op) => {
-    if (op === 'change') return { changedFileCount: String(paths.length), headSha: head, baseBranch: 'main' };
+  ask: (op, args) => {
+    if (op === 'change') return { changedFileCount: String(paths.length), headSha: head, baseBranch: LANE_BASE_BRANCH };
     if (op === 'changedFiles') return paths.map((p) => f(p));
-    if (op === 'branchSha') return { sha: base };
+    if (op === 'branchSha') {
+      if (!args || args.branch !== LANE_BASE_BRANCH) throw new PlatformError(`假平台只有基底分支 ${LANE_BASE_BRANCH}，問的是 ${args && args.branch}`);
+      return { sha: base };
+    }
     throw new PlatformError(`測試沒給 ${op}`);
   },
 });

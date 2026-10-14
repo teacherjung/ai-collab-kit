@@ -3,7 +3,8 @@
 // 守得到的：
 //   ①範本的格子跟產生器的表一一對上（範本加、刪、換一格就紅）；同一個字樣在不同位置填不同的值（複審者與實作者）；只留 <三選一>；
 //     「規矩讀基底那一版」那一格填的是基底版本碼（不是受審版本）；
-//   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；
+//   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；問平台基底那一顆時，分支名照平台回的
+//     這支 PR 的基底分支傳（假平台的基底刻意不叫 main、問別的名字就問不到；#96 r5 R6）；
 //   ③第 2 輪起：輪次＝這一位最大的輪次＋1、上一輪結論與上一輪之後的差異指到那一則、別位的結論不算；同一位＝角色＋來源字串；
 //     相關裁示列問在本支、配到的 ⚖️；
 //   ④本輪範圍照分級表那一列與輪次（上一輪是算數的通過＝照「通過後回頭改」那一格；算不算照結論閘：缺固定小標的不算、
@@ -16,7 +17,8 @@
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2；
 //   ⑩分級腳本判能走快速通道（AI）（F12）：本輪範圍＝只核差異、提示寫明為什麼；這一位連兩輪沒「通過」（輪次相鄰；每一輪算不算
 //     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道。
-// ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的。
+// ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
+//    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -95,10 +97,12 @@ function fakePlatform(answers) {
     },
   };
 }
+// 基底分支刻意不叫 main（專案設定的主幹名）：傳錯名字、傳空的，或拿設定的主幹名去問，都問不到基底那一顆（#96 r5 R6）
+const BASE_BRANCH = 'trunk';
 const answersFor = ({ head, base }, over = {}) => ({
-  change: { id: '7', title: 't', body: BODY, baseBranch: 'main', headBranch: 'topic', headSha: head, state: 'OPEN', isDraft: true, isCrossRepo: false, autoMergeOn: false, changedFileCount: '1', author: 'ai-acct' },
+  change: { id: '7', title: 't', body: BODY, baseBranch: BASE_BRANCH, headBranch: 'topic', headSha: head, state: 'OPEN', isDraft: true, isCrossRepo: false, autoMergeOn: false, changedFileCount: '1', author: 'ai-acct' },
   changedFiles: [{ path: 'tools/x.js', status: 'modified', previousPath: null }],
-  branchSha: { sha: base },
+  branchSha: (args) => (args && args.branch === BASE_BRANCH ? { sha: base } : new PlatformError(`假平台只有基底分支 ${BASE_BRANCH}，問的是 ${args && args.branch}`)),
   comments: [],
   allComments: [],
   ...over,
@@ -212,7 +216,7 @@ test('②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀�
     const mutation = path.join(folder, 'mutation');
     for (const t of [tree, mutation]) assert.equal(sh(t, 'rev-parse', 'HEAD'), r.head, `${t} 要在受審版本`);
     const prompt = fs.readFileSync(path.join(folder, 'prompt.md'), 'utf8');
-    for (const s of [`受審版本：${r.head}（短碼 ${r.head.slice(0, 7)}）`, `基底：main 的 ${r.base}`, '輪次：r1', '風險級別：高（照表算的）', '本輪範圍：全審（', '上一輪的結論：沒有', '相關裁示：沒有',
+    for (const s of [`受審版本：${r.head}（短碼 ${r.head.slice(0, 7)}）`, `基底：${BASE_BRANCH} 的 ${r.base}`, '輪次：r1', '風險級別：高（照表算的）', '本輪範圍：全審（', '上一輪的結論：沒有', '相關裁示：沒有',
       `審查樹：你現在所在的 ${tree}，`, `突變副本：${mutation}，`, `在副本裡跑考題：npm --prefix ${mutation} test -- <考題檔>`, `看整支的差異：git diff ${r.base}...${r.head}`, '看上一輪之後的差異：沒有', '實作者：Alpha',
       `\`git show ${r.base}:RULES.md\``,
       'PR：https://x.invalid/acme/kit/pull/7', '（post 7 --file <你寫好的結論檔>）', `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：<三選一>`]) {
