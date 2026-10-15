@@ -34,6 +34,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -80,11 +81,10 @@ test('②同一位同輪次相反結論＝擋，而且不取決於順序', () =>
 
 test('③版本一變舊通過失效；放行只認指定的那一位；讀不出指定誰＝不放行；沒結論＝不放行', () => {
   const stale = evaluate([verdict({ sha: OLD })], HEAD, 'Beta', ROLES);
-  assert.ok(stale.problems.some((p) => p.includes('不再適用')), '舊版本的通過不算');
-  // ⚠️ 兩道檢查互為備援（突變驗過：拿掉其中一道，退出碼不變）。釘訊息是為了讓兩句都在——
-  //    「沒有人對目前版本點頭」與「那則通過是對舊版本說的」是給人看的兩件不同的事。
+  assert.ok(stale.warnings.some((p) => p.includes('不再適用')), '舊通過應提醒：檢查 tools/gates/check-review-verdicts.js，重跑 node --test tests/check-review-verdicts.test.js');
+  // F5 區分失效的通過與未撤銷的阻擋；舊通過只提醒，缺指定者對目前版本的通過仍須擋下。
   assert.ok(stale.problems.some((p) => p.includes('沒有「Beta」對目前版本')), '要說目前版本沒人點頭');
-  assert.equal(stale.problems.length, 2);
+  assert.equal(stale.problems.length, 1, '缺當版通過才阻擋：檢查 tools/gates/check-review-verdicts.js，重跑 node --test tests/check-review-verdicts.test.js');
   const wrongOne = evaluate([verdict({ role: 'Alpha' })], HEAD, 'Beta', ROLES);
   assert.ok(wrongOne.problems.some((p) => p.includes('放行只認指定的那一位')), '實作者自己說通過不算');
   const unknown = evaluate([verdict()], HEAD, null, ROLES);
@@ -251,7 +251,7 @@ test('⑨同一位同輪次對不同版本各說通過＝不明、擋；每一�
   const shortSha = { ...verdict({ sha: HEAD.slice(0, 7), round: 1 }), createdAt: '2026-09-13T04:00:01Z' };
   assert.deepEqual(evaluate([onHead, shortSha], HEAD, 'Beta', ROLES).problems, []);
   // 更高輪次澄清後放行
-  const clarify = verdict({ sha: HEAD, round: 2 });
+  const clarify = { ...verdict({ sha: HEAD, round: 2 }), createdAt: '2026-09-13T04:00:02Z' };
   assert.deepEqual(evaluate([onOld, onHead, clarify], HEAD, 'Beta', ROLES).problems, []);
 });
 
@@ -301,7 +301,7 @@ test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說�
   // 短碼＋一個不匹配目前版本的長碼：兩種排列都要擋（不可以短碼先到就放行）
   for (const p of [[a, d], [d, a]]) assert.ok(evaluate(p, head12, 'Beta', ROLES).problems.length > 0, '代表值是長碼，跟目前版本對不上');
   // 更高輪次澄清後放行
-  assert.deepEqual(evaluate([a, b, d, verdict({ sha: head12, round: 2 })], head12, 'Beta', ROLES).problems, []);
+  assert.deepEqual(evaluate([a, b, d, { ...verdict({ sha: head12, round: 2 }), createdAt: '2026-09-13T04:00:02Z' }], head12, 'Beta', ROLES).problems, []);
 });
 
 test('⑫沒帶時區的留言時間不收＝退 2；同一份留言在 TZ=UTC 與 TZ=Asia/Taipei 判一樣', () => {
@@ -402,4 +402,242 @@ test('⑭「快速通道（擁有者）」：專案設定登記的擁有者的�
   assert.doesNotMatch(ai.lines.join('\n'), /還沒登記擁有者/u);
   // 識別值前後帶空白：跟 rolesOf 一樣去掉再比，照樣豁免
   assert.equal(gateRun('7', { settings: { ...people, owner: ' Gamma ' }, platform: fakePlatform({ change: fast, comments: [ownerPass] }) }).code, 0);
+});
+
+test('F5 接手：舊身分已通過、新指定者對目前版本通過＝放行並保留失效提醒', () => {
+  const oldPass = verdict({ role: 'Beta', source: 'CLI', sha: OLD });
+  const newPass = verdict({ role: 'Gamma', source: 'review CLI' });
+  const r = gateRun('7', { settings, platform: fakePlatform({
+    change: change({ body: '- **實作者**：Alpha\n- **複審者**：Gamma' }),
+    comments: [oldPass, newPass],
+  }) });
+  const hint = '檢查 tools/gates/check-review-verdicts.js，重跑 node --test tests/check-review-verdicts.test.js';
+  assert.equal(r.code, 0, `${r.lines.join('\n')}\n${hint}`);
+  assert.ok(r.lines.some((line) => line.startsWith('提醒') && line.includes('Beta（CLI）') && line.includes('不再適用')), hint);
+});
+
+test('F5 接手：舊身分尚未撤銷的實質阻擋不被新指定者的通過解除', () => {
+  for (const verdictText of ['需修改後再審', '不可合併']) {
+    const oldBlock = verdict({ role: 'Beta', source: 'CLI', sha: OLD, verdict: verdictText });
+    const newPass = verdict({ role: 'Gamma', source: 'review CLI' });
+    const r = gateRun('7', { settings, platform: fakePlatform({
+      change: change({ body: '- **實作者**：Alpha\n- **複審者**：Gamma' }),
+      comments: [oldBlock, newPass],
+    }) });
+    const hint = '檢查 tools/gates/check-review-verdicts.js，重跑 node --test tests/check-review-verdicts.test.js';
+    assert.equal(r.code, 1, `${verdictText}\n${r.lines.join('\n')}\n${hint}`);
+    assert.ok(r.lines.some((line) => line.includes('Beta（CLI）') && line.includes('還沒有被同一位撤銷')), hint);
+  }
+});
+
+test('F5 接手：沒有新指定者對目前版本的通過，舊通過或別人的新通過都不能放行', () => {
+  const oldPass = verdict({ role: 'Beta', source: 'CLI', sha: OLD });
+  const staleNew = verdict({ role: 'Gamma', source: 'review CLI', sha: OLD });
+  const otherPass = verdict({ role: 'Alpha', source: 'CLI' });
+  for (const comments of [[oldPass], [oldPass, staleNew, otherPass]]) {
+    const r = gateRun('7', { settings, platform: fakePlatform({
+      change: change({ body: '- **實作者**：Alpha\n- **複審者**：Gamma' }), comments,
+    }) });
+    const hint = '檢查 tools/gates/check-review-verdicts.js，重跑 node --test tests/check-review-verdicts.test.js';
+    assert.equal(r.code, 1, `${r.lines.join('\n')}\n${hint}`);
+    assert.ok(r.lines.some((line) => line.includes('沒有「Gamma」對目前版本') || line.includes('放行只認指定的那一位')), hint);
+  }
+});
+
+
+const F7_MARK = 'F7 當版核對收據 v1';
+const NEXT = 'fedcba9876543210fedcba9876543210fedcba98';
+const digest = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+const timed = (comment, second, ms = 0) => ({ ...comment, createdAt: new Date(Date.UTC(2026, 9, 15, 0, 0, second, ms)).toISOString() });
+/** 只造合成公開摘要；proof hash 是夾具，不是實跑收據。 */
+function receiptFor(pass, patch = {}, second = 30) {
+  const h = headerOf(pass.body, ROLES);
+  const data = { passCommentId: pass.id, role: h.role, source: h.source, headSha: OLD,
+    checkedAt: '2026-10-15T00:00:20Z', exitCode: 0, passBodySha256: digest(pass.body), proofSha256: '1'.repeat(64), ...patch };
+  return timed(c(`${F7_MARK}\n\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\``), second);
+}
+const eventFixture = () => {
+  const block = timed(verdict({ role: 'Beta', sha: HEAD, verdict: '需修改後再審' }), 10);
+  const pass = timed(verdict({ role: 'Beta', sha: OLD, round: 2 }), 20);
+  const current = timed(verdict({ role: 'Gamma', sha: NEXT }), 40);
+  return { block, pass, current };
+};
+const F5_HINT = '檢查 tools/gates/check-review-verdicts.js 的阻擋事件與 F7 收據，重跑 node --test tests/check-review-verdicts.test.js';
+
+test('F5 事件：高輪錯版通過不能吃掉當版阻擋或同輪衝突', () => {
+  for (const conflict of [false, true]) {
+    const { block, pass } = eventFixture();
+    const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+    const comments = [block, ...(conflict ? [timed(verdict({ role: 'Beta', sha: HEAD }), 11)] : []), pass, current];
+    const r = evaluate(comments, HEAD, 'Gamma', ROLES);
+    assert.ok(r.problems.some((x) => x.includes('Beta（CLI）')), F5_HINT);
+    assert.ok(r.problems.some((x) => x.includes('收據') && x.includes('tools/gates/check-review-verdicts.js')), F5_HINT);
+    if (conflict) assert.ok(r.problems.some((x) => x.includes('相反結論')), F5_HINT);
+  }
+});
+
+test('F5 事件：只有同身分更高輪且時間較晚的合規當版通過能解', () => {
+  const { block } = eventFixture();
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const yes = timed(verdict({ role: 'Beta', sha: HEAD, round: 2 }), 20);
+  assert.deepEqual(evaluate([block, yes, current], HEAD, 'Gamma', ROLES).problems, [], F5_HINT);
+  const rejected = [
+    timed(verdict({ role: 'Alpha', sha: HEAD, round: 2 }), 20),
+    timed(verdict({ role: 'Beta', source: '桌面', sha: HEAD, round: 2 }), 20),
+    timed(verdict({ role: 'Beta', sha: HEAD, round: 1 }), 20),
+    timed(verdict({ role: 'Beta', sha: HEAD, round: 2 }), 9),
+    timed(verdict({ role: 'Beta', sha: HEAD, round: 2 }), 10),
+    timed(verdict({ role: 'Beta', sha: HEAD, round: 2, headings: false }), 20),
+  ];
+  for (const no of rejected) assert.ok(evaluate([block, no, current], HEAD, 'Gamma', ROLES).problems.length, F5_HINT);
+  const higherBlock = { ...block, body: block.body.replace('｜r1｜', '｜r3｜') };
+  assert.ok(evaluate([higherBlock, yes, current], HEAD, 'Gamma', ROLES).problems.length, F5_HINT);
+});
+
+test('F7 收據：有效歷史解除不重生，但收據不能代替新指定者當版通過', () => {
+  const { block, pass, current } = eventFixture();
+  const receipt = receiptFor(pass);
+  const r = evaluate([block, pass, receipt, current], NEXT, 'Gamma', ROLES);
+  assert.deepEqual(r.problems, [], `${r.problems.join('\n')}\n${F5_HINT}`);
+  assert.ok(evaluate([block, pass, receipt], NEXT, 'Gamma', ROLES).problems.some((x) => x.includes('沒有「Gamma」')), F5_HINT);
+  const otherBlock = timed(verdict({ role: 'Alpha', sha: HEAD, verdict: '不可合併' }), 10);
+  assert.ok(evaluate([otherBlock, block, pass, receipt, current], NEXT, 'Gamma', ROLES).problems.some((x) => x.includes('Alpha（CLI）')), F5_HINT);
+  const lateBlock = timed(verdict({ role: 'Beta', sha: HEAD, verdict: '不可合併' }), 35);
+  assert.ok(evaluate([block, pass, receipt, lateBlock, current], NEXT, 'Gamma', ROLES).problems.some((x) => x.includes('不可合併')), F5_HINT);
+});
+
+test('F7 收據：同輪一致按 checkedAt 截止，後到衝突是新事件', () => {
+  const { block, pass, current } = eventFixture();
+  const late = timed(verdict({ role: 'Beta', sha: OLD, round: 2, verdict: '不可合併' }), 25);
+  const r = evaluate([block, pass, receiptFor(pass), late, current], NEXT, 'Gamma', ROLES);
+  assert.ok(!r.problems.some((x) => x.includes('在 r1')), F5_HINT);
+  assert.ok(r.problems.some((x) => x.includes('在 r2')), F5_HINT);
+  assert.ok(r.problems.some((x) => x.includes('相反結論')), F5_HINT);
+  const staleCheck = evaluate([block, pass, receiptFor(pass, { checkedAt: '2026-10-15T00:00:25Z' }), late, current], NEXT, 'Gamma', ROLES);
+  assert.ok(staleCheck.problems.some((x) => x.includes('在 r1')), F5_HINT);
+  assert.ok(staleCheck.warnings.some((x) => x.includes('收據')), F5_HINT);
+  const sameSecond = timed(late, 20, 900);
+  assert.ok(evaluate([block, pass, receiptFor(pass), sameSecond, current], NEXT, 'Gamma', ROLES).problems.some((x) => x.includes('在 r1')), F5_HINT);
+});
+
+test('F7 收據：欄位、型別、版本、時間與原留言 body 綁定逐一拒收', () => {
+  const { block, pass, current } = eventFixture();
+  const badPatches = [
+    { extra: true }, { role: null }, { source: 1 }, { passCommentId: 123 },
+    { passCommentId: 'not-found' }, { role: 'Gamma' }, { source: '桌面' },
+    { headSha: HEAD }, { headSha: OLD.slice(0, 7) }, { headSha: OLD.toUpperCase() },
+    { checkedAt: '2026-10-15T00:00:19Z' }, { checkedAt: '2026-10-15T00:00:31Z' },
+    { checkedAt: '2026-10-15T00:00:20.000Z' }, { checkedAt: '2026-02-30T00:00:20Z' },
+    { exitCode: 1 }, { exitCode: 2 }, { exitCode: '0' },
+    { passBodySha256: '2'.repeat(64) }, { passBodySha256: 'bad' }, { proofSha256: 'bad' },
+  ];
+  for (const patch of badPatches) {
+    const r = evaluate([block, pass, receiptFor(pass, patch), current], NEXT, 'Gamma', ROLES);
+    assert.ok(r.problems.length, `${JSON.stringify(patch)}\n${F5_HINT}`);
+    assert.ok(r.warnings.some((x) => x.includes('收據')), F5_HINT);
+  }
+  const complete = receiptFor(pass);
+  for (const body of [complete.body.replace(/"proofSha256":"[^"]+",?/u, '').replace(',}', '}'),
+    `${F7_MARK}\n\n\`\`\`json\nnot-json\n\`\`\``, complete.body + '\n額外內容', complete.body.replace(F7_MARK, ' ' + F7_MARK)]) {
+    const r = evaluate([block, pass, { ...complete, body }, current], NEXT, 'Gamma', ROLES);
+    assert.ok(r.problems.length && r.warnings.some((x) => x.includes('收據')), F5_HINT);
+  }
+  const edited = { ...pass, body: pass.body + '\n' };
+  assert.ok(evaluate([block, edited, complete, current], NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+  const bare = { ...pass, body: pass.body.split('\n\n###')[0] };
+  assert.ok(evaluate([block, bare, receiptFor(bare), current], NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+  assert.ok(evaluate([block, pass, receiptFor(block, { headSha: HEAD }), current], NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+});
+
+test('F7 收據：無關壞收據只提醒；秒精度與身分正規化沿用契約', () => {
+  const { block, pass, current } = eventFixture();
+  const bad = { ...receiptFor(pass, { exitCode: 1 }), createdAt: 'not-time' };
+  const harmless = evaluate([current, bad], NEXT, 'Gamma', ROLES);
+  assert.deepEqual(harmless.problems, [], F5_HINT);
+  assert.ok(harmless.warnings.some((x) => x.includes('收據')), F5_HINT);
+  const fractional = timed(pass, 20, 999);
+  const receipt = receiptFor(fractional, { role: ' beta ', source: '  CLI  ' }, 20);
+  assert.deepEqual(evaluate([block, fractional, receipt, current], NEXT, 'Gamma', ROLES).problems, [], F5_HINT);
+  const raw = { ...pass, body: pass.body.replace(/\n/gu, '\r\n') + ' ' };
+  assert.deepEqual(evaluate([block, raw, receiptFor(raw), current], NEXT, 'Gamma', ROLES).problems, [], F5_HINT);
+});
+
+test('F7 收據：打亂輸入順序不改結果；收據不為較早或同刻 pass 補解除資格', () => {
+  const { block, pass, current } = eventFixture();
+  const receipt = receiptFor(pass);
+  const all = [block, pass, receipt, current];
+  const first = evaluate(all, NEXT, 'Gamma', ROLES);
+  for (const order of [[...all].reverse(), [receipt, block, current, pass]]) {
+    const r = evaluate(order, NEXT, 'Gamma', ROLES);
+    assert.deepEqual(r.problems, first.problems, F5_HINT);
+    assert.deepEqual(r.warnings, first.warnings, F5_HINT);
+  }
+  for (const second of [9, 10]) {
+    const early = timed(pass, second);
+    assert.ok(evaluate([block, early, receiptFor(early), current], NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+  }
+});
+
+
+test('F5 事件：更高輪錯版 pass 不能遮住缺小標通過未能解的舊阻擋', () => {
+  const { block, pass } = eventFixture();
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const bare = timed(verdict({ role: 'Beta', sha: HEAD, round: 3, headings: false }), 30);
+  const r = evaluate([block, pass, bare, current], HEAD, 'Gamma', ROLES);
+  assert.ok(r.problems.some((x) => x.includes('在 r1')), F5_HINT);
+  assert.ok(r.problems.some((x) => x.includes('在 r3') && x.includes('缺固定小標')), F5_HINT);
+});
+
+test('F7 收據：擁有者豁免與原標頭版本前綴沿用；收據不能造出缺失原結論', () => {
+  const { block, pass, current } = eventFixture();
+  const ownerPass = { ...pass, body: pass.body.split('\n\n###')[0] };
+  const receipt = receiptFor(ownerPass);
+  const comments = [block, ownerPass, receipt, current];
+  assert.deepEqual(evaluate(comments, NEXT, 'Gamma', ROLES, { ownerRole: 'Beta' }).problems, [], F5_HINT);
+  assert.ok(evaluate(comments, NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+  assert.ok(evaluate([block, receipt, current], NEXT, 'Gamma', ROLES, { ownerRole: 'Beta' }).problems.length, F5_HINT);
+  // 同輪的長碼把版本說得更精確，不能拿相容的短碼收據冒充另一個完整 HEAD。
+  const long = { ...pass, id: 'long-version', body: pass.body.replace(OLD.slice(0, 7), OLD.slice(0, 8)) };
+  const otherHead = OLD.slice(0, 7) + 'e' + OLD.slice(8);
+  assert.ok(evaluate([block, pass, long, receiptFor(pass, { headSha: otherHead }), current], NEXT, 'Gamma', ROLES).problems.length, F5_HINT);
+});
+
+test('F7 收據：gateRun 使用同一份平台 comments，壞收據不把綠燈變成查不清楚', () => {
+  const { block, pass, current } = eventFixture();
+  const run = (comments) => gateRun('7', { settings, platform: fakePlatform({
+    change: change({ headSha: NEXT, body: '- **實作者**：Alpha\n- **複審者**：Gamma' }), comments,
+  }) });
+  assert.equal(run([block, pass, receiptFor(pass), current]).code, 0, F5_HINT);
+  assert.equal(run([block, pass, current]).code, 1, F5_HINT);
+  assert.equal(run([current, { ...receiptFor(pass), createdAt: 'not-time' }]).code, 0, F5_HINT);
+});
+
+
+test('F5 事件：較早高輪 pass 不能預解後來才出現的低輪版本衝突', () => {
+  const first = timed(verdict({ role: 'Beta', sha: HEAD, round: 1 }), 10);
+  const higher = timed(verdict({ role: 'Beta', sha: HEAD, round: 2 }), 20);
+  const conflict = timed(verdict({ role: 'Beta', sha: OLD, round: 1 }), 30);
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const all = [first, higher, conflict, current];
+  const r = evaluate(all, HEAD, 'Gamma', ROLES);
+  assert.ok(r.problems.some((x) => x.includes('在 r1') && x.includes('對不同版本各給結論')), F5_HINT);
+  assert.deepEqual(evaluate([...all].reverse(), HEAD, 'Gamma', ROLES).problems, r.problems, F5_HINT);
+  const later = timed(verdict({ role: 'Beta', sha: HEAD, round: 3 }), 35);
+  assert.deepEqual(evaluate([...all, later], HEAD, 'Gamma', ROLES).problems, [], F5_HINT);
+});
+
+
+test('F5 狀態：發審讀到的 reviewer 不把尚有未撤事件的高輪錯版 pass 當成上輪已過', () => {
+  const { block, pass, current } = eventFixture();
+  const blocked = evaluate([block, pass, current], NEXT, 'Gamma', ROLES);
+  assert.equal(blocked.reviewers['Beta（CLI）'].blocking, true, F5_HINT);
+  assert.equal(blocked.reviewers['Beta（CLI）'].round, 2, F5_HINT);
+  assert.match(blocked.reviewers['Beta（CLI）'].verdict, /未撤銷阻擋/u, F5_HINT);
+  assert.equal(blocked.reviewers['Gamma（CLI）'].blocking, false, F5_HINT);
+  const proved = evaluate([block, pass, receiptFor(pass), current], NEXT, 'Gamma', ROLES);
+  assert.equal(proved.reviewers['Beta（CLI）'].blocking, false, F5_HINT);
+  const staleOnly = evaluate([pass, current], NEXT, 'Gamma', ROLES);
+  assert.equal(staleOnly.reviewers['Beta（CLI）'].blocking, false, F5_HINT);
+  const currentPass = timed(verdict({ role: 'Beta', sha: NEXT, round: 3 }), 35);
+  assert.equal(evaluate([block, pass, currentPass, current], NEXT, 'Gamma', ROLES).reviewers['Beta（CLI）'].blocking, false, F5_HINT);
 });

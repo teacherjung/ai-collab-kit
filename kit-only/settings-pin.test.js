@@ -25,6 +25,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     ['裁示者（人）', 'William', 'teacherjung'],
     ['AI 甲', 'Claude', 'teacherjung'],
     ['AI 乙', 'Codex', 'teacherjung'],
+    ['AI 丙', 'Grok', 'teacherjung'],
   ]);
   assert.equal(s.platform.name, 'GitHub');
   assert.equal(s.platform.project, 'teacherjung/ai-collab-kit');
@@ -32,6 +33,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.deepEqual(s.reviewers.map((r) => [r.participant, r.strongest, r.maxEffort, r.autoMode, r.source]), [
     ['Claude', 'claude-fable-5-1', 'max', 'Ultracode', 'Claude CLI'],
     ['Codex', 'gpt-6-astra', 'max', 'ultra（這一檔會自動派助手）', 'codex CLI'],
+    ['Grok', 'grok-4.7', 'xhigh', '自動選模', 'Grok CLI'],
   ]);
   assert.deepEqual(s.gates.map((g) => g.name), [
     '待裁（本支貼的 ❓ 都配到 ⚖️ 或 🚫）',
