@@ -10,7 +10,8 @@
 //     但作廢不了合規留言、作廢不了不存在的、作廢不了比自己晚的，而且作廢不產生任何結論；
 //   ⑥沒標頭但看起來像結論＝只提醒，不影響退出碼；兩個來源長得像＝提醒、不併身分；
 //   ⑦平台問不到、設定沒填＝退 2；
-//   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；時間讀不出＝退 2。
+//   ⑧先後看留言時間不看清單順序（r1 Medium⑩）：清單反過來給也判得一樣；同一刻證明不了先後＝作廢不生效；一般留言時間讀不出＝退 2。
+//     收據前綴的時間例外見題名關鍵字「混入機器人記號的壞時間不取得收據豁免」；辨認條件與效力以結論閘檔頭為準。
 //   ⑨同一位同輪次對**不同版本**各給結論＝不明、擋（r2 Medium⑤：原本同為通過時先遇到哪一則就用哪一則，
 //     清單順序改變判決）；判決與清單順序無關，每一種排列都要判一樣。
 //   ⑩找 🤖 讀整份原文、什麼都不剝（r5：每一種剝法都在正常寫法上吞過看得見的 🤖）；「像不像結論」的提醒與指定的複審者
@@ -212,7 +213,7 @@ test('真的跑一遍指令（空白設定的複本，不讀本倉庫那份）�
   assert.equal(runInCopy('tools/gates/check-review-verdicts.js').status, 2);
 });
 
-test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻＝作廢不生效；時間讀不出＝退 2', () => {
+test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻＝作廢不生效；一般留言時間讀不出＝退 2', () => {
   const bad = c('🤖 Beta｜來源：CLI｜審 ｜r1｜結論：要求修改', 'bad1');
   const good = verdict({ round: 2 });
   const voider = verdict({ role: 'Alpha', round: 2, extra: '\n\n作廢上一則：bad1' });
@@ -228,7 +229,7 @@ test('⑧先後看留言時間：清單反過來給也判得一樣；同一刻�
   const r = evaluate([bad, good, same], HEAD, 'Beta', ROLES);
   assert.ok(r.problems.some((p) => p.includes('bad1')));
   assert.ok(r.warnings.some((w) => w.includes('不比作廢宣告早')));
-  // 時間讀不出＝退 2
+  // 一般留言時間讀不出＝退 2
   const settings = { participants: ROLES.map((id) => ({ id })) };
   const broken = { ...good, createdAt: 'yesterday' };
   const g = gateRun('7', { settings, platform: fakePlatform({ change: change(), comments: [broken] }) });
@@ -304,7 +305,7 @@ test('⑪短碼相容不可傳遞：abcdef1／abcdef12／abcdef13 同輪各說�
   assert.deepEqual(evaluate([a, b, d, { ...verdict({ sha: head12, round: 2 }), createdAt: '2026-09-13T04:00:02Z' }], head12, 'Beta', ROLES).problems, []);
 });
 
-test('⑫沒帶時區的留言時間不收＝退 2；同一份留言在 TZ=UTC 與 TZ=Asia/Taipei 判一樣', () => {
+test('⑫一般留言沒帶時區不收＝退 2；同一份留言在 TZ=UTC 與 TZ=Asia/Taipei 判一樣', () => {
   const bad = c('🤖 Beta｜來源：CLI｜審 ｜r1｜結論：要求修改', 'bad1'); bad.createdAt = '2026-09-13T02:00:00Z';
   const good = verdict({ round: 2 }); good.createdAt = '2026-09-13T02:30:00Z';
   const voider = verdict({ role: 'Alpha', round: 2, extra: '\n\n作廢上一則：bad1' });
