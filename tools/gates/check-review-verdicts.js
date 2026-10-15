@@ -50,7 +50,8 @@
 // ```
 // 角色／來源沿用標頭正規化。body 不正規化；原留言被編輯時舊 hash 不能沿用。時間同以秒精度比較：
 // 原 pass.createdAt ≤ checkedAt ≤ 收據.createdAt。同輪一致性只核 checkedAt 當秒以前的留言；後到矛盾另立阻擋。
-// 缺欄、多欄、型別／時間／綁定不符或非 exit0 只讓收據不採計並提醒；不為無關壞收據新增全域阻擋。
+// 無機器人記號的收據若缺欄、多欄、型別／時間／綁定不符或非 exit0，只讓收據不採計並提醒；不為無關壞收據新增全域阻擋。
+// 收據前綴若豁免含機器人記號的留言，會把既有壞標頭／壞時間防線變成只提醒。
 // 缺可採計的歷史證據時保留阻擋，不推定從未解除；可由同身分對目前 HEAD 補更高輪次通過，或公開既有真實 exit0 收據。
 // 誠實劃界：proofSha256 只驗格式，閘不讀私證據、不證明當時 HEAD 或 exit0 真實；F7 收件者須核原證據。
 // 這沿用共用帳號自我宣告的限制，不是簽章、強身分驗證或平台原生歷史。
@@ -164,7 +165,7 @@ const RECEIPT_TITLE = 'F7 當版核對收據 v1';
 const RECEIPT_FIELDS = ['passCommentId', 'role', 'source', 'headSha', 'checkedAt', 'exitCode', 'passBodySha256', 'proofSha256'];
 const RECEIPT_FIX = '由同身分對目前 HEAD 補更高輪次通過，或依 tools/gates/check-review-verdicts.js 檔頭「F7 當版核對收據 v1」公開既有真實 exit0 收據；不得以今天重跑冒充歷史核對。';
 const secondOf = (time) => Math.floor(time / 1000);
-const receiptLike = (body) => (String(body || '').split('\n').find((line) => line.trim()) || '').trim().startsWith('F7 當版核對收據');
+const receiptLike = (body) => !hasBotMark(body) && (String(body || '').split('\n').find((line) => line.trim()) || '').trim().startsWith('F7 當版核對收據');
 const compatibleSha = (a, b) => a.startsWith(b) || b.startsWith(a);
 
 /** 同輪的所有結論須同為通過且與核對 HEAD 相容；短碼不能掩蓋另一則更長版本碼。 */

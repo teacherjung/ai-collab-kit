@@ -641,3 +641,66 @@ test('F5 狀態：發審讀到的 reviewer 不把尚有未撤事件的高輪錯�
   const currentPass = timed(verdict({ role: 'Beta', sha: NEXT, round: 3 }), 35);
   assert.equal(evaluate([block, pass, currentPass, current], NEXT, 'Gamma', ROLES).reviewers['Beta（CLI）'].blocking, false, F5_HINT);
 });
+
+
+test('F7 收據前綴：同則機器人記號不因前綴而免除壞標頭', () => {
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const block = timed(verdict({ role: 'Beta', sha: HEAD, verdict: '不可合併' }), 10);
+  const run = (comment) => gateRun('7', { settings, platform: fakePlatform({
+    change: change({ headSha: HEAD, body: '- **實作者**：Alpha\n- **複審者**：Gamma' }), comments: [comment, current],
+  }) });
+  const prefixes = ['F7 當版核對收據', F7_MARK, 'F7 當版核對收據 v2', F7_MARK + ' 額外文字', '\n \t' + F7_MARK + '\r\n'];
+  const markedBodies = [block.body, '> ' + block.body, '```text\n' + block.body + '\n```', '<!-- ' + block.body + ' -->', '`🤖`', '{"note":"🤖"}'];
+  for (const prefix of prefixes) {
+    const harmless = run({ ...block, body: prefix + '\nnot-json' });
+    assert.equal(harmless.code, 0, F5_HINT);
+    assert.ok(harmless.lines.some((x) => x.startsWith('提醒') && x.includes('收據')), F5_HINT);
+    for (const body of markedBodies) {
+      const mixed = { ...block, body: prefix + '\n' + body };
+      const result = run(mixed);
+      assert.equal(result.code, 1, `${JSON.stringify({ prefix, body })}\n${F5_HINT}`);
+      assert.ok(result.lines.some((x) => x.includes('標頭格式不合規')), F5_HINT);
+    }
+  }
+});
+
+test('F7 收據前綴：混入機器人記號的壞時間不取得收據豁免', () => {
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const block = verdict({ role: 'Beta', sha: HEAD, verdict: '不可合併' });
+  for (const prefix of [F7_MARK, 'F7 當版核對收據', '\n  ' + F7_MARK]) {
+    for (const createdAt of ['invalid-time', '2026-10-15T00:00:20', '2026-02-30T00:00:20Z']) {
+      for (const marked of [false, true]) {
+        const mixed = { id: 'receipt-time', createdAt, body: prefix + '\n' + (marked ? block.body : 'not-json') };
+        const result = gateRun('7', { settings, platform: fakePlatform({
+          change: change({ headSha: HEAD, body: '- **實作者**：Alpha\n- **複審者**：Gamma' }), comments: [mixed, current],
+        }) });
+        assert.equal(result.code, marked ? 2 : 0, `${JSON.stringify({ prefix, createdAt, marked })}\n${F5_HINT}`);
+        assert.ok(result.lines.some((x) => x.includes(marked ? '時間讀不出' : '收據')), F5_HINT);
+      }
+    }
+  }
+});
+
+test('F7 收據前綴：合規標頭在首行時仍沿原結論與解除規則', () => {
+  const current = timed(verdict({ role: 'Gamma', sha: HEAD }), 40);
+  const block = timed(verdict({ role: 'Beta', sha: HEAD, verdict: '不可合併', extra: '\n' + F7_MARK }), 10);
+  const pass = timed(verdict({ role: 'Beta', sha: HEAD, round: 2, extra: '\n' + F7_MARK }), 20);
+  assert.ok(evaluate([block, current], HEAD, 'Gamma', ROLES).problems.some((x) => x.includes('還沒有被同一位撤銷')), F5_HINT);
+  assert.deepEqual(evaluate([block, pass, current], HEAD, 'Gamma', ROLES).problems, [], F5_HINT);
+  assert.equal(evaluate([{ ...block, createdAt: 'invalid-time' }, current], HEAD, 'Gamma', ROLES).unsure, true, F5_HINT);
+});
+
+test('F7 收據前綴：有效歷史收據仍解除，無記號壞收據只提醒', () => {
+  const { block, pass, current } = eventFixture();
+  const valid = receiptFor(pass);
+  const invalid = { ...receiptFor(pass, { exitCode: 1 }), id: 'irrelevant-invalid', createdAt: 'invalid-time' };
+  const run = (comments) => gateRun('7', { settings, platform: fakePlatform({
+    change: change({ headSha: NEXT, body: '- **實作者**：Alpha\n- **複審者**：Gamma' }), comments,
+  }) });
+  assert.equal(run([block, pass, current]).code, 1, F5_HINT);
+  const good = run([block, pass, valid, current, invalid]);
+  assert.equal(good.code, 0, F5_HINT);
+  assert.ok(good.lines.some((x) => x.startsWith('提醒') && x.includes('irrelevant-invalid')), F5_HINT);
+  const marked = { ...valid, body: valid.body + '\n🤖' };
+  assert.equal(run([block, pass, marked, current]).code, 1, F5_HINT);
+});
