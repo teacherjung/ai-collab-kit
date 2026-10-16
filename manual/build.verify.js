@@ -174,7 +174,7 @@ function ownHeader(text) {
   }
   return { line: para.match(/^[^。]*。/u)[0], para };
 }
-const HEADER_SAMPLES = { 'tests/forbidden-defaults.test.js': '包含空白範本 tests/helpers/unfilled-settings.json 的同名清單', 'tests/kit-lock.test.js': '清單的豁免；K1：每條', 'tools/gates/check-review-verdicts.js': '；放行只認' };
+const HEADER_SAMPLES = { 'tests/forbidden-defaults.test.js': '包含空白範本 tests/helpers/unfilled-settings.json 的同名清單', 'tests/kit-lock.test.js': '不覆蓋；K1：每條', 'tools/gates/check-review-verdicts.js': '；放行只認' };
 
 /** 考題自己列 tools/ 與 tools/gates/ 的 .js（不用產生器的 readTools）。 */
 function ownTools() {
@@ -1546,9 +1546,9 @@ test('⑰ 套用頁：README.md「搬進一個專案」「專案裡改到套件�
   assert.ok(page.includes(`<p class="page-sum">怎麼把套件搬進一個專案、專案裡改到套件的檔要怎麼辦：下面是 README.md 的「搬進一個專案」「專案裡改到套件的檔」這 ${secs.length} 節原文，照說明書的排法排。</p>`), '套用頁頁首那一句不對（數字或字）');
   assert.ok(html.includes('<p class="source-note">來源：README.md 的「搬進一個專案」「專案裡改到套件的檔」兩節。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單（含從 1 連號的編號清單，與編號清單項底下的程式碼框）、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與程式碼框開頭的語言名不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、刪除線、HTML 的寫法），會讓整份停下不產生。</p>'), '套用頁的來源註記不對');
   assert.ok(!html.includes('<section class="page" id="page-adopt" data-page="adopt" hidden>\n<header class="page-head"><p class="eyebrow">第 7 頁</p>'), '套用頁不該再是「準備中」');
-  // 寫死的樣本：第 2 步底下的程式碼框、第二節開頭是粗體的清單項、第 3 步補了灰底框的家目錄路徑、編號清單至少 5 步
+  // 寫死的樣本：第 2 步底下的程式碼框、第二節第一個清單項開頭的粗體、第 3 步補了灰底框的家目錄路徑、編號清單至少 5 步
   assert.ok(page.includes("</li><li>專案若有 ESLint、而且把 <code>.js</code> 當 ES 模組：在它的設定補一組（package.json 的宣告管不到 lint）。漏了＝lint 對套件檔報幾百個錯，推送前那道門推不上去。<pre class=\"code-box\"><code>{ files: ['tools/**/*.js', 'tests/**/*.js'], languageOptions: { sourceType: 'commonjs', globals: globals.node } }</code></pre></li>"), '第 2 步與它底下的程式碼框不對（寫死的樣本）');
-  assert.ok(page.includes('<ul class="items"><li><strong>預設：套件先改、再同步回專案</strong>——'), '第二節第一項開頭的粗體不對（寫死的樣本）');
+  assert.ok(page.includes('<ul class="items"><li><strong>只在套件改、再同步回專案</strong>——'), '第二節第一項開頭的粗體不對（寫死的樣本）');
   assert.ok(page.includes('例如 <code>~/.local/share/ai-collab-kit/guard/&lt;版本碼前幾碼&gt;</code>）。②'), '第 3 步那一處家目錄路徑要在灰底框裡（寫死的樣本）');
   assert.ok(secs[0].blocks.filter((b) => b.kind === 'olist').reduce((n, b) => n + b.items.length, 0) >= 5, '前提：考題自己讀到的編號清單太少');
   // 照原文靠的樣式：程式碼框保留換行與縮排；編號清單要看得到號碼（整份樣式不准有 list-style）
