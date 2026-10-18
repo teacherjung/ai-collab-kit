@@ -87,9 +87,9 @@ function evaluate(comments, decider, settings = {}) {
   let assignments;
   try { assignments = assignmentsOf(settings); }
   catch (e) { return { open: [], ruled: [], withdrawn: [], near: [], accepted: [], unsure: e.message }; }
-  const ownerId = decider.ownerId || decider.id;
-  const ownerAccount = decider.ownerAccount || decider.account;
-  const rulingIds = [...new Set([ownerId, decider.id, ...assignments.map((a) => a.decider)])];
+  const ownerId = decider.ownerId || null;
+  const ownerAccount = decider.ownerAccount || null;
+  const rulingIds = [...new Set([ownerId, decider.id, ...assignments.map((a) => a.decider)].filter(Boolean))];
   const rulingRe = new RegExp(`^## ⚖️? (${rulingIds.map(esc).join('|')}) 裁示（(\\d{4}-\\d{2}-\\d{2})）：(\\S.*)$`, 'u');
   const asks = [];
   const rulings = [];
@@ -114,7 +114,7 @@ function evaluate(comments, decider, settings = {}) {
     const route = resolveAt(assignments, decider, c.body, c.createdAt);
     const r = rulingRe.exec(first);
     if (r) {
-      const ownerRuling = r[1] === ownerId;
+      const ownerRuling = ownerId !== null && r[1] === ownerId;
       const expected = ownerRuling ? { id: ownerId, account: ownerAccount, routeId: 'default' } : route;
       if (!realDate(r[2])) { near.push({ ...c, why: '日期不是真的日子' }); continue; }
       if (!expected || r[1] !== expected.id) { near.push({ ...c, why: '指定裁示的指派或有效時間不符；核對裁示指派行及設定' }); continue; }

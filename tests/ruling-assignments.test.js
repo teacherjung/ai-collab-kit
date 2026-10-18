@@ -210,3 +210,26 @@ test('開工摘要顯示當期人選與來源，終止範圍不當作現在有�
   const after = routingSummary(f.settings, '2026-10-18T10:03:00Z').join('\n');
   assert.match(after, /目前預設：Boss/u); assert.ok(!after.includes('範圍裁示｜engineering'));
 });
+
+
+test('純舊設定未登 owner 可認預設答案，但不能冒充本人跨路由', () => {
+  const f = fixture(); delete f.settings.rulingAssignments; delete f.settings.owner;
+  f.settings.participants[0].role = '參與者'; f.settings.participants[2].role = '裁示者';
+  f.answer.body = f.answer.body.replace('裁示指派：engineering\n', '');
+  assert.equal(deciderOf(f.settings).ownerId, null);
+  assert.equal(check(f).ruled.length, 1); assert.equal(check(f).ruled[0].by.ownerRuling, false);
+  f.question.body += '\n裁示指派：unknown'; assert.equal(check(f).open.length, 1);
+});
+
+
+test('首次 default 遷移不能漏仍登記的舊預設，既有歷史段可用真起點', () => {
+  const f = fixture(), original = f.settings.rulingAssignments[0];
+  f.settings.participants[0].role = '擁有者'; f.settings.participants[2].role = '裁示者';
+  f.answer.body = f.answer.body.replace('裁示指派：engineering\n', '');
+  f.settings.rulingAssignments = [{ ...original, id: 'default', decider: 'Alpha', from: '2026-11-01T00:00:00Z' }];
+  assert.throws(() => assignmentsOf(f.settings), /缺少仍登記的舊預設/u); assert.ok(check(f).unsure);
+  f.settings.rulingAssignments.push({ ...original, id: 'default', until: '2026-11-01T00:00:00Z' });
+  assert.equal(check(f).ruled[0]?.by.ruler, 'Delta');
+  f.settings.rulingAssignments[1].from = null; assert.equal(check(f).ruled.length, 1);
+  f.settings.participants.reverse(); assert.equal(check(f).ruled.length, 1);
+});

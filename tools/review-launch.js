@@ -223,7 +223,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   const used = new Set([...entry.command.matchAll(TOKEN)].map((m) => m[1]));
   if (!used.has('model') || !used.has('effort')) throw new LaunchError(`「${reviewer}」的啟動指令樣板沒帶 {model} 或 {effort}：漏帶時複審者照它自己的預設跑，從外面看不出來（F11）`);
   const decider = deciderOf(settings);
-  if (!decider) throw new LaunchError('專案設定裡的裁示者識別值或貼文帳號還沒填：算不出相關裁示');
+  if (!decider) throw new LaunchError('專案設定裡的裁示者識別值或貼文帳號未填或不唯一（也請核對 owner）；修正 settings.json 後重跑：算不出相關裁示');
   const tpl = template === null ? fs.readFileSync(TEMPLATE, 'utf8') : template;
 
   const change = askPlatform(platform, settings, 'change', { change: String(changeArg) });

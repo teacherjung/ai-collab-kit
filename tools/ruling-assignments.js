@@ -15,11 +15,11 @@ function identitiesOf(settings) {
   const owners = all.filter((p) => p && p.id === settings.owner);
   if (settings.owner !== undefined && (owners.length !== 1 || !valid(owners[0]))) return null;
   if (Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.length && !owners.length) return null;
-  const owner = owners[0] || (!scheduled && defaults.length === 1 ? defaults[0] : null);
+  const owner = owners[0] || null;
   const fallback = scheduled ? owner : defaults[0] || owner;
-  if (!valid(owner) || !valid(fallback)) return null;
-  if ([owner, fallback].some((p) => all.filter((x) => x && x.id === p.id).length !== 1)) return null;
-  return { id: fallback.id, account: fallback.account, ownerId: owner.id, ownerAccount: owner.account,
+  if (!valid(fallback)) return null;
+  if ([owner, fallback].filter(Boolean).some((p) => all.filter((x) => x && x.id === p.id).length !== 1)) return null;
+  return { id: fallback.id, account: fallback.account, ownerId: owner ? owner.id : null, ownerAccount: owner ? owner.account : null,
     ids: all.filter(valid).map((p) => p.id), accounts: all.filter(valid).map((p) => p.account) };
 }
 
@@ -46,6 +46,10 @@ function assignmentsOf(settings) {
       if (periods[i - 1].untilMs === null || periods[i].fromMs < periods[i - 1].untilMs) fail(`「${id}」的有效期間重疊；換人須保留舊期並結束於新期開始時`);
     }
   }
+  if (result.length && !identitiesOf(settings)) fail('啟用指派須明確登記唯一擁有者、裁示者與貼文帳號');
+  const legacy = (settings.participants || []).filter((p) => p && typeof p.role === 'string' && p.role.startsWith('裁示者'));
+  if (result.some((a) => a.id === 'default') && legacy.length === 1 && legacy[0].id !== settings.owner
+    && !result.some((a) => a.id === 'default' && a.decider === legacy[0].id)) fail(`時間表缺少仍登記的舊預設「${legacy[0].id}」歷史段；核對遷移前後待裁配對，不可刪掉角色掩蓋遺漏`);
   return result;
 }
 
@@ -76,7 +80,7 @@ function routingSummary(settings, time = new Date().toISOString()) {
   const assignments = assignmentsOf(settings);
   const scheduled = assignments.some((a) => a.id === 'default');
   const current = resolveAt(assignments, decider, '', time);
-  const lines = [`裁示角色｜擁有者：${decider.ownerId}｜預設模式：${scheduled ? '明確時間表' : '舊設定相容模式'}｜目前預設：${current.id}${current.assignment ? `｜來源：${current.assignment.source}` : '（無當期 default 指派或沿用舊設定）'}`];
+  const lines = [`裁示角色｜擁有者：${settings.owner || '未登記（僅舊設定相容）'}｜預設模式：${scheduled ? '明確時間表' : '舊設定相容模式'}｜目前預設：${current.id}${current.assignment ? `｜來源：${current.assignment.source}` : '（無當期 default 指派或沿用舊設定）'}`];
   for (const a of assignments.filter((a) => a.id !== 'default' && activeAt(a, time))) lines.push(`範圍裁示｜${a.id}：${a.decider}｜${a.scope}｜來源：${a.source}`);
   lines.push('新題先依既有指派選路由；格式與歷史銜接讀 templates/ruling-record.md，完整時間表見 settings.json／PROJECT-SETTINGS.md。');
   return lines;
