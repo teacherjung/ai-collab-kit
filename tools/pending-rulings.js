@@ -107,6 +107,7 @@ function evaluate(comments, decider, settings = {}) {
     const a = ASK.exec(first);
     if (a) {
       if (!realDate(a[1])) { near.push({ ...c, why: '日期不是真的日子' }); continue; }
+      if (assignmentOf(c.body).invalid) near.push({ ...c, why: '裁示指派行不合範本；請以唯一一行「裁示指派：〈id〉」補明，不當作未指定' });
       asks.push({ ...c, date: a[1], title: a[2].trim() });
       continue;
     }

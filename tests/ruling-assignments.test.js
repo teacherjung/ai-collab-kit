@@ -150,7 +150,7 @@ test('舊預設只能唯一；無指派回 owner，歧義退 2 不依角色順�
   f.answer.body = f.answer.body.replace('裁示指派：engineering\n', '');
   assert.equal(check(f).ruled.length, 1);
   f.settings.participants[1].role = '裁示者';
-  const options = { settings: f.settings, platform: { ask: () => f.comments } };
+  const options = { settings: f.settings, platform: { ask: (op) => op === 'change' ? { id: '7' } : f.comments } };
   assert.equal(run(options).code, 2); assert.ok(check(f).unsure);
   f.settings.participants.reverse(); assert.equal(run(options).code, 2);
   for (const p of f.settings.participants) p.role = '參與者';
@@ -232,4 +232,48 @@ test('首次 default 遷移不能漏仍登記的舊預設，既有歷史段可�
   assert.equal(check(f).ruled[0]?.by.ruler, 'Delta');
   f.settings.rulingAssignments[1].from = null; assert.equal(check(f).ruled.length, 1);
   f.settings.participants.reverse(); assert.equal(check(f).ruled.length, 1);
+});
+
+
+test('未填或辨不出 owner 的舊設定仍可裁示，但不取得本人優先或新指派資格', () => {
+  for (const owner of ['未設定', 'Unknown', 'Boss']) {
+    const f = fixture(); delete f.settings.rulingAssignments;
+    f.settings.owner = owner;
+    f.settings.participants[0].role = '參與者'; f.settings.participants[2].role = '裁示者';
+    if (owner === 'Boss') f.settings.participants.push({ ...f.settings.participants[0] });
+    f.answer.body = f.answer.body.replace('裁示指派：engineering\n', '');
+    const decider = deciderOf(f.settings);
+    assert.ok(decider, '已填的舊裁示者須可辨認');
+    assert.equal(decider.id, 'Delta'); assert.equal(decider.ownerId, null);
+    assert.equal(check(f).ruled.length, 1); assert.equal(check(f).ruled[0].by.ownerRuling, false);
+    const options = { settings: f.settings, platform: { ask: (op) => op === 'change' ? { id: '7' } : f.comments } };
+    assert.equal(gateRun('7', options).code, 0);
+    f.question.body += '\n裁示指派：unknown'; assert.equal(gateRun('7', options).code, 1);
+    f.settings.rulingAssignments = fixture().settings.rulingAssignments;
+    assert.equal(deciderOf(f.settings), null); assert.equal(gateRun('7', options).code, 2);
+  }
+});
+
+test('像指派的壞行不退回預設；提問、指定答案與撤回共用拒收', () => {
+  const badLines = ['- 裁示指派：engineering', '  裁示指派：engineering', '裁示指派:engineering',
+    '裁示指派：engineering ', '裁示指派', '**裁示指派**：engineering', '1. 裁示指派：engineering',
+    '    裁示指派：engineering', '\t裁示指派：engineering', '> 裁示指派：engineering',
+    '- [ ] 裁示指派：engineering', '裁示指派：engineering\n- 裁示指派：engineering'];
+  for (const line of badLines) {
+    const f = fixture();
+    f.settings.rulingAssignments.push({ ...f.settings.rulingAssignments[0], id: 'default', decider: 'Alpha' });
+    const defaultAnswer = { ...f.answer, author: 'ai-acct', body: f.answer.body.replace('Delta 裁示', 'Alpha 裁示').replace('裁示指派：engineering\n', '') };
+    assert.equal(check({ ...f, comments: [f.question, defaultAnswer] }).ruled.length, 1, '對照組確實有可採的非本人預設答案');
+    f.question.body += '\n' + line;
+    assert.equal(assignmentOf(f.question.body).invalid, true, line);
+    const result = check({ ...f, comments: [f.question, defaultAnswer] });
+    assert.equal(result.open.length, 1, line); assert.ok(result.near.some((x) => x.why.includes('指派行不合範本')));
+    assert.equal(check(f).open.length, 1, '同範圍答案也不能替壞指派行補猜');
+    f.question.body = fixture().question.body;
+    defaultAnswer.body = defaultAnswer.body.replace('\n原話', '\n' + line + '\n原話');
+    assert.equal(check({ ...f, comments: [f.question, defaultAnswer] }).open.length, 1, line);
+    const withdrawal = { ...f.answer, author: 'ai-acct', body: '## 🚫 撤回（2026-10-18）：前提錯誤\n' + line
+      + '\n撤回理由：問題本身問錯了（對象寫錯）\nAlpha 撤回、Alpha 未回；他隨時可以要我重問\nhttps://x.invalid/acme/kit/pull/7#c-q' };
+    assert.equal(check({ ...f, comments: [f.question, withdrawal] }).open.length, 1, line);
+  }
 });

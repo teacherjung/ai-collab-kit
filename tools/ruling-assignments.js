@@ -1,7 +1,7 @@
 // A1 的指派登記與留痕路由；範圍語意、來源真偽及本人保留事項仍由人核對。
 'use strict';
 const { parseInstant } = require('./time-point.js');
-const { leadingText } = require('./markdown-effective.js');
+const { leadingLines } = require('./markdown-effective.js');
 const plain = (v) => typeof v === 'string' && v.trim() === v && v.length > 0 && Array.from(v).every((c) => c.charCodeAt(0) > 31 && ![127, 133, 8232, 8233].includes(c.charCodeAt(0)));
 const fail = (why) => { throw new Error(`裁示指派設定：${why}；核對 settings.json 的 rulingAssignments 後重跑原指令`); };
 
@@ -13,9 +13,8 @@ function identitiesOf(settings) {
   const scheduled = Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.some((a) => a && a.id === 'default');
   if (!scheduled && defaults.length > 1) return null;
   const owners = all.filter((p) => p && p.id === settings.owner);
-  if (settings.owner !== undefined && (owners.length !== 1 || !valid(owners[0]))) return null;
-  if (Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.length && !owners.length) return null;
-  const owner = owners[0] || null;
+  const owner = owners.length === 1 && valid(owners[0]) ? owners[0] : null;
+  if (Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.length && !owner) return null;
   const fallback = scheduled ? owner : defaults[0] || owner;
   if (!valid(fallback)) return null;
   if ([owner, fallback].filter(Boolean).some((p) => all.filter((x) => x && x.id === p.id).length !== 1)) return null;
@@ -55,7 +54,11 @@ function assignmentsOf(settings) {
 
 /** 一行指向一條既有指派路由，不新增權限。 */
 function assignmentOf(body) {
-  const lines = leadingText(body).split('\n').filter((line) => line.startsWith('裁示指派：'));
+  const text = String(body || '').replace(/\r\n?/g, '\n');
+  const { lines: effective, stopAt } = leadingLines(text);
+  // 停止行只用來辨認壞指派，不讀它後面的引用內容或從中授權。
+  const candidates = stopAt ? [...effective, text.split('\n')[stopAt - 1]] : effective;
+  const lines = candidates.filter((line) => /^裁示指派(?:[\s:：*_~`]|$)/u.test(line.replace(/^[\s#>*+~`_[\]().\d-]+/u, '')));
   if (!lines.length) return { id: null, invalid: false };
   const match = /^裁示指派：([A-Za-z0-9][A-Za-z0-9._-]{0,79})$/u.exec(lines[0]);
   return { id: match ? match[1] : null, invalid: lines.length !== 1 || !match };
@@ -80,7 +83,7 @@ function routingSummary(settings, time = new Date().toISOString()) {
   const assignments = assignmentsOf(settings);
   const scheduled = assignments.some((a) => a.id === 'default');
   const current = resolveAt(assignments, decider, '', time);
-  const lines = [`裁示角色｜擁有者：${settings.owner || '未登記（僅舊設定相容）'}｜預設模式：${scheduled ? '明確時間表' : '舊設定相容模式'}｜目前預設：${current.id}${current.assignment ? `｜來源：${current.assignment.source}` : '（無當期 default 指派或沿用舊設定）'}`];
+  const lines = [`裁示角色｜擁有者：${decider.ownerId || '未登記（僅舊設定相容）'}｜預設模式：${scheduled ? '明確時間表' : '舊設定相容模式'}｜目前預設：${current.id}${current.assignment ? `｜來源：${current.assignment.source}` : '（無當期 default 指派或沿用舊設定）'}`];
   for (const a of assignments.filter((a) => a.id !== 'default' && activeAt(a, time))) lines.push(`範圍裁示｜${a.id}：${a.decider}｜${a.scope}｜來源：${a.source}`);
   lines.push('新題先依既有指派選路由；格式與歷史銜接讀 templates/ruling-record.md，完整時間表見 settings.json／PROJECT-SETTINGS.md。');
   return lines;
