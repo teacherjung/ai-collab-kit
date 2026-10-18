@@ -1,0 +1,84 @@
+// A1 的指派登記與留痕路由；範圍語意、來源真偽及本人保留事項仍由人核對。
+'use strict';
+const { parseInstant } = require('./time-point.js');
+const { leadingText } = require('./markdown-effective.js');
+const plain = (v) => typeof v === 'string' && v.trim() === v && v.length > 0 && Array.from(v).every((c) => c.charCodeAt(0) > 31 && ![127, 133, 8232, 8233].includes(c.charCodeAt(0)));
+const fail = (why) => { throw new Error(`裁示指派設定：${why}；核對 settings.json 的 rulingAssignments 後重跑原指令`); };
+
+/** 身分與舊設定相容入口；時間表存在時，角色說明不再決定預設路由。 */
+function identitiesOf(settings) {
+  const all = Array.isArray(settings.participants) ? settings.participants : [];
+  const valid = (p) => p && plain(p.id) && p.id !== '未設定' && plain(p.account) && p.account !== '未設定';
+  const defaults = all.filter((p) => p && typeof p.role === 'string' && p.role.startsWith('裁示者'));
+  const scheduled = Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.some((a) => a && a.id === 'default');
+  if (!scheduled && defaults.length > 1) return null;
+  const owners = all.filter((p) => p && p.id === settings.owner);
+  if (settings.owner !== undefined && (owners.length !== 1 || !valid(owners[0]))) return null;
+  if (Array.isArray(settings.rulingAssignments) && settings.rulingAssignments.length && !owners.length) return null;
+  const owner = owners[0] || (!scheduled && defaults.length === 1 ? defaults[0] : null);
+  const fallback = scheduled ? owner : defaults[0] || owner;
+  if (!valid(owner) || !valid(fallback)) return null;
+  if ([owner, fallback].some((p) => all.filter((x) => x && x.id === p.id).length !== 1)) return null;
+  return { id: fallback.id, account: fallback.account, ownerId: owner.id, ownerAccount: owner.account,
+    ids: all.filter(valid).map((p) => p.id), accounts: all.filter(valid).map((p) => p.account) };
+}
+
+function assignmentsOf(settings) {
+  if (!Object.hasOwn(settings, 'rulingAssignments')) return [];
+  if (!Array.isArray(settings.rulingAssignments)) fail('必須是陣列');
+  const result = settings.rulingAssignments.map((a) => {
+    if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).sort().join(',') !== 'decider,from,id,scope,source,until') fail('欄位須為 id、decider、scope、source、from、until');
+    if (!plain(a.id) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(a.id)) fail('識別值不合法');
+    if (![a.decider, a.scope, a.source].every(plain)) fail('裁示者、範圍與來源須填非空單行');
+    let url;
+    try { url = new URL(a.source); } catch { fail('來源須為完整 HTTPS 網址'); }
+    if (url.protocol !== 'https:' || url.username || url.password || /\s/u.test(a.source)) fail('來源須為完整 HTTPS 網址');
+    const from = a.from === null && a.id === 'default' ? -Infinity : parseInstant(a.from);
+    const until = a.until === null ? null : parseInstant(a.until);
+    if (from === null || (a.until !== null && (until === null || until <= from))) fail('起訖時間須帶時區且結束晚於開始；未結束填 null，僅 default 的舊制起點可填 null');
+    const persons = (settings.participants || []).filter((p) => p && p.id === a.decider);
+    if (persons.length !== 1 || !plain(persons[0].account) || persons[0].account === '未設定' || a.decider === '未設定') fail('指定裁示者須唯一登記在參與者表，並有貼文帳號');
+    return { ...a, account: persons[0].account, fromMs: from, untilMs: until };
+  });
+  for (const id of new Set(result.map((a) => a.id))) {
+    const periods = result.filter((a) => a.id === id).sort((a, b) => a.fromMs - b.fromMs);
+    for (let i = 1; i < periods.length; i++) {
+      if (periods[i - 1].untilMs === null || periods[i].fromMs < periods[i - 1].untilMs) fail(`「${id}」的有效期間重疊；換人須保留舊期並結束於新期開始時`);
+    }
+  }
+  return result;
+}
+
+/** 一行指向一條既有指派路由，不新增權限。 */
+function assignmentOf(body) {
+  const lines = leadingText(body).split('\n').filter((line) => line.startsWith('裁示指派：'));
+  if (!lines.length) return { id: null, invalid: false };
+  const match = /^裁示指派：([A-Za-z0-9][A-Za-z0-9._-]{0,79})$/u.exec(lines[0]);
+  return { id: match ? match[1] : null, invalid: lines.length !== 1 || !match };
+}
+function activeAt(assignment, createdAt) {
+  const time = parseInstant(createdAt);
+  return time !== null && time >= assignment.fromMs && (assignment.untilMs === null || time < assignment.untilMs);
+}
+function resolveAt(assignments, decider, body, createdAt) {
+  const marker = assignmentOf(body);
+  if (marker.invalid) return null;
+  const routeId = marker.id || 'default';
+  const assignment = assignments.find((a) => a.id === routeId && activeAt(a, createdAt));
+  if (assignment) return { id: assignment.decider, account: assignment.account, routeId, assignment };
+  if (routeId !== 'default') return null;
+  return { id: decider.id, account: decider.account, routeId };
+}
+/** 開工直接顯示當刻路由；時間可注入，考題不依賴牆鐘。 */
+function routingSummary(settings, time = new Date().toISOString()) {
+  const decider = identitiesOf(settings);
+  if (!decider) return ['裁示者設定查不清；核對 owner、participants 的識別值／帳號與重複裁示者角色，再重跑原指令。'];
+  const assignments = assignmentsOf(settings);
+  const scheduled = assignments.some((a) => a.id === 'default');
+  const current = resolveAt(assignments, decider, '', time);
+  const lines = [`裁示角色｜擁有者：${decider.ownerId}｜預設模式：${scheduled ? '明確時間表' : '舊設定相容模式'}｜目前預設：${current.id}${current.assignment ? `｜來源：${current.assignment.source}` : '（無當期 default 指派或沿用舊設定）'}`];
+  for (const a of assignments.filter((a) => a.id !== 'default' && activeAt(a, time))) lines.push(`範圍裁示｜${a.id}：${a.decider}｜${a.scope}｜來源：${a.source}`);
+  lines.push('新題先依既有指派選路由；格式與歷史銜接讀 templates/ruling-record.md，完整時間表見 settings.json／PROJECT-SETTINGS.md。');
+  return lines;
+}
+module.exports = { assignmentsOf, assignmentOf, activeAt, identitiesOf, resolveAt, routingSummary };

@@ -13,7 +13,7 @@
 
 1. **讀 [RULES.md](RULES.md) 全文**：協作規矩的正本。
 2. **以 GitHub 上的最新版為準**：桌面這一份是主目錄，不會自己更新，也不在這裡施工（D2）。先 `git fetch`，從 `origin/main` 開分支，在自己的常設工作樹做（Claude 的是同層的 `ai-collab-kit-claude`）。
-3. **看有沒有還沒回的待裁**：`node tools/pending-rulings.js`（D1）。
+3. **看有沒有還沒回的待裁**：`node tools/pending-rulings.js`（D1）。 指派誰、何時有效及怎麼留痕，先看 [裁示者設定與標準留痕](templates/ruling-record.md)；設定正本是 `settings.json`，不要從工作階段暱稱或貼文帳號猜裁示者。
 4. **看待辦裡有沒有提到這支要改的檔**：`node tools/backlog-touch.js`（只列不擋；開工時多半還沒改檔，送審前再跑一次）。條件到了的，問裁示者要不要併進手上這支或另開。
 5. **看使用專案落後套件多少**：`node tools/downstream-lag.js`（只列不擋、不排程；要網路與 gh 登入；擁有者 2026-10-07 裁開工時手動跑）。要不要同步照 README「專案裡改到套件的檔」與常設指示。
 6. **錢與禁區（B1〜B3）**：任何 AI 都不碰禁區清單上的工具與能力，發現可能碰到的新工具先停下來通報擁有者。本倉庫自己沒接禁區攔截器（設定位置表 B1 那一列）；空白範本的 forbidden 那一塊與 `tools/forbidden-tools.js` 是每個專案拿到的清單與判斷，改到它們的 PR 先等擁有者點頭（A5）。

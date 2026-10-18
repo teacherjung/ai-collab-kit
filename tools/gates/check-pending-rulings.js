@@ -46,7 +46,7 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
     }
     throw e;
   }
-  const result = evaluate(comments, decider);
+  const result = evaluate(comments, decider, settings);
   if (result.unsure) return { code: 2, lines: [`待裁閘：${result.unsure}——先後判不了，查不清楚就不放行。`] };
   const mine = onlyThisChange(result, id);
   const lines = [`待裁閘｜變更 ${id}（掃了整個專案 ${comments.length} 則留言，只看問在這一支的題）`, ...render(mine)];
