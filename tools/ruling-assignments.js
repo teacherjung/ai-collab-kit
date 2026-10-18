@@ -52,13 +52,40 @@ function assignmentsOf(settings) {
   return result;
 }
 
+// 只辨認該拒收的欄位候選；原始整行另驗，剝下裝飾不能換得授權。
+const decoration = /^[\p{White_Space}\p{P}\p{S}\p{N}\p{M}\p{Default_Ignorable_Code_Point}]+/u;
+const chineseNumerals = /^[零〇一二三四五六七八九十百千萬兩壹貳參肆伍陸柒捌玖拾佰仟]+/u;
+const listDelimiter = /^[.．、)）]/u;
+function assignmentCandidate(line) {
+  let rest = line;
+  while (rest) {
+    const chinese = chineseNumerals.exec(rest);
+    if (chinese) {
+      const tail = rest.slice(chinese[0].length);
+      if (!listDelimiter.test(tail)) break;
+      rest = tail.slice(1);
+      continue;
+    }
+    const letter = /^[A-Za-z][.．、)）]/u.exec(rest);
+    if (letter) { rest = rest.slice(letter[0].length); continue; }
+    const prefix = decoration.exec(rest);
+    if (!prefix) break;
+    // 〇 屬 Unicode 數字，仍須按中文列號驗分隔符，不能由通用類別吃掉。
+    const zero = prefix[0].indexOf('〇');
+    const length = zero < 0 ? prefix[0].length : zero;
+    if (!length) break;
+    rest = rest.slice(length);
+  }
+  return /^裁示指派(?:[\p{White_Space}\p{P}\p{S}\p{N}\p{M}\p{Default_Ignorable_Code_Point}]|$)/u.test(rest);
+}
+
 /** 一行指向一條既有指派路由，不新增權限。 */
 function assignmentOf(body) {
   const text = String(body || '').replace(/\r\n?/g, '\n');
   const { lines: effective, stopAt } = leadingLines(text);
   // 停止行只用來辨認壞指派，不讀它後面的引用內容或從中授權。
   const candidates = stopAt ? [...effective, text.split('\n')[stopAt - 1]] : effective;
-  const lines = candidates.filter((line) => /^裁示指派(?:[\s:：*_~`]|$)/u.test(line.replace(/^[\s#>*+~`_[\]().\d-]+/u, '')));
+  const lines = candidates.filter(assignmentCandidate);
   if (!lines.length) return { id: null, invalid: false };
   const match = /^裁示指派：([A-Za-z0-9][A-Za-z0-9._-]{0,79})$/u.exec(lines[0]);
   return { id: match ? match[1] : null, invalid: lines.length !== 1 || !match };

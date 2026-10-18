@@ -258,22 +258,44 @@ test('像指派的壞行不退回預設；提問、指定答案與撤回共用�
   const badLines = ['- 裁示指派：engineering', '  裁示指派：engineering', '裁示指派:engineering',
     '裁示指派：engineering ', '裁示指派', '**裁示指派**：engineering', '1. 裁示指派：engineering',
     '    裁示指派：engineering', '\t裁示指派：engineering', '> 裁示指派：engineering',
-    '- [ ] 裁示指派：engineering', '裁示指派：engineering\n- 裁示指派：engineering'];
+    '- [ ] 裁示指派：engineering', '裁示指派：engineering\n- 裁示指派：engineering',
+    ...['・', '  ・', '「', '一、', '１.', '１．', '•', '『', '（', '【', '①', '＞', '※',
+      '⚠️ ', '👩‍💻 ', '1️⃣ ', '\u200b', '\u0301', '\u0085', '（一）a) ', '- [ ]（壹佰）', 'a.', 'Z）', '〇、', '※〇、']
+      .map((prefix) => prefix + '裁示指派：engineering'),
+    '「裁示指派：engineering」', '裁示指派️：engineering', '裁示指派）：engineering'];
   for (const line of badLines) {
     const f = fixture();
     f.settings.rulingAssignments.push({ ...f.settings.rulingAssignments[0], id: 'default', decider: 'Alpha' });
     const defaultAnswer = { ...f.answer, author: 'ai-acct', body: f.answer.body.replace('Delta 裁示', 'Alpha 裁示').replace('裁示指派：engineering\n', '') };
-    assert.equal(check({ ...f, comments: [f.question, defaultAnswer] }).ruled.length, 1, '對照組確實有可採的非本人預設答案');
-    f.question.body += '\n' + line;
-    assert.equal(assignmentOf(f.question.body).invalid, true, line);
-    const result = check({ ...f, comments: [f.question, defaultAnswer] });
-    assert.equal(result.open.length, 1, line); assert.ok(result.near.some((x) => x.why.includes('指派行不合範本')));
-    assert.equal(check(f).open.length, 1, '同範圍答案也不能替壞指派行補猜');
-    f.question.body = fixture().question.body;
-    defaultAnswer.body = defaultAnswer.body.replace('\n原話', '\n' + line + '\n原話');
-    assert.equal(check({ ...f, comments: [f.question, defaultAnswer] }).open.length, 1, line);
-    const withdrawal = { ...f.answer, author: 'ai-acct', body: '## 🚫 撤回（2026-10-18）：前提錯誤\n' + line
-      + '\n撤回理由：問題本身問錯了（對象寫錯）\nAlpha 撤回、Alpha 未回；他隨時可以要我重問\nhttps://x.invalid/acme/kit/pull/7#c-q' };
-    assert.equal(check({ ...f, comments: [f.question, withdrawal] }).open.length, 1, line);
+    const withdrawal = { ...f.answer, author: 'ai-acct', body: '## 🚫 撤回（2026-10-18）：前提錯誤\n'
+      + '撤回理由：問題本身問錯了（對象寫錯）\nAlpha 撤回、Alpha 未回；他隨時可以要我重問\nhttps://x.invalid/acme/kit/pull/7#c-q' };
+    const gate = (comments) => gateRun('7', { settings: f.settings, platform: { ask: (op) => op === 'change' ? { id: '7' } : comments } }).code;
+    for (const reply of [defaultAnswer, withdrawal]) {
+      const comments = [f.question, reply];
+      assert.equal(gate(comments), 0, '對照組確實可由非本人預設答案或撤回關題');
+      f.question.body += '\n' + line;
+      assert.equal(assignmentOf(f.question.body).invalid, true, line);
+      const result = check({ ...f, comments });
+      assert.equal(result.open.length, 1, line); assert.ok(result.near.some((x) => x.why.includes('指派行不合範本')));
+      assert.equal(gate(comments), 1, line);
+      assert.equal(check(f).open.length, 1, '同範圍答案也不能替壞指派行補猜');
+      f.question.body = fixture().question.body;
+      // 必填行先到齊，才能證明停止行的拒收不是碰巧被缺原話或缺網址擋下。
+      reply.body += '\n' + line;
+      assert.equal(check({ ...f, comments }).open.length, 1, line);
+      assert.equal(gate(comments), 1, line);
+    }
   }
+});
+
+test('候選辨認保留普通正文與停止邊界，只准原文精確行授權', () => {
+  for (const line of ['正文提到裁示指派：engineering', '請用裁示指派：engineering', '不要填裁示指派：engineering',
+    'example 裁示指派：engineering', 'Alpha. 裁示指派：engineering', 'a 裁示指派：engineering',
+    '一裁示指派：engineering', '〇裁示指派：engineering', '※〇裁示指派：engineering', '裁示指派流程：engineering']) {
+    assert.deepEqual(assignmentOf(line), { id: null, invalid: false }, line);
+  }
+  assert.deepEqual(assignmentOf('裁示指派：engineering'), { id: 'engineering', invalid: false });
+  assert.deepEqual(assignmentOf('> 範例\n・裁示指派：engineering'), { id: null, invalid: false });
+  assert.deepEqual(assignmentOf('裁示指派：engineering\n> 範例\n・裁示指派：another'), { id: 'engineering', invalid: false });
+  assert.equal(assignmentOf('裁示指派：engineering\n・裁示指派：another').invalid, true);
 });
