@@ -19,12 +19,17 @@
    "role": "AI 丙",
    "id": "Grok",
    "account": "teacherjung"
+  },
+  {
+   "role": "AI 丁",
+   "id": "Gemini",
+   "account": "teacherjung"
   }
  ],
  "accountRule": "只採計登記在參與者表裡的貼文帳號貼的 ❓／⚖️／🚫；沒登記的帳號貼的不採計為有效留痕——它貼的 ❓ 不入待裁，它貼的 ⚖️／🚫 不能替已採計的問題收口（原題繼續待裁），形狀合規的會另列成疑似。⚖️ 另外要由裁示者那一位的帳號貼。結論閘只認識別值、不認帳號。多方共用同一個帳號時，機器分不出是誰親自貼的——那是這套機制的邊界，不是保證。",
  "identityDomain": "現階段只准純拉丁字母：結論標頭的正則只收 A 到 Z 的字母，協作欄位閘收得寬，兩道機器值域不同——要放寬就得標頭與欄位閘整族一起改。",
  "defaultDivision": {
-  "implementer": "Claude",
+  "implementer": "Gemini",
   "reviewer": "Codex"
  },
  "owner": "William",
@@ -128,18 +133,32 @@
  },
  "mainBranch": "main",
  "scanner": {
-  "tool": "Grok CLI（xAI），借用 personal-finance-webapp 的掃描腳本與隔離盒（擁有者 2026-10-05「A，先借用試試看」）：一律在 <理財工作樹> 經 node scripts/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射；整條鏈（試探、埋、掃、比對、收）都在 <理財工作樹> 用它自己的工具與設定跑，步驟見 README「本倉庫自己怎麼合併」的掃描那一項；<理財工作樹>＝理財的工作樹（不是理財主目錄），只寫關係、不寫路徑（Fable 2026-10-11 代裁）；呼叫紀律、三個失效條件、執行檔版本釘＝那支腳本檔頭；不准手動啟動 grok CLI",
-  "assignedBy": "掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝Claude（借的是理財那一套，現況跟理財設定那一格登記的相同）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問 William",
-  "tieBreak": "還沒裁：今天只有一方起得了（見上一格），用不到；出現兩方都起得了時先問裁示者（理財那邊裁的是實作者）",
-  "fallback": "沒有任何一方起得了時（G4），由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：<原因>」並轉正式；掃得起但掃不成時，由掃描發射者（現況 Claude）寫「未執行：<原因>」、轉正式也由它做；表定不掃的照 G1；都不擋合併",
-  "strongest": "未設定",
-  "maxEffort": "未設定",
+  "tool": "Grok CLI（xAI），本倉庫自建隔離設定檔 kit-only/grok-sandbox.sb 並經 kit-only/grok-scan.js 發射（盒外把 GROK_SCAN_RUNNER 綁定 <理財工作樹>/scripts/grok-scan.js，核對同層 grok-sandbox.sb 雜湊一致、模型與推理讀本倉庫 settings.json）：一律在本倉庫經 node kit-only/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射；整條鏈（試探、埋、掃、比對、收）都在本倉庫用自己的工具與設定跑，步驟見 README「本倉庫自己怎麼合併」的掃描那一項；<理財工作樹>＝理財的工作樹（不是理財主目錄），只寫關係、不寫路徑（Fable 2026-10-11 代裁）；呼叫紀律、三個失效條件、執行檔版本釘＝那支腳本檔頭；不准手動啟動 grok CLI",
+  "assignedBy": "掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝實作者（Gemini 2026-10-19 實測 node tools/scan-probe.js 退 0，擁有者 2026-10-18 指派 Gemini 實作、Codex 複審、Grok 掃描並於本支拍板）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問裁示者",
+  "tieBreak": "由實作者發射（擁有者 2026-10-18 指派 Gemini 實作、Codex 複審、Grok 掃描；實作者自己起不了時改問裁示者或照下一格記錄未執行）",
+  "fallback": "沒有任何一方起得了時（G4），由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：<原因>」並轉正式；掃得起但掃不成時，由掃描發射者（現況實作者）寫「未執行：<原因>」、轉正式也由它做；表定不掃的照 G1；都不擋合併",
+  "strongest": "grok-4.7",
+  "maxEffort": "xhigh",
   "isolation": {
-   "provider": "借用",
-   "lender": "personal-finance-webapp",
-   "wrap": [],
-   "boxRoot": "未設定",
-   "forbidden": []
+   "provider": "專案自建",
+   "lender": "未設定",
+   "wrap": [
+    "/usr/bin/sandbox-exec",
+    "-f",
+    "{projectRoot}/kit-only/grok-sandbox.sb",
+    "-D",
+    "SCAN_DIR={box}",
+    "-D",
+    "RELAY_PORT=18765"
+   ],
+   "boxRoot": "/private/tmp",
+   "forbidden": [
+    "~",
+    "/private/tmp",
+    "/private/var/tmp",
+    "/Users/Shared",
+    "~/.grok"
+   ]
   }
  },
  "platform": {
