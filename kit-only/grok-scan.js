@@ -10,7 +10,8 @@
 //      先核對 runner 同層的 grok-sandbox.sb 與本倉庫 kit-only/grok-sandbox.sb 的 SHA-256 完全一致
 //      （確保步驟 1 試探的沙箱與步驟 3 實際掃描的沙箱是同一份），再呼叫 runScan(args, { settingsFile })
 //      讓模型與推理從本倉庫 settings.json 讀，其餘 ScanDeps（含 liveRoot）一律維持正式預設值。
-//   4. 錯誤訊息一律不回顯本機路徑（避免抄進 PR 說明時外流帳號與資料夾名）。
+//   4. 本入口在交給外部 runner 之前自行回傳的錯誤訊息不回顯本機路徑（避免抄進 PR 說明時外流帳號與資料夾名）；
+//      ⚠️ 守不到的：轉交外部 runner（runScan）後的輸出由該 runner 自己的規則決定（例如指示檔或執行檔不存在時，外部 runner 仍會印出該路徑）。
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -72,7 +73,7 @@ function parseScanArgs(argv, { cwd = process.cwd(), kitRoot = KIT_ROOT } = {}) {
 }
 
 /**
- * 核對盒外綁定的 GROK_SCAN_RUNNER 與同層 grok-sandbox.sb 雜湊。錯誤訊息不印本機路徑。
+ * 核對盒外綁定的 GROK_SCAN_RUNNER 與同層 grok-sandbox.sb 雜湊。此函式回傳的錯誤訊息不印本機路徑。
  */
 function resolveRunner({ env = process.env, kitRoot = KIT_ROOT } = {}) {
   const runnerEnv = env && env.GROK_SCAN_RUNNER;
