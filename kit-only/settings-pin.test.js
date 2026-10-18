@@ -11,7 +11,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const read = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'settings.json'), 'utf8'));
@@ -26,7 +28,9 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     ['AI 甲', 'Claude', 'teacherjung'],
     ['AI 乙', 'Codex', 'teacherjung'],
     ['AI 丙', 'Grok', 'teacherjung'],
+    ['AI 丁', 'Gemini', 'teacherjung'],
   ]);
+  assert.deepEqual(s.defaultDivision, { implementer: 'Gemini', reviewer: 'Codex' });
   assert.equal(s.platform.name, 'GitHub');
   assert.equal(s.platform.project, 'teacherjung/ai-collab-kit');
   assert.deepEqual(s.platform.clearEnv, ['GH_REPO', 'GH_HOST']);
@@ -47,10 +51,26 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.deepEqual(s.acceptance.tiers.map((t) => t.id), ['免驗收']);
   assert.equal(s.acceptance.unknownTier, '免驗收');
   assert.deepEqual(s.acceptance.families, [{ pattern: '^', tier: '免驗收' }]);
-  // 掃描借用理財的（擁有者 2026-10-05「A，先借用試試看」；Fable 2026-10-11 代裁：只寫關係不寫路徑、提供者加「借用」）
-  assert.match(s.scanner.tool, /^Grok CLI（xAI），借用 personal-finance-webapp 的掃描腳本與隔離盒/u, '套件倉庫借用理財的掃描');
-  assert.ok(s.scanner.tool.includes('一律在 <理財工作樹> 經 node scripts/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射'), '發射指令（含 --repo）');
-  assert.deepEqual(s.scanner.isolation, { provider: '借用', lender: 'personal-finance-webapp', wrap: [], boxRoot: '未設定', forbidden: [] });
+  // 掃描：本倉庫自管 scanner 設定與隔離設定檔 kit-only/grok-sandbox.sb，經 kit-only/grok-scan.js 發射
+  assert.equal(s.scanner.strongest, 'grok-4.7');
+  assert.equal(s.scanner.maxEffort, 'xhigh');
+  assert.match(s.scanner.tool, /^Grok CLI（xAI），本倉庫自建隔離設定檔 kit-only\/grok-sandbox\.sb 並經 kit-only\/grok-scan\.js 發射/u, '套件倉庫自管掃描設定與隔離檔');
+  assert.ok(s.scanner.tool.includes('一律在本倉庫經 node kit-only/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射'), '發射指令（含 --repo）');
+  assert.deepEqual(s.scanner.isolation, {
+    provider: '專案自建',
+    lender: '未設定',
+    wrap: [
+      '/usr/bin/sandbox-exec',
+      '-f',
+      '{projectRoot}/kit-only/grok-sandbox.sb',
+      '-D',
+      'SCAN_DIR={box}',
+      '-D',
+      'RELAY_PORT=18765',
+    ],
+    boxRoot: '/private/tmp',
+    forbidden: ['~', '/private/tmp', '/private/var/tmp', '/Users/Shared', '~/.grok'],
+  });
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
   const states = Object.fromEntries(s.machines.map((m) => [m.name.split('（')[0], m.state]));
   assert.deepEqual(states, {
@@ -68,32 +88,113 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   }
 });
 
-test('借用的掃描：佔位只有一個寫法（<理財工作樹>）、設定與 README 不出現本機路徑；套件自己的試探與埋都退 2、指路去理財', { skip: IN_KIT ? false : '不是套件倉庫' }, () => {
-  const { spawnSync } = require('node:child_process');
-  // 設定頁是產生器在標點前面加反斜線的產物：每個反斜線拿掉、留下它後面那個字（反斜線本身也被跳脫過，所以這樣剛好還原；
-  // 不手抄產生器跳脫哪些字）再比（#83 複審後掃：原本設定頁整份不在這一題裡）
-  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-  const texts = { 'settings.json': read('settings.json'), 'README.md': read('README.md'), 'PROJECT-SETTINGS.md': read('PROJECT-SETTINGS.md').replace(/\\(.)/gsu, '$1') };
-  // 會指到某台機器、某個帳號的寫法：家目錄（mac／Linux／Windows，JSON 裡的 Windows 反斜線是兩個）、家目錄底下自己放的資料夾、
-  // 使用者暫存區與工作階段暫存區、外接磁碟、理財主目錄的資料夾名形狀（含擁有者本名，只比括號那段）。
-  // 每台機器都一樣的路徑（/tmp、/dev/null、~ 底下套件自己定的 ~/.local/share/…）不算；大小寫照實比，GitHub 網址的 /users/ 不算。
-  const LOCAL = /\/Users\/|\/home\/|(?:~|\$\{?HOME\}?)\/(?:Desktop|Documents|Downloads)\b|\/var\/folders\/|\/tmp\/claude-\d+\/|\/Volumes\/|[A-Za-z]:(?:\\{1,2}|\/)Users|%USERPROFILE%|\$env:USERPROFILE|（投資理財）/u;
+test('套件掃描接線：佔位只有一個寫法（<理財工作樹>）、設定與 README 不出現本機路徑；kit-only/grok-scan.js 嚴格核對 runner 與沙箱設定檔雜湊並只傳 settingsFile', { skip: IN_KIT ? false : '不是套件倉庫' }, async () => {
+  const { parseScanArgs, resolveRunner, runKitScan } = require('./grok-scan.js');
+  // 設定頁是產生器在標點前面加反斜線的產物：每個反斜線拿掉、留下它後面那個字再比
+  const readText = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  const texts = {
+    'settings.json': readText('settings.json'),
+    'README.md': readText('README.md'),
+    'PROJECT-SETTINGS.md': readText('PROJECT-SETTINGS.md').replace(/\\(.)/gsu, '$1'),
+  };
+  // 會指到某台機器、某個帳號的寫法：家目錄（mac／Linux／Windows）、家目錄底下自己放的資料夾、
+  // 使用者暫存區與工作階段暫存區、外接磁碟、理財主目錄的資料夾名形狀。
+  // 每台機器都一樣的系統固定路徑（/tmp、/private/tmp、/private/var/tmp、/Users/Shared、/dev/null、~/.local/share/…）不算。
+  const LOCAL = /\/Users\/(?!Shared(?:$|[",\s\\、]))|\/home\/|(?:~|\$\{?HOME\}?)\/(?:Desktop|Documents|Downloads)\b|\/var\/folders\/|\/tmp\/claude-\d+\/|\/Volumes\/|[A-Za-z]:(?:\\{1,2}|\/)Users|%USERPROFILE%|\$env:USERPROFILE|（投資理財）/u;
+  assert.ok(LOCAL.test('/Users/teacherjung/x') && LOCAL.test('/Users/Shared/x') && !LOCAL.test('"/Users/Shared"'), '對照組：LOCAL 放行 macOS 系統固定目錄 /Users/Shared、仍攔使用者路徑與子路徑');
   for (const [name, text] of Object.entries(texts)) {
     assert.ok(text.includes('<理財工作樹>'), `${name} 沒有用佔位 <理財工作樹>`);
     assert.deepEqual([...new Set(text.match(/<理財[^>]*>/gu))], ['<理財工作樹>'], `${name} 的理財佔位要只有一種寫法`);
     assert.doesNotMatch(text, LOCAL, `${name} 出現了本機路徑（只寫關係、不寫路徑）`);
   }
-  // 設定頁那一句由 data-contract 逐字釘；README 的同一件事在這裡釘（#83 複審後掃：收照常收，只有試探與埋退 2）
-  assert.ok(texts['README.md'].includes('本倉庫自己的 `tools/scan-probe.js` 試探與埋遇到借用一律退 2、指路過去（收不讀設定，借用時用理財那邊的收）。'), 'README 的借用那一句');
-  const listDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kit-borrowed-'));
+  const sbFile = path.join(ROOT, 'kit-only', 'grok-sandbox.sb');
+  assert.ok(fs.existsSync(sbFile) && fs.lstatSync(sbFile).isFile(), 'kit-only/grok-sandbox.sb 要是一般檔案');
+  const sbText = fs.readFileSync(sbFile, 'utf8');
+  assert.match(sbText, /^\(version 1\)\n\(deny default\)\n\(import "system\.sb"\)/mu, '沙箱設定檔要是 deny-default + system.sb');
+  assert.ok(sbText.includes('(param "SCAN_DIR")') && sbText.includes('(param "RELAY_PORT")') && sbText.includes('(deny file-read* process-exec* (subpath "/usr/local"))'), '沙箱設定檔關鍵規則都在');
+
+  // 參數檢查：缺參數、壞 SHA、重複旗標、--flag=value、未知旗標都退 2
+  const validArgv = ['--base', '1234567', '--head', '89abcdef', '--prompt', 'p.md'];
+  for (const badArgv of [
+    [],
+    ['--base', '1234567', '--head', '89abcdef'],
+    ['--base', 'NOT_SHA', '--head', '89abcdef', '--prompt', 'p.md'],
+    ['--base', '1234567', '--base', '1234567', '--head', '89abcdef', '--prompt', 'p.md'],
+    ['--base', '1234567', '--head', '89abcdef', '--prompt', 'p.md', '--repo=x'],
+    ['--base', '1234567', '--head', '89abcdef', '--prompt', 'p.md', '--unknown', '1'],
+    ['--base', '1234567', '--head', '89abcdef', '--prompt', '-x'],
+  ]) {
+    const parsed = parseScanArgs(badArgv, { cwd: '/tmp', kitRoot: ROOT });
+    assert.equal(parsed.ok, false, `應該拒收參數：${badArgv.join(' ')}`);
+  }
+  const defaultRepo = parseScanArgs(validArgv, { cwd: '/tmp', kitRoot: ROOT });
+  assert.equal(defaultRepo.ok, true);
+  assert.equal(defaultRepo.args.repo, ROOT, '未給 --repo 時預設掃本倉庫（不會退回理財倉庫）');
+
+  // GROK_SCAN_RUNNER 與同層 grok-sandbox.sb 核對：缺設定、相對路徑、捷徑、雜湊不合都退 2 且不印本機路徑
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-scan-'));
   try {
-    for (const args of [[], ['--plant', path.join(listDir, 'list.txt')]]) {
-      const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'scan-probe.js'), ...args], { encoding: 'utf8' });
-      assert.equal(r.status, 2, `${args.join(' ') || '試探'}：${r.stdout}${r.stderr}`);
-      assert.match(r.stdout, /^隔離是借用的，試探、埋、收在 personal-finance-webapp 那邊跑/u);
+    const runnerPath = path.join(tmpDir, 'grok-scan.js');
+    const runnerSb = path.join(tmpDir, 'grok-sandbox.sb');
+    fs.writeFileSync(runnerPath, "'use strict';\n");
+    for (const env of [{}, { GROK_SCAN_RUNNER: '' }, { GROK_SCAN_RUNNER: 'relative/grok-scan.js' }, { GROK_SCAN_RUNNER: path.join(tmpDir, 'missing.js') }]) {
+      const res = resolveRunner({ env, kitRoot: ROOT });
+      assert.equal(res.ok, false);
+      assert.ok(!res.message.includes(tmpDir), `錯誤訊息不該印出本機路徑：${res.message}`);
     }
-    assert.deepEqual(fs.readdirSync(listDir), [], '借用時不該寫清單檔');
-  } finally { fs.rmSync(listDir, { recursive: true, force: true }); }
+    const missingSb = resolveRunner({ env: { GROK_SCAN_RUNNER: runnerPath }, kitRoot: ROOT });
+    assert.equal(missingSb.ok, false);
+    assert.match(missingSb.message, /同層缺少一般檔案 grok-sandbox\.sb/u);
+
+    fs.writeFileSync(runnerSb, '; different profile\n');
+    const diffSb = resolveRunner({ env: { GROK_SCAN_RUNNER: runnerPath }, kitRoot: ROOT });
+    assert.equal(diffSb.ok, false);
+    assert.match(diffSb.message, /沙箱設定檔雜湊不一致/u);
+
+    fs.writeFileSync(runnerSb, sbText);
+    const symlinkRunner = path.join(tmpDir, 'link-grok-scan.js');
+    fs.symlinkSync(runnerPath, symlinkRunner);
+    assert.equal(resolveRunner({ env: { GROK_SCAN_RUNNER: symlinkRunner }, kitRoot: ROOT }).ok, false, '不收捷徑 runner');
+
+    // 雜湊一致時通過，且 runKitScan 只傳 settingsFile（不覆寫 liveRoot 等 ScanDeps）
+    let capturedArgs = null;
+    let capturedDeps = null;
+    const okRun = await runKitScan(
+      ['--repo', tmpDir, '--base', '1234567', '--head', '89abcdef', '--prompt', 'p.md', '--out', 'out.md'],
+      {
+        env: { GROK_SCAN_RUNNER: runnerPath },
+        cwd: '/tmp',
+        kitRoot: ROOT,
+        loadRunner: async () => ({
+          runScan: async (args, deps) => {
+            capturedArgs = args;
+            capturedDeps = deps;
+            return { code: 0, summary: [] };
+          },
+        }),
+      },
+    );
+    assert.equal(okRun.code, 0);
+    assert.deepEqual(capturedArgs, {
+      base: '1234567',
+      head: '89abcdef',
+      promptFile: '/tmp/p.md',
+      outFile: '/tmp/out.md',
+      repo: path.resolve('/tmp', tmpDir),
+    });
+    assert.deepEqual(capturedDeps, { settingsFile: path.join(ROOT, 'settings.json') }, '只傳 settingsFile，不覆寫 liveRoot 等正式預設值');
+    assert.equal(Object.hasOwn(capturedDeps, 'liveRoot'), false);
+
+    // CLI 入口子行程實跑（未綁 GROK_SCAN_RUNNER 退 2）
+    const cliNoEnv = spawnSync(process.execPath, [path.join(ROOT, 'kit-only', 'grok-scan.js'), ...validArgv], {
+      env: { PATH: process.env.PATH },
+      encoding: 'utf8',
+    });
+    assert.equal(cliNoEnv.status, 2);
+    assert.match(cliNoEnv.stderr, /GROK_SCAN_RUNNER/u);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('快速通道（AI）一律不收的清單，蓋住機器表 B1 那一列點名的每一支 .js（F12：禁區清單、判斷與攔截器的檔不收）', { skip: IN_KIT ? false : '不是套件倉庫：這一支只釘套件自己的值' }, () => {
