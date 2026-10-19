@@ -25,6 +25,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
@@ -1217,7 +1218,15 @@ const GROK_SEATBELT_PROFILE = [
   '  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")',
   '  (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/") (literal "/dev/fd"))',
   '(allow file-ioctl (regex #"^/dev/"))',
-  '(allow file-read* file-write* (subpath (param "SCAN_DIR")))',
+  '(allow file-read* (subpath (param "SCAN_DIR")))',
+  '(allow file-write*',
+  '  (subpath (string-append (param "SCAN_DIR") "/grok-home"))',
+  '  (subpath (string-append (param "SCAN_DIR") "/tmp"))',
+  '  (subpath (string-append (param "SCAN_DIR") "/mutation")))',
+  '(deny file-write*',
+  '  (subpath (string-append (param "SCAN_DIR") "/worktree"))',
+  '  (subpath (string-append (param "SCAN_DIR") "/mutation/.git"))',
+  '  (literal (string-append (param "SCAN_DIR") "/prompt.md")))',
   '(allow network-outbound (remote tcp (string-append "localhost:" (param "RELAY_PORT"))))',
   '(allow network-bind (local tcp "localhost:*"))',
   '(allow network-inbound (local tcp "localhost:*"))',
@@ -1237,8 +1246,14 @@ function verifyGrokSeatbeltProfile(profile = GROK_SEATBELT_PROFILE) {
       return { ok: false, reason: `Seatbelt 規則不可放行宿主敏感或未列名路徑：${forbidden}` };
     }
   }
-  if (!profile.includes('(allow file-read* file-write* (subpath (param "SCAN_DIR")))')) {
-    return { ok: false, reason: 'Seatbelt 規則缺少 SCAN_DIR 讀寫限制' };
+  if (profile.includes('(allow file-read* file-write* (subpath (param "SCAN_DIR")))')) {
+    return { ok: false, reason: 'Seatbelt 規則不可放行整個 SCAN_DIR 寫入（worktree 與 mutation/.git 必須禁寫）' };
+  }
+  if (!profile.includes('(allow file-read* (subpath (param "SCAN_DIR")))')
+      || !profile.includes('(deny file-write*')
+      || !profile.includes('(subpath (string-append (param "SCAN_DIR") "/worktree"))')
+      || !profile.includes('(subpath (string-append (param "SCAN_DIR") "/mutation/.git"))')) {
+    return { ok: false, reason: 'Seatbelt 規則缺少 SCAN_DIR 唯讀與 worktree／mutation/.git 禁寫限制' };
   }
   const outboundMatches = profile.match(/\(allow\s+network-outbound[^)]*\)/gu) || [];
   if (outboundMatches.length !== 1 || !profile.includes('(allow network-outbound (remote tcp (string-append "localhost:" (param "RELAY_PORT"))))')) {
@@ -1265,12 +1280,24 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
   if (!canApplySeatbelt(sandboxExec, spawnSyncImpl)) {
     return { ok: false, reason: 'Seatbelt 預檢無法套用（sandbox-exec 退非零）' };
   }
-  const probeFile = path.join(boxDir, '.probe-ok');
+  const effectiveBadPort = Number(unallowedPort) > 0 && Number(unallowedPort) !== Number(relayPort)
+    ? Number(unallowedPort)
+    : (Number(relayPort) === 65534 ? 65533 : 65534);
+  const probeTmpDir = path.join(boxDir, 'tmp');
+  const probeWorktreeDir = path.join(boxDir, 'worktree');
+  const probeMutGitDir = path.join(boxDir, 'mutation', '.git');
+  const probeFile = path.join(probeTmpDir, '.probe-ok');
   const script = [
     'const fs = require("node:fs");',
     'const net = require("node:net");',
     'const path = require("node:path");',
-    'if (fs.readFileSync(path.join(process.env.BOX_DIR, ".probe-ok"), "utf8") !== "ok") process.exit(11);',
+    'if (fs.readFileSync(path.join(process.env.BOX_DIR, "tmp", ".probe-ok"), "utf8") !== "ok") process.exit(11);',
+    'fs.writeFileSync(path.join(process.env.BOX_DIR, "tmp", ".probe-write"), "ok");',
+    'for (const ro of [path.join(process.env.BOX_DIR, "worktree", ".probe-ro"), path.join(process.env.BOX_DIR, "mutation", ".git", ".probe-ro"), path.join(process.env.BOX_DIR, "prompt.md")]) {',
+    '  let blocked = false;',
+    '  try { fs.writeFileSync(ro, "x"); } catch { blocked = true; }',
+    '  if (!blocked) process.exit(17);',
+    '}',
     'if (process.env.AUTH_FILE) {',
     '  let blocked = false;',
     '  try { fs.readFileSync(process.env.AUTH_FILE); } catch { blocked = true; }',
@@ -1288,16 +1315,16 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
     '  if (!blocked) process.exit(14);',
     '}',
     'const badPort = Number(process.env.UNALLOWED_PORT || 0);',
-    'if (badPort > 0) {',
-    '  const s = net.connect({ host: "127.0.0.1", port: badPort });',
-    '  s.on("connect", () => { s.destroy(); process.exit(15); });',
-    '  s.on("error", () => { console.log("PROBE_PASS"); process.exit(0); });',
-    '  setTimeout(() => { s.destroy(); process.exit(16); }, 1000);',
-    '} else {',
-    '  console.log("PROBE_PASS");',
-    '}',
+    'if (!(badPort > 0)) process.exit(18);',
+    'const s = net.connect({ host: "127.0.0.1", port: badPort });',
+    's.on("connect", () => { s.destroy(); process.exit(15); });',
+    's.on("error", () => { console.log("PROBE_PASS"); process.exit(0); });',
+    'setTimeout(() => { s.destroy(); process.exit(16); }, 1000);',
   ].join('\n');
   try {
+    fs.mkdirSync(probeTmpDir, { recursive: true });
+    fs.mkdirSync(probeWorktreeDir, { recursive: true });
+    fs.mkdirSync(probeMutGitDir, { recursive: true });
     fs.writeFileSync(probeFile, 'ok');
     const nodeExec = fs.realpathSync(process.execPath);
     const r = spawnSyncImpl(sandboxExec, [
@@ -1310,12 +1337,12 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
       cwd: boxDir,
       env: {
         PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
-        HOME: boxDir,
-        TMPDIR: boxDir,
+        HOME: probeTmpDir,
+        TMPDIR: probeTmpDir,
         BOX_DIR: boxDir,
         AUTH_FILE: authFile || '',
         HOST_HOME: os.homedir(),
-        UNALLOWED_PORT: String(unallowedPort || 0),
+        UNALLOWED_PORT: String(effectiveBadPort),
       },
       encoding: 'utf8',
     });
@@ -1324,7 +1351,9 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
     }
     return { ok: true };
   } finally {
-    try { fs.rmSync(probeFile, { force: true }); } catch { /* ignore */ }
+    for (const p of [probeTmpDir, probeWorktreeDir, path.join(boxDir, 'mutation')]) {
+      try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -1542,19 +1571,92 @@ function parseGrokExecArgs(argv) {
   return out;
 }
 
-function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null } = {}) {
-  git(srcTree, ['clone', '--no-hardlinks', '--no-local', '--quiet', srcTree, destTree]);
-  if (rootRepo && baseSha && !gitOk(destTree, ['cat-file', '-e', `${baseSha}^{commit}`])) {
-    git(destTree, ['fetch', '--no-tags', '--quiet', rootRepo, baseSha]);
+function snapshotTreeState(rootDir) {
+  if (!rootDir || !fs.existsSync(rootDir)) return null;
+  try {
+    const rootStat = fs.lstatSync(rootDir);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+    const hash = crypto.createHash('sha256');
+    const walk = (curDir, relPrefix) => {
+      const names = fs.readdirSync(curDir).sort();
+      for (const name of names) {
+        const full = path.join(curDir, name);
+        const rel = relPrefix ? `${relPrefix}/${name}` : name;
+        const st = fs.lstatSync(full);
+        if (st.isSymbolicLink()) {
+          hash.update(`L:${rel}:${fs.readlinkSync(full)}\n`);
+        } else if (st.isDirectory()) {
+          hash.update(`D:${rel}\n`);
+          walk(full, rel);
+        } else if (st.isFile()) {
+          const fileHash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+          hash.update(`F:${rel}:${st.mode & 0o777}:${st.size}:${fileHash}\n`);
+        } else {
+          hash.update(`X:${rel}:${st.mode}\n`);
+        }
+      }
+    };
+    walk(rootDir, '');
+    return hash.digest('hex');
+  } catch {
+    return null;
   }
-  const targetHead = headSha || git(srcTree, ['rev-parse', 'HEAD']);
-  if (rootRepo && !gitOk(destTree, ['cat-file', '-e', `${targetHead}^{commit}`])) {
-    git(destTree, ['fetch', '--no-tags', '--quiet', rootRepo, targetHead]);
+}
+
+function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null, extraShas = [] } = {}) {
+  const resolveCommit = (repoDir, rev) => (repoDir && rev && gitOk(repoDir, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
+    ? git(repoDir, ['rev-parse', '--verify', `${rev}^{commit}`])
+    : null);
+  const targetHead = resolveCommit(srcTree, headSha || 'HEAD') || resolveCommit(rootRepo, headSha);
+  if (!targetHead) throw new LaunchError('無法解析受審版本 HEAD');
+
+  const wantedSet = new Set([targetHead]);
+  for (const rev of [baseSha, ...(Array.isArray(extraShas) ? extraShas : [])]) {
+    if (!rev) continue;
+    const resolved = resolveCommit(srcTree, rev) || resolveCommit(rootRepo, rev);
+    if (resolved) wantedSet.add(resolved);
   }
-  git(destTree, ['checkout', '--detach', '--quiet', targetHead]);
-  gitOk(destTree, ['remote', 'remove', 'origin']);
+  const wantedShas = [...wantedSet];
+
+  git(srcTree, ['init', '--quiet', '-b', 'main', destTree]);
   git(destTree, ['config', 'user.name', 'scanner']);
   git(destTree, ['config', 'user.email', 'scanner@localhost']);
+
+  const inSrc = wantedShas.filter((sha) => gitOk(srcTree, ['cat-file', '-e', `${sha}^{commit}`]));
+  if (inSrc.length > 0) {
+    git(destTree, [
+      '-c', 'protocol.file.allow=always',
+      'fetch', '--no-tags', '--quiet',
+      '--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack',
+      `file://${srcTree}`,
+      ...inSrc,
+    ]);
+  }
+  const missing = wantedShas.filter((sha) => !gitOk(destTree, ['cat-file', '-e', `${sha}^{commit}`]));
+  if (missing.length > 0 && rootRepo) {
+    const inRoot = missing.filter((sha) => gitOk(rootRepo, ['cat-file', '-e', `${sha}^{commit}`]));
+    if (inRoot.length > 0) {
+      git(destTree, [
+        '-c', 'protocol.file.allow=always',
+        'fetch', '--no-tags', '--quiet',
+        '--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack',
+        `file://${rootRepo}`,
+        ...inRoot,
+      ]);
+    }
+  }
+
+  git(destTree, ['checkout', '--detach', '--quiet', targetHead]);
+  const resolvedBase = resolveCommit(destTree, baseSha);
+  if (resolvedBase) {
+    git(destTree, ['update-ref', 'refs/remotes/origin/main', resolvedBase]);
+  }
+  git(destTree, ['reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all']);
+  git(destTree, ['repack', '-a', '-d', '--quiet']);
+  git(destTree, ['prune', '--expire=now']);
+  try { fs.rmSync(path.join(destTree, '.git', 'FETCH_HEAD'), { force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(path.join(destTree, '.git', 'logs'), { recursive: true, force: true }); } catch { /* ignore */ }
+
   const nodeModulesSrc = path.join(srcTree, 'node_modules');
   if (fs.existsSync(nodeModulesSrc)) {
     const cpArgs = process.platform === 'darwin' ? ['-cR', nodeModulesSrc, path.join(destTree, 'node_modules')] : ['-R', nodeModulesSrc, path.join(destTree, 'node_modules')];
@@ -1606,13 +1708,22 @@ async function runGrokExec(argv, deps = {}) {
     const rawBox = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-grok-box-'));
     boxDir = fs.realpathSync(rawBox);
 
-    const probe = probeFn({
-      boxDir,
-      relayPort: relay.port,
-      authFile,
-      sandboxExec,
-      profile,
-    });
+    const probeGuardServer = net.createServer();
+    await new Promise((r) => probeGuardServer.listen(0, '127.0.0.1', r));
+    let probe;
+    try {
+      const unallowedPort = probeGuardServer.address().port;
+      probe = probeFn({
+        boxDir,
+        relayPort: relay.port,
+        authFile,
+        unallowedPort,
+        sandboxExec,
+        profile,
+      });
+    } finally {
+      await new Promise((r) => probeGuardServer.close(() => r()));
+    }
     if (!probe || !probe.ok) {
       return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${(probe && probe.reason) || '沙盒隔離預檢未通過'}——拒絕啟動。`] };
     }
@@ -1626,19 +1737,30 @@ async function runGrokExec(argv, deps = {}) {
       }
     }
 
+    let promptText = fs.readFileSync(promptPath, 'utf8');
+    const promptShas = [...promptText.matchAll(/\bdiff\s+([0-9a-fA-F]{7,40})\.\.([0-9a-fA-F]{7,40})\b/gu)]
+      .flatMap((m) => [m[1], m[2]]);
+
     const boxWorktree = path.join(boxDir, 'worktree');
     const boxMutation = mutationPath ? path.join(boxDir, 'mutation') : null;
-    const expectedHead = materializeIsolatedGitRepo(cwdPath, boxWorktree, {
+    materializeIsolatedGitRepo(cwdPath, boxWorktree, {
       rootRepo: recMeta && recMeta.root,
       baseSha: recMeta && recMeta.base,
       headSha: recMeta && recMeta.head,
+      extraShas: promptShas,
     });
     if (mutationPath && boxMutation) {
       materializeIsolatedGitRepo(mutationPath, boxMutation, {
         rootRepo: recMeta && recMeta.root,
         baseSha: recMeta && recMeta.base,
         headSha: recMeta && recMeta.head,
+        extraShas: promptShas,
       });
+    }
+    const beforeWorktreeSnap = snapshotTreeState(boxWorktree);
+    const beforeMutationGitSnap = boxMutation ? snapshotTreeState(path.join(boxMutation, '.git')) : null;
+    if (!beforeWorktreeSnap || (boxMutation && !beforeMutationGitSnap)) {
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：無法建立盒內工作樹初始快照——拒絕啟動。'] };
     }
 
     const grokHome = path.join(boxDir, 'grok-home');
@@ -1664,7 +1786,6 @@ async function runGrokExec(argv, deps = {}) {
       fs.chmodSync(boxGrokBin, 0o755);
     }
 
-    let promptText = fs.readFileSync(promptPath, 'utf8');
     const realCwd = realDir(cwdPath);
     for (const fromPath of [realCwd, cwdPath]) {
       if (fromPath) promptText = promptText.split(fromPath).join(boxWorktree);
@@ -1741,10 +1862,12 @@ async function runGrokExec(argv, deps = {}) {
     if (relay.blockingRefusals.length > 0) {
       return { code: 2, lines: [`送審產生器（Grok 隔離執行）：受控認證通道攔截到 ${relay.blockingRefusals.length} 筆未授權請求——已拒絕寫出結果。`] };
     }
-    const afterHead = gitOk(boxWorktree, ['rev-parse', 'HEAD']) ? git(boxWorktree, ['rev-parse', 'HEAD']) : null;
-    const afterStatus = gitOk(boxWorktree, ['status', '--porcelain']) ? git(boxWorktree, ['status', '--porcelain']) : null;
-    if (afterHead !== expectedHead || afterStatus === null || afterStatus !== '') {
-      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹不乾淨或 HEAD 已改變（違反唯讀邊界）——已拒絕寫出結果。'] };
+    // 盒外絕不對盒內目錄執行 git（防 .git/config 的 core.fsmonitor 等設定在宿主權限下被觸發）：
+    // 直接以純檔案系統 lstat + SHA-256 快照比對整個 boxWorktree（含 .git）及 boxMutation/.git 是否一字未改
+    const afterWorktreeSnap = snapshotTreeState(boxWorktree);
+    const afterMutationGitSnap = boxMutation ? snapshotTreeState(path.join(boxMutation, '.git')) : null;
+    if (afterWorktreeSnap !== beforeWorktreeSnap || (boxMutation && afterMutationGitSnap !== beforeMutationGitSnap)) {
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹或 .git 狀態被改動（違反唯讀邊界）——已拒絕寫出結果。'] };
     }
     const outputText = String(runResult.stdout || '');
     const activeNeedles = authInfo.needles.filter((n) => n && !promptText.includes(n));
@@ -1860,4 +1983,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };

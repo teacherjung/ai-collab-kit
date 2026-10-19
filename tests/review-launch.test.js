@@ -1535,13 +1535,18 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: `Bearer ${refreshed.dummyBearer}` } }, refreshed.dummyBearer), null);
     assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer NEW-KEY-SECRET-3333' } }, refreshed.dummyBearer).code, 'auth');
 
-    // (d) review 模式（含突變副本）端到端驗證
+    // (d) review 模式（含突變副本）端到端驗證，且盒內不含其他本機分支物件（r5 R1 路徑 B）
+    sh(r.dir, 'checkout', '-qb', 'unsubmitted-local');
+    fs.writeFileSync(path.join(r.dir, 'private-branch.txt'), 'SYNTHETIC-UNSUBMITTED-R5\n');
+    sh(r.dir, 'add', '.');
+    const unrelatedSha = sh(r.dir, 'commit', '-qm', 'unsubmitted') || sh(r.dir, 'rev-parse', 'HEAD');
+    sh(r.dir, 'checkout', '-q', 'main');
     const mutDir = path.join(tmp, 'mutation');
     fs.mkdirSync(mutDir);
     spawnSync('git', ['clone', '--quiet', r.dir, mutDir], { env: gitEnv() });
     const promptFile = path.join(tmp, 'prompt.md');
     const outFile = path.join(tmp, 'out.md');
-    fs.writeFileSync(promptFile, `審查樹：${r.dir}\n突變副本：${mutDir}\n`);
+    fs.writeFileSync(promptFile, `審查樹：${r.dir}\n突變副本：${mutDir}\ngit -C ${r.dir} diff ${r.base}..${r.head}\n`);
     const revRun = await runGrokExec([
       '--mode', 'review',
       '--cwd', r.dir,
@@ -1557,13 +1562,40 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       spawnGrok: async ({ boxWorktree, boxMutation, boxPromptFile }) => {
         const pTxt = fs.readFileSync(boxPromptFile, 'utf8');
         assert.ok(pTxt.includes(boxWorktree) && pTxt.includes(boxMutation), '提示檔內審查樹與突變副本路徑皆已改寫為盒內路徑');
-        // 盒內突變副本可改檔，盒內審查樹保持乾淨
+        const leak = spawnSync('git', ['-C', boxWorktree, 'show', `${unrelatedSha}:private-branch.txt`], { env: gitEnv(), encoding: 'utf8' });
+        assert.notEqual(leak.status, 0, '盒內工作樹不可含未送審本機分支物件');
+        // 盒內突變副本的工作區可改檔，盒內審查樹與兩邊 .git 保持不變
         fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
         return { status: 0, stdout: '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
       },
     });
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
     assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u);
+
+    // (e) 盒內若改動 .git/config（如寫入 core.fsmonitor），盒外收尾絕不執行該腳本且退 2 拒寫輸出（r5 R1 路徑 A）
+    const marker = path.join(tmp, 'outside-box-marker.txt');
+    const badOut = path.join(tmp, 'bad-out.md');
+    const fsmonitorRun = await runGrokExec([
+      '--mode', 'scan',
+      '--cwd', r.dir,
+      '--model', 'grok-4.7',
+      '--reasoning-effort', 'xhigh',
+      '--prompt-file', promptFile,
+      '--out', badOut,
+    ], {
+      authFile,
+      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async ({ boxWorktree }) => {
+        const hook = path.join(boxWorktree, '.git', 'r5-fsmonitor.sh');
+        fs.writeFileSync(hook, `#!/bin/sh\nprintf 'SYNTHETIC-HOST-EXECUTION' > '${marker}'\nprintf 'token\\000'\n`, { mode: 0o700 });
+        sh(boxWorktree, 'config', 'core.fsmonitor', hook);
+        return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+      },
+    });
+    assert.equal(fs.existsSync(marker), false, '盒外收尾絕不可執行盒內 .git/config 的 core.fsmonitor');
+    assert.equal(fsmonitorRun.code, 2);
+    assert.equal(fs.existsSync(badOut), false);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
