@@ -145,7 +145,7 @@
   "strongest": "grok-4.7",
   "maxEffort": "xhigh",
   "source": "Grok CLI",
-  "command": "grok --cwd {scanTree} --model {model} --reasoning-effort {effort} --permission-mode plan --sandbox read-only --deny 'Read(~/**)' --deny 'Edit(*)' --deny 'Write(*)' --disallowed-tools 'web_search,web_fetch,write,search_replace,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}"
+  "command": "grok --cwd {scanTree} --model {model} --reasoning-effort {effort} --permission-mode plan --sandbox read-only --deny \"Read($HOME/**)\" --deny 'Edit(*)' --deny 'Write(*)' --disallowed-tools 'web_search,web_fetch,write,search_replace,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}"
  },
  "platform": {
   "name": "GitHub",
@@ -393,10 +393,10 @@
    "autoMode": "自動選模",
    "source": "Grok CLI",
    "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；審完由外殼 --post 核對樹乾淨與標頭後代貼結論；詳見 README.md「本倉庫自己怎麼合併」",
-   "command": "grok --cwd {reviewTree} --model {model} --reasoning-effort {effort} --permission-mode dontAsk --sandbox workspace --allow 'Read' --allow 'Grep' --allow 'Edit({mutationCopy}/**)' --allow 'Write({mutationCopy}/**)' --allow 'Bash(git *)' --allow 'Bash(node *)' --allow 'Bash(npm *)' --deny 'Read(~/**)' --deny 'Edit(./**)' --deny 'Write(./**)' --disallowed-tools 'web_search,web_fetch,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}",
-   "machine": "--permission-mode dontAsk 預設拒絕未放行的動作，搭配 --sandbox workspace 核心沙盒、--deny 'Read(~/**)' 阻擋家目錄與其他工作樹讀取、--deny 'Edit(./**)' --deny 'Write(./**)' 禁止修改審查樹並僅放行突變副本 {mutationCopy} 編輯與 git／node／npm 測試；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
-   "promptOnly": "放行的 node／npm 在突變副本執行時仍可由測試子程序存取系統路徑，審查樹與突變副本最終乾淨靠 --post／--close 核對；輸出零不代表通過或已貼文",
-   "verified": "2026-10-20 本機 grok 1.0.62 連結工作樹實測：plan／dontAsk＋read-only／workspace 沙盒＋Read(~/**) 拒絕家目錄讀取、放行樹內讀取與測試"
+   "command": "grok --cwd {reviewTree} --model {model} --reasoning-effort {effort} --permission-mode dontAsk --sandbox workspace --allow 'Read' --allow 'Grep' --allow 'Edit({mutationCopy}/**)' --allow 'Write({mutationCopy}/**)' --allow 'Bash(git *)' --allow 'Bash(node *)' --allow 'Bash(npm *)' --deny \"Read($HOME/**)\" --deny 'Edit(./**)' --deny 'Write(./**)' --disallowed-tools 'web_search,web_fetch,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}",
+   "machine": "--permission-mode dontAsk 預設拒絕未放行的動作，搭配 --sandbox workspace 核心寫入沙盒（限制只准寫入工作目錄、~/.grok 與暫存區，並核心層級拒絕修改設定與鉤子）、雙引號展開 --deny \"Read($HOME/**)\" 在工具與直接殼層參數權限層攔截家目錄（含絕對路徑、.. 相對路徑與符號連結的 Read／Grep）、--deny 'Edit(./**)' --deny 'Write(./**)' 禁止修改審查樹並僅放行突變副本 {mutationCopy} 編輯與 git／node／npm 測試；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "promptOnly": "--sandbox workspace 與 --sandbox read-only 的 OS 檔案系統讀取範圍為 Everywhere（連結工作樹的 git 需讀取主倉庫 .git/worktrees 才能運作），因此 --deny \"Read($HOME/**)\" 屬 Grok 權限規則層攔截而非 OS 核心層級 file-read* 封鎖——放行的 git／node／npm 子程序在內部自行讀取家目錄或系統路徑時核心不會擋（靠提示與自覺）；審查樹與突變副本最終乾淨靠 --post／--close 核對；輸出零不代表通過或已貼文",
+   "verified": "2026-10-20 本機 grok 1.0.62 連結工作樹實測：雙引號展開 --deny \"Read($HOME/**)\" 在工具權限層攔截絕對路徑、.. 相對路徑與符號連結之 read_file／grep，並放行連結工作樹 git diff 與 node --test；OS 層讀取範圍 Everywhere 與子程序內部讀取限制據實列於靠提示欄"
   },
   {
    "participant": "Gemini",

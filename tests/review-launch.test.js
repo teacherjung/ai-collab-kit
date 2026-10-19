@@ -1182,7 +1182,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.equal(noScanTree.code, 2);
     assert.match(noScanTree.lines.join('\n'), /scanner\.command 沒帶 \{model\}、\{effort\} 或 \{scanTree\}/u);
 
-    // (b) 快速通道（擁有者） → 印未執行：快速通道（擁有者）
+    // (b) 快速通道（擁有者／AI） → 印未執行：快速通道（擁有者／AI），即使 PR 說明填了「風險級別：高」或帶 `--tier 高` 亦不取消快速通道（AI）（#114 r2 R7）
     const ownerBody = BODY.replace('- **複審者**：Beta', '- **複審者**：Boss');
     const fastOwner = main(['--scan', '7', '--dir', dir], {
       settings: s,
@@ -1191,6 +1191,21 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     });
     assert.equal(fastOwner.code, 2);
     assert.match(fastOwner.lines.join('\n'), /未執行：快速通道（擁有者）/u);
+
+    const cr = commentRepo();
+    const sLane = { ...s, ...LANE_SETTINGS };
+    const crAns = answersFor(cr, {
+      change: { ...answersFor(cr).change, body: `${BODY}- **風險級別**：高\n` },
+      comments: [verdict('Beta', 1, cr.head, '通過', { id: 'pass-lane', createdAt: '2026-10-19T12:00:00Z' })],
+    });
+    const fastAi = main(['--scan', '7', '--tier', '高', '--dir', dir], {
+      settings: sLane,
+      platform: fakePlatform(crAns),
+      cwd: cr.dir,
+    });
+    assert.equal(fastAi.code, 2);
+    assert.match(fastAi.lines.join('\n'), /未執行：快速通道（AI）/u);
+    assert.deepEqual(fs.readdirSync(dir), [], '快速通道（AI）不開掃描樹');
 
     // (c) 低風險表定不掃 → 印未執行：低風險，表定不掃；但若依 D4 調重（--tier 高／中 或 PR 說明「風險級別」調重）則放行開樹，若企圖調輕則拒絕
     const lowFiles = [{ path: 'docs/x.md', status: 'modified', previousPath: null }];

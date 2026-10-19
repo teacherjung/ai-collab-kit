@@ -823,9 +823,8 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     }
   }
   const tier = [fileTier, bodyTier, tierArg].filter(Boolean).reduce((a, b) => (TIER_ORDER.indexOf(b) < TIER_ORDER.indexOf(a) ? b : a));
-  const escalated = tier !== fileTier || tierArg !== null || bodyTier !== null;
   const reviewerEntry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === reviewer);
-  const lane = !escalated && risk.result.fastLaneAI === true;
+  const lane = risk.result.fastLaneAI === true;
   const exhausted = lane && reviewerEntry && filled(reviewerEntry.source) && twoMissesInARow(comments, reviewer, reviewerEntry.source, usable);
   if (lane && !exhausted) {
     throw new LaunchError('這一支走快速通道（AI），照 G1、F12 不掃描（PR說明的「### 複審後掃」下寫「未執行：快速通道（AI）」）');
