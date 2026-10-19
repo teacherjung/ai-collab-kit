@@ -1182,6 +1182,16 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.equal(noScanTree.code, 2);
     assert.match(noScanTree.lines.join('\n'), /scanner\.command 沒帶 \{model\}、\{effort\} 或 \{scanTree\}/u);
 
+    for (const overlap of ['Alpha', 'Beta']) {
+      const overlapRes = main(['--scan', '7', '--dir', dir], {
+        settings: { ...s, scanner: { ...scannerCfg, participant: overlap } },
+        platform: fakePlatform(baseAns),
+        cwd: r.dir,
+      });
+      assert.equal(overlapRes.code, 2);
+      assert.match(overlapRes.lines.join('\n'), /與本支實作者.*或複審者.*重疊：G1 規定由第三個 AI 掃描/u);
+    }
+
     // (b) 快速通道（擁有者／AI） → 印未執行：快速通道（擁有者／AI），即使 PR 說明填了「風險級別：高」或帶 `--tier 高` 亦不取消快速通道（AI）（#114 r2 R7）
     const ownerBody = BODY.replace('- **複審者**：Beta', '- **複審者**：Boss');
     const fastOwner = main(['--scan', '7', '--dir', dir], {
@@ -1449,4 +1459,3 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
-

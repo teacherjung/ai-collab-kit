@@ -1212,4 +1212,3 @@ if (require.main === module) {
 }
 
 module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
-

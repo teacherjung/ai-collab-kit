@@ -60,10 +60,10 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.equal(s.scanner.isolation, undefined, '不再設定 scanner.isolation');
   assert.ok(s.scanner.tool.includes('node tools/review-launch.js --scan <編號>'), '掃描入口統一為 review-launch.js --scan');
   assert.ok(s.scanner.command.includes('--model {model} --reasoning-effort {effort}'), '掃描啟動指令帶模型與推理');
-  assert.ok(s.scanner.command.includes('--permission-mode plan --sandbox read-only --deny "Read($HOME/**)"'), '掃描啟動指令接上原生 plan 權限、read-only 沙盒與雙引號展開的家目錄拒絕規則');
+  assert.ok(s.scanner.command.includes('/usr/bin/sandbox-exec -p ') && s.scanner.command.includes('--permission-mode dontAsk --sandbox off') && s.scanner.command.includes('--deny "Read($HOME/**)"'), '掃描啟動指令外層包 /usr/bin/sandbox-exec 核心讀寫隔離，內層接 dontAsk 與雙引號展開的家目錄拒絕規則');
   assert.ok(!s.scanner.command.includes('--always-approve'), '掃描啟動指令不使用 --always-approve');
   const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
-  assert.ok(grokRev.command.includes('--permission-mode dontAsk --sandbox workspace') && grokRev.command.includes('--deny "Read($HOME/**)"') && !grokRev.command.includes('--always-approve'), 'Grok 複審啟動指令接上 dontAsk、workspace 沙盒與雙引號展開的家目錄拒絕規則');
+  assert.ok(grokRev.command.includes('/usr/bin/sandbox-exec -p ') && grokRev.command.includes('--permission-mode dontAsk --sandbox off') && grokRev.command.includes('--deny "Read($HOME/**)"') && !grokRev.command.includes('--always-approve'), 'Grok 複審啟動指令外層包 /usr/bin/sandbox-exec 核心讀寫隔離，內層接 dontAsk 與雙引號展開的家目錄拒絕規則');
   const geminiRev = s.reviewers.find((r) => r.participant === 'Gemini');
   assert.ok(geminiRev.command.startsWith('cd {reviewTree} && '), 'Gemini 複審啟動指令先切換至 {reviewTree}');
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
@@ -80,6 +80,94 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   });
   for (const m of s.machines) {
     if (m.state === '已啟用') assert.match(m.verified, /^\d{4}-\d{2}-\d{2}$/u, `已啟用的機器要有驗證日期：${m.name}`);
+  }
+});
+
+test('Grok 掃描與複審啟動樣板的 /usr/bin/sandbox-exec 核心隔離實測（macOS）', { skip: !IN_KIT || process.platform !== 'darwin' || !fs.existsSync('/usr/bin/sandbox-exec') ? '僅在套件倉庫且具 macOS /usr/bin/sandbox-exec 時執行' : false }, () => {
+  const { substitute } = require('../tools/review-launch.js');
+  const s = read();
+  const baseDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-sb-pin-')));
+  const siblingDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-sibling-')));
+  const ptmpDir = fs.mkdtempSync('/private/tmp/kit-grok-ptmp-');
+  const treeDir = path.join(baseDir, 'tree');
+  const mutDir = path.join(baseDir, 'mutation');
+  const promptFile = path.join(baseDir, 'prompt.md');
+  const outFile = path.join(baseDir, 'output.log');
+  try {
+    fs.writeFileSync(path.join(siblingDir, 'secret.txt'), 'SIBLING_SECRET\n');
+    fs.writeFileSync(path.join(ptmpDir, 'secret.txt'), 'PTMP_SECRET\n');
+    fs.writeFileSync(promptFile, 'prompt\n');
+    fs.mkdirSync(treeDir);
+    spawnSync('git', ['init', '-q', treeDir]);
+    fs.mkdirSync(mutDir);
+    fs.writeFileSync(path.join(treeDir, 'in-tree.txt'), 'IN_TREE_OK\n');
+    fs.symlinkSync(path.join(ROOT, 'package.json'), path.join(treeDir, 'link-home.json'));
+    fs.symlinkSync(path.join(ptmpDir, 'secret.txt'), path.join(treeDir, 'link-ptmp.txt'));
+    fs.symlinkSync(path.join(siblingDir, 'secret.txt'), path.join(treeDir, 'link-sibling.txt'));
+
+    const homeSecret = path.join(ROOT, 'package.json');
+    const ptmpSecret = path.join(ptmpDir, 'secret.txt');
+    const siblingSecret = path.join(siblingDir, 'secret.txt');
+
+    // 1. 驗證 scanner.command 核心層讀寫攔截
+    const scanCmd = substitute(s.scanner.command, {
+      model: s.scanner.strongest,
+      effort: s.scanner.maxEffort,
+      scanTree: treeDir,
+      promptFile,
+      outFile,
+      change: '114',
+      project: s.platform.project,
+    }, 'scanner.command').text;
+    const scanProbeScript = [
+      `cat "${treeDir}/in-tree.txt" || exit 11`,
+      `cat "${promptFile}" >/dev/null || exit 12`,
+      `if cat "${homeSecret}" 2>/dev/null; then exit 21; fi`,
+      `if cat "${ptmpSecret}" 2>/dev/null; then exit 22; fi`,
+      `if cat "${siblingSecret}" 2>/dev/null; then exit 23; fi`,
+      `if cat "${treeDir}/link-home.json" 2>/dev/null; then exit 24; fi`,
+      `if cat "${treeDir}/link-ptmp.txt" 2>/dev/null; then exit 25; fi`,
+      `if cat "${treeDir}/link-sibling.txt" 2>/dev/null; then exit 26; fi`,
+      `if ls /Users/Shared 2>/dev/null; then exit 27; fi`,
+      `if ls /private/var/tmp 2>/dev/null; then exit 28; fi`,
+      `if touch "${treeDir}/dirty" 2>/dev/null; then exit 29; fi`,
+      'echo SCAN_PROBE_OK',
+    ].join('; ');
+    const scanShellLine = scanCmd.replace(/ grok --cwd .* > /u, ` /bin/sh -c '${scanProbeScript}' > `);
+    const rScan = spawnSync('/bin/sh', ['-c', scanShellLine], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(rScan.status, 0, `scanner 沙盒探針應退 0（實際退 ${rScan.status}，stderr=${rScan.stderr}）`);
+    assert.match(fs.readFileSync(outFile, 'utf8'), /IN_TREE_OK[\s\S]*SCAN_PROBE_OK/u);
+    assert.equal(fs.existsSync(path.join(baseDir, 'tmp')), false, '掃描結束後應自動清除當場 tmp 目錄');
+
+    // 2. 驗證 reviewers (Grok) 核心層讀寫攔截（審查樹唯讀、突變副本可寫）
+    const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
+    const revCmd = substitute(grokRev.command, {
+      model: grokRev.strongest,
+      effort: grokRev.maxEffort,
+      reviewTree: treeDir,
+      mutationCopy: mutDir,
+      promptFile,
+      outFile,
+      change: '114',
+      project: s.platform.project,
+    }, 'Grok.command').text;
+    const revProbeScript = [
+      `cat "${treeDir}/in-tree.txt" || exit 31`,
+      `touch "${mutDir}/mutated.txt" || exit 32`,
+      `if touch "${treeDir}/dirty" 2>/dev/null; then exit 41; fi`,
+      `if cat "${homeSecret}" 2>/dev/null; then exit 42; fi`,
+      `if cat "${ptmpSecret}" 2>/dev/null; then exit 43; fi`,
+      `if cat "${siblingSecret}" 2>/dev/null; then exit 44; fi`,
+      'echo REV_PROBE_OK',
+    ].join('; ');
+    const revShellLine = revCmd.replace(/ grok --cwd .* > /u, ` /bin/sh -c '${revProbeScript}' > `);
+    const rRev = spawnSync('/bin/sh', ['-c', revShellLine], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(rRev.status, 0, `Grok 複審沙盒探針應退 0（實際退 ${rRev.status}，stderr=${rRev.stderr}）`);
+    assert.match(fs.readFileSync(outFile, 'utf8'), /IN_TREE_OK[\s\S]*REV_PROBE_OK/u);
+    assert.equal(fs.existsSync(path.join(mutDir, 'mutated.txt')), true, '突變副本應可寫入');
+    assert.equal(fs.existsSync(path.join(baseDir, 'tmp')), false, '複審結束後應自動清除當場 tmp 目錄');
+  } finally {
+    for (const d of [baseDir, siblingDir, ptmpDir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
 
