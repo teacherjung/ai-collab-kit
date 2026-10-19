@@ -22,7 +22,8 @@
 //     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次；
 //   ⑫複審後掃生命週期（G1、G2；--scan、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
 //     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；通過後開唯讀掃描樹、印啟動指令與紀錄骨架；
-//     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹。
+//     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹；
+//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行與 DLP。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -1457,5 +1458,113 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名單重建、轉送器拒收與預檢失敗拒啟', async () => {
+  const {
+    parseGrokExecArgs,
+    prepareGrokBoxAuth,
+    grokRelayRejectReason,
+    verifyGrokSeatbeltProfile,
+    runGrokSeatbeltProbe,
+    runGrokExec,
+    GROK_SEATBELT_PROFILE,
+    GROK_PINNED_ISSUER,
+    GROK_PINNED_CLIENT_ID,
+  } = require('../tools/review-launch.js');
+
+  // (a) 參數檢查
+  for (const bad of [
+    [],
+    ['--mode', 'scan', '--cwd', '/tmp', '--model', 'g', '--reasoning-effort', 'h', '--prompt-file', '/tmp/p'],
+    ['--mode', 'other', '--cwd', '/tmp', '--model', 'g', '--reasoning-effort', 'h', '--prompt-file', '/tmp/p', '--out', '/tmp/o'],
+    ['--mode', 'review', '--cwd', '/tmp', '--model', 'g', '--reasoning-effort', 'h', '--prompt-file', '/tmp/p', '--out', '/tmp/o'],
+    ['--mode', 'scan', '--cwd', '/tmp', '--mutation-copy', '/tmp/m', '--model', 'g', '--reasoning-effort', 'h', '--prompt-file', '/tmp/p', '--out', '/tmp/o'],
+    ['--mode', 'scan', '--mode', 'scan', '--cwd', '/tmp', '--model', 'g', '--reasoning-effort', 'h', '--prompt-file', '/tmp/p', '--out', '/tmp/o'],
+    ['--unknown', '1'],
+  ]) {
+    assert.ok(parseGrokExecArgs(bad).error, `應拒收壞參數：${bad.join(' ')}`);
+  }
+
+  // (b) Seatbelt 規則靜態檢查與預檢失敗拒啟
+  assert.equal(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE).ok, true);
+  assert.equal(runGrokSeatbeltProbe({ boxDir: '/tmp', relayPort: 54321, spawnSyncImpl: () => ({ status: 71, stdout: '', stderr: 'Operation not permitted' }) }).ok, false);
+
+  // (c) OIDC 快到期自動續期與壞欄拒收
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ack-grok-exec-test-')));
+  const r = repo();
+  try {
+    const authFile = path.join(tmp, 'auth.json');
+    const entryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
+    const expiredAuth = {
+      [entryKey]: {
+        auth_mode: 'oidc',
+        user_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        create_time: '2026-10-19T00:00:00.000Z',
+        expires_at: '2026-10-19T00:10:00.000Z',
+        oidc_issuer: GROK_PINNED_ISSUER,
+        oidc_client_id: GROK_PINNED_CLIENT_ID,
+        key: 'OLD-KEY-SECRET-1111',
+        refresh_token: 'OLD-REFRESH-SECRET-2222',
+      },
+    };
+    fs.writeFileSync(authFile, JSON.stringify(expiredAuth, null, 2), { mode: 0o600 });
+    const refreshed = await prepareGrokBoxAuth(authFile, {
+      now: () => Date.parse('2026-10-19T00:05:00.000Z'),
+      fetchImpl: async (url) => {
+        assert.equal(url, `${GROK_PINNED_ISSUER}/oauth2/token`);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: 'NEW-KEY-SECRET-3333', refresh_token: 'NEW-REFRESH-SECRET-4444', expires_in: 7200 }),
+        };
+      },
+    });
+    assert.equal(refreshed.refreshed, true);
+    assert.equal(refreshed.realBearer, 'NEW-KEY-SECRET-3333');
+    assert.equal(refreshed.forBox[entryKey].key, refreshed.dummyBearer);
+    assert.equal(refreshed.forBox[entryKey].refresh_token, undefined);
+
+    // 連結檔 auth.json 一律拒收
+    const linkAuth = path.join(tmp, 'link-auth.json');
+    fs.symlinkSync(authFile, linkAuth);
+    await assert.rejects(() => prepareGrokBoxAuth(linkAuth), /一般檔案/);
+
+    // 轉送器規則核對
+    assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: `Bearer ${refreshed.dummyBearer}` } }, refreshed.dummyBearer), null);
+    assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer NEW-KEY-SECRET-3333' } }, refreshed.dummyBearer).code, 'auth');
+
+    // (d) review 模式（含突變副本）端到端驗證
+    const mutDir = path.join(tmp, 'mutation');
+    fs.mkdirSync(mutDir);
+    spawnSync('git', ['clone', '--quiet', r.dir, mutDir], { env: gitEnv() });
+    const promptFile = path.join(tmp, 'prompt.md');
+    const outFile = path.join(tmp, 'out.md');
+    fs.writeFileSync(promptFile, `審查樹：${r.dir}\n突變副本：${mutDir}\n`);
+    const revRun = await runGrokExec([
+      '--mode', 'review',
+      '--cwd', r.dir,
+      '--mutation-copy', mutDir,
+      '--model', 'grok-4.7',
+      '--reasoning-effort', 'xhigh',
+      '--prompt-file', promptFile,
+      '--out', outFile,
+    ], {
+      authFile,
+      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async ({ boxWorktree, boxMutation, boxPromptFile }) => {
+        const pTxt = fs.readFileSync(boxPromptFile, 'utf8');
+        assert.ok(pTxt.includes(boxWorktree) && pTxt.includes(boxMutation), '提示檔內審查樹與突變副本路徑皆已改寫為盒內路徑');
+        // 盒內突變副本可改檔，盒內審查樹保持乾淨
+        fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
+        return { status: 0, stdout: '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
+      },
+    });
+    assert.equal(revRun.code, 0, revRun.lines.join('\n'));
+    assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

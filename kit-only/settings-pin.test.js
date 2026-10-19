@@ -59,11 +59,17 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.equal(s.scanner.source, 'Grok CLI');
   assert.equal(s.scanner.isolation, undefined, '不再設定 scanner.isolation');
   assert.ok(s.scanner.tool.includes('node tools/review-launch.js --scan <編號>'), '掃描入口統一為 review-launch.js --scan');
-  assert.ok(s.scanner.command.includes('--model {model} --reasoning-effort {effort}'), '掃描啟動指令帶模型與推理');
-  assert.ok(s.scanner.command.includes('/usr/bin/sandbox-exec -p ') && s.scanner.command.includes('--permission-mode dontAsk --sandbox off') && s.scanner.command.includes('--deny "Read($HOME/**)"'), '掃描啟動指令外層包 /usr/bin/sandbox-exec 核心讀寫隔離，內層接 dontAsk 與雙引號展開的家目錄拒絕規則');
-  assert.ok(!s.scanner.command.includes('--always-approve'), '掃描啟動指令不使用 --always-approve');
+  assert.equal(
+    s.scanner.command,
+    'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}',
+    '掃描啟動指令統一走 review-launch.js --grok-exec --mode scan',
+  );
   const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
-  assert.ok(grokRev.command.includes('/usr/bin/sandbox-exec -p ') && grokRev.command.includes('--permission-mode dontAsk --sandbox off') && grokRev.command.includes('--deny "Read($HOME/**)"') && !grokRev.command.includes('--always-approve'), 'Grok 複審啟動指令外層包 /usr/bin/sandbox-exec 核心讀寫隔離，內層接 dontAsk 與雙引號展開的家目錄拒絕規則');
+  assert.equal(
+    grokRev.command,
+    'node tools/review-launch.js --grok-exec --mode review --cwd {reviewTree} --mutation-copy {mutationCopy} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}',
+    'Grok 複審啟動指令統一走 review-launch.js --grok-exec --mode review',
+  );
   const geminiRev = s.reviewers.find((r) => r.participant === 'Gemini');
   assert.ok(geminiRev.command.startsWith('cd {reviewTree} && '), 'Gemini 複審啟動指令先切換至 {reviewTree}');
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
@@ -83,91 +89,226 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   }
 });
 
-test('Grok 掃描與複審啟動樣板的 /usr/bin/sandbox-exec 核心隔離實測（macOS）', { skip: !IN_KIT || process.platform !== 'darwin' || !fs.existsSync('/usr/bin/sandbox-exec') ? '僅在套件倉庫且具 macOS /usr/bin/sandbox-exec 時執行' : false }, () => {
-  const { substitute } = require('../tools/review-launch.js');
-  const s = read();
-  const baseDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-sb-pin-')));
-  const siblingDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-sibling-')));
-  const ptmpDir = fs.mkdtempSync('/private/tmp/kit-grok-ptmp-');
-  const treeDir = path.join(baseDir, 'tree');
-  const mutDir = path.join(baseDir, 'mutation');
-  const promptFile = path.join(baseDir, 'prompt.md');
-  const outFile = path.join(baseDir, 'output.log');
+test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證通道、啟動前預檢與 DLP 正反驗證', { skip: IN_KIT ? false : '不是套件倉庫' }, async () => {
+  const net = require('node:net');
+  const {
+    GROK_SEATBELT_PROFILE,
+    GROK_PINNED_ISSUER,
+    GROK_PINNED_CLIENT_ID,
+    verifyGrokSeatbeltProfile,
+    canApplySeatbelt,
+    runGrokSeatbeltProbe,
+    prepareGrokBoxAuth,
+    grokRelayRejectReason,
+    startGrokRelay,
+    runGrokExec,
+  } = require('../tools/review-launch.js');
+
+  // 1. 預設拒絕 Seatbelt 規則靜態與突變檢查（不依賴巢狀 sandbox_apply，在 Codex 複審沙盒與 Linux CI 皆必跑）
+  assert.deepEqual(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE), { ok: true });
+  assert.equal(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE.replace('(deny default)', '(allow default)')).ok, false, '改為 allow default 必須紅');
+  assert.equal(verifyGrokSeatbeltProfile(`${GROK_SEATBELT_PROFILE}\n(allow file-read* (literal "/Users/x/.grok/auth.json"))`).ok, false, '放行 auth.json 必須紅');
+  assert.equal(verifyGrokSeatbeltProfile(`${GROK_SEATBELT_PROFILE}\n(allow file-read* (subpath "/opt/homebrew/var"))`).ok, false, '放行 /opt/homebrew/var 必須紅');
+  assert.equal(verifyGrokSeatbeltProfile(`${GROK_SEATBELT_PROFILE}\n(allow file-read* (subpath "/Library/Application Support"))`).ok, false, '放行 /Library/Application Support 必須紅');
+  assert.equal(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE.replace('(deny file-read* process-exec* (subpath "/usr/local"))', '')).ok, false, '拿掉 /usr/local 拒絕規則必須紅');
+  assert.equal(verifyGrokSeatbeltProfile(`${GROK_SEATBELT_PROFILE}\n(allow network-outbound (remote tcp "*:*"))`).ok, false, '放寬外網連線必須紅');
+
+  // 2. 真實憑證維持在盒外（prepareGrokBoxAuth 白名單重建、假權杖與 DLP 針提取）
+  const baseDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-pin-')));
   try {
-    fs.writeFileSync(path.join(siblingDir, 'secret.txt'), 'SIBLING_SECRET\n');
-    fs.writeFileSync(path.join(ptmpDir, 'secret.txt'), 'PTMP_SECRET\n');
-    fs.writeFileSync(promptFile, 'prompt\n');
+    const authFile = path.join(baseDir, 'auth.json');
+    const entryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
+    const futureIso = new Date(Date.now() + 86400 * 1000).toISOString();
+    const rawAuth = {
+      [entryKey]: {
+        auth_mode: 'oidc',
+        user_id: '11111111-2222-3333-4444-555555555555',
+        create_time: '2026-10-19T00:00:00.000Z',
+        expires_at: futureIso,
+        oidc_issuer: GROK_PINNED_ISSUER,
+        oidc_client_id: GROK_PINNED_CLIENT_ID,
+        key: 'SYNTHETIC-REAL-BEARER-SECRET-9999',
+        refresh_token: 'SYNTHETIC-REFRESH-TOKEN-SECRET-8888',
+        email: 'secret-owner@example.com',
+        principal_type: 'user',
+      },
+    };
+    fs.writeFileSync(authFile, JSON.stringify(rawAuth, null, 2), { mode: 0o600 });
+    const prepared = await prepareGrokBoxAuth(authFile);
+    assert.equal(prepared.realBearer, 'SYNTHETIC-REAL-BEARER-SECRET-9999');
+    assert.match(prepared.dummyBearer, /^DUMMY-SCAN-TOKEN-[0-9a-f]{48}$/u);
+    const boxCred = prepared.forBox[entryKey];
+    assert.equal(boxCred.key, prepared.dummyBearer, '盒內 auth.json 僅含假權杖');
+    assert.equal(boxCred.refresh_token, undefined, '盒內 auth.json 不含 refresh_token');
+    assert.equal(boxCred.email, undefined, '盒內 auth.json 不含 email');
+    assert.ok(prepared.needles.includes('SYNTHETIC-REAL-BEARER-SECRET-9999'), '真實 key 納入 DLP 針');
+    assert.ok(prepared.needles.includes('SYNTHETIC-REFRESH-TOKEN-SECRET-8888'), 'refresh_token 納入 DLP 針');
+    assert.ok(prepared.needles.includes('secret-owner@example.com'), 'email 納入 DLP 針');
+
+    // 3. 受控認證通道（端點白名單、假權杖驗證與真權杖代換）
+    assert.equal(grokRelayRejectReason({ method: 'POST', url: '/v1/responses', headers: { authorization: `Bearer ${prepared.dummyBearer}` } }, prepared.dummyBearer), null);
+    assert.equal(grokRelayRejectReason({ method: 'POST', url: '/v1/responses', headers: { authorization: 'Bearer WRONG' } }, prepared.dummyBearer).code, 'auth');
+    assert.equal(grokRelayRejectReason({ method: 'POST', url: '/v1/files', headers: { authorization: `Bearer ${prepared.dummyBearer}` } }, prepared.dummyBearer).code, 'shape');
+    assert.equal(grokRelayRejectReason({ method: 'GET', url: 'https://evil.example/v1/models', headers: { authorization: `Bearer ${prepared.dummyBearer}` } }, prepared.dummyBearer).code, 'bad-target');
+
+    let seenUpstreamAuth = null;
+    let seenUpstreamHost = null;
+    const relay = await startGrokRelay({
+      realBearer: prepared.realBearer,
+      dummyBearer: prepared.dummyBearer,
+      requestImpl: (opts, cb) => {
+        seenUpstreamAuth = opts.headers.authorization;
+        seenUpstreamHost = opts.headers.host;
+        const { PassThrough } = require('node:stream');
+        const reqStream = new PassThrough();
+        const resStream = new PassThrough();
+        resStream.statusCode = 200;
+        resStream.headers = { 'content-type': 'application/json' };
+        process.nextTick(() => {
+          cb(resStream);
+          resStream.end('{"ok":true}');
+        });
+        return reqStream;
+      },
+    });
+    try {
+      const okRes = await fetch(`http://127.0.0.1:${relay.port}/v1/models`, {
+        headers: { authorization: `Bearer ${prepared.dummyBearer}` },
+      });
+      assert.equal(okRes.status, 200);
+      assert.equal(seenUpstreamAuth, 'Bearer SYNTHETIC-REAL-BEARER-SECRET-9999', '轉送器在盒外代換為真實權杖');
+      assert.equal(seenUpstreamHost, 'cli-chat-proxy.grok.com');
+
+      const tolRes = await fetch(`http://127.0.0.1:${relay.port}/`);
+      assert.equal(tolRes.status, 403);
+      assert.equal(relay.toleratedRefusals.length, 1);
+      assert.equal(relay.blockingRefusals.length, 0);
+
+      const badRes = await fetch(`http://127.0.0.1:${relay.port}/v1/files`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${prepared.dummyBearer}` },
+      });
+      assert.equal(badRes.status, 403);
+      assert.equal(relay.blockingRefusals.length, 1, '非白名單端點記入阻擋拒絕');
+    } finally {
+      await relay.close();
+    }
+
+    // 4. 由 settings.json 的 scanner.command 與 Grok.command 實際展開參數送入 runGrokExec，驗預檢失敗拒啟、DLP 攔截、工作樹污染攔截與正常執行
+    const { substitute, splitCommandArgs } = require('../tools/review-launch.js');
+    const s = read();
+    const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
+    const treeDir = path.join(baseDir, 'tree');
+    const mutDir = path.join(baseDir, 'mutation');
+    const promptFile = path.join(baseDir, 'prompt.md');
+    const outFile = path.join(baseDir, 'output.log');
     fs.mkdirSync(treeDir);
-    spawnSync('git', ['init', '-q', treeDir]);
     fs.mkdirSync(mutDir);
-    fs.writeFileSync(path.join(treeDir, 'in-tree.txt'), 'IN_TREE_OK\n');
-    fs.symlinkSync(path.join(ROOT, 'package.json'), path.join(treeDir, 'link-home.json'));
-    fs.symlinkSync(path.join(ptmpDir, 'secret.txt'), path.join(treeDir, 'link-ptmp.txt'));
-    fs.symlinkSync(path.join(siblingDir, 'secret.txt'), path.join(treeDir, 'link-sibling.txt'));
+    spawnSync('git', ['init', '-q', treeDir]);
+    spawnSync('git', ['-C', treeDir, 'config', 'user.name', 'test']);
+    spawnSync('git', ['-C', treeDir, 'config', 'user.email', 'test@localhost']);
+    fs.writeFileSync(path.join(treeDir, 'a.txt'), 'hello\n');
+    spawnSync('git', ['-C', treeDir, 'add', 'a.txt']);
+    spawnSync('git', ['-C', treeDir, 'commit', '-q', '-m', 'init']);
+    spawnSync('git', ['clone', '--quiet', treeDir, mutDir]);
+    fs.writeFileSync(promptFile, `請檢查 ${treeDir}\n`);
 
-    const homeSecret = path.join(ROOT, 'package.json');
-    const ptmpSecret = path.join(ptmpDir, 'secret.txt');
-    const siblingSecret = path.join(siblingDir, 'secret.txt');
-
-    // 1. 驗證 scanner.command 核心層讀寫攔截
-    const scanCmd = substitute(s.scanner.command, {
+    const scanArgv = splitCommandArgs(substitute(s.scanner.command, {
+      scanTree: treeDir,
       model: s.scanner.strongest,
       effort: s.scanner.maxEffort,
-      scanTree: treeDir,
       promptFile,
       outFile,
-      change: '114',
-      project: s.platform.project,
-    }, 'scanner.command').text;
-    const scanProbeScript = [
-      `cat "${treeDir}/in-tree.txt" || exit 11`,
-      `cat "${promptFile}" >/dev/null || exit 12`,
-      `if cat "${homeSecret}" 2>/dev/null; then exit 21; fi`,
-      `if cat "${ptmpSecret}" 2>/dev/null; then exit 22; fi`,
-      `if cat "${siblingSecret}" 2>/dev/null; then exit 23; fi`,
-      `if cat "${treeDir}/link-home.json" 2>/dev/null; then exit 24; fi`,
-      `if cat "${treeDir}/link-ptmp.txt" 2>/dev/null; then exit 25; fi`,
-      `if cat "${treeDir}/link-sibling.txt" 2>/dev/null; then exit 26; fi`,
-      `if ls /Users/Shared 2>/dev/null; then exit 27; fi`,
-      `if ls /private/var/tmp 2>/dev/null; then exit 28; fi`,
-      `if touch "${treeDir}/dirty" 2>/dev/null; then exit 29; fi`,
-      'echo SCAN_PROBE_OK',
-    ].join('; ');
-    const scanShellLine = scanCmd.replace(/ grok --cwd .* > /u, ` /bin/sh -c '${scanProbeScript}' > `);
-    const rScan = spawnSync('/bin/sh', ['-c', scanShellLine], { cwd: ROOT, encoding: 'utf8' });
-    assert.equal(rScan.status, 0, `scanner 沙盒探針應退 0（實際退 ${rScan.status}，stderr=${rScan.stderr}）`);
-    assert.match(fs.readFileSync(outFile, 'utf8'), /IN_TREE_OK[\s\S]*SCAN_PROBE_OK/u);
-    assert.equal(fs.existsSync(path.join(baseDir, 'tmp')), false, '掃描結束後應自動清除當場 tmp 目錄');
+    }, 'scanner.command').text, 'scanner.command');
+    assert.deepEqual(scanArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'scanner.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
+    const baseArgs = scanArgv.slice(3);
 
-    // 2. 驗證 reviewers (Grok) 核心層讀寫攔截（審查樹唯讀、突變副本可寫）
-    const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
-    const revCmd = substitute(grokRev.command, {
-      model: grokRev.strongest,
-      effort: grokRev.maxEffort,
+    const revArgv = splitCommandArgs(substitute(grokRev.command, {
       reviewTree: treeDir,
       mutationCopy: mutDir,
+      model: grokRev.strongest,
+      effort: grokRev.maxEffort,
       promptFile,
       outFile,
-      change: '114',
-      project: s.platform.project,
-    }, 'Grok.command').text;
-    const revProbeScript = [
-      `cat "${treeDir}/in-tree.txt" || exit 31`,
-      `touch "${mutDir}/mutated.txt" || exit 32`,
-      `if touch "${treeDir}/dirty" 2>/dev/null; then exit 41; fi`,
-      `if cat "${homeSecret}" 2>/dev/null; then exit 42; fi`,
-      `if cat "${ptmpSecret}" 2>/dev/null; then exit 43; fi`,
-      `if cat "${siblingSecret}" 2>/dev/null; then exit 44; fi`,
-      'echo REV_PROBE_OK',
-    ].join('; ');
-    const revShellLine = revCmd.replace(/ grok --cwd .* > /u, ` /bin/sh -c '${revProbeScript}' > `);
-    const rRev = spawnSync('/bin/sh', ['-c', revShellLine], { cwd: ROOT, encoding: 'utf8' });
-    assert.equal(rRev.status, 0, `Grok 複審沙盒探針應退 0（實際退 ${rRev.status}，stderr=${rRev.stderr}）`);
-    assert.match(fs.readFileSync(outFile, 'utf8'), /IN_TREE_OK[\s\S]*REV_PROBE_OK/u);
-    assert.equal(fs.existsSync(path.join(mutDir, 'mutated.txt')), true, '突變副本應可寫入');
-    assert.equal(fs.existsSync(path.join(baseDir, 'tmp')), false, '複審結束後應自動清除當場 tmp 目錄');
+    }, 'Grok.command').text, 'Grok.command');
+    assert.deepEqual(revArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'Grok.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
+
+    // 4a. 預檢失敗時拒絕啟動（不跑 grok、不寫 outFile）
+    let grokCalled = false;
+    const failProbeRun = await runGrokExec(baseArgs, {
+      authFile,
+      probeFn: () => ({ ok: false, reason: '模擬預檢失敗' }),
+      spawnGrok: async () => { grokCalled = true; return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' }; },
+    });
+    assert.equal(failProbeRun.code, 2);
+    assert.equal(grokCalled, false, '預檢失敗時不可啟動 Grok');
+    assert.equal(fs.existsSync(outFile), false);
+
+    // 4b. DLP 攔截（輸出含真實憑證或私密欄位時拒絕寫出）
+    const dlpRun = await runGrokExec(baseArgs, {
+      authFile,
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async () => ({ status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n外流 SYNTHETIC-REFRESH-TOKEN-SECRET-8888\n', stderr: '' }),
+    });
+    assert.equal(dlpRun.code, 2);
+    assert.equal(fs.existsSync(outFile), false, 'DLP 攔截時不可寫出 outFile');
+
+    // 4c. 盒內工作樹被改動時拒絕寫出
+    const dirtyRun = await runGrokExec(baseArgs, {
+      authFile,
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async ({ boxWorktree }) => {
+        fs.writeFileSync(path.join(boxWorktree, 'dirty.txt'), 'x');
+        return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+      },
+    });
+    assert.equal(dirtyRun.code, 2);
+    assert.equal(fs.existsSync(outFile), false, '盒內工作樹不乾淨時不可寫出 outFile');
+
+    // 4d. 正常隔離執行：盒內 auth.json 無真憑證、boxPromptFile 已改寫為盒內路徑、執行後自動清除 boxDir
+    let capturedBoxDir = null;
+    const okRun = await runGrokExec(baseArgs, {
+      authFile,
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async ({ boxDir, boxWorktree, boxPromptFile, env }) => {
+        capturedBoxDir = boxDir;
+        const boxAuthText = fs.readFileSync(path.join( env.HOME, '.grok', 'auth.json'), 'utf8');
+        assert.ok(!boxAuthText.includes('SYNTHETIC-REAL-BEARER-SECRET-9999'), '盒內 auth.json 絕不含真實 key');
+        assert.ok(!boxAuthText.includes('SYNTHETIC-REFRESH-TOKEN-SECRET-8888'), '盒內 auth.json 絕不含 refresh_token');
+        assert.ok(boxAuthText.includes('DUMMY-SCAN-TOKEN-'), '盒內 auth.json 僅含假權杖');
+        const boxPrompt = fs.readFileSync(boxPromptFile, 'utf8');
+        assert.ok(boxPrompt.includes(boxWorktree) && !boxPrompt.includes(treeDir), '盒內提示檔已改寫為盒內隔離路徑');
+        return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+      },
+    });
+    assert.equal(okRun.code, 0);
+    assert.match(fs.readFileSync(outFile, 'utf8'), /^🔍 Grok｜來源：Grok CLI｜掃 `1234567`/u);
+    assert.equal(fs.existsSync(capturedBoxDir), false, '執行結束後自動清除隔離盒目錄');
+
+    // 5. 若當前環境允許套用 Seatbelt（宿主機實跑），額外執行核心層級預檢探針（含阻擋宿主 auth.json、未列名本機路徑與非轉送器連接埠）
+    if (canApplySeatbelt()) {
+      const dummyServer = net.createServer();
+      await new Promise((r) => dummyServer.listen(0, '127.0.0.1', r));
+      const unallowedPort = dummyServer.address().port;
+      const liveBox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-grok-live-sb-')));
+      try {
+        const probeRes = runGrokSeatbeltProbe({
+          boxDir: liveBox,
+          relayPort: unallowedPort + 1 > 65535 ? unallowedPort - 1 : unallowedPort + 1,
+          authFile,
+          unallowedPort,
+        });
+        assert.deepEqual(probeRes, { ok: true }, '核心層級 Seatbelt 探針應攔截宿主 auth.json、$HOME、未列名路徑與非轉送器連接埠');
+      } finally {
+        dummyServer.close();
+        fs.rmSync(liveBox, { recursive: true, force: true });
+      }
+    } else {
+      const blockedProbe = runGrokSeatbeltProbe({ boxDir: baseDir, relayPort: 54321, authFile });
+      assert.equal(blockedProbe.ok, false, '無法套用 Seatbelt 時預檢必須拒絕啟動');
+    }
   } finally {
-    for (const d of [baseDir, siblingDir, ptmpDir]) fs.rmSync(d, { recursive: true, force: true });
+    fs.rmSync(baseDir, { recursive: true, force: true });
   }
 });
 

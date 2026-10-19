@@ -23,9 +23,11 @@
 'use strict';
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
+const https = require('node:https');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { ask, PlatformError } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
 const { gitEnv } = require('./git-env.js');
@@ -1126,6 +1128,639 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
   return { code: 0, lines };
 }
 
+const GROK_PINNED_ISSUER = 'https://auth.x.ai';
+const GROK_PINNED_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
+const GROK_DUMMY_BEARER_PREFIX = 'DUMMY-SCAN-TOKEN-';
+const GROK_UPSTREAM_HOST = 'cli-chat-proxy.grok.com';
+const GROK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const GROK_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/u;
+const GROK_BOX_FIELDS = Object.freeze({
+  auth_mode: (v) => typeof v === 'string' && /^[a-z_]{1,16}$/u.test(v),
+  user_id: (v) => typeof v === 'string' && GROK_UUID_RE.test(v),
+  create_time: (v) => typeof v === 'string' && GROK_ISO_RE.test(v),
+  expires_at: (v) => typeof v === 'string' && GROK_ISO_RE.test(v),
+  oidc_issuer: (v) => v === GROK_PINNED_ISSUER,
+  oidc_client_id: (v) => v === GROK_PINNED_CLIENT_ID,
+});
+const GROK_ENUM_FIELDS = Object.freeze(['principal_type']);
+const GROK_ALLOWED_REQUESTS = Object.freeze([
+  { method: 'GET', path: /^\/v1\/models$/u },
+  { method: 'GET', path: /^\/v1\/settings$/u },
+  { method: 'GET', path: /^\/v1\/feedback\/config$/u },
+  { method: 'POST', path: /^\/v1\/responses$/u },
+  { method: 'POST', path: /^\/v1\/sessions\/[0-9a-f-]{36}\/signals$/u },
+  { method: 'POST', path: /^\/v1\/sessions\/[0-9a-f-]{36}\/turn-deltas$/u },
+  { method: 'POST', path: /^\/v1\/traces$/u },
+]);
+const GROK_TOLERATED_REFUSALS = Object.freeze([
+  'shape GET /v1/bundle/archive',
+  'shape GET /v1/subagents/bundle',
+  'shape GET /',
+]);
+const GROK_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade', 'host']);
+
+const GROK_SEATBELT_PROFILE = [
+  '(version 1)',
+  '(deny default)',
+  '(import "system.sb")',
+  '(allow process-fork) (allow signal) (allow sysctl-read)',
+  '(allow process-exec*',
+  '  (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System")',
+  '  (subpath "/Library/Developer/CommandLineTools")',
+  '  (subpath "/opt/homebrew/Cellar/ada-url/3.4.4")',
+  '  (subpath "/opt/homebrew/Cellar/brotli/1.2.0")',
+  '  (subpath "/opt/homebrew/Cellar/c-ares/1.34.6")',
+  '  (subpath "/opt/homebrew/Cellar/hdrhistogram_c/0.11.9")',
+  '  (subpath "/opt/homebrew/Cellar/icu4c@78/78.3")',
+  '  (subpath "/opt/homebrew/Cellar/libnghttp2/1.69.0")',
+  '  (subpath "/opt/homebrew/Cellar/libnghttp3/1.15.0")',
+  '  (subpath "/opt/homebrew/Cellar/libngtcp2/1.22.1")',
+  '  (subpath "/opt/homebrew/Cellar/libuv/1.52.1")',
+  '  (subpath "/opt/homebrew/Cellar/llhttp/9.4.1")',
+  '  (subpath "/opt/homebrew/Cellar/merve/1.2.2_1")',
+  '  (subpath "/opt/homebrew/Cellar/nbytes/0.1.4")',
+  '  (subpath "/opt/homebrew/Cellar/node/26.0.0")',
+  '  (subpath "/opt/homebrew/Cellar/openssl@3/3.6.2")',
+  '  (subpath "/opt/homebrew/Cellar/simdjson/4.6.4")',
+  '  (subpath "/opt/homebrew/Cellar/simdutf/9.0.0")',
+  '  (subpath "/opt/homebrew/Cellar/sqlite/3.53.1")',
+  '  (subpath "/opt/homebrew/Cellar/uvwasi/0.0.23")',
+  '  (subpath "/opt/homebrew/Cellar/zstd/1.5.7_1")',
+  '  (subpath (param "SCAN_DIR")))',
+  '(allow file-read*',
+  '  (subpath "/usr") (subpath "/bin") (subpath "/sbin") (subpath "/System")',
+  '  (subpath "/Library/Developer/CommandLineTools")',
+  '  (subpath "/Library/Preferences/Logging") (subpath "/private/etc")',
+  '  (subpath "/private/var/db/timezone") (subpath "/private/var/select")',
+  '  (subpath "/opt/homebrew/etc/openssl@3")',
+  '  (subpath "/opt/homebrew/Cellar/ada-url/3.4.4")',
+  '  (subpath "/opt/homebrew/Cellar/brotli/1.2.0")',
+  '  (subpath "/opt/homebrew/Cellar/c-ares/1.34.6")',
+  '  (subpath "/opt/homebrew/Cellar/hdrhistogram_c/0.11.9")',
+  '  (subpath "/opt/homebrew/Cellar/icu4c@78/78.3")',
+  '  (subpath "/opt/homebrew/Cellar/libnghttp2/1.69.0")',
+  '  (subpath "/opt/homebrew/Cellar/libnghttp3/1.15.0")',
+  '  (subpath "/opt/homebrew/Cellar/libngtcp2/1.22.1")',
+  '  (subpath "/opt/homebrew/Cellar/libuv/1.52.1")',
+  '  (subpath "/opt/homebrew/Cellar/llhttp/9.4.1")',
+  '  (subpath "/opt/homebrew/Cellar/merve/1.2.2_1")',
+  '  (subpath "/opt/homebrew/Cellar/nbytes/0.1.4")',
+  '  (subpath "/opt/homebrew/Cellar/node/26.0.0")',
+  '  (subpath "/opt/homebrew/Cellar/openssl@3/3.6.2")',
+  '  (subpath "/opt/homebrew/Cellar/simdjson/4.6.4")',
+  '  (subpath "/opt/homebrew/Cellar/simdutf/9.0.0")',
+  '  (subpath "/opt/homebrew/Cellar/sqlite/3.53.1")',
+  '  (subpath "/opt/homebrew/Cellar/uvwasi/0.0.23")',
+  '  (subpath "/opt/homebrew/Cellar/zstd/1.5.7_1"))',
+  '(allow file-read-metadata)',
+  '(allow file-read* file-write*',
+  '  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")',
+  '  (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/") (literal "/dev/fd"))',
+  '(allow file-ioctl (regex #"^/dev/"))',
+  '(allow file-read* file-write* (subpath (param "SCAN_DIR")))',
+  '(allow network-outbound (remote tcp (string-append "localhost:" (param "RELAY_PORT"))))',
+  '(allow network-bind (local tcp "localhost:*"))',
+  '(allow network-inbound (local tcp "localhost:*"))',
+  '(allow system-socket)',
+  '(deny file-read* process-exec* (subpath "/usr/local"))',
+].join('\n');
+
+function verifyGrokSeatbeltProfile(profile = GROK_SEATBELT_PROFILE) {
+  if (typeof profile !== 'string' || !profile.startsWith('(version 1)\n(deny default)\n(import "system.sb")\n')) {
+    return { ok: false, reason: 'Seatbelt 規則不是 (version 1) + (deny default) + (import "system.sb") 起手' };
+  }
+  if (profile.includes('(allow default)')) {
+    return { ok: false, reason: 'Seatbelt 規則不可含 (allow default)' };
+  }
+  for (const forbidden of ['auth.json', '.grok', '/Users/', '/private/tmp', '/var/tmp', '/opt/homebrew/var', '/Library/Application Support']) {
+    if (profile.includes(forbidden)) {
+      return { ok: false, reason: `Seatbelt 規則不可放行宿主敏感或未列名路徑：${forbidden}` };
+    }
+  }
+  if (!profile.includes('(allow file-read* file-write* (subpath (param "SCAN_DIR")))')) {
+    return { ok: false, reason: 'Seatbelt 規則缺少 SCAN_DIR 讀寫限制' };
+  }
+  const outboundMatches = profile.match(/\(allow\s+network-outbound[^)]*\)/gu) || [];
+  if (outboundMatches.length !== 1 || !profile.includes('(allow network-outbound (remote tcp (string-append "localhost:" (param "RELAY_PORT"))))')) {
+    return { ok: false, reason: 'Seatbelt 規則的 network-outbound 必須且只能限制為 localhost:RELAY_PORT' };
+  }
+  if (!profile.trimEnd().endsWith('(deny file-read* process-exec* (subpath "/usr/local"))')) {
+    return { ok: false, reason: 'Seatbelt 規則檔尾必須明確拒絕 /usr/local 讀寫與執行' };
+  }
+  return { ok: true };
+}
+
+function canApplySeatbelt(sandboxExec = '/usr/bin/sandbox-exec', spawnSyncImpl = spawnSync) {
+  if (process.platform !== 'darwin') return false;
+  const r = spawnSyncImpl(sandboxExec, ['-p', '(version 1)(allow default)', '/usr/bin/true'], { encoding: 'utf8' });
+  return !r.error && r.status === 0;
+}
+
+function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort = 0, sandboxExec = '/usr/bin/sandbox-exec', spawnSyncImpl = spawnSync, profile = GROK_SEATBELT_PROFILE } = {}) {
+  const staticCheck = verifyGrokSeatbeltProfile(profile);
+  if (!staticCheck.ok) return staticCheck;
+  if (!boxDir || !Number.isInteger(Number(relayPort)) || Number(relayPort) <= 0) {
+    return { ok: false, reason: 'Seatbelt 預檢缺少有效的 boxDir 或 relayPort' };
+  }
+  if (!canApplySeatbelt(sandboxExec, spawnSyncImpl)) {
+    return { ok: false, reason: 'Seatbelt 預檢無法套用（sandbox-exec 退非零）' };
+  }
+  const probeFile = path.join(boxDir, '.probe-ok');
+  const script = [
+    'const fs = require("node:fs");',
+    'const net = require("node:net");',
+    'const path = require("node:path");',
+    'if (fs.readFileSync(path.join(process.env.BOX_DIR, ".probe-ok"), "utf8") !== "ok") process.exit(11);',
+    'if (process.env.AUTH_FILE) {',
+    '  let blocked = false;',
+    '  try { fs.readFileSync(process.env.AUTH_FILE); } catch { blocked = true; }',
+    '  if (!blocked) process.exit(12);',
+    '}',
+    'if (process.env.HOST_HOME) {',
+    '  let blocked = false;',
+    '  try { fs.readdirSync(process.env.HOST_HOME); } catch { blocked = true; }',
+    '  if (!blocked) process.exit(13);',
+    '}',
+    'for (const p of ["/private/tmp", "/Users/Shared", "/usr/local", "/opt/homebrew/var", "/Library/Application Support"]) {',
+    '  if (!fs.existsSync(p)) continue;',
+    '  let blocked = false;',
+    '  try { fs.readdirSync(p); } catch { blocked = true; }',
+    '  if (!blocked) process.exit(14);',
+    '}',
+    'const badPort = Number(process.env.UNALLOWED_PORT || 0);',
+    'if (badPort > 0) {',
+    '  const s = net.connect({ host: "127.0.0.1", port: badPort });',
+    '  s.on("connect", () => { s.destroy(); process.exit(15); });',
+    '  s.on("error", () => { console.log("PROBE_PASS"); process.exit(0); });',
+    '  setTimeout(() => { s.destroy(); process.exit(16); }, 1000);',
+    '} else {',
+    '  console.log("PROBE_PASS");',
+    '}',
+  ].join('\n');
+  try {
+    fs.writeFileSync(probeFile, 'ok');
+    const nodeExec = fs.realpathSync(process.execPath);
+    const r = spawnSyncImpl(sandboxExec, [
+      '-p', profile,
+      '-D', `SCAN_DIR=${boxDir}`,
+      '-D', `RELAY_PORT=${relayPort}`,
+      nodeExec,
+      '-e', script,
+    ], {
+      cwd: boxDir,
+      env: {
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        HOME: boxDir,
+        TMPDIR: boxDir,
+        BOX_DIR: boxDir,
+        AUTH_FILE: authFile || '',
+        HOST_HOME: os.homedir(),
+        UNALLOWED_PORT: String(unallowedPort || 0),
+      },
+      encoding: 'utf8',
+    });
+    if (r.error || r.status !== 0 || String(r.stdout || '').trim() !== 'PROBE_PASS') {
+      return { ok: false, reason: `沙盒隔離預檢未通過（退 ${r.status === null ? '信號中斷' : r.status}）` };
+    }
+    return { ok: true };
+  } finally {
+    try { fs.rmSync(probeFile, { force: true }); } catch { /* ignore */ }
+  }
+}
+
+function grokAuthNeedles(authJson) {
+  const out = new Set();
+  const givenToBox = new Set();
+  const walk = (v, into) => {
+    if (typeof v === 'string') { if (v) into.add(v); }
+    else if (Array.isArray(v)) v.forEach((x) => walk(x, into));
+    else if (v && typeof v === 'object') Object.values(v).forEach((x) => walk(x, into));
+  };
+  for (const cred of Object.values(authJson || {})) {
+    if (!cred || typeof cred !== 'object') continue;
+    for (const [k, v] of Object.entries(cred)) {
+      if (Object.hasOwn(GROK_BOX_FIELDS, k)) walk(v, givenToBox);
+      else if (!GROK_ENUM_FIELDS.includes(k)) walk(v, out);
+    }
+  }
+  for (const v of givenToBox) out.delete(v);
+  return [...out];
+}
+
+async function prepareGrokBoxAuth(authFile, { fetchImpl = globalThis.fetch, now = Date.now, earlySecs = 4200, pins = { issuer: GROK_PINNED_ISSUER, clientId: GROK_PINNED_CLIENT_ID }, dummyBearer: givenDummy = null } = {}) {
+  if (!authFile || !fs.existsSync(authFile) || !fs.lstatSync(authFile).isFile()) {
+    throw new LaunchError('Grok 認證檔不存在或不是一般檔案（拒絕收連結）');
+  }
+  let all;
+  try { all = JSON.parse(fs.readFileSync(authFile, 'utf8')); }
+  catch { throw new LaunchError('Grok 認證檔不是合法 JSON（內容不回顯）'); }
+  const entries = Object.entries(all || {});
+  if (entries.length !== 1) throw new LaunchError(`Grok 認證檔應恰有一個登入項，實際 ${entries.length}`);
+  const [entryKey, cred] = entries[0];
+  if (!cred || typeof cred !== 'object') throw new LaunchError('Grok 認證檔登入項格式不對');
+  for (const need of ['oidc_issuer', 'oidc_client_id', 'refresh_token', 'expires_at', 'key']) {
+    if (typeof cred[need] !== 'string' || !cred[need]) throw new LaunchError(`Grok 認證檔缺 ${need}`);
+  }
+  if (cred.oidc_issuer !== pins.issuer) throw new LaunchError(`Grok 認證檔的 oidc_issuer 不等於釘住的「${pins.issuer}」`);
+  if (cred.oidc_client_id !== pins.clientId) throw new LaunchError('Grok 認證檔的 oidc_client_id 不等於釘住的值');
+  if (!GROK_ISO_RE.test(String(cred.expires_at))) throw new LaunchError('Grok 認證檔的 expires_at 不是合法 ISO 時間');
+  const expectedEntryKey = `${pins.issuer}::${pins.clientId}`;
+  if (entryKey !== expectedEntryKey) throw new LaunchError('Grok 認證檔登入項鍵名不是釘住的 issuer::client_id');
+
+  const expiresAtMs = Date.parse(String(cred.expires_at));
+  let current = cred;
+  let refreshed = false;
+  if (!(expiresAtMs - now() > earlySecs * 1000)) {
+    if (typeof fetchImpl !== 'function') throw new LaunchError('Grok 憑證快到期但無可用 fetch 進行續期');
+    const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: String(cred.refresh_token), client_id: pins.clientId });
+    const r = await fetchImpl(`${pins.issuer}/oauth2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
+    if (!r || !r.ok) throw new LaunchError(`Grok 憑證 refresh 失敗（HTTP ${r ? r.status : '不明'}）`);
+    let j;
+    try { j = await r.json(); } catch { throw new LaunchError('Grok 憑證 refresh 回應不是合法 JSON'); }
+    if (!j || typeof j.access_token !== 'string' || !j.access_token || !Number.isFinite(Number(j.expires_in))) {
+      throw new LaunchError('Grok 憑證 refresh 回應缺 access_token 或 expires_in');
+    }
+    current = {
+      ...cred,
+      key: j.access_token,
+      refresh_token: typeof j.refresh_token === 'string' && j.refresh_token ? j.refresh_token : cred.refresh_token,
+      expires_at: new Date(now() + Number(j.expires_in) * 1000).toISOString(),
+    };
+    const tmp = `${authFile}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ [entryKey]: current }, null, 2), { mode: 0o600 });
+    const fd = fs.openSync(tmp, 'r');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, authFile);
+    refreshed = true;
+  }
+
+  const forBox = {};
+  for (const [k, check] of Object.entries(GROK_BOX_FIELDS)) {
+    const ok = k === 'oidc_issuer' ? current[k] === pins.issuer : k === 'oidc_client_id' ? current[k] === pins.clientId : check(current[k]);
+    if (!ok) throw new LaunchError(`Grok 認證檔的 ${k} 格式不合白名單規範`);
+    forBox[k] = current[k];
+  }
+  const dummyBearer = givenDummy || `${GROK_DUMMY_BEARER_PREFIX}${crypto.randomBytes(24).toString('hex')}`;
+  if (!dummyBearer.startsWith(GROK_DUMMY_BEARER_PREFIX) || dummyBearer.length < GROK_DUMMY_BEARER_PREFIX.length + 32) {
+    throw new LaunchError('Grok 盒內假權杖格式不合規範');
+  }
+  forBox.key = dummyBearer;
+  const needles = grokAuthNeedles({ [entryKey]: current });
+  return {
+    forBox: { [entryKey]: forBox },
+    realBearer: String(current.key),
+    dummyBearer,
+    needles,
+    refreshed,
+    expiresAt: String(current.expires_at),
+  };
+}
+
+function grokRelayRejectReason(req, dummyBearer) {
+  const url = String((req && req.url) || '');
+  if (!url.startsWith('/') || url.startsWith('//') || /[\r\n\0]/u.test(url)) {
+    return { code: 'bad-target', why: '路徑不是相對根路徑' };
+  }
+  if (url.length > 2048) {
+    return { code: 'path-too-long', why: '路徑過長' };
+  }
+  const pathname = url.split('?')[0];
+  const method = String((req && req.method) || '').toUpperCase();
+  if (!GROK_ALLOWED_REQUESTS.some((r) => r.method === method && r.path.test(pathname))) {
+    return { code: 'shape', why: '不在允許端點白名單' };
+  }
+  const auth = req && req.headers && req.headers.authorization;
+  if (!dummyBearer || auth !== `Bearer ${dummyBearer}`) {
+    return { code: 'auth', why: '缺少或盒內假權杖不符' };
+  }
+  return null;
+}
+
+function isGrokToleratedRefusal(code, method, fullPath) {
+  return GROK_TOLERATED_REFUSALS.includes(`${code} ${String(method || '').toUpperCase()} ${fullPath}`);
+}
+
+async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPSTREAM_HOST, requestImpl = https.request } = {}) {
+  if (typeof realBearer !== 'string' || realBearer.length < 8) throw new LaunchError('受控認證通道缺少有效的真實權杖');
+  if (typeof dummyBearer !== 'string' || !dummyBearer.startsWith(GROK_DUMMY_BEARER_PREFIX) || dummyBearer.length < GROK_DUMMY_BEARER_PREFIX.length + 32) {
+    throw new LaunchError('受控認證通道缺少合規的盒內假權杖');
+  }
+  const blockingRefusals = [];
+  const toleratedRefusals = [];
+  const forwarded = [];
+  const server = http.createServer((req, res) => {
+    if (req.method === 'CONNECT') {
+      blockingRefusals.push('connect CONNECT');
+      res.writeHead(405, { 'content-type': 'text/plain' });
+      res.end('relay: CONNECT not supported');
+      return;
+    }
+    const rej = grokRelayRejectReason(req, dummyBearer);
+    if (rej) {
+      const method = String(req.method || '').toUpperCase();
+      const fullPath = String(req.url || '');
+      const key = `${rej.code} ${method} ${fullPath}`;
+      if (isGrokToleratedRefusal(rej.code, method, fullPath)) toleratedRefusals.push(key);
+      else blockingRefusals.push(key);
+      res.writeHead(403, { 'content-type': 'text/plain' });
+      res.end(`relay: refused (${rej.why})`);
+      req.resume();
+      return;
+    }
+    const headers = {};
+    for (const [k, v] of Object.entries(req.headers || {})) {
+      if (!GROK_HOP_HEADERS.has(k.toLowerCase()) && v !== undefined) headers[k] = v;
+    }
+    headers.host = upstreamHost;
+    headers.authorization = `Bearer ${realBearer}`;
+    const pathname = String(req.url || '').split('?')[0];
+    forwarded.push(`${String(req.method || '').toUpperCase()} ${pathname}`);
+    const up = requestImpl({
+      host: upstreamHost,
+      port: 443,
+      method: req.method,
+      path: req.url,
+      headers,
+      timeout: 300000,
+    }, (upRes) => {
+      const out = {};
+      for (const [k, v] of Object.entries(upRes.headers || {})) {
+        if (!GROK_HOP_HEADERS.has(k.toLowerCase()) && v !== undefined) out[k] = v;
+      }
+      res.writeHead(upRes.statusCode || 502, out);
+      upRes.pipe(res);
+    });
+    up.on('error', () => {
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
+      res.end('relay: upstream unreachable');
+    });
+    req.pipe(up);
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const addr = server.address();
+  const port = addr && typeof addr === 'object' ? addr.port : 0;
+  return {
+    server,
+    port,
+    blockingRefusals,
+    toleratedRefusals,
+    forwarded,
+    close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
+}
+
+function parseGrokExecArgs(argv) {
+  const out = { mode: undefined, cwd: undefined, mutationCopy: undefined, model: undefined, effort: undefined, promptFile: undefined, outFile: undefined };
+  const flagMap = {
+    '--mode': 'mode',
+    '--cwd': 'cwd',
+    '--mutation-copy': 'mutationCopy',
+    '--model': 'model',
+    '--reasoning-effort': 'effort',
+    '--prompt-file': 'promptFile',
+    '--out': 'outFile',
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (!Object.hasOwn(flagMap, a)) return { error: `Grok 隔離執行不認得的參數：${a}` };
+    const k = flagMap[a];
+    if (out[k] !== undefined) return { error: `Grok 隔離執行重複給了參數：${a}` };
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('-')) return { error: `Grok 隔離執行 ${a} 後面要接值` };
+    out[k] = v;
+    i += 1;
+  }
+  for (const [flag, k] of [['--mode', 'mode'], ['--cwd', 'cwd'], ['--model', 'model'], ['--reasoning-effort', 'effort'], ['--prompt-file', 'promptFile'], ['--out', 'outFile']]) {
+    if (!filled(out[k])) return { error: `Grok 隔離執行缺少必填參數 ${flag}` };
+  }
+  if (out.mode !== 'scan' && out.mode !== 'review') return { error: 'Grok 隔離執行 --mode 只能是 scan 或 review' };
+  if (out.mode === 'review' && !filled(out.mutationCopy)) return { error: 'Grok 隔離執行 --mode review 必須提供 --mutation-copy' };
+  if (out.mode === 'scan' && out.mutationCopy !== undefined) return { error: 'Grok 隔離執行 --mode scan 不可提供 --mutation-copy' };
+  return out;
+}
+
+function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null } = {}) {
+  git(srcTree, ['clone', '--no-hardlinks', '--no-local', '--quiet', srcTree, destTree]);
+  if (rootRepo && baseSha && !gitOk(destTree, ['cat-file', '-e', `${baseSha}^{commit}`])) {
+    git(destTree, ['fetch', '--no-tags', '--quiet', rootRepo, baseSha]);
+  }
+  const targetHead = headSha || git(srcTree, ['rev-parse', 'HEAD']);
+  if (rootRepo && !gitOk(destTree, ['cat-file', '-e', `${targetHead}^{commit}`])) {
+    git(destTree, ['fetch', '--no-tags', '--quiet', rootRepo, targetHead]);
+  }
+  git(destTree, ['checkout', '--detach', '--quiet', targetHead]);
+  gitOk(destTree, ['remote', 'remove', 'origin']);
+  git(destTree, ['config', 'user.name', 'scanner']);
+  git(destTree, ['config', 'user.email', 'scanner@localhost']);
+  const nodeModulesSrc = path.join(srcTree, 'node_modules');
+  if (fs.existsSync(nodeModulesSrc)) {
+    const cpArgs = process.platform === 'darwin' ? ['-cR', nodeModulesSrc, path.join(destTree, 'node_modules')] : ['-R', nodeModulesSrc, path.join(destTree, 'node_modules')];
+    spawnSync('cp', cpArgs, { encoding: 'utf8' });
+  }
+  return targetHead;
+}
+
+async function runGrokExec(argv, deps = {}) {
+  const parsed = parseGrokExecArgs(argv);
+  if (parsed.error) return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${parsed.error}——拒絕啟動。`] };
+
+  const cwdPath = path.resolve(parsed.cwd);
+  const promptPath = path.resolve(parsed.promptFile);
+  const outPath = path.resolve(parsed.outFile);
+  const mutationPath = parsed.mutationCopy ? path.resolve(parsed.mutationCopy) : null;
+  if (!fs.existsSync(cwdPath) || !fs.lstatSync(cwdPath).isDirectory()) {
+    return { code: 2, lines: ['送審產生器（Grok 隔離執行）：--cwd 工作樹不存在或不是資料夾——拒絕啟動。'] };
+  }
+  if (mutationPath && (!fs.existsSync(mutationPath) || !fs.lstatSync(mutationPath).isDirectory())) {
+    return { code: 2, lines: ['送審產生器（Grok 隔離執行）：--mutation-copy 突變副本不存在或不是資料夾——拒絕啟動。'] };
+  }
+  if (!fs.existsSync(promptPath) || !fs.lstatSync(promptPath).isFile()) {
+    return { code: 2, lines: ['送審產生器（Grok 隔離執行）：--prompt-file 提示檔不存在或不是一般檔案——拒絕啟動。'] };
+  }
+
+  const authFile = deps.authFile || path.join(os.homedir(), '.grok', 'auth.json');
+  const grokBin = deps.grokBin || path.join(os.homedir(), '.grok', 'bin', 'grok');
+  const sandboxExec = deps.sandboxExec || '/usr/bin/sandbox-exec';
+  const profile = deps.profile || GROK_SEATBELT_PROFILE;
+  const probeFn = deps.probeFn || runGrokSeatbeltProbe;
+
+  let authInfo;
+  try {
+    authInfo = await prepareGrokBoxAuth(authFile, deps.authOpts || {});
+  } catch (e) {
+    return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${(e && e.message) || '憑證準備失敗'}——拒絕啟動。`] };
+  }
+
+  let relay = null;
+  let boxDir = null;
+  try {
+    relay = await startGrokRelay({
+      realBearer: authInfo.realBearer,
+      dummyBearer: authInfo.dummyBearer,
+      upstreamHost: deps.upstreamHost || GROK_UPSTREAM_HOST,
+      requestImpl: deps.requestImpl || https.request,
+    });
+    const rawBox = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-grok-box-'));
+    boxDir = fs.realpathSync(rawBox);
+
+    const probe = probeFn({
+      boxDir,
+      relayPort: relay.port,
+      authFile,
+      sandboxExec,
+      profile,
+    });
+    if (!probe || !probe.ok) {
+      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${(probe && probe.reason) || '沙盒隔離預檢未通過'}——拒絕啟動。`] };
+    }
+
+    const metaDir = path.dirname(outPath);
+    let recMeta = null;
+    for (const metaName of ['scan.json', 'launch.json']) {
+      const mf = path.join(metaDir, metaName);
+      if (fs.existsSync(mf)) {
+        try { recMeta = JSON.parse(fs.readFileSync(mf, 'utf8')); break; } catch { /* ignore */ }
+      }
+    }
+
+    const boxWorktree = path.join(boxDir, 'worktree');
+    const boxMutation = mutationPath ? path.join(boxDir, 'mutation') : null;
+    const expectedHead = materializeIsolatedGitRepo(cwdPath, boxWorktree, {
+      rootRepo: recMeta && recMeta.root,
+      baseSha: recMeta && recMeta.base,
+      headSha: recMeta && recMeta.head,
+    });
+    if (mutationPath && boxMutation) {
+      materializeIsolatedGitRepo(mutationPath, boxMutation, {
+        rootRepo: recMeta && recMeta.root,
+        baseSha: recMeta && recMeta.base,
+        headSha: recMeta && recMeta.head,
+      });
+    }
+
+    const grokHome = path.join(boxDir, 'grok-home');
+    const grokBinDir = path.join(grokHome, 'bin');
+    const grokDotDir = path.join(grokHome, '.grok');
+    const grokTmpDir = path.join(boxDir, 'tmp');
+    fs.mkdirSync(grokBinDir, { recursive: true });
+    fs.mkdirSync(grokDotDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(grokTmpDir, { recursive: true });
+    fs.writeFileSync(path.join(grokDotDir, 'auth.json'), `${JSON.stringify(authInfo.forBox, null, 2)}\n`, { mode: 0o600 });
+
+    const boxGrokBin = path.join(grokBinDir, 'grok');
+    if (!deps.spawnGrok) {
+      if (!fs.existsSync(grokBin)) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：找不到 Grok CLI 執行檔——拒絕啟動。'] };
+      }
+      const realGrokBin = fs.realpathSync(grokBin);
+      try {
+        fs.copyFileSync(realGrokBin, boxGrokBin, fs.constants.COPYFILE_FICLONE);
+      } catch {
+        fs.copyFileSync(realGrokBin, boxGrokBin);
+      }
+      fs.chmodSync(boxGrokBin, 0o755);
+    }
+
+    let promptText = fs.readFileSync(promptPath, 'utf8');
+    const realCwd = realDir(cwdPath);
+    for (const fromPath of [realCwd, cwdPath]) {
+      if (fromPath) promptText = promptText.split(fromPath).join(boxWorktree);
+    }
+    if (mutationPath && boxMutation) {
+      const realMut = realDir(mutationPath);
+      for (const fromMut of [realMut, mutationPath]) {
+        if (fromMut) promptText = promptText.split(fromMut).join(boxMutation);
+      }
+    }
+    const boxPromptFile = path.join(boxDir, 'prompt.md');
+    fs.writeFileSync(boxPromptFile, promptText);
+
+    const instruction = parsed.mode === 'scan'
+      ? `請讀取 ${boxPromptFile} 的掃描提示並照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）`
+      : `請讀取 ${boxPromptFile} 的送審提示並照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）`;
+    const grokArgs = [
+      '--sandbox', 'off',
+      '--no-subagents',
+      '--allow', 'Bash(*)',
+      '--allow', 'Read(*)',
+      '--allow', 'Edit(*)',
+      '--allow', 'Write(*)',
+      '--allow', 'Grep(*)',
+      '--allow', 'Glob(*)',
+      '-m', parsed.model,
+      '--reasoning-effort', parsed.effort,
+      '-p', instruction,
+    ];
+    const childEnv = {
+      HOME: grokHome,
+      TMPDIR: grokTmpDir,
+      PATH: `${grokBinDir}:/opt/homebrew/Cellar/node/26.0.0/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+      GROK_CLI_CHAT_PROXY_BASE_URL: `http://127.0.0.1:${relay.port}/v1`,
+      LANG: process.env.LANG || 'en_US.UTF-8',
+    };
+
+    const runResult = deps.spawnGrok
+      ? await deps.spawnGrok({
+        sandboxExec,
+        profile,
+        boxDir,
+        boxWorktree,
+        boxMutation,
+        boxPromptFile,
+        boxGrokBin,
+        relayPort: relay.port,
+        grokArgs,
+        env: childEnv,
+      })
+      : await new Promise((resolve) => {
+        const child = spawn(sandboxExec, [
+          '-p', profile,
+          '-D', `SCAN_DIR=${boxDir}`,
+          '-D', `RELAY_PORT=${relay.port}`,
+          boxGrokBin,
+          ...grokArgs,
+        ], {
+          cwd: boxWorktree,
+          env: childEnv,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => { stdout += d; });
+        child.stderr.on('data', (d) => { stderr += d; });
+        child.on('error', (err) => resolve({ status: 2, stdout, stderr: err.message }));
+        child.on('close', (status) => resolve({ status: status === null ? 2 : status, stdout, stderr }));
+      });
+
+    if (runResult.status !== 0) {
+      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：Grok 退 ${runResult.status}——未寫出結果。`] };
+    }
+    if (relay.blockingRefusals.length > 0) {
+      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：受控認證通道攔截到 ${relay.blockingRefusals.length} 筆未授權請求——已拒絕寫出結果。`] };
+    }
+    const afterHead = gitOk(boxWorktree, ['rev-parse', 'HEAD']) ? git(boxWorktree, ['rev-parse', 'HEAD']) : null;
+    const afterStatus = gitOk(boxWorktree, ['status', '--porcelain']) ? git(boxWorktree, ['status', '--porcelain']) : null;
+    if (afterHead !== expectedHead || afterStatus === null || afterStatus !== '') {
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹不乾淨或 HEAD 已改變（違反唯讀邊界）——已拒絕寫出結果。'] };
+    }
+    const outputText = String(runResult.stdout || '');
+    const activeNeedles = authInfo.needles.filter((n) => n && !promptText.includes(n));
+    if (activeNeedles.some((n) => outputText.includes(n))) {
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
+    }
+    fs.writeFileSync(outPath, outputText);
+    return { code: 0, lines: [] };
+  } finally {
+    if (relay) await relay.close();
+    if (boxDir) {
+      try { fs.rmSync(boxDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+}
+
 function parseArgs(argv) {
   const out = { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: undefined };
   const flagMap = {
@@ -1205,10 +1840,24 @@ function main(argv, opts = {}) {
 }
 
 if (require.main === module) {
-  let result;
-  try { result = main(process.argv.slice(2)); } catch (e) { result = { code: 2, lines: [`送審產生器：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——沒有產生。`] }; }
-  process.stdout.write(`${result.lines.join('\n')}\n`);
-  process.exit(result.code);
+  const rawArgv = process.argv.slice(2);
+  if (rawArgv[0] === '--grok-exec') {
+    runGrokExec(rawArgv.slice(1)).then(
+      (result) => {
+        if (result.lines && result.lines.length) process.stderr.write(`${result.lines.join('\n')}\n`);
+        process.exit(result.code);
+      },
+      (e) => {
+        process.stderr.write(`送審產生器（Grok 隔離執行）：${(e && e.message) || '不明錯誤'}——拒絕啟動。\n`);
+        process.exit(2);
+      },
+    );
+  } else {
+    let result;
+    try { result = main(rawArgv); } catch (e) { result = { code: 2, lines: [`送審產生器：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——沒有產生。`] }; }
+    process.stdout.write(`${result.lines.join('\n')}\n`);
+    process.exit(result.code);
+  }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
