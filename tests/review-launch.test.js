@@ -17,8 +17,9 @@
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2；
 //   ⑩分級腳本判能走快速通道（AI）（F12）：本輪範圍＝只核差異、提示寫明為什麼；這一位連兩輪沒「通過」（輪次相鄰；每一輪算不算
 //     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道；
-//   ⑪通用插座（SAFE 字元集與 --post 外殼代貼結論）：非 ASCII 模型／推理名放行、殼解讀字元與空白照擋；--post 先核兩棵樹乾淨、HEAD 沒變、
-//     沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、平台版本與同輪未重複，通過才代貼並記下 postedAt。
+//   ⑪通用插座（SAFE 字元集與 --post 外殼代貼結論）：非 ASCII 模型／推理名放行、殼解讀字元與空白照擋；--post 每輪排他鎖（post.lock）與獨立結論暫存檔、
+//     先核兩棵樹未收、已登記、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、
+//     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -27,9 +28,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SAFE } = require('../tools/review-launch.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -727,7 +728,7 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
   }
 });
 
-test('⑪外殼代貼結論（--post）：先核兩棵樹乾淨與 HEAD、再核標頭與平台狀態，剝除「未貼」後代貼並記下 postedAt；樹不乾淨退 1、不重複貼退 2', () => {
+test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／乾淨／HEAD／沒上鎖，再核標頭、引號參數與平台狀態，剝除「未貼」後逐字代貼並記下 postedAt', () => {
   const r = repo();
   const dir = tmp('review-launch-post-');
   const extDir = tmp('review-launch-ext-');
@@ -737,12 +738,18 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹乾淨與 HEAD、再核
     const launched = launch('7', 'Beta', { settings: s, platform, cwd: r.dir, dir, template: TEMPLATE });
     assert.equal(launched.code, 0, launched.lines.join('\n'));
     const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
-    const validPass = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- m-strong / max\n\n### 清單逐項結果\n- 全過\n\n未貼\n`;
+    const recFile = path.join(folder, 'launch.json');
+    const recOrig = fs.readFileSync(recFile, 'utf8');
+    const expectedBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- m-strong / max\n\n### 清單逐項結果\n- 全過\n`;
+    const validPass = `\n${expectedBody}\n未貼  \n\n`;
     fs.writeFileSync(path.join(folder, 'output.log'), validPass);
 
-    // ① 審查樹或突變副本不乾淨、HEAD 變了、上了鎖＝退 1，而且絕對不呼叫 runPost
+    // ① 審查樹或突變副本不乾淨、HEAD 變了、上了鎖、紀錄標已收、或不在 git worktree 登記裡＝退 1，而且絕對不呼叫 runPost
     const calls = [];
-    const recordPost = (cmd, args) => { calls.push({ cmd, args }); };
+    const recordPost = (cmd, args) => {
+      const sentBody = fs.readFileSync(args.at(-1), 'utf8');
+      calls.push({ cmd, args, sentBody });
+    };
     fs.writeFileSync(path.join(folder, 'tree', 'a.txt'), 'dirty\n');
     let res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
     assert.equal(res.code, 1, res.lines.join('\n'));
@@ -756,6 +763,31 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹乾淨與 HEAD、再核
     assert.match(res.lines.join('\n'), /突變副本的 HEAD 是/u);
     assert.equal(calls.length, 0);
     sh(path.join(folder, 'mutation'), 'checkout', '-q', '--detach', r.head);
+
+    sh(r.dir, 'worktree', 'lock', path.join(folder, 'mutation'));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本上了鎖/u);
+    assert.equal(calls.length, 0);
+    sh(r.dir, 'worktree', 'unlock', path.join(folder, 'mutation'));
+
+    const recParsed = JSON.parse(recOrig);
+    fs.writeFileSync(recFile, `${JSON.stringify({ ...recParsed, removed: [recParsed.mutation] }, null, 1)}\n`);
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本已經收掉了/u);
+    assert.equal(calls.length, 0);
+    fs.writeFileSync(recFile, recOrig);
+
+    const extClone = path.join(extDir, 'unregistered-clone');
+    sh(r.dir, 'clone', '-q', r.dir, extClone);
+    sh(extClone, 'checkout', '-q', '--detach', r.head);
+    fs.writeFileSync(recFile, `${JSON.stringify({ ...recParsed, mutation: extClone }, null, 1)}\n`);
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本不在 git worktree 登記裡/u);
+    assert.equal(calls.length, 0);
+    fs.writeFileSync(recFile, recOrig);
 
     // ② 結論檔放在審查樹或突變副本裡面、或是連結／資料夾＝退 2，不貼
     const inTree = path.join(folder, 'tree', 'a.txt');
@@ -776,34 +808,74 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹乾淨與 HEAD、再核
     assert.equal(res.code, 2);
     assert.match(res.lines.join('\n'), /版本已變，不代貼舊版結論/u);
 
+    const changedReviewerPlatform = fakePlatform(answersFor(r, {
+      change: { ...answersFor(r).change, body: answersFor(r).change.body.replace('**複審者**：Beta', '**複審者**：Alpha') },
+    }));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform: changedReviewerPlatform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /PR說明的「複審者」欄目前是「Alpha」，不是開樹時的 Beta：不代貼/u);
+
     const dupOnPlatform = fakePlatform(answersFor(r, { comments: [verdict('Beta', 1, r.head, '通過')] }));
     res = main(['--post', '7', '--dir', dir], { settings: s, platform: dupOnPlatform, runPost: recordPost });
     assert.equal(res.code, 2);
     assert.match(res.lines.join('\n'), /平台上已經有 Beta（beta CLI）的 r1 結論留言：不重複貼/u);
-
-    // ④ postComment 樣板沒帶 {change} 或沒帶獨立的 <你寫好的結論檔>＝退 2
-    const badPostSettings = settingsFor({ reviewLaunch: { ...s.reviewLaunch, postComment: '假的貼法 {change}' } });
-    res = main(['--post', '7', '--dir', dir], { settings: badPostSettings, platform, runPost: recordPost });
-    assert.equal(res.code, 2);
-    assert.match(res.lines.join('\n'), /要包含獨立的 <你寫好的結論檔> 佔位/u);
     assert.equal(calls.length, 0);
 
-    // ⑤ 正常代貼（預設讀 outFile，自動剝除文末「未貼」）
-    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    // ④ postComment 樣板沒帶 {change}、沒帶獨立的 <你寫好的結論檔>、或引號未閉合＝退 2；splitCommandArgs 保留單雙引號與空白參數
+    assert.deepEqual(
+      splitCommandArgs('post 7 -R "acme/kit" --label \'needs review\' --tag "a \\"quoted\\" tag" --path /tmp/my\\ dir --file "<你寫好的結論檔>"'),
+      ['post', '7', '-R', 'acme/kit', '--label', 'needs review', '--tag', 'a "quoted" tag', '--path', '/tmp/my dir', '--file', '<你寫好的結論檔>'],
+    );
+    assert.throws(() => splitCommandArgs('post 7 -R "acme/kit'), /引號或跳脫字元沒有閉合/u);
+    assert.throws(() => splitCommandArgs('post 7 \\'), /引號或跳脫字元沒有閉合/u);
+
+    const noChangeSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: 'post -R {project} --file <你寫好的結論檔>' } });
+    res = main(['--post', '7', '--dir', dir], { settings: noChangeSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /reviewLaunch\.postComment 沒帶 \{change\}/u);
+
+    const noFileSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: '假的貼法 {change}' } });
+    res = main(['--post', '7', '--dir', dir], { settings: noFileSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /要包含獨立的 <你寫好的結論檔> 佔位/u);
+
+    const unclosedQuoteSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: 'post {change} -R "{project} --file <你寫好的結論檔>' } });
+    res = main(['--post', '7', '--dir', dir], { settings: unclosedQuoteSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /引號或跳脫字元沒有閉合/u);
+    assert.equal(calls.length, 0);
+
+    // ⑤ 正常代貼（含單雙引號與帶空白參數樣板、死程序殘留鎖自動清理、預設讀 outFile、自動剝除文末「未貼」、逐字比對送出全文）
+    let deadPid = 999999;
+    while (deadPid > 200000) {
+      try { process.kill(deadPid, 0); deadPid -= 1; } catch (e) { if (e && e.code === 'ESRCH') break; deadPid -= 1; }
+    }
+    fs.writeFileSync(path.join(folder, 'post.lock'), `${deadPid}\n`);
+    const quotedSettings = settingsFor({
+      owner: 'Boss',
+      reviewLaunch: {
+        ...s.reviewLaunch,
+        postComment: 'post {change} -R "{project}" --label \'needs review\' --tag "a \\"quoted\\" tag" --path /tmp/my\\ dir --file "<你寫好的結論檔>"',
+      },
+    });
+    res = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.match(res.lines.join('\n'), /已代貼 r1 結論.*結論：通過（已剝除文末「未貼」）/u);
     assert.equal(calls.length, 1);
-    const verdictFile = path.join(folder, 'verdict.md');
-    assert.deepEqual(calls[0], { cmd: 'post', args: ['7', '--file', verdictFile] });
-    const written = fs.readFileSync(verdictFile, 'utf8');
-    assert.ok(!written.includes('未貼'), '寫入 verdict.md 送貼的內容已剝除「未貼」');
-    assert.ok(written.includes('### 清單逐項結果'));
-    const recAfter = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+    const recAfter = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     assert.ok(recAfter.postedAt, 'launch.json 記下 postedAt');
     assert.equal(recAfter.verdict, '通過');
+    assert.ok(recAfter.verdictFile.startsWith(path.join(folder, 'verdict-')), '結論暫存檔為每輪每次獨立檔名');
+    assert.deepEqual(calls[0].cmd, 'post');
+    assert.deepEqual(calls[0].args, [
+      '7', '-R', 'acme/kit', '--label', 'needs review', '--tag', 'a "quoted" tag', '--path', '/tmp/my dir', '--file', recAfter.verdictFile,
+    ]);
+    assert.equal(calls[0].sentBody, expectedBody, '送給貼結論指令的檔案內容須與期望全文逐字一致');
+    assert.equal(fs.readFileSync(recAfter.verdictFile, 'utf8'), expectedBody, '暫存檔全文須與期望全文逐字一致');
+    assert.ok(!fs.existsSync(path.join(folder, 'post.lock')), '代貼完成後釋放 post.lock');
 
     // ⑥ 同一輪重複跑 --post＝退 2，不重複呼叫
-    const dupLocal = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    const dupLocal = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
     assert.equal(dupLocal.code, 2);
     assert.match(dupLocal.lines.join('\n'), /已經在 .* 代貼過結論，不重複貼/u);
     assert.equal(calls.length, 1);
@@ -814,6 +886,100 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹乾淨與 HEAD、再核
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, extDir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保證只送出一次，且送出全文與紀錄一致', async () => {
+  const r = repo();
+  const dir = tmp('review-launch-race-');
+  const ext = tmp('review-launch-race-ext-');
+  const s = settingsFor({ owner: 'Boss' });
+  const answers = answersFor(r);
+  const launched = launch('7', 'Beta', { settings: s, platform: fakePlatform(answers), cwd: r.dir, dir, template: TEMPLATE });
+  assert.equal(launched.code, 0, launched.lines.join('\n'));
+  const expectedA = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n### 本輪實際用的設定\n- A-original\n\n### 清單逐項結果\n- A-original\n`;
+  const expectedB = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- B-original\n\n### 清單逐項結果\n- B-original\n`;
+  const fileA = path.join(ext, 'A.md');
+  const fileB = path.join(ext, 'B.md');
+  fs.writeFileSync(fileA, `${expectedA}\n未貼\n`);
+  fs.writeFileSync(fileB, `${expectedB}\n未貼\n`);
+
+  function workerMain() {
+    const wfs = require('node:fs');
+    const wpath = require('node:path');
+    const o = JSON.parse(process.argv[2]);
+    const { main: runMain } = require(o.modulePath);
+    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    if (o.tag === 'B') {
+      const aEntered = wpath.join(o.ext, 'a-entered-runpost');
+      const until = Date.now() + 10000;
+      while (!wfs.existsSync(aEntered)) {
+        if (Date.now() > until) throw new Error('timeout waiting for A to enter runPost');
+        sleep(10);
+      }
+      wfs.writeFileSync(wpath.join(o.ext, 'b-calling-post'), '1');
+    }
+    const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
+      settings: o.settings,
+      platform: {
+        ask(op) {
+          if (op === 'change') return o.change;
+          if (op === 'comments') return [];
+          throw new Error(`unexpected op: ${op}`);
+        },
+      },
+      runPost(_cmd, args) {
+        if (o.tag === 'A') {
+          wfs.writeFileSync(wpath.join(o.ext, 'a-entered-runpost'), '1');
+          const bCalling = wpath.join(o.ext, 'b-calling-post');
+          const until = Date.now() + 10000;
+          while (!wfs.existsSync(bCalling)) {
+            if (Date.now() > until) throw new Error('timeout waiting for B to call post');
+            sleep(10);
+          }
+          sleep(80);
+        }
+        const body = wfs.readFileSync(args.at(-1), 'utf8');
+        wfs.appendFileSync(wpath.join(o.ext, 'posts.jsonl'), `${JSON.stringify({ tag: o.tag, body })}\n`);
+      },
+    });
+    process.stdout.write(`${JSON.stringify({ tag: o.tag, code: res.code, verdict: res.header ? res.header.verdict : null, lines: res.lines })}\n`);
+    process.exitCode = res.code;
+  }
+
+  const workerFile = path.join(ext, 'worker.js');
+  fs.writeFileSync(workerFile, `(${workerMain.toString()})();\n`);
+  const runWorker = (tag, file) => new Promise((resolve, reject) => {
+    const payload = { tag, ext, dir, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: gitEnv() });
+    let stdout = '';
+    let stderr = '';
+    p.stdout.on('data', (d) => { stdout += d; });
+    p.stderr.on('data', (d) => { stderr += d; });
+    p.on('error', reject);
+    p.on('close', (code) => resolve({ code, stdout, stderr, out: stdout.trim() ? JSON.parse(stdout.trim()) : null }));
+  });
+
+  try {
+    const [resA, resB] = await Promise.all([runWorker('A', fileA), runWorker('B', fileB)]);
+    assert.equal(resA.code, 0, `A stderr: ${resA.stderr}`);
+    assert.equal(resA.out.verdict, '需修改後再審');
+    assert.equal(resB.code, 2, `B should be rejected after A posts; got ${JSON.stringify(resB)}`);
+    assert.match(resB.out.lines.join('\n'), /已經在 .* 代貼過結論，不重複貼/u);
+
+    const posts = fs.readFileSync(path.join(ext, 'posts.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(posts.length, 1, '同輪並行 --post 只可送出一則結論');
+    assert.equal(posts[0].tag, 'A');
+    assert.equal(posts[0].body, expectedA, '送出全文須與 A 核對通過的結論逐字一致，不可被 B 覆寫');
+
+    const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+    const recAfter = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+    assert.equal(recAfter.verdict, '需修改後再審');
+    assert.equal(fs.readFileSync(recAfter.verdictFile, 'utf8'), expectedA);
+  } finally {
+    close('7', { settings: s, dir, leftoverRoots: [] });
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    for (const d of [dir, ext, r.dir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
 
@@ -843,4 +1009,3 @@ test('⑪defaultRunPost：不開 shell 直接執行，並清掉整個 GIT_* 家�
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
-

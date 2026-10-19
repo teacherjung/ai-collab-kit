@@ -21,6 +21,7 @@
 //   ⑤收樹只核兩棵樹（狀態不看被忽略的檔）；複審者在暫存區另建的東西只列出比開樹晚的第一層、不刪，也不保證列齊（別的程式同時寫的也會被列進來）。
 // 退出碼：0＝做好了；1＝代貼結論或收樹時核到樹不乾淨、HEAD 變了或上了鎖而沒貼／沒收，或收到一半（要人看）；2＝做不了（設定沒填、平台問不到、git 出錯、路徑不安全、範本對不上、結論格式不對或已貼過、參數不對）。⚠️ 不是閘。
 'use strict';
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -417,6 +418,107 @@ function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole 
   return { body, header: h, strippedUnposted };
 }
 
+/**
+ * 不開 shell 解析指令字串為參數陣列：支援單引號、雙引號（含 \" 與 \\ 跳脫）及引號外的反斜線跳脫；
+ * 引號或跳脫未閉合時丟 LaunchError。
+ */
+function splitCommandArgs(text) {
+  const args = [];
+  let cur = '';
+  let hasToken = false;
+  let quote = null;
+  const s = String(text ?? '');
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+      } else if (ch === '\\') {
+        if (i + 1 >= s.length) throw new LaunchError('reviewLaunch.postComment 的引號或跳脫字元沒有閉合');
+        const next = s[i + 1];
+        if (next === '"' || next === '\\' || next === '$' || next === '`') {
+          cur += next;
+          i += 1;
+        } else {
+          cur += ch;
+        }
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      hasToken = true;
+      continue;
+    }
+    if (ch === '\\') {
+      if (i + 1 >= s.length) throw new LaunchError('reviewLaunch.postComment 的引號或跳脫字元沒有閉合');
+      cur += s[i + 1];
+      hasToken = true;
+      i += 1;
+      continue;
+    }
+    if (/\s/u.test(ch)) {
+      if (hasToken) {
+        args.push(cur);
+        cur = '';
+        hasToken = false;
+      }
+      continue;
+    }
+    cur += ch;
+    hasToken = true;
+  }
+  if (quote !== null) throw new LaunchError('reviewLaunch.postComment 的引號或跳脫字元沒有閉合');
+  if (hasToken) args.push(cur);
+  return args;
+}
+
+/** 原子寫回 JSON 紀錄（先寫同目錄唯一暫存檔再 rename，避免並發讀取看到半套內容）。 */
+function writeJsonAtomic(filePath, obj) {
+  const tmpFile = `${filePath}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  fs.writeFileSync(tmpFile, `${JSON.stringify(obj, null, 1)}\n`, { flag: 'wx' });
+  fs.renameSync(tmpFile, filePath);
+}
+
+/** 每輪排他鎖（post.lock）：同輪並發呼叫 --post 時依序排隊，取得鎖後重讀 launch.json 與平台狀態，防止重複送出或覆寫。 */
+function withPostLock(folder, fn) {
+  const lockFile = path.join(folder, 'post.lock');
+  const deadline = Date.now() + 15000;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      fs.writeFileSync(lockFile, `${process.pid}\n`, { flag: 'wx' });
+      acquired = true;
+    } catch (e) {
+      if (!e || e.code !== 'EEXIST') throw new LaunchError(`建立代貼鎖失敗：${(e && (e.code || e.message)) || e}`);
+      let ownerPid = 0;
+      try { ownerPid = Number.parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10); } catch { /* 剛被釋放 */ }
+      if (ownerPid > 0) {
+        try { process.kill(ownerPid, 0); } catch (ke) {
+          if (ke && ke.code === 'ESRCH') {
+            try { fs.unlinkSync(lockFile); } catch { /* 已被清掉 */ }
+            continue;
+          }
+        }
+      }
+      if (Date.now() >= deadline) throw new LaunchError(`另一支代貼程序（PID ${ownerPid || '未知'}）持有 ${lockFile} 逾時，請稍後再試`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+  }
+}
+
 /** 執行貼結論指令（不開 shell；清掉 GIT_* 與 platform.clearEnv）。 */
 function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
   const env = gitEnv();
@@ -451,103 +553,99 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
   if (open.length > 1) throw new LaunchError(`在 ${dir} 底下找到 ${open.length} 個還開著的審查資料夾（${open.map((f) => path.basename(f)).join('、')}）：請先整理到只剩本輪一個`);
   const folder = open[0];
   const recFile = path.join(folder, 'launch.json');
-  const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-  if (String(rec.change) !== String(changeArg)) throw new LaunchError(`launch.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
-  if (rec.postedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.postedAt} 代貼過結論，不重複貼`);
-  const entry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === rec.reviewer);
-  if (!entry || !filled(entry.source)) throw new LaunchError(`專案設定的 reviewers 找不到「${rec.reviewer}」或沒填 source`);
+  return withPostLock(folder, () => {
+    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (String(rec.change) !== String(changeArg)) throw new LaunchError(`launch.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
+    if (rec.closedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.closedAt} 收樹，不代貼結論`);
+    if (rec.postedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.postedAt} 代貼過結論，不重複貼`);
+    const entry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === rec.reviewer);
+    if (!entry || !filled(entry.source)) throw new LaunchError(`專案設定的 reviewers 找不到「${rec.reviewer}」或沒填 source`);
 
-  const locks = lockedTrees(rec.root);
-  const removed = Array.isArray(rec.removed) ? rec.removed : [];
-  const problems = [];
-  for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
-    if (removed.includes(t)) { problems.push(`${what}已經收掉了（代貼結論前兩棵樹都要還在、好核對乾淨與 HEAD）`); continue; }
-    if (!fs.existsSync(t)) { problems.push(`${what}不見了（${t}）`); continue; }
-    if (!locks.has(t)) problems.push(`${what}不在 git worktree 登記裡（${t}）`);
-    else if (locks.get(t)) problems.push(`${what}上了鎖`);
-    const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-    if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
-    const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-    if (st === null) problems.push(`${what}的狀態讀不出`);
-    else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
-  }
-  if (problems.length) {
-    return {
-      code: 1,
-      lines: [
-        `沒貼 r${rec.round}（${folder}）：`,
-        ...problems.map((p) => `  ・${p}`),
-        '  審查樹與突變副本都要在、乾淨、HEAD 沒變、沒上鎖，才代貼結論。',
-      ],
-    };
-  }
-
-  const srcPath = fileArg ? path.resolve(fileArg) : rec.outFile;
-  if (!filled(srcPath)) throw new LaunchError('找不到結論檔路徑');
-  let st;
-  try { st = fs.lstatSync(srcPath); } catch (e) { throw new LaunchError(`讀不到結論檔 ${srcPath}（${e.code || e.message}）`); }
-  if (!st.isFile()) throw new LaunchError(`結論檔 ${srcPath} 不是一般檔案（不收連結或資料夾）`);
-  const realSrc = fs.realpathSync(srcPath);
-  for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
-    let realT;
-    try { realT = fs.realpathSync(t); } catch { continue; }
-    if (realSrc === realT || realSrc.startsWith(`${realT}${path.sep}`)) {
-      throw new LaunchError(`結論檔不可放在${what}裡面（${realSrc}）`);
+    const locks = lockedTrees(rec.root);
+    const removed = Array.isArray(rec.removed) ? rec.removed : [];
+    const problems = [];
+    for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+      if (removed.includes(t)) { problems.push(`${what}已經收掉了（代貼結論前兩棵樹都要還在、好核對乾淨與 HEAD）`); continue; }
+      if (!fs.existsSync(t)) { problems.push(`${what}不見了（${t}）`); continue; }
+      if (!locks.has(t)) problems.push(`${what}不在 git worktree 登記裡（${t}）`);
+      else if (locks.get(t)) problems.push(`${what}上了鎖`);
+      const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+      if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
+      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+      if (st === null) problems.push(`${what}的狀態讀不出`);
+      else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
     }
-  }
-  const raw = fs.readFileSync(realSrc, 'utf8');
-  const prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+    if (problems.length) {
+      return {
+        code: 1,
+        lines: [
+          `沒貼 r${rec.round}（${folder}）：`,
+          ...problems.map((p) => `  ・${p}`),
+          '  審查樹與突變副本都要在、乾淨、HEAD 沒變、沒上鎖，才代貼結論。',
+        ],
+      };
+    }
 
-  const sub = substitute(rl.postComment, { project, change: rec.change }, '貼結論的指令');
-  if (!sub.used.includes('change')) throw new LaunchError('reviewLaunch.postComment 沒帶 {change}：不知道要貼到哪一支');
-  const parts = sub.text.trim().split(/\s+/u).filter(Boolean);
-  if (parts.length < 2 || !parts.includes(FILE_SLOT)) {
-    throw new LaunchError(`reviewLaunch.postComment 要包含獨立的 ${FILE_SLOT} 佔位（例如 gh pr comment {change} -R {project} --body-file ${FILE_SLOT}）`);
-  }
+    const srcPath = fileArg ? path.resolve(fileArg) : rec.outFile;
+    if (!filled(srcPath)) throw new LaunchError('找不到結論檔路徑');
+    let st;
+    try { st = fs.lstatSync(srcPath); } catch (e) { throw new LaunchError(`讀不到結論檔 ${srcPath}（${e.code || e.message}）`); }
+    if (!st.isFile()) throw new LaunchError(`結論檔 ${srcPath} 不是一般檔案（不收連結或資料夾）`);
+    const realSrc = fs.realpathSync(srcPath);
+    for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+      let realT;
+      try { realT = fs.realpathSync(t); } catch { continue; }
+      if (realSrc === realT || realSrc.startsWith(`${realT}${path.sep}`)) {
+        throw new LaunchError(`結論檔不可放在${what}裡面（${realSrc}）`);
+      }
+    }
+    const raw = fs.readFileSync(realSrc, 'utf8');
+    const prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
 
-  const change = askPlatform(platform, settings, 'change', { change: String(rec.change) });
-  if (change.headSha !== rec.head) {
-    throw new LaunchError(`平台目前受審版本是 ${String(change.headSha).slice(0, 7)}，不是開樹時的 ${String(rec.head).slice(0, 7)}：版本已變，不代貼舊版結論`);
-  }
-  const named = canonicalRole(fieldValue(change.body, '複審者'), usable);
-  if (named !== rec.reviewer) {
-    throw new LaunchError(`PR說明的「複審者」欄目前是「${named || '讀不出'}」，不是開樹時的 ${rec.reviewer}：不代貼`);
-  }
-  const comments = askPlatform(platform, settings, 'comments', { change: rec.change });
-  const wantSource = String(entry.source).trim().replace(/\s+/gu, ' ');
-  const alreadyOnPlatform = comments.some((c) => {
-    const h = headerOf(c.body, usable);
-    return h && h.role === rec.reviewer && h.source === wantSource && h.round === rec.round;
+    const sub = substitute(rl.postComment, { project, change: rec.change }, '貼結論的指令');
+    if (!sub.used.includes('change')) throw new LaunchError('reviewLaunch.postComment 沒帶 {change}：不知道要貼到哪一支');
+    const parts = splitCommandArgs(sub.text);
+    if (parts.length < 2 || !parts.includes(FILE_SLOT)) {
+      throw new LaunchError(`reviewLaunch.postComment 要包含獨立的 ${FILE_SLOT} 佔位（例如 gh pr comment {change} -R {project} --body-file ${FILE_SLOT}）`);
+    }
+
+    const change = askPlatform(platform, settings, 'change', { change: String(rec.change) });
+    if (change.headSha !== rec.head) {
+      throw new LaunchError(`平台目前受審版本是 ${String(change.headSha).slice(0, 7)}，不是開樹時的 ${String(rec.head).slice(0, 7)}：版本已變，不代貼舊版結論`);
+    }
+    const named = canonicalRole(fieldValue(change.body, '複審者'), usable);
+    if (named !== rec.reviewer) {
+      throw new LaunchError(`PR說明的「複審者」欄目前是「${named || '讀不出'}」，不是開樹時的 ${rec.reviewer}：不代貼`);
+    }
+    const comments = askPlatform(platform, settings, 'comments', { change: rec.change });
+    const wantSource = String(entry.source).trim().replace(/\s+/gu, ' ');
+    const alreadyOnPlatform = comments.some((c) => {
+      const h = headerOf(c.body, usable);
+      return h && h.role === rec.reviewer && h.source === wantSource && h.round === rec.round;
+    });
+    if (alreadyOnPlatform) throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
+
+    const verdictFile = path.join(folder, `verdict-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.md`);
+    fs.writeFileSync(verdictFile, prepared.body, { flag: 'wx' });
+    const argv = parts.map((p) => (p === FILE_SLOT ? verdictFile : p));
+    const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
+    runPost(argv[0], argv.slice(1), { clearEnv });
+    rec.postedAt = now().toISOString();
+    rec.verdict = prepared.header.verdict;
+    rec.verdictFile = verdictFile;
+    writeJsonAtomic(recFile, rec);
+    return {
+      code: 0,
+      lines: [
+        `已代貼 r${rec.round} 結論｜變更 ${rec.change}｜複審者 ${rec.reviewer}（來源 ${wantSource}）｜審 ${rec.head.slice(0, 7)}｜結論：${prepared.header.verdict}${prepared.strippedUnposted ? '（已剝除文末「未貼」）' : ''}`,
+        `  兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨；下一步跑結論閘確認，審完跑：node tools/review-launch.js --close ${rec.change}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`}`,
+      ],
+      record: rec,
+      header: prepared.header,
+      body: prepared.body,
+      argv,
+    };
   });
-  if (alreadyOnPlatform) throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
-
-  const verdictFile = path.join(folder, 'verdict.md');
-  try {
-    const vst = fs.lstatSync(verdictFile);
-    if (vst.isSymbolicLink() || vst.isDirectory()) throw new LaunchError(`不可覆寫連結或資料夾：${verdictFile}`);
-  } catch (e) {
-    if (e instanceof LaunchError) throw e;
-    if (!e || e.code !== 'ENOENT') throw new LaunchError(`核對結論暫存檔失敗：${e.code || e.message}`);
-  }
-  fs.writeFileSync(verdictFile, prepared.body);
-  const argv = parts.map((p) => (p === FILE_SLOT ? verdictFile : p));
-  const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
-  runPost(argv[0], argv.slice(1), { clearEnv });
-  rec.postedAt = now().toISOString();
-  rec.verdict = prepared.header.verdict;
-  rec.verdictFile = verdictFile;
-  fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
-  return {
-    code: 0,
-    lines: [
-      `已代貼 r${rec.round} 結論｜變更 ${rec.change}｜複審者 ${rec.reviewer}（來源 ${wantSource}）｜審 ${rec.head.slice(0, 7)}｜結論：${prepared.header.verdict}${prepared.strippedUnposted ? '（已剝除文末「未貼」）' : ''}`,
-      `  兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨；下一步跑結論閘確認，審完跑：node tools/review-launch.js --close ${rec.change}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`}`,
-    ],
-    record: rec,
-    header: prepared.header,
-    body: prepared.body,
-    argv,
-  };
 }
 
 /**
@@ -678,4 +776,4 @@ if (require.main === module) {
   process.exit(result.code);
 }
 
-module.exports = { main, launch, close, post, prepareVerdict, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, FILL, FILE_SLOT, SAFE, COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, prepareVerdict, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, FILL, FILE_SLOT, SAFE, COMMAND_TOKENS, LaunchError };
