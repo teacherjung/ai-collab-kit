@@ -60,6 +60,12 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.equal(s.scanner.isolation, undefined, '不再設定 scanner.isolation');
   assert.ok(s.scanner.tool.includes('node tools/review-launch.js --scan <編號>'), '掃描入口統一為 review-launch.js --scan');
   assert.ok(s.scanner.command.includes('--model {model} --reasoning-effort {effort}'), '掃描啟動指令帶模型與推理');
+  assert.ok(s.scanner.command.includes("--permission-mode plan --sandbox read-only --deny 'Read(~/**)'"), '掃描啟動指令接上原生 plan 權限、read-only 沙盒與家目錄拒絕規則');
+  assert.ok(!s.scanner.command.includes('--always-approve'), '掃描啟動指令不使用 --always-approve');
+  const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
+  assert.ok(grokRev.command.includes("--permission-mode dontAsk --sandbox workspace") && grokRev.command.includes("--deny 'Read(~/**)'") && !grokRev.command.includes('--always-approve'), 'Grok 複審啟動指令接上 dontAsk、workspace 沙盒與家目錄拒絕規則');
+  const geminiRev = s.reviewers.find((r) => r.participant === 'Gemini');
+  assert.ok(geminiRev.command.startsWith('cd {reviewTree} && '), 'Gemini 複審啟動指令先切換至 {reviewTree}');
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
   const states = Object.fromEntries(s.machines.map((m) => [m.name.split('（')[0], m.state]));
   assert.deepEqual(states, {

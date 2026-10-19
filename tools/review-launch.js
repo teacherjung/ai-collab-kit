@@ -42,9 +42,10 @@ const FILE_SLOT = '<你寫好的結論檔>';
 const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--dir <放樹的資料夾>]
       node tools/review-launch.js --post <變更編號> [--file <結論檔>] [--dir <放樹的資料夾>]
       node tools/review-launch.js --close <變更編號> [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--dir <放樹的資料夾>]
       node tools/review-launch.js --scan-post <變更編號> [--file <回覆檔>] [--dir <放樹的資料夾>]
       node tools/review-launch.js --scan-close <變更編號> [--dir <放樹的資料夾>]`;
+const TIER_ORDER = ['高', '中', '低'];
 
 /** 範本裡每一格照出現順序要填什麼；null＝留給複審者。 */
 const FILL = [
@@ -200,7 +201,7 @@ function askPlatform(platform, settings, op, args) {
 /** 啟動指令樣板認得的記號（launch 裡 tokens 那一張，順序無關）。 */
 const COMMAND_TOKENS = ['model', 'effort', 'reviewTree', 'mutationCopy', 'promptFile', 'outFile', 'change', 'project'];
 const SCAN_COMMAND_TOKENS = ['model', 'effort', 'scanTree', 'promptFile', 'outFile', 'change', 'project'];
-/** 設定裡填了的樣板逐一核：登記了的複審者與掃描者格位都有、記號都認得、啟動指令帶著模型與推理。回問題清單；沒登記的不核（新專案還沒填）。 */
+/** 設定裡填了的樣板逐一核：登記了的複審者與掃描者格位都有、記號都認得、啟動指令帶著模型、推理與工作樹路徑。回問題清單；沒登記的不核（新專案還沒填）。 */
 function templateProblems(settings) {
   const out = [];
   const tokensOf = (t) => [...String(t).matchAll(TOKEN)].map((m) => m[1]);
@@ -212,7 +213,7 @@ function templateProblems(settings) {
     const used = tokensOf(r.command);
     const bad = used.filter((t) => !COMMAND_TOKENS.includes(t));
     if (bad.length) out.push(`「${r.participant}」的啟動指令樣板有認不得的記號：${bad.join('、')}`);
-    for (const t of ['model', 'effort']) if (!used.includes(t)) out.push(`「${r.participant}」的啟動指令樣板沒帶 {${t}}`);
+    for (const t of ['model', 'effort', 'reviewTree']) if (!used.includes(t)) out.push(`「${r.participant}」的啟動指令樣板沒帶 {${t}}`);
   }
   const sc = settings.scanner || {};
   if (filled(sc.participant) || (filled(sc.command) && sc.tool !== '無')) {
@@ -223,7 +224,7 @@ function templateProblems(settings) {
       const used = tokensOf(sc.command);
       const bad = used.filter((t) => !SCAN_COMMAND_TOKENS.includes(t));
       if (bad.length) out.push(`scanner.command 有認不得的記號：${bad.join('、')}`);
-      for (const t of ['model', 'effort']) if (!used.includes(t)) out.push(`scanner.command 沒帶 {${t}}`);
+      for (const t of ['model', 'effort', 'scanTree']) if (!used.includes(t)) out.push(`scanner.command 沒帶 {${t}}`);
     }
   }
   const rl = settings.reviewLaunch || {};
@@ -254,7 +255,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填');
   const used = new Set([...entry.command.matchAll(TOKEN)].map((m) => m[1]));
-  if (!used.has('model') || !used.has('effort')) throw new LaunchError(`「${reviewer}」的啟動指令樣板沒帶 {model} 或 {effort}：漏帶時複審者照它自己的預設跑，從外面看不出來（F11）`);
+  if (!used.has('model') || !used.has('effort') || !used.has('reviewTree')) throw new LaunchError(`「${reviewer}」的啟動指令樣板沒帶 {model}、{effort} 或 {reviewTree}：漏帶時複審者照預設跑或不在審查樹目錄下執行（F1、F11）`);
   const decider = deciderOf(settings);
   if (!decider) throw new LaunchError('專案設定裡的裁示者識別值或貼文帳號未填或不唯一（也請核對 owner）；修正 settings.json 後重跑：算不出相關裁示');
   const tpl = template === null ? fs.readFileSync(TEMPLATE, 'utf8') : template;
@@ -755,7 +756,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
   return { code: refused ? 1 : 0, lines };
 }
 
-function scanLaunch(changeArg, { scanner: scannerArg = null, settings = readSettings(), platform = { ask }, cwd = process.cwd(), dir: dirArg = os.tmpdir(), template = null, now = () => new Date() } = {}) {
+function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = null, settings = readSettings(), platform = { ask }, cwd = process.cwd(), dir: dirArg = os.tmpdir(), template = null, now = () => new Date() } = {}) {
   const dir = realDir(dirArg);
   const { usable } = rolesOf(settings);
   const ownerRole = canonicalRole(settings && settings.owner, usable);
@@ -769,12 +770,17 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, settings = readSett
     const want = canonicalRole(scannerArg, usable);
     if (want !== configuredScanner) throw new LaunchError(`--scanner 給的「${scannerArg}」不是專案設定的掃描者 ${configuredScanner}`);
   }
+  if (tierArg !== null && tierArg !== undefined && !TIER_ORDER.includes(tierArg)) {
+    throw new LaunchError(`--tier 給的「${tierArg}」不是高／中／低`);
+  }
   const scanner = configuredScanner;
   for (const k of ['strongest', 'maxEffort', 'source', 'command']) {
     if (!filled(sc[k])) throw new LaunchError(`專案設定的 scanner.${k} 還沒填`);
   }
   const used = new Set([...sc.command.matchAll(TOKEN)].map((m) => m[1]));
-  if (!used.has('model') || !used.has('effort')) throw new LaunchError('scanner.command 沒帶 {model} 或 {effort}：漏帶時掃描者照自己的預設跑，從外面看不出來（G1）');
+  if (!used.has('model') || !used.has('effort') || !used.has('scanTree')) {
+    throw new LaunchError('scanner.command 沒帶 {model}、{effort} 或 {scanTree}：漏帶時掃描者照預設跑或不在掃描樹目錄下執行（G1）');
+  }
   const rl = settings.reviewLaunch || {};
   for (const k of ['changeLink', 'commentLink', 'postComment']) {
     if (!filled(rl[k])) throw new LaunchError(`專案設定的 reviewLaunch.${k} 還沒填`);
@@ -803,9 +809,23 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, settings = readSett
   const risk = riskRun(id, { settings, platform, git: gitIn(root) });
   if (risk.code !== 0) throw new LaunchError(`風險級別算不出來：${risk.lines.join(' ')}`);
   if (risk.result.head !== head) throw new LaunchError(`準備掃描期間這一支換了版本（目前 ${String(head).slice(0, 12)}，算風險時是 ${String(risk.result.head).slice(0, 12)}）：請重跑一次`);
-  const tier = risk.result.level;
+  const fileTier = risk.result.level;
+  const bodyTierRaw = (fieldValue(change.body, '風險級別') || ((/^[ \t]*(?:-[ \t]*)?(?:\*\*)?風險級別(?:\*\*)?[：:][ \t]*([^\n]+)/mu.exec(String(change.body || '')) || [])[1] || '')).trim();
+  let bodyTier = null;
+  if (bodyTierRaw) {
+    const m = /^(高|中|低)/u.exec(bodyTierRaw);
+    if (!m) throw new LaunchError(`PR說明的「風險級別」欄「${bodyTierRaw}」讀不出高／中／低`);
+    bodyTier = m[1];
+  }
+  for (const [label, candidate] of [['PR說明的「風險級別」', bodyTier], ['--tier', tierArg]]) {
+    if (candidate && TIER_ORDER.indexOf(candidate) > TIER_ORDER.indexOf(fileTier)) {
+      throw new LaunchError(`風險級別只升不降（D4）：依檔案算是${fileTier}風險，${label}不可調輕為${candidate}風險`);
+    }
+  }
+  const tier = [fileTier, bodyTier, tierArg].filter(Boolean).reduce((a, b) => (TIER_ORDER.indexOf(b) < TIER_ORDER.indexOf(a) ? b : a));
+  const escalated = tier !== fileTier || tierArg !== null || bodyTier !== null;
   const reviewerEntry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === reviewer);
-  const lane = risk.result.fastLaneAI === true;
+  const lane = !escalated && risk.result.fastLaneAI === true;
   const exhausted = lane && reviewerEntry && filled(reviewerEntry.source) && twoMissesInARow(comments, reviewer, reviewerEntry.source, usable);
   if (lane && !exhausted) {
     throw new LaunchError('這一支走快速通道（AI），照 G1、F12 不掃描（PR說明的「### 複審後掃」下寫「未執行：快速通道（AI）」）');
@@ -892,6 +912,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, settings = readSett
 /**
  * 核對掃描回覆：去除首尾空行，若最後一行單獨是「未貼」就剝掉；
  * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭攔截）；
+ * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
 function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null }) {
@@ -925,11 +946,14 @@ function prepareScan(raw, { scanner, source, head, usable, passCommentLink = nul
   const rest = lines.slice(1);
   while (rest.length && rest[0].trim() === '') rest.shift();
   if (!rest.length) throw new LaunchError('掃描回覆只有標頭、沒有掃描內容（零發現請寫「- 零發現」）');
+  if (rest.some((l) => /^[ \t]*>?[ \t]*(?:\*\*|__)?[ \t]*掃描時序/u.test(l))) {
+    throw new LaunchError('掃描回覆不可自帶「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）');
+  }
   const timingLine = passCommentLink && startedAt && postedAt && base
     ? `> 掃描時序：依據複審留言 ${passCommentLink}｜準備 ${startedAt}｜代貼 ${postedAt}｜範圍 \`${String(base).slice(0, 7)}..${String(head).slice(0, 7)}\``
     : null;
   const outLines = [lines[0]];
-  if (timingLine && !rest[0].startsWith('> 掃描時序：')) {
+  if (timingLine) {
     outLines.push(timingLine, '');
   } else {
     outLines.push('');
@@ -1104,7 +1128,7 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
 }
 
 function parseArgs(argv) {
-  const out = { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: undefined };
+  const out = { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: undefined };
   const flagMap = {
     '--reviewer': 'reviewer',
     '--close': 'close',
@@ -1113,6 +1137,7 @@ function parseArgs(argv) {
     '--dir': 'dir',
     '--scan': 'scan',
     '--scanner': 'scanner',
+    '--tier': 'tier',
     '--scan-post': 'scanPost',
     '--scan-close': 'scanClose',
   };
@@ -1130,26 +1155,27 @@ function parseArgs(argv) {
   const modes = ['close', 'post', 'scan', 'scanPost', 'scanClose'].filter((k) => out[k] !== undefined);
   if (modes.length > 1) return { error: '一次只能指定一種模式（--close、--post、--scan、--scan-post、--scan-close）' };
   if (out.close !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.file === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
       ? out : { error: '--close 只收變更編號（和 --dir）' };
   }
   if (out.post !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
       ? out : { error: '--post 只收變更編號（和選填的 --file、--dir）' };
   }
   if (out.scan !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.file === undefined
-      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--dir）' };
+      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--tier、--dir）' };
   }
   if (out.scanPost !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
       ? out : { error: '--scan-post 只收變更編號（和選填的 --file、--dir）' };
   }
   if (out.scanClose !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.file === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
       ? out : { error: '--scan-close 只收變更編號（和 --dir）' };
   }
   if (out.scanner !== undefined) return { error: '--scanner 只能配 --scan 用' };
+  if (out.tier !== undefined) return { error: '--tier 只能配 --scan 用' };
   if (out.file !== undefined) return { error: '--file 只能配 --post 或 --scan-post 用' };
   if (out.change === undefined || out.reviewer === undefined) return { error: '要給變更編號與 --reviewer' };
   return out;
@@ -1162,7 +1188,7 @@ function main(argv, opts = {}) {
   try {
     if (a.close !== undefined) return close(a.close, { ...opts, ...(dir ? { dir } : {}) });
     if (a.post !== undefined) return post(a.post, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scan !== undefined) return scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(dir ? { dir } : {}) });
+    if (a.scan !== undefined) return scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
     if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
     if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...(dir ? { dir } : {}) });
     return launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });

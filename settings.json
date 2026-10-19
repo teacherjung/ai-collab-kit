@@ -145,7 +145,7 @@
   "strongest": "grok-4.7",
   "maxEffort": "xhigh",
   "source": "Grok CLI",
-  "command": "grok --cwd {scanTree} --disable-web-search --no-subagents --always-approve --model {model} --reasoning-effort {effort} --prompt-file {promptFile} > {outFile}"
+  "command": "grok --cwd {scanTree} --model {model} --reasoning-effort {effort} --permission-mode plan --sandbox read-only --deny 'Read(~/**)' --deny 'Edit(*)' --deny 'Write(*)' --disallowed-tools 'web_search,web_fetch,write,search_replace,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}"
  },
  "platform": {
   "name": "GitHub",
@@ -393,10 +393,10 @@
    "autoMode": "自動選模",
    "source": "Grok CLI",
    "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；審完由外殼 --post 核對樹乾淨與標頭後代貼結論；詳見 README.md「本倉庫自己怎麼合併」",
-   "command": "grok --cwd {reviewTree} --disable-web-search --no-subagents --always-approve --model {model} --reasoning-effort {effort} --prompt-file {promptFile} > {outFile}",
-   "machine": "帶 --disable-web-search --no-subagents 關掉連網搜尋與子代理；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
-   "promptOnly": "--always-approve 在執行期間允許工具執行，受審材料不改檔靠提示與審後 --post／--close 的樹乾淨核對；輸出零不代表通過或已貼文",
-   "verified": "2026-10-19 本機 grok CLI 旗標與輸出實測"
+   "command": "grok --cwd {reviewTree} --model {model} --reasoning-effort {effort} --permission-mode dontAsk --sandbox workspace --allow 'Read' --allow 'Grep' --allow 'Edit({mutationCopy}/**)' --allow 'Write({mutationCopy}/**)' --allow 'Bash(git *)' --allow 'Bash(node *)' --allow 'Bash(npm *)' --deny 'Read(~/**)' --deny 'Edit(./**)' --deny 'Write(./**)' --disallowed-tools 'web_search,web_fetch,task' --disable-web-search --no-subagents --prompt-file {promptFile} > {outFile}",
+   "machine": "--permission-mode dontAsk 預設拒絕未放行的動作，搭配 --sandbox workspace 核心沙盒、--deny 'Read(~/**)' 阻擋家目錄與其他工作樹讀取、--deny 'Edit(./**)' --deny 'Write(./**)' 禁止修改審查樹並僅放行突變副本 {mutationCopy} 編輯與 git／node／npm 測試；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "promptOnly": "放行的 node／npm 在突變副本執行時仍可由測試子程序存取系統路徑，審查樹與突變副本最終乾淨靠 --post／--close 核對；輸出零不代表通過或已貼文",
+   "verified": "2026-10-20 本機 grok 1.0.62 連結工作樹實測：plan／dontAsk＋read-only／workspace 沙盒＋Read(~/**) 拒絕家目錄讀取、放行樹內讀取與測試"
   },
   {
    "participant": "Gemini",
@@ -406,10 +406,10 @@
    "autoMode": "auto-model",
    "source": "Gemini CLI",
    "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；審完由外殼 --post 核對樹乾淨與標頭後代貼結論；詳見 README.md「本倉庫自己怎麼合併」",
-   "command": "GEMINI_EFFORT={effort} gemini --model {model} --approval-mode plan --include-directories {mutationCopy} -p \"$(cat {promptFile})\" > {outFile}",
-   "machine": "--approval-mode plan 限制在唯讀規劃模式；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "command": "cd {reviewTree} && GEMINI_EFFORT={effort} gemini --model {model} --approval-mode plan --include-directories {mutationCopy} -p \"$(cat {promptFile})\" > {outFile}",
+   "machine": "先 cd {reviewTree} 固定進入審查樹，--approval-mode plan 限制在唯讀規劃模式並以 --include-directories {mutationCopy} 納入突變副本；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
    "promptOnly": "CLI 旗標未開放獨立調整推理強度（{effort} 以環境變數 GEMINI_EFFORT 傳入，實際推理由模型預設承接）；plan 模式下若需在突變副本實際改檔跑突變測試，改由外殼或提示引導",
-   "verified": "2026-10-19 本機 gemini CLI 旗標與唯讀模式核對"
+   "verified": "2026-10-20 本機 gemini CLI 旗標、cwd 切換與唯讀模式核對"
   }
  ],
  "reviewLaunch": {
