@@ -845,12 +845,13 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／�
     assert.match(res.lines.join('\n'), /引號或跳脫字元沒有閉合/u);
     assert.equal(calls.length, 0);
 
-    // ⑤ 正常代貼（含單雙引號與帶空白參數樣板、死程序殘留鎖自動清理、預設讀 outFile、自動剝除文末「未貼」、逐字比對送出全文）
+    // ⑤ 發現死程序殘留鎖（post.lock 的 PID 已不存在）＝退 2、保留殘留鎖不自動刪除、零貼文；手動移除殘留鎖後正常代貼（含單雙引號與帶空白參數樣板、預設讀 outFile、自動剝除文末「未貼」、逐字比對送出全文）
     let deadPid = 999999;
     while (deadPid > 200000) {
       try { process.kill(deadPid, 0); deadPid -= 1; } catch (e) { if (e && e.code === 'ESRCH') break; deadPid -= 1; }
     }
-    fs.writeFileSync(path.join(folder, 'post.lock'), `${deadPid}\n`);
+    const lockFile = path.join(folder, 'post.lock');
+    fs.writeFileSync(lockFile, `${deadPid}\n`);
     const quotedSettings = settingsFor({
       owner: 'Boss',
       reviewLaunch: {
@@ -858,6 +859,13 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／�
         postComment: 'post {change} -R "{project}" --label \'needs review\' --tag "a \\"quoted\\" tag" --path /tmp/my\\ dir --file "<你寫好的結論檔>"',
       },
     });
+    res = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /發現殘留的代貼鎖 .*（原持有程序 PID .* 已結束）/u);
+    assert.equal(calls.length, 0, '遇殘留鎖時不可呼叫貼結論指令');
+    assert.ok(fs.existsSync(lockFile), '遇殘留鎖時不可非原子自動刪除 post.lock');
+    fs.unlinkSync(lockFile);
+
     res = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
     assert.equal(res.code, 0, res.lines.join('\n'));
     assert.match(res.lines.join('\n'), /已代貼 r1 結論.*結論：通過（已剝除文末「未貼」）/u);
@@ -889,7 +897,7 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／�
   }
 });
 
-test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保證只送出一次，且送出全文與紀錄一致', async () => {
+test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與獨立暫存檔保證只送出一次，且不會誤刪持有者的鎖', async () => {
   const r = repo();
   const dir = tmp('review-launch-race-');
   const ext = tmp('review-launch-race-ext-');
@@ -897,6 +905,8 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保�
   const answers = answersFor(r);
   const launched = launch('7', 'Beta', { settings: s, platform: fakePlatform(answers), cwd: r.dir, dir, template: TEMPLATE });
   assert.equal(launched.code, 0, launched.lines.join('\n'));
+  const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+  const lockFile = path.join(folder, 'post.lock');
   const expectedA = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n### 本輪實際用的設定\n- A-original\n\n### 清單逐項結果\n- A-original\n`;
   const expectedB = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- B-original\n\n### 清單逐項結果\n- B-original\n`;
   const fileA = path.join(ext, 'A.md');
@@ -904,6 +914,88 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保�
   fs.writeFileSync(fileA, `${expectedA}\n未貼\n`);
   fs.writeFileSync(fileB, `${expectedB}\n未貼\n`);
 
+  // (a) 固定交錯點 1：兩個程序處理同一舊殘留鎖（A 讀到死 PID 後暫停，期間舊鎖已除且 B 取得新鎖進入 runPost；A 恢復後不得刪掉 B 的鎖，也不能再送出一則）
+  let deadPid = 999999;
+  while (deadPid > 200000) {
+    try { process.kill(deadPid, 0); deadPid -= 1; } catch (e) { if (e && e.code === 'ESRCH') break; deadPid -= 1; }
+  }
+  fs.writeFileSync(lockFile, `${deadPid}\n`);
+
+  function staleWorkerMain() {
+    const wfs = require('node:fs');
+    const wpath = require('node:path');
+    const o = JSON.parse(process.argv[2]);
+    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    if (o.tag === 'A') {
+      const origRead = wfs.readFileSync;
+      let hooked = false;
+      wfs.readFileSync = function patchedRead(p, ...rest) {
+        const res = origRead.call(this, p, ...rest);
+        if (!hooked && String(p).endsWith('post.lock')) {
+          hooked = true;
+          wfs.writeFileSync(wpath.join(o.ext, 'stale-a-read-pid'), '1');
+          const bInPost = wpath.join(o.ext, 'stale-b-in-runpost');
+          const until = Date.now() + 10000;
+          while (!origRead && false || !wfs.existsSync(bInPost)) {
+            if (Date.now() > until) throw new Error('timeout waiting for B to acquire new lock');
+            sleep(10);
+          }
+        }
+        return res;
+      };
+    } else {
+      const aRead = wpath.join(o.ext, 'stale-a-read-pid');
+      const until = Date.now() + 10000;
+      while (!wfs.existsSync(aRead)) {
+        if (Date.now() > until) throw new Error('timeout waiting for A to read stale PID');
+        sleep(10);
+      }
+      try { wfs.unlinkSync(o.lockFile); } catch { /* removed */ }
+    }
+    const { main: runMain } = require(o.modulePath);
+    const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
+      settings: o.settings,
+      platform: {
+        ask(op) {
+          if (op === 'change') return o.change;
+          if (op === 'comments') return [];
+          throw new Error(`unexpected op: ${op}`);
+        },
+      },
+      runPost(_cmd, args) {
+        if (o.tag === 'B') {
+          wfs.writeFileSync(wpath.join(o.ext, 'stale-b-in-runpost'), '1');
+          const aDone = wpath.join(o.ext, 'stale-a-done');
+          const until = Date.now() + 10000;
+          while (!wfs.existsSync(aDone)) {
+            if (Date.now() > until) break;
+            sleep(10);
+          }
+          if (!wfs.existsSync(o.lockFile)) throw new Error('B lock was deleted by A');
+        }
+        const body = wfs.readFileSync(args.at(-1), 'utf8');
+        wfs.appendFileSync(wpath.join(o.ext, 'stale-posts.jsonl'), `${JSON.stringify({ tag: o.tag, body })}\n`);
+      },
+    });
+    if (o.tag === 'A') wfs.writeFileSync(wpath.join(o.ext, 'stale-a-done'), '1');
+    process.stdout.write(`${JSON.stringify({ tag: o.tag, code: res.code, verdict: res.header ? res.header.verdict : null, lines: res.lines })}\n`);
+    process.exitCode = res.code;
+  }
+
+  const staleWorkerFile = path.join(ext, 'stale-worker.js');
+  fs.writeFileSync(staleWorkerFile, `(${staleWorkerMain.toString()})();\n`);
+  const runStaleWorker = (tag, file) => new Promise((resolve, reject) => {
+    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: gitEnv() });
+    let stdout = '';
+    let stderr = '';
+    p.stdout.on('data', (d) => { stdout += d; });
+    p.stderr.on('data', (d) => { stderr += d; });
+    p.on('error', reject);
+    p.on('close', (code) => resolve({ code, stdout, stderr, out: stdout.trim() ? JSON.parse(stdout.trim()) : null }));
+  });
+
+  // (b) 固定交錯點 2：一般同輪雙程序並發（A 持鎖在 runPost 內、B 後到排隊等候，A 完成後 B 重讀 launch.json 拒絕重貼）
   function workerMain() {
     const wfs = require('node:fs');
     const wpath = require('node:path');
@@ -961,6 +1053,23 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保�
   });
 
   try {
+    const [staleA, staleB] = await Promise.all([runStaleWorker('A', fileA), runStaleWorker('B', fileB)]);
+    assert.equal(staleA.code, 2, `staleA should reject stale lock; got ${JSON.stringify(staleA)}`);
+    assert.match(staleA.out.lines.join('\n'), /發現殘留的代貼鎖/u);
+    assert.equal(staleB.code, 0, `staleB stderr: ${staleB.stderr}`);
+    const stalePosts = fs.readFileSync(path.join(ext, 'stale-posts.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(stalePosts.length, 1, '殘留鎖交錯時全程只可送出一則');
+    assert.equal(stalePosts[0].tag, 'B');
+    assert.equal(stalePosts[0].body, expectedB);
+
+    // 重設 postedAt 以驗證一般同輪並發排隊
+    const recFile = path.join(folder, 'launch.json');
+    const recReset = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    delete recReset.postedAt;
+    delete recReset.verdict;
+    delete recReset.verdictFile;
+    fs.writeFileSync(recFile, `${JSON.stringify(recReset, null, 1)}\n`);
+
     const [resA, resB] = await Promise.all([runWorker('A', fileA), runWorker('B', fileB)]);
     assert.equal(resA.code, 0, `A stderr: ${resA.stderr}`);
     assert.equal(resA.out.verdict, '需修改後再審');
@@ -972,8 +1081,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖與獨立暫存檔保�
     assert.equal(posts[0].tag, 'A');
     assert.equal(posts[0].body, expectedA, '送出全文須與 A 核對通過的結論逐字一致，不可被 B 覆寫');
 
-    const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
-    const recAfter = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+    const recAfter = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     assert.equal(recAfter.verdict, '需修改後再審');
     assert.equal(fs.readFileSync(recAfter.verdictFile, 'utf8'), expectedA);
   } finally {

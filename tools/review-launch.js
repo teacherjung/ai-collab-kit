@@ -487,7 +487,7 @@ function writeJsonAtomic(filePath, obj) {
   fs.renameSync(tmpFile, filePath);
 }
 
-/** 每輪排他鎖（post.lock）：同輪並發呼叫 --post 時依序排隊，取得鎖後重讀 launch.json 與平台狀態，防止重複送出或覆寫。 */
+/** 每輪排他鎖（post.lock）：同輪並發呼叫 --post 時依序排隊，取得鎖後重讀 launch.json 與平台狀態；遇死程序殘留鎖明確拒絕、不自動刪鎖（避免非原子回收誤刪他程序新鎖）。 */
 function withPostLock(folder, fn) {
   const lockFile = path.join(folder, 'post.lock');
   const deadline = Date.now() + 15000;
@@ -503,8 +503,7 @@ function withPostLock(folder, fn) {
       if (ownerPid > 0) {
         try { process.kill(ownerPid, 0); } catch (ke) {
           if (ke && ke.code === 'ESRCH') {
-            try { fs.unlinkSync(lockFile); } catch { /* 已被清掉 */ }
-            continue;
+            throw new LaunchError(`發現殘留的代貼鎖 ${lockFile}（原持有程序 PID ${ownerPid} 已結束）：請先確認平台上是否已貼出結論，手動移除該鎖檔後再重試`);
           }
         }
       }
