@@ -1139,6 +1139,11 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
   const dummy = Object.fromEntries(SCAN_FILL.map(([, k], i) => [k, `VAL_${i}_${k}`]));
   const filled = fill(scanTpl, dummy, SCAN_FILL);
   for (const [, k] of Object.entries(dummy)) assert.ok(filled.includes(k), `掃描提示範本漏掉 ${k}`);
+  assert.match(
+    filled,
+    new RegExp(`這一支的實作者：\`${dummy.implementer}\`；複審者：\`${dummy.reviewer}\``, 'u'),
+    '掃描提示的實作者與複審者位置必須正確',
+  );
   assert.throws(() => fill(`${scanTpl}\n<多一格>`, dummy, SCAN_FILL), /範本的格子跟產生器的表對不上/u);
 
   const r = repo();
@@ -1301,6 +1306,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
       cwd: r.dir,
     });
     assert.equal(ok.code, 0, ok.lines.join('\n'));
+    assert.match(ok.prompt, /這一支的實作者：`Alpha`；複審者：`Beta`/u, '掃描提示的實作者與複審者填對角色');
     const folder = path.dirname(ok.record.promptFile);
     assert.ok(fs.existsSync(path.join(ok.record.tree, 'a.txt')), '唯讀掃描樹已開出');
     assert.ok(fs.existsSync(ok.record.promptFile) && fs.existsSync(path.join(folder, 'scan.json')), '提示檔與 scan.json 已寫出');
@@ -1535,18 +1541,26 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: `Bearer ${refreshed.dummyBearer}` } }, refreshed.dummyBearer), null);
     assert.equal(grokRelayRejectReason({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer NEW-KEY-SECRET-3333' } }, refreshed.dummyBearer).code, 'auth');
 
-    // (d) review 模式（含突變副本）端到端驗證，且盒內不含其他本機分支物件（r5 R1 路徑 B）
+    // (d) review 模式（含突變副本）端到端驗證，且盒內不含其他本機分支物件（r5 R1 路徑 B）、保留非祖先上一輪提交差異（r6 R1）
     sh(r.dir, 'checkout', '-qb', 'unsubmitted-local');
     fs.writeFileSync(path.join(r.dir, 'private-branch.txt'), 'SYNTHETIC-UNSUBMITTED-R5\n');
     sh(r.dir, 'add', '.');
     const unrelatedSha = sh(r.dir, 'commit', '-qm', 'unsubmitted') || sh(r.dir, 'rev-parse', 'HEAD');
+    // 建立非祖先的上一輪提交 P
+    sh(r.dir, 'checkout', '-q', '--detach', r.base);
+    fs.writeFileSync(path.join(r.dir, 'a.txt'), 'prev-round-diverged\n');
+    sh(r.dir, 'add', 'a.txt');
+    const prevRoundSha = sh(r.dir, 'commit', '-qm', 'prev-round') || sh(r.dir, 'rev-parse', 'HEAD');
     sh(r.dir, 'checkout', '-q', 'main');
     const mutDir = path.join(tmp, 'mutation');
     fs.mkdirSync(mutDir);
-    spawnSync('git', ['clone', '--quiet', r.dir, mutDir], { env: gitEnv() });
+    sh(r.dir, 'clone', '--quiet', r.dir, mutDir);
     const promptFile = path.join(tmp, 'prompt.md');
     const outFile = path.join(tmp, 'out.md');
-    fs.writeFileSync(promptFile, `審查樹：${r.dir}\n突變副本：${mutDir}\ngit -C ${r.dir} diff ${r.base}..${r.head}\n`);
+    fs.writeFileSync(
+      promptFile,
+      `審查樹：${r.dir}\n突變副本：${mutDir}\ngit -C ${r.dir} diff ${r.base}..${r.head}\ngit -C ${r.dir} diff ${prevRoundSha}..${r.head}\n`,
+    );
     const revRun = await runGrokExec([
       '--mode', 'review',
       '--cwd', r.dir,
@@ -1564,6 +1578,8 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         assert.ok(pTxt.includes(boxWorktree) && pTxt.includes(boxMutation), '提示檔內審查樹與突變副本路徑皆已改寫為盒內路徑');
         const leak = spawnSync('git', ['-C', boxWorktree, 'show', `${unrelatedSha}:private-branch.txt`], { env: gitEnv(), encoding: 'utf8' });
         assert.notEqual(leak.status, 0, '盒內工作樹不可含未送審本機分支物件');
+        const prevDiff = sh(boxWorktree, 'diff', `${prevRoundSha}..${r.head}`);
+        assert.match(prevDiff, /-prev-round-diverged/u, '盒內工作樹必須保留非祖先的上一輪提交並可比對跨輪差異');
         // 盒內突變副本的工作區可改檔，盒內審查樹與兩邊 .git 保持不變
         fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
         return { status: 0, stdout: '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };

@@ -1614,7 +1614,8 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   for (const rev of [baseSha, ...(Array.isArray(extraShas) ? extraShas : [])]) {
     if (!rev) continue;
     const resolved = resolveCommit(srcTree, rev) || resolveCommit(rootRepo, rev);
-    if (resolved) wantedSet.add(resolved);
+    if (!resolved) throw new LaunchError(`無法解析隔離工作樹所需提交：${rev}`);
+    wantedSet.add(resolved);
   }
   const wantedShas = [...wantedSet];
 
@@ -1651,11 +1652,23 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   if (resolvedBase) {
     git(destTree, ['update-ref', 'refs/remotes/origin/main', resolvedBase]);
   }
+  for (let i = 0; i < wantedShas.length; i += 1) {
+    const sha = wantedShas[i];
+    if (!gitOk(destTree, ['cat-file', '-e', `${sha}^{commit}`])) {
+      throw new LaunchError(`隔離工作樹缺少所需提交：${sha}`);
+    }
+    git(destTree, ['update-ref', `refs/keep/wanted-${i}`, sha]);
+  }
   git(destTree, ['reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all']);
   git(destTree, ['repack', '-a', '-d', '--quiet']);
   git(destTree, ['prune', '--expire=now']);
   try { fs.rmSync(path.join(destTree, '.git', 'FETCH_HEAD'), { force: true }); } catch { /* ignore */ }
   try { fs.rmSync(path.join(destTree, '.git', 'logs'), { recursive: true, force: true }); } catch { /* ignore */ }
+  for (const sha of wantedShas) {
+    if (!gitOk(destTree, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`])) {
+      throw new LaunchError(`清理後隔離工作樹遺失所需提交：${sha}`);
+    }
+  }
 
   const nodeModulesSrc = path.join(srcTree, 'node_modules');
   if (fs.existsSync(nodeModulesSrc)) {
@@ -1743,19 +1756,23 @@ async function runGrokExec(argv, deps = {}) {
 
     const boxWorktree = path.join(boxDir, 'worktree');
     const boxMutation = mutationPath ? path.join(boxDir, 'mutation') : null;
-    materializeIsolatedGitRepo(cwdPath, boxWorktree, {
-      rootRepo: recMeta && recMeta.root,
-      baseSha: recMeta && recMeta.base,
-      headSha: recMeta && recMeta.head,
-      extraShas: promptShas,
-    });
-    if (mutationPath && boxMutation) {
-      materializeIsolatedGitRepo(mutationPath, boxMutation, {
+    try {
+      materializeIsolatedGitRepo(cwdPath, boxWorktree, {
         rootRepo: recMeta && recMeta.root,
         baseSha: recMeta && recMeta.base,
         headSha: recMeta && recMeta.head,
         extraShas: promptShas,
       });
+      if (mutationPath && boxMutation) {
+        materializeIsolatedGitRepo(mutationPath, boxMutation, {
+          rootRepo: recMeta && recMeta.root,
+          baseSha: recMeta && recMeta.base,
+          headSha: recMeta && recMeta.head,
+          extraShas: promptShas,
+        });
+      }
+    } catch (e) {
+      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${(e && e.message) || '建立隔離工作樹失敗'}——拒絕啟動。`] };
     }
     const beforeWorktreeSnap = snapshotTreeState(boxWorktree);
     const beforeMutationGitSnap = boxMutation ? snapshotTreeState(path.join(boxMutation, '.git')) : null;

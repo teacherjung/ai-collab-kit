@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { gitEnv } = require('../tools/git-env.js');
 
 const ROOT = path.join(__dirname, '..');
 const read = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'settings.json'), 'utf8'));
@@ -101,8 +102,15 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
     prepareGrokBoxAuth,
     grokRelayRejectReason,
     startGrokRelay,
+    snapshotTreeState,
     runGrokExec,
   } = require('../tools/review-launch.js');
+
+  const g = (cwd, ...args) => {
+    const r = spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')} 失敗：${r.stderr}`);
+    return r.stdout.trim();
+  };
 
   // 1. 預設拒絕 Seatbelt 規則靜態與突變檢查（不依賴巢狀 sandbox_apply，在 Codex 複審沙盒與 Linux CI 皆必跑）
   assert.deepEqual(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE), { ok: true });
@@ -197,121 +205,152 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
       await relay.close();
     }
 
-    // 4. 由 settings.json 的 scanner.command 與 Grok.command 實際展開參數送入 runGrokExec，驗預檢失敗拒啟、DLP 攔截、工作樹污染攔截、fsmonitor 不執行、無關分支不帶入與正常執行
+    // 4. 由 settings.json 的 scanner.command 與 Grok.command 實際展開參數送入 runGrokExec，驗預檢失敗拒啟、DLP 攔截、工作樹污染攔截、fsmonitor 不執行、無關分支不帶入、非祖先上一輪提交保留（r6 R1）與 GIT_DIR 誘餌零污染（r6 R8）
     const { substitute, splitCommandArgs } = require('../tools/review-launch.js');
     const s = read();
     const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
+    const decoyDir = path.join(baseDir, 'decoy');
     const treeDir = path.join(baseDir, 'tree');
     const mutDir = path.join(baseDir, 'mutation');
     const promptFile = path.join(baseDir, 'prompt.md');
     const outFile = path.join(baseDir, 'output.log');
+    fs.mkdirSync(decoyDir);
     fs.mkdirSync(treeDir);
     fs.mkdirSync(mutDir);
-    spawnSync('git', ['init', '-q', '-b', 'main', treeDir]);
-    spawnSync('git', ['-C', treeDir, 'config', 'user.name', 'test']);
-    spawnSync('git', ['-C', treeDir, 'config', 'user.email', 'test@localhost']);
-    fs.writeFileSync(path.join(treeDir, 'a.txt'), 'hello\n');
-    spawnSync('git', ['-C', treeDir, 'add', 'a.txt']);
-    spawnSync('git', ['-C', treeDir, 'commit', '-q', '-m', 'init']);
-    const baseCommit = spawnSync('git', ['-C', treeDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    // 建立另一條未送審本機分支（含機密合成內容），再切回 main 提交受審改動
-    spawnSync('git', ['-C', treeDir, 'checkout', '-qb', 'unsubmitted-local']);
-    fs.writeFileSync(path.join(treeDir, 'private-branch.txt'), 'SYNTHETIC-UNSUBMITTED-BRANCH-SECRET\n');
-    spawnSync('git', ['-C', treeDir, 'add', 'private-branch.txt']);
-    spawnSync('git', ['-C', treeDir, 'commit', '-q', '-m', 'unsubmitted']);
-    const unsubmittedCommit = spawnSync('git', ['-C', treeDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['-C', treeDir, 'checkout', '-q', 'main']);
-    fs.appendFileSync(path.join(treeDir, 'a.txt'), 'reviewed\n');
-    spawnSync('git', ['-C', treeDir, 'add', 'a.txt']);
-    spawnSync('git', ['-C', treeDir, 'commit', '-q', '-m', 'reviewed']);
-    const headCommit = spawnSync('git', ['-C', treeDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-    spawnSync('git', ['clone', '--quiet', treeDir, mutDir]);
-    fs.writeFileSync(promptFile, `請檢查 ${treeDir}\ngit -C ${treeDir} diff ${baseCommit}..${headCommit}\n`);
+    g(decoyDir, 'init', '-q', '-b', 'main');
+    g(decoyDir, 'config', 'maintenance.auto', 'false');
+    g(decoyDir, 'config', 'gc.auto', '0');
+    g(decoyDir, 'config', 'user.name', 'R6_DECOY_ORIGINAL_NAME');
+    g(decoyDir, 'config', 'user.email', 'decoy@localhost');
+    fs.writeFileSync(path.join(decoyDir, 'decoy.txt'), 'decoy\n');
+    g(decoyDir, 'add', 'decoy.txt');
+    g(decoyDir, 'commit', '-q', '-m', 'decoy-init');
+    const decoyBeforeSnap = snapshotTreeState(decoyDir);
+    const savedGitDir = process.env.GIT_DIR;
+    process.env.GIT_DIR = path.join(decoyDir, '.git');
+    try {
+      g(baseDir, 'init', '-q', '-b', 'main', treeDir);
+      g(treeDir, 'config', 'user.name', 'test');
+      g(treeDir, 'config', 'user.email', 'test@localhost');
+      fs.writeFileSync(path.join(treeDir, 'a.txt'), 'hello\n');
+      g(treeDir, 'add', 'a.txt');
+      g(treeDir, 'commit', '-q', '-m', 'init');
+      const baseCommit = g(treeDir, 'rev-parse', 'HEAD');
+      // 建立另一條未送審本機分支（含機密合成內容），絕不可帶進盒內
+      g(treeDir, 'checkout', '-qb', 'unsubmitted-local');
+      fs.writeFileSync(path.join(treeDir, 'private-branch.txt'), 'SYNTHETIC-UNSUBMITTED-BRANCH-SECRET\n');
+      g(treeDir, 'add', 'private-branch.txt');
+      g(treeDir, 'commit', '-q', '-m', 'unsubmitted');
+      const unsubmittedCommit = g(treeDir, 'rev-parse', 'HEAD');
+      // 建立上一輪提交 P（模擬 rebase/amend 後不在本輪 HEAD 祖先鏈上，但仍在倉庫且列於提示 diff P..H）
+      g(treeDir, 'checkout', '-q', '--detach', baseCommit);
+      fs.writeFileSync(path.join(treeDir, 'a.txt'), 'hello\nprev-round-line\n');
+      g(treeDir, 'add', 'a.txt');
+      g(treeDir, 'commit', '-q', '-m', 'prev-round');
+      const prevRoundCommit = g(treeDir, 'rev-parse', 'HEAD');
+      // 切回 main 建立本輪受審 HEAD
+      g(treeDir, 'checkout', '-q', 'main');
+      fs.appendFileSync(path.join(treeDir, 'a.txt'), 'reviewed\n');
+      g(treeDir, 'add', 'a.txt');
+      g(treeDir, 'commit', '-q', '-m', 'reviewed');
+      const headCommit = g(treeDir, 'rev-parse', 'HEAD');
+      g(baseDir, 'clone', '--quiet', treeDir, mutDir);
+      fs.writeFileSync(
+        promptFile,
+        `請檢查 ${treeDir}\ngit -C ${treeDir} diff ${baseCommit}..${headCommit}\ngit -C ${treeDir} diff ${prevRoundCommit}..${headCommit}\n`,
+      );
 
-    const scanArgv = splitCommandArgs(substitute(s.scanner.command, {
-      scanTree: treeDir,
-      model: s.scanner.strongest,
-      effort: s.scanner.maxEffort,
-      promptFile,
-      outFile,
-    }, 'scanner.command').text, 'scanner.command');
-    assert.deepEqual(scanArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'scanner.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
-    const baseArgs = scanArgv.slice(3);
+      const scanArgv = splitCommandArgs(substitute(s.scanner.command, {
+        scanTree: treeDir,
+        model: s.scanner.strongest,
+        effort: s.scanner.maxEffort,
+        promptFile,
+        outFile,
+      }, 'scanner.command').text, 'scanner.command');
+      assert.deepEqual(scanArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'scanner.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
+      const baseArgs = scanArgv.slice(3);
 
-    const revArgv = splitCommandArgs(substitute(grokRev.command, {
-      reviewTree: treeDir,
-      mutationCopy: mutDir,
-      model: grokRev.strongest,
-      effort: grokRev.maxEffort,
-      promptFile,
-      outFile,
-    }, 'Grok.command').text, 'Grok.command');
-    assert.deepEqual(revArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'Grok.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
+      const revArgv = splitCommandArgs(substitute(grokRev.command, {
+        reviewTree: treeDir,
+        mutationCopy: mutDir,
+        model: grokRev.strongest,
+        effort: grokRev.maxEffort,
+        promptFile,
+        outFile,
+      }, 'Grok.command').text, 'Grok.command');
+      assert.deepEqual(revArgv.slice(0, 3), ['node', 'tools/review-launch.js', '--grok-exec'], 'Grok.command 必須經由 node tools/review-launch.js --grok-exec 啟動');
 
-    // 4a. 預檢失敗時拒絕啟動（不跑 grok、不寫 outFile），且正式呼叫必傳入有效的 unallowedPort
-    let grokCalled = false;
-    let seenUnallowedPort = 0;
-    const failProbeRun = await runGrokExec(baseArgs, {
-      authFile,
-      probeFn: (opts) => { seenUnallowedPort = opts.unallowedPort; return { ok: false, reason: '模擬預檢失敗' }; },
-      spawnGrok: async () => { grokCalled = true; return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' }; },
-    });
-    assert.equal(failProbeRun.code, 2);
-    assert.ok(seenUnallowedPort > 0, 'runGrokExec 正式呼叫必須傳入有效的 unallowedPort');
-    assert.equal(grokCalled, false, '預檢失敗時不可啟動 Grok');
-    assert.equal(fs.existsSync(outFile), false);
+      // 4a. 預檢失敗時拒絕啟動（不跑 grok、不寫 outFile），且正式呼叫必傳入有效的 unallowedPort
+      let grokCalled = false;
+      let seenUnallowedPort = 0;
+      const failProbeRun = await runGrokExec(baseArgs, {
+        authFile,
+        probeFn: (opts) => { seenUnallowedPort = opts.unallowedPort; return { ok: false, reason: '模擬預檢失敗' }; },
+        spawnGrok: async () => { grokCalled = true; return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' }; },
+      });
+      assert.equal(failProbeRun.code, 2);
+      assert.ok(seenUnallowedPort > 0, 'runGrokExec 正式呼叫必須傳入有效的 unallowedPort');
+      assert.equal(grokCalled, false, '預檢失敗時不可啟動 Grok');
+      assert.equal(fs.existsSync(outFile), false);
 
-    // 4b. DLP 攔截（輸出含真實憑證或私密欄位時拒絕寫出）
-    const dlpRun = await runGrokExec(baseArgs, {
-      authFile,
-      probeFn: () => ({ ok: true }),
-      spawnGrok: async () => ({ status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n外流 SYNTHETIC-REFRESH-TOKEN-SECRET-8888\n', stderr: '' }),
-    });
-    assert.equal(dlpRun.code, 2);
-    assert.equal(fs.existsSync(outFile), false, 'DLP 攔截時不可寫出 outFile');
+      // 4b. DLP 攔截（輸出含真實憑證或私密欄位時拒絕寫出）
+      const dlpRun = await runGrokExec(baseArgs, {
+        authFile,
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async () => ({ status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n外流 SYNTHETIC-REFRESH-TOKEN-SECRET-8888\n', stderr: '' }),
+      });
+      assert.equal(dlpRun.code, 2);
+      assert.equal(fs.existsSync(outFile), false, 'DLP 攔截時不可寫出 outFile');
 
-    // 4c. 盒內工作樹或 .git/config（含 core.fsmonitor）被改動時，宿主絕不執行盒內設定且拒絕寫出（r5 R1 路徑 A）
-    const fsmonitorMarker = path.join(baseDir, 'outside-fsmonitor-marker.txt');
-    const fsmonitorRun = await runGrokExec(baseArgs, {
-      authFile,
-      probeFn: () => ({ ok: true }),
-      spawnGrok: async ({ boxWorktree }) => {
-        const hook = path.join(boxWorktree, '.git', 'r5-fsmonitor.sh');
-        fs.writeFileSync(hook, `#!/bin/sh\nprintf 'PWNED' > '${fsmonitorMarker}'\nprintf 'token\\000'\n`, { mode: 0o700 });
-        spawnSync('git', ['-C', boxWorktree, 'config', 'core.fsmonitor', hook]);
-        return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
-      },
-    });
-    assert.equal(fs.existsSync(fsmonitorMarker), false, '盒外收尾絕不可執行盒內 .git/config 的 core.fsmonitor');
-    assert.equal(fsmonitorRun.code, 2, '盒內 .git 被改動時必須退 2 拒絕寫出');
-    assert.equal(fs.existsSync(outFile), false);
+      // 4c. 盒內工作樹或 .git/config（含 core.fsmonitor）被改動時，宿主絕不執行盒內設定且拒絕寫出（r5 R1 路徑 A）
+      const fsmonitorMarker = path.join(baseDir, 'outside-fsmonitor-marker.txt');
+      const fsmonitorRun = await runGrokExec(baseArgs, {
+        authFile,
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async ({ boxWorktree }) => {
+          const hook = path.join(boxWorktree, '.git', 'r5-fsmonitor.sh');
+          fs.writeFileSync(hook, `#!/bin/sh\nprintf 'PWNED' > '${fsmonitorMarker}'\nprintf 'token\\000'\n`, { mode: 0o700 });
+          g(boxWorktree, 'config', 'core.fsmonitor', hook);
+          return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+        },
+      });
+      assert.equal(fs.existsSync(fsmonitorMarker), false, '盒外收尾絕不可執行盒內 .git/config 的 core.fsmonitor');
+      assert.equal(fsmonitorRun.code, 2, '盒內 .git 被改動時必須退 2 拒絕寫出');
+      assert.equal(fs.existsSync(outFile), false);
 
-    // 4d. 正常隔離執行：盒內不含其他本機分支物件（r5 R1 路徑 B）、盒內 auth.json 無真憑證、boxPromptFile 已改寫為盒內路徑、執行後自動清除 boxDir
-    let capturedBoxDir = null;
-    const okRun = await runGrokExec(baseArgs, {
-      authFile,
-      probeFn: () => ({ ok: true }),
-      spawnGrok: async ({ boxDir, boxWorktree, boxPromptFile, env }) => {
-        capturedBoxDir = boxDir;
-        const unreachable = spawnSync('git', ['-C', boxWorktree, 'fsck', '--unreachable', '--no-reflogs'], { encoding: 'utf8' });
-        assert.equal(unreachable.stdout.trim(), '', '盒內不可殘留未引用或其他分支物件');
-        const leakShow = spawnSync('git', ['-C', boxWorktree, 'show', `${unsubmittedCommit}:private-branch.txt`], { encoding: 'utf8' });
-        assert.notEqual(leakShow.status, 0, '盒內不可讀取未送審的其他本機分支物件');
-        const okDiff = spawnSync('git', ['-C', boxWorktree, 'diff', `${baseCommit}..${headCommit}`], { encoding: 'utf8' });
-        assert.equal(okDiff.status, 0, '盒內必須能正常執行 base..head 差異比對');
-        assert.match(okDiff.stdout, /\+reviewed/u);
-        const boxAuthText = fs.readFileSync(path.join(env.HOME, '.grok', 'auth.json'), 'utf8');
-        assert.ok(!boxAuthText.includes('SYNTHETIC-REAL-BEARER-SECRET-9999'), '盒內 auth.json 絕不含真實 key');
-        assert.ok(!boxAuthText.includes('SYNTHETIC-REFRESH-TOKEN-SECRET-8888'), '盒內 auth.json 絕不含 refresh_token');
-        assert.ok(boxAuthText.includes('DUMMY-SCAN-TOKEN-'), '盒內 auth.json 僅含假權杖');
-        const boxPrompt = fs.readFileSync(boxPromptFile, 'utf8');
-        assert.ok(boxPrompt.includes(boxWorktree) && !boxPrompt.includes(treeDir), '盒內提示檔已改寫為盒內隔離路徑');
-        return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
-      },
-    });
-    assert.equal(okRun.code, 0);
-    assert.match(fs.readFileSync(outFile, 'utf8'), /^🔍 Grok｜來源：Grok CLI｜掃 `1234567`/u);
-    assert.equal(fs.existsSync(capturedBoxDir), false, '執行結束後自動清除隔離盒目錄');
+      // 4d. 正常隔離執行：盒內不含其他本機分支物件（r5 R1 路徑 B）、保留非祖先上一輪提交差異（r6 R1）、盒內 auth.json 無真憑證、boxPromptFile 已改寫為盒內路徑、執行後自動清除 boxDir
+      let capturedBoxDir = null;
+      const okRun = await runGrokExec(baseArgs, {
+        authFile,
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async ({ boxDir, boxWorktree, boxPromptFile, env }) => {
+          capturedBoxDir = boxDir;
+          const unreachable = g(boxWorktree, 'fsck', '--unreachable', '--no-reflogs');
+          assert.equal(unreachable, '', '盒內不可殘留未引用或其他分支物件');
+          const leakShow = spawnSync('git', ['-C', boxWorktree, 'show', `${unsubmittedCommit}:private-branch.txt`], { env: gitEnv(), encoding: 'utf8' });
+          assert.notEqual(leakShow.status, 0, '盒內不可讀取未送審的其他本機分支物件');
+          const okDiff = g(boxWorktree, 'diff', `${baseCommit}..${headCommit}`);
+          assert.match(okDiff, /\+reviewed/u, '盒內必須能正常執行 base..head 差異比對');
+          const prevDiff = g(boxWorktree, 'diff', `${prevRoundCommit}..${headCommit}`);
+          assert.match(prevDiff, /-prev-round-line/u, '盒內必須保留非祖先的上一輪提交並能執行跨輪差異比對');
+          const boxAuthText = fs.readFileSync(path.join(env.HOME, '.grok', 'auth.json'), 'utf8');
+          assert.ok(!boxAuthText.includes('SYNTHETIC-REAL-BEARER-SECRET-9999'), '盒內 auth.json 絕不含真實 key');
+          assert.ok(!boxAuthText.includes('SYNTHETIC-REFRESH-TOKEN-SECRET-8888'), '盒內 auth.json 絕不含 refresh_token');
+          assert.ok(boxAuthText.includes('DUMMY-SCAN-TOKEN-'), '盒內 auth.json 僅含假權杖');
+          const boxPrompt = fs.readFileSync(boxPromptFile, 'utf8');
+          assert.ok(boxPrompt.includes(boxWorktree) && !boxPrompt.includes(treeDir), '盒內提示檔已改寫為盒內隔離路徑');
+          return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+        },
+      });
+      assert.equal(okRun.code, 0);
+      assert.match(fs.readFileSync(outFile, 'utf8'), /^🔍 Grok｜來源：Grok CLI｜掃 `1234567`/u);
+      assert.equal(fs.existsSync(capturedBoxDir), false, '執行結束後自動清除隔離盒目錄');
+    } finally {
+      if (savedGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = savedGitDir;
+    }
+    assert.equal(g(decoyDir, 'config', '--get', 'user.name'), 'R6_DECOY_ORIGINAL_NAME', 'GIT_DIR 誘餌倉庫設定不可被改動');
+    assert.equal(snapshotTreeState(decoyDir), decoyBeforeSnap, 'GIT_DIR 誘餌倉庫任何檔案與 .git 不可被改動');
 
     // 5. 若當前環境允許套用 Seatbelt（宿主機實跑），額外執行核心層級預檢探針（含阻擋宿主 auth.json、未列名本機路徑與非轉送器連接埠）
     if (canApplySeatbelt()) {
