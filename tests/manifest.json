@@ -34,8 +34,6 @@
   "rules-length.test.js",
   "ruling-assignments.test.js",
   "run-checks.test.js",
-  "scan-postmortem.test.js",
-  "scan-probe.test.js",
   "settings.test.js",
   "signposts.test.js",
   "stale-text.test.js",

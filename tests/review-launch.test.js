@@ -19,7 +19,10 @@
 //     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道；
 //   ⑪通用插座（SAFE 字元集與 --post 外殼代貼結論）：非 ASCII 模型／推理名放行、殼解讀字元與空白照擋；--post 每輪排他鎖（post.lock）與獨立結論暫存檔、
 //     先核兩棵樹未收、已登記、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、
-//     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次。
+//     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次；
+//   ⑫複審後掃生命週期（G1、G2；--scan、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
+//     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；通過後開唯讀掃描樹、印啟動指令與紀錄骨架；
+//     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -30,7 +33,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { evaluate: evaluateVerdicts } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -411,13 +415,16 @@ test('⑧指令入口：參數不對＝退 2；空白設定的複本裡跑＝退
     [], ['7'], ['--reviewer', 'Beta'], ['7', '--reviewer'], ['7', '--reviewer', 'Beta', '--oops'], ['7', '8', '--reviewer', 'Beta'],
     ['--close'], ['--close', '7', '--reviewer', 'Beta'], ['--close', '7', '--post', '7'], ['--close', '7', '--file', 'x'],
     ['--post'], ['--post', '7', '--reviewer', 'Beta'], ['--post', '7', '8'], ['7', '--reviewer', 'Beta', '--file', 'x'],
+    ['--scan'], ['--scan', '7', '--reviewer', 'Beta'], ['--scan', '7', '--file', 'x'], ['--scan-post'], ['--scan-close'],
+    ['--scan-post', '/tmp/s', '--scanner', 'Beta'], ['--scan-close', '/tmp/s', '--file', 'x'],
   ]) {
     assert.ok(parseArgs(bad).error, JSON.stringify(bad));
     assert.equal(main(bad).code, 2, JSON.stringify(bad));
   }
   assert.match(parseArgs(['--oops', '--reviewer', 'Beta']).error, /不認得的參數：--oops/u, '不認得的旗標不可以被當成變更編號');
-  assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, post: undefined, file: undefined, dir: '/x' });
-  assert.deepEqual(parseArgs(['--post', '7', '--file', '/tmp/v.md', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: '7', file: '/tmp/v.md', dir: '/x' });
+  assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, post: undefined, scan: undefined, scanner: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x' });
+  assert.deepEqual(parseArgs(['--post', '7', '--file', '/tmp/v.md', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: '7', scan: undefined, scanner: undefined, scanPost: undefined, scanClose: undefined, file: '/tmp/v.md', dir: '/x' });
+  assert.deepEqual(parseArgs(['--scan', '7', '--scanner', 'Beta', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: '7', scanner: 'Beta', scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x' });
   const r = runInCopy('tools/review-launch.js', ['7', '--reviewer', 'Codex']);
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout, /沒有產生/u);
@@ -1117,3 +1124,168 @@ test('⑪defaultRunPost：不開 shell 直接執行，並清掉整個 GIT_* 家�
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；--scan／--scan-post／--scan-close 與結論閘相容', () => {
+  const scanTpl = fs.readFileSync(SCAN_TEMPLATE, 'utf8');
+  assert.ok(!scanTpl.includes('🤖'), 'templates/scan-record.md 不可含字面上的 🤖，以免誤觸結論閘');
+  const dummy = Object.fromEntries(SCAN_FILL.map(([, k], i) => [k, `VAL_${i}_${k}`]));
+  const filled = fill(scanTpl, dummy, SCAN_FILL);
+  for (const [, k] of Object.entries(dummy)) assert.ok(filled.includes(k), `掃描提示範本漏掉 ${k}`);
+  assert.throws(() => fill(`${scanTpl}\n<多一格>`, dummy, SCAN_FILL), /範本的格子跟產生器的表對不上/u);
+
+  const r = repo();
+  const dir = tmp('scan-launch-out-');
+  const scannerCfg = {
+    participant: 'Gamma',
+    launch: '由掃描發射者執行 tools/review-launch.js --scan',
+    assignedBy: '專案設定',
+    tieBreaker: '由實作者發起',
+    fallback: '未執行：<原因>',
+    strongest: 'grok-strong',
+    maxEffort: 'xhigh',
+    source: 'Grok CLI',
+    command: 'grok --cwd {scanTree} --model {model} --effort {effort} --mode plan --prompt "$(cat {promptFile})" > {outFile}',
+  };
+  const s = settingsFor({
+    participants: [
+      ...settingsFor().participants,
+      { role: 'AI 丙', id: 'Gamma', account: 'ai-acct' },
+    ],
+    owner: 'Boss',
+    scanner: scannerCfg,
+  });
+  const baseAns = answersFor(r);
+  const usable = s.participants.map((p) => p.id);
+
+  try {
+    // (a) 未設定掃描者 → 印未執行收口句
+    const noScanner = main(['--scan', '7', '--dir', dir], {
+      settings: settingsFor({ scanner: { ...unfilled().scanner } }),
+      platform: fakePlatform(baseAns),
+      cwd: r.dir,
+    });
+    assert.equal(noScanner.code, 2);
+    assert.match(noScanner.lines.join('\n'), /未執行：本專案無掃描者/u);
+
+    // (b) 快速通道（擁有者） → 印未執行：快速通道（擁有者）
+    const ownerBody = BODY.replace('- **複審者**：Beta', '- **複審者**：Boss');
+    const fastOwner = main(['--scan', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform({ ...baseAns, change: { ...baseAns.change, body: ownerBody } }),
+      cwd: r.dir,
+    });
+    assert.equal(fastOwner.code, 2);
+    assert.match(fastOwner.lines.join('\n'), /未執行：快速通道（擁有者）/u);
+
+    // (c) 低風險表定不掃 → 印未執行：低風險，表定不掃
+    const lowFiles = [{ path: 'docs/x.md', status: 'modified', previousPath: null }];
+    const lowRisk = main(['--scan', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform({ ...baseAns, changedFiles: lowFiles }),
+      cwd: r.dir,
+    });
+    assert.equal(lowRisk.code, 2);
+    assert.match(lowRisk.lines.join('\n'), /未執行：低風險，表定不掃/u);
+
+    // (d) 指定複審者尚未對當版貼通過 → 拒絕開樹
+    const noPass = main(['--scan', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: r.dir,
+    });
+    assert.equal(noPass.code, 2);
+    assert.match(noPass.lines.join('\n'), /還沒有指定複審者 Beta 的合格「通過」結論/u);
+
+    // (e) 指定複審者已對當版貼通過 → 退 0、開唯讀掃描樹、寫 prompt.md 與 scan.json
+    const passComment = verdict('Beta', 1, r.head, '通過', { id: 'pass99', createdAt: '2026-10-19T12:00:00Z' });
+    const withPass = { ...baseAns, comments: [passComment] };
+    const ok = main(['--scan', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      cwd: r.dir,
+    });
+    assert.equal(ok.code, 0, ok.lines.join('\n'));
+    const folder = path.dirname(ok.record.promptFile);
+    assert.ok(fs.existsSync(path.join(ok.record.tree, 'a.txt')), '唯讀掃描樹已開出');
+    assert.ok(fs.existsSync(ok.record.promptFile) && fs.existsSync(path.join(folder, 'scan.json')), '提示檔與 scan.json 已寫出');
+    assert.match(ok.command, /^grok --cwd .* --model grok-strong --effort xhigh/u);
+
+    // (f) prepareScan 與 --scan-post：禁含 🤖、驗 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」、樹髒退 1
+    assert.throws(
+      () => prepareScan(`🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n內文誤帶 🤖 記號\n未貼\n`, {
+        scanner: 'Gamma', source: 'Grok CLI', head: r.head, usable,
+      }),
+      /掃描回覆含有複審結論記號 🤖/u,
+    );
+    assert.throws(
+      () => prepareScan(`🔍 Wrong｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n內容\n`, {
+        scanner: 'Gamma', source: 'Grok CLI', head: r.head, usable,
+      }),
+      /掃描標頭的角色是「Wrong」/u,
+    );
+
+    fs.writeFileSync(ok.record.outFile, [
+      `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\``,
+      '',
+      '### 本次實際用的設定',
+      '- 模型：grok-strong',
+      '- 推理強度：xhigh',
+      '',
+      '### 掃描結果',
+      '- 零發現',
+      '未貼',
+      '',
+    ].join('\n'));
+
+    // 弄髒掃描樹 → --scan-post 退 1、不貼
+    fs.writeFileSync(path.join(ok.record.tree, 'a.txt'), 'dirty\n');
+    const dirtyPost = main(['--scan-post', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass) });
+    assert.equal(dirtyPost.code, 1);
+    assert.match(dirtyPost.lines.join('\n'), /掃描樹不乾淨/u);
+    sh(ok.record.tree, 'checkout', '-q', '--', 'a.txt');
+
+    let postedBody = null;
+    const postRes = main(['--scan-post', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      runPost(_cmd, args) {
+        postedBody = fs.readFileSync(args.at(-1), 'utf8');
+      },
+    });
+    assert.equal(postRes.code, 0, postRes.lines.join('\n'));
+    assert.ok(postedBody, '應呼叫 runPost 送出掃描留言');
+    assert.ok(!postedBody.includes('🤖'), '送出的掃描留言不含 🤖');
+    assert.ok(!postedBody.trim().endsWith('未貼'), '文末單獨一行的未貼已剝除');
+    const postedLines = postedBody.split('\n');
+    assert.equal(postedLines[0], `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\``);
+    assert.match(postedLines[1], /^> 掃描時序：依據複審留言 https:\/\/x\.invalid\/acme\/kit\/pull\/7#c-pass99｜準備 /u);
+
+    // 驗證貼上 🔍 掃描留言後，結論聯集閘 evaluateVerdicts 完全相容、不會誤判成壞標頭結論
+    const gateRes = evaluateVerdicts([
+      passComment,
+      { id: 'scan100', author: 'ai-acct', createdAt: '2026-10-19T12:05:00Z', body: postedBody },
+    ], r.head, 'Beta', usable, { ownerRole: s.owner });
+    assert.deepEqual(gateRes.problems, [], `結論閘應放行含 🔍 掃描留言的 PR：${JSON.stringify(gateRes)}`);
+    assert.deepEqual(gateRes.warnings, []);
+
+    // 重複代貼同版掃描留言 → 退 2
+    const dupPost = main(['--scan-post', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass) });
+    assert.equal(dupPost.code, 2);
+    assert.match(dupPost.lines.join('\n'), /已經在 .* 代貼過掃描留言/u);
+
+    // (g) --scan-close：樹髒退 1，乾淨退 0 並收掉掃描樹
+    fs.writeFileSync(path.join(ok.record.tree, 'a.txt'), 'dirty\n');
+    const dirtyClose = main(['--scan-close', '7', '--dir', dir], { settings: s });
+    assert.equal(dirtyClose.code, 1);
+    sh(ok.record.tree, 'checkout', '-q', '--', 'a.txt');
+
+    const okClose = main(['--scan-close', '7', '--dir', dir], { settings: s });
+    assert.equal(okClose.code, 0, okClose.lines.join('\n'));
+    assert.ok(!fs.existsSync(ok.record.tree), '掃描樹已收掉');
+    assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8')).closedAt, 'scan.json 已記 closedAt');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+

@@ -55,8 +55,12 @@
    "string": "William 本人"
   },
   {
-   "tool": "Grok CLI 隔離盒起的正式複審",
+   "tool": "本機 Grok CLI 起的複審或掃描 session",
    "string": "Grok CLI"
+  },
+  {
+   "tool": "本機 Gemini CLI 起的複審 session",
+   "string": "Gemini CLI"
   }
  ],
  "locations": [
@@ -133,33 +137,15 @@
  },
  "mainBranch": "main",
  "scanner": {
-  "tool": "Grok CLI（xAI），本倉庫自建隔離設定檔 kit-only/grok-sandbox.sb 並經 kit-only/grok-scan.js 發射（盒外把 GROK_SCAN_RUNNER 綁定 <理財工作樹>/scripts/grok-scan.js，核對同層 grok-sandbox.sb 雜湊一致、模型與推理讀本倉庫 settings.json）：一律在本倉庫經 node kit-only/grok-scan.js --repo <套件受審樹> --base <sha> --head <sha> --prompt <指示檔> --out <回覆檔> 發射；整條鏈（試探、埋、掃、比對、收）都在本倉庫用自己的工具與設定跑，步驟見 README「本倉庫自己怎麼合併」的掃描那一項；<理財工作樹>＝理財的工作樹（不是理財主目錄），只寫關係、不寫路徑（Fable 2026-10-11 代裁）；呼叫紀律、三個失效條件、執行檔版本釘＝那支腳本檔頭；不准手動啟動 grok CLI",
-  "assignedBy": "掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝實作者（Gemini 2026-10-19 實測 node tools/scan-probe.js 退 0，擁有者 2026-10-18 指派 Gemini 實作、Codex 複審、Grok 掃描並於本支拍板）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問裁示者",
+  "participant": "Grok",
+  "tool": "Grok CLI（xAI），經 node tools/review-launch.js --scan <編號> 在暫存掃描樹啟動，掃完由 --scan-post 核對樹乾淨、標頭合規且不含複審結論記號後代貼 🔍 掃描留言，再用 --scan-close 收樹；步驟見 README「本倉庫自己怎麼合併」的掃描那一項",
+  "assignedBy": "掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝實作者（擁有者 2026-10-18 指派 Gemini 實作、Codex 複審、Grok 掃描並於 2026-10-19 拍板改走 review-launch.js 統一掃描生命週期）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問裁示者",
   "tieBreak": "由實作者發射（擁有者 2026-10-18 指派 Gemini 實作、Codex 複審、Grok 掃描；實作者自己起不了時改問裁示者或照下一格記錄未執行）",
   "fallback": "沒有任何一方起得了時（G4），由實作者在 PR說明的「### 複審後掃」下逐字寫「未執行：<原因>」並轉正式；掃得起但掃不成時，由掃描發射者（現況實作者）寫「未執行：<原因>」、轉正式也由它做；表定不掃的照 G1；都不擋合併",
   "strongest": "grok-4.7",
   "maxEffort": "xhigh",
-  "isolation": {
-   "provider": "專案自建",
-   "lender": "未設定",
-   "wrap": [
-    "/usr/bin/sandbox-exec",
-    "-f",
-    "{projectRoot}/kit-only/grok-sandbox.sb",
-    "-D",
-    "SCAN_DIR={box}",
-    "-D",
-    "RELAY_PORT=18765"
-   ],
-   "boxRoot": "/private/tmp",
-   "forbidden": [
-    "~",
-    "/private/tmp",
-    "/private/var/tmp",
-    "/Users/Shared",
-    "~/.grok"
-   ]
-  }
+  "source": "Grok CLI",
+  "command": "grok --cwd {scanTree} --disable-web-search --no-subagents --always-approve --model {model} --reasoning-effort {effort} --prompt-file {promptFile} > {outFile}"
  },
  "platform": {
   "name": "GitHub",
@@ -394,10 +380,10 @@
    "autoMode": "ultra（這一檔會自動派助手）",
    "source": "codex CLI",
    "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；為什麼這樣寫見 README.md「本倉庫自己怎麼合併」的「送審」那一項",
-   "command": "codex exec -m {model} -c model_reasoning_effort='\"{effort}\"' -c approval_policy='\"never\"' -s workspace-write -c sandbox_workspace_write.network_access=true -C {reviewTree} - < {promptFile} > {outFile} 2>&1",
-   "machine": "幾乎沒有：審查樹與系統暫存區都寫得進；使用者層放行規則命中的指令在沙箱外跑；樣板帶 approval_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准）",
-   "promptOnly": "唯讀、不轉正式、不合併、只貼一則留言，全靠提示；退出 0 不代表通過、也不代表留言已貼成功（啟動失敗會退非零），發審的一方要自己去 PR 看留言在不在；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 --add-dir 突變副本（2026-10-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀",
-   "verified": "2026-10-03 本倉庫 #30 兩輪；2026-10-07 #49 r1 用產生器印的指令（帶 approval_policy＝never）跑一輪，日誌印 approval: never，結論照常貼上"
+   "command": "codex exec -m {model} -c model_reasoning_effort='\"{effort}\"' -c approval_policy='\"never\"' -s workspace-write -c sandbox_workspace_write.network_access=true -C {reviewTree} -o {outFile} - < {promptFile}",
+   "machine": "樣板帶 approval_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准）；-o {outFile} 只把最後結論寫入 {outFile}（不含命令列工具進度雜訊），審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "promptOnly": "審查樹與系統暫存區在執行期間可寫，唯讀靠提示與審後 --post／--close 的樹乾淨核對；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 --add-dir 突變副本（2026-10-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀",
+   "verified": "2026-10-03 本倉庫 #30 兩輪；2026-10-07 #49 r1 用產生器印的指令（帶 approval_policy＝never）跑一輪；2026-10-19 #112、#113 實跑通過"
   },
   {
    "participant": "Grok",
@@ -406,11 +392,24 @@
    "maxEffort": "xhigh",
    "autoMode": "自動選模",
    "source": "Grok CLI",
-   "launch": "本次必要前置修正限定，依 AGENTS.md 本人授權；送審產生器印指令，GROK_REVIEW_RUNNER 在盒外綁定 <理財工作樹>/scripts/grok-review.js，版本與雜湊先留證；其餘見 README「本倉庫自己怎麼合併」。",
-   "command": "node \"$GROK_REVIEW_RUNNER\" --model {model} --effort {effort} --review-tree {reviewTree} --mutation-copy {mutationCopy} --prompt-file {promptFile} --out-file {outFile} --change {change} --project {project}",
-   "machine": "借用 grok-scan.js 的 OS 隔離、試探、執行檔釘值、假鑰匙中繼與掃後比對；正式用途另核材料與原文雜湊。GitHub 憑證不進盒，前端不代貼結論。",
-   "promptOnly": "受審材料不改檔靠提示與前後雜湊核對；突變只改盒內副本。盒內沒有原倉庫的 .git，版本以外層核過的清單表示。輸出零不代表通過或已貼文。",
-   "verified": "2026-10-15 合成材料與假 runner 行為題；真模型執行與逐字貼文另以每輪 PR 證據核對。"
+   "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；審完由外殼 --post 核對樹乾淨與標頭後代貼結論；詳見 README.md「本倉庫自己怎麼合併」",
+   "command": "grok --cwd {reviewTree} --disable-web-search --no-subagents --always-approve --model {model} --reasoning-effort {effort} --prompt-file {promptFile} > {outFile}",
+   "machine": "帶 --disable-web-search --no-subagents 關掉連網搜尋與子代理；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "promptOnly": "--always-approve 在執行期間允許工具執行，受審材料不改檔靠提示與審後 --post／--close 的樹乾淨核對；輸出零不代表通過或已貼文",
+   "verified": "2026-10-19 本機 grok CLI 旗標與輸出實測"
+  },
+  {
+   "participant": "Gemini",
+   "strongest": "gemini-3.1-pro",
+   "second": "gemini-3-flash",
+   "maxEffort": "high",
+   "autoMode": "auto-model",
+   "source": "Gemini CLI",
+   "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer <識別值> 照下一格的樣板印出填好的那一行；審完由外殼 --post 核對樹乾淨與標頭後代貼結論；詳見 README.md「本倉庫自己怎麼合併」",
+   "command": "GEMINI_EFFORT={effort} gemini --model {model} --approval-mode plan --include-directories {mutationCopy} -p \"$(cat {promptFile})\" > {outFile}",
+   "machine": "--approval-mode plan 限制在唯讀規劃模式；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
+   "promptOnly": "CLI 旗標未開放獨立調整推理強度（{effort} 以環境變數 GEMINI_EFFORT 傳入，實際推理由模型預設承接）；plan 模式下若需在突變副本實際改檔跑突變測試，改由外殼或提示引導",
+   "verified": "2026-10-19 本機 gemini CLI 旗標與唯讀模式核對"
   }
  ],
  "reviewLaunch": {
@@ -585,18 +584,6 @@
    "rules": "E6",
    "state": "已啟用",
    "verified": "2026-09-13"
-  },
-  {
-   "name": "掃描前試探（禁區各埋一個假機密，從盒內試讀試寫；隔離本身由專案設定指定誰提供）",
-   "rules": "G2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
-  },
-  {
-   "name": "掃描後比對（假機密與未給盒子的真值不得出現在回覆、日誌、檔名）",
-   "rules": "G2",
-   "state": "已啟用",
-   "verified": "2026-09-12"
   },
   {
    "name": "合併閘登記對帳題（磁碟上的閘 vs 設定登記的閘）",

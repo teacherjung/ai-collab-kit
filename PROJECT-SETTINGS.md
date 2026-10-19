@@ -33,7 +33,8 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | Codex 桌面 session | Codex 桌面 |
 | Claude 桌面 session | Claude 桌面 |
 | William 本人（產品裁決） | William 本人 |
-| Grok CLI 隔離盒起的正式複審 | Grok CLI |
+| 本機 Grok CLI 起的複審或掃描 session | Grok CLI |
+| 本機 Gemini CLI 起的複審 session | Gemini CLI |
 
 ## 三、清單與正本的位置
 
@@ -60,24 +61,12 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 
 ## 四、掃描發射者（規矩 A1、G1、G4）
 
-- 掃描者：Grok CLI（xAI），本倉庫自建隔離設定檔 kit\-only\/grok\-sandbox\.sb 並經 kit\-only\/grok\-scan\.js 發射（盒外把 GROK\_SCAN\_RUNNER 綁定 \<理財工作樹\>\/scripts\/grok\-scan\.js，核對同層 grok\-sandbox\.sb 雜湊一致、模型與推理讀本倉庫 settings\.json）：一律在本倉庫經 node kit\-only\/grok\-scan\.js \-\-repo \<套件受審樹\> \-\-base \<sha\> \-\-head \<sha\> \-\-prompt \<指示檔\> \-\-out \<回覆檔\> 發射；整條鏈（試探、埋、掃、比對、收）都在本倉庫用自己的工具與設定跑，步驟見 README「本倉庫自己怎麼合併」的掃描那一項；\<理財工作樹\>＝理財的工作樹（不是理財主目錄），只寫關係、不寫路徑（Fable 2026\-10\-11 代裁）；呼叫紀律、三個失效條件、執行檔版本釘＝那支腳本檔頭；不准手動啟動 grok CLI（沒有掃描者＝照風險級別要掃的那幾支，掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式；表定不掃的照規矩 G1）
-- 誰指派、登記在哪：掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝實作者（Gemini 2026\-10\-19 實測 node tools\/scan\-probe\.js 退 0，擁有者 2026\-10\-18 指派 Gemini 實作、Codex 複審、Grok 掃描並於本支拍板）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問裁示者
+- 掃描者識別值：Grok；怎麼起：Grok CLI（xAI），經 node tools\/review\-launch\.js \-\-scan \<編號\> 在暫存掃描樹啟動，掃完由 \-\-scan\-post 核對樹乾淨、標頭合規且不含複審結論記號後代貼 🔍 掃描留言，再用 \-\-scan\-close 收樹；步驟見 README「本倉庫自己怎麼合併」的掃描那一項（沒有掃描者＝照風險級別要掃的那幾支，掃描紀錄寫「未執行：本專案無掃描者」，由下面指定的那一方記錄並轉正式；表定不掃的照規矩 G1）
+- 誰指派、登記在哪：掃描發射者＝起得了掃描者的那一方（定義＝RULES A1、G4）；本倉庫現況＝實作者（擁有者 2026\-10\-18 指派 Gemini 實作、Codex 複審、Grok 掃描並於 2026\-10\-19 拍板改走 review\-launch\.js 統一掃描生命週期）；要換現況＝想換的那一方自己實測、貼出可重跑的結果，再問裁示者
 - 兩方都起得了時：由實作者發射（擁有者 2026\-10\-18 指派 Gemini 實作、Codex 複審、Grok 掃描；實作者自己起不了時改問裁示者或照下一格記錄未執行）
 - 沒有合格者時，誰記錄未執行、誰轉正式：沒有任何一方起得了時（G4），由實作者在 PR說明的「\#\#\# 複審後掃」下逐字寫「未執行：\<原因\>」並轉正式；掃得起但掃不成時，由掃描發射者（現況實作者）寫「未執行：\<原因\>」、轉正式也由它做；表定不掃的照 G1；都不擋合併
 - 掃描用的最強模型（規矩 G1；換新模型只改這裡）：grok\-4\.7；最高推理：xhigh
-
-隔離（規矩 G2；裁示者 2026-09-12 裁「丙」：隔離本身不在套件裡，由這裡指定誰提供；套件只帶掃前檢查與掃後檢查兩支小工具）：
-
-- 由誰提供：專案自建（「無」或「未設定」＝不掃，掃描紀錄寫「未執行：無隔離」；「借用」＝用別的專案現成的隔離）
-- 從盒內跑一條指令的前綴（{box} 會換成盒子路徑、{projectRoot} 會換成專案根目錄）：\/usr\/bin\/sandbox\-exec \-f \{projectRoot\}\/kit\-only\/grok\-sandbox\.sb \-D SCAN\_DIR\=\{box\} \-D RELAY\_PORT\=18765
-- 盒子建在：\/private\/tmp（未設定＝系統暫存區）
-- 盒內必須讀不到也寫不進的目錄（~ 代表家目錄；掃前檢查在每一個各埋一個假機密）：\~、\/private\/tmp、\/private\/var\/tmp、\/Users\/Shared、\~\/\.grok
-- 整條鏈（每一步退非零就停，掃描紀錄寫未執行）：
-  1. node tools/scan-probe.js：任一禁區用它的讀寫機制碰得到＝隔離是假的，不掃；連試探都做不成（含盒內起不了那個機制）＝不掃。
-  2. node tools/scan-probe.js --plant <清單檔>：在每個禁區埋一個掃描期間才有的假機密。清單檔不要貼進任何紀錄。
-  3. 起掃描者（本套件不代跑）。
-  4. node tools/scan-postmortem.js --secrets <清單檔> --reply <回覆檔> --logs <日誌目錄>：假機密或未給盒子的真值出現在任何輸出（含檔名）＝事故。
-  5. node tools/scan-probe.js --sweep <清單檔>：把埋下去的收掉。這一步一定要跑。
+- 掃描留言標頭的來源字串：Grok CLI；啟動指令樣板（tools/review-launch.js --scan 替換記號後印出）：grok \-\-cwd \{scanTree\} \-\-disable\-web\-search \-\-no\-subagents \-\-always\-approve \-\-model \{model\} \-\-reasoning\-effort \{effort\} \-\-prompt\-file \{promptFile\} \> \{outFile\}
 
 ## 五、平台介面（規矩 E5、H1；閘要問平台的每一件事都走這裡）
 
@@ -175,18 +164,21 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | Claude | claude\-fable\-5\-1 | claude\-opus\-5\-5 | max | Ultracode |
 | Codex | gpt\-6\-astra | gpt\-6\-sol | max | ultra（這一檔會自動派助手） |
 | Grok | grok\-4\.7 | 未設定 | xhigh | 自動選模 |
+| Gemini | gemini\-3\.1\-pro | gemini\-3\-flash | high | auto\-model |
 
 | 複審者 | 怎麼起（含放行哪些考題指令） | 機器擋得住的 | 只靠提示的、已知缺口 | 驗過的日期 |
 |---|---|---|---|---|
 | Claude | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；為什麼這樣寫見 README\.md「本倉庫自己怎麼合併」的「送審」那一項 | 放行清單以外的指令一律被拒（不跳出詢問）；Edit 工具改不了審查樹、只准改突變副本；不讀主目錄的本機設定檔 | 放行的指令仍可能寫檔（例如 git diff 的 \-\-output），副本裡改了程式再跑考題＝能跑任意程式，所以審查樹唯讀靠提示；讀檔的禁令管不到考題程式自己讀檔；助手被拒時最後的輸出看不到，要逐筆搜「has been denied」 | 2026\-10\-03 玩具資料夾、便宜模型；本倉庫沒實跑過 |
-| Codex | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；為什麼這樣寫見 README\.md「本倉庫自己怎麼合併」的「送審」那一項 | 幾乎沒有：審查樹與系統暫存區都寫得進；使用者層放行規則命中的指令在沙箱外跑；樣板帶 approval\_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准） | 唯讀、不轉正式、不合併、只貼一則留言，全靠提示；退出 0 不代表通過、也不代表留言已貼成功（啟動失敗會退非零），發審的一方要自己去 PR 看留言在不在；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 \-\-add\-dir 突變副本（2026\-10\-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀 | 2026\-10\-03 本倉庫 \#30 兩輪；2026\-10\-07 \#49 r1 用產生器印的指令（帶 approval\_policy＝never）跑一輪，日誌印 approval\: never，結論照常貼上 |
-| Grok | 本次必要前置修正限定，依 AGENTS\.md 本人授權；送審產生器印指令，GROK\_REVIEW\_RUNNER 在盒外綁定 \<理財工作樹\>\/scripts\/grok\-review\.js，版本與雜湊先留證；其餘見 README「本倉庫自己怎麼合併」。 | 借用 grok\-scan\.js 的 OS 隔離、試探、執行檔釘值、假鑰匙中繼與掃後比對；正式用途另核材料與原文雜湊。GitHub 憑證不進盒，前端不代貼結論。 | 受審材料不改檔靠提示與前後雜湊核對；突變只改盒內副本。盒內沒有原倉庫的 \.git，版本以外層核過的清單表示。輸出零不代表通過或已貼文。 | 2026\-10\-15 合成材料與假 runner 行為題；真模型執行與逐字貼文另以每輪 PR 證據核對。 |
+| Codex | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；為什麼這樣寫見 README\.md「本倉庫自己怎麼合併」的「送審」那一項 | 樣板帶 approval\_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准）；\-o \{outFile\} 只把最後結論寫入 \{outFile\}（不含命令列工具進度雜訊），審完由外殼 \-\-post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論 | 審查樹與系統暫存區在執行期間可寫，唯讀靠提示與審後 \-\-post／\-\-close 的樹乾淨核對；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 \-\-add\-dir 突變副本（2026\-10\-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀 | 2026\-10\-03 本倉庫 \#30 兩輪；2026\-10\-07 \#49 r1 用產生器印的指令（帶 approval\_policy＝never）跑一輪；2026\-10\-19 \#112、\#113 實跑通過 |
+| Grok | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；審完由外殼 \-\-post 核對樹乾淨與標頭後代貼結論；詳見 README\.md「本倉庫自己怎麼合併」 | 帶 \-\-disable\-web\-search \-\-no\-subagents 關掉連網搜尋與子代理；審完由外殼 \-\-post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論 | \-\-always\-approve 在執行期間允許工具執行，受審材料不改檔靠提示與審後 \-\-post／\-\-close 的樹乾淨核對；輸出零不代表通過或已貼文 | 2026\-10\-19 本機 grok CLI 旗標與輸出實測 |
+| Gemini | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；審完由外殼 \-\-post 核對樹乾淨與標頭後代貼結論；詳見 README\.md「本倉庫自己怎麼合併」 | \-\-approval\-mode plan 限制在唯讀規劃模式；審完由外殼 \-\-post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論 | CLI 旗標未開放獨立調整推理強度（\{effort\} 以環境變數 GEMINI\_EFFORT 傳入，實際推理由模型預設承接）；plan 模式下若需在突變副本實際改檔跑突變測試，改由外殼或提示引導 | 2026\-10\-19 本機 gemini CLI 旗標與唯讀模式核對 |
 
 | 複審者 | 結論標頭的來源字串 | 啟動指令樣板（送審產生器替換記號後印出） |
 |---|---|---|
 | Claude | Claude CLI | cd \{reviewTree\} \&\& claude \-p \"\$\(cat \{promptFile\}\)\" \-\-model \{model\} \-\-effort \{effort\} \-\-permission\-mode dontAsk \-\-setting\-sources user\,project \-\-add\-dir \{mutationCopy\} \-\-verbose \-\-output\-format json \-\-allowedTools \'Read\,Grep\,Glob\,Bash\(node \-\-test \*\)\,Bash\(npm \-\-prefix \{mutationCopy\} test \*\)\,Bash\(git diff \*\)\,Bash\(git log \*\)\,Bash\(git show \*\)\,Bash\(git rev\-parse HEAD\)\,Bash\(git \-C \{mutationCopy\} rev\-parse HEAD\)\,Bash\(git \-C \{mutationCopy\} status \-\-porcelain\)\,Bash\(git \-C \{mutationCopy\} diff\)\,Bash\(gh pr view \*\)\,Bash\(gh pr diff \*\)\,Bash\(gh pr checks \*\)\,Bash\(gh run view \*\)\,Bash\(gh run list \*\)\,Bash\(gh pr comment \{change\} \*\)\,Edit\(\/\{mutationCopy\}\/\*\*\)\,Workflow\' \-\-disallowedTools \'Write\,NotebookEdit\,WebFetch\,WebSearch\,Edit\(\/\{reviewTree\}\/\*\*\)\,Bash\(gh pr merge \*\)\,Bash\(gh pr edit \*\)\,Bash\(gh pr close \*\)\,Bash\(gh pr review \*\)\,Bash\(gh pr ready \*\)\,Bash\(git push \*\)\,Bash\(git commit \*\)\,Bash\(git checkout \*\)\,Bash\(git switch \*\)\,Bash\(git stash \*\)\,Bash\(git worktree \*\)\,Bash\(git fetch \*\)\,Bash\(npm install \*\)\,Bash\(npm ci \*\)\,Bash\(npx \*\)\,Bash\(node \-e \*\)\' \< \/dev\/null \> \{outFile\} |
-| Codex | codex CLI | codex exec \-m \{model\} \-c model\_reasoning\_effort\=\'\"\{effort\}\"\' \-c approval\_policy\=\'\"never\"\' \-s workspace\-write \-c sandbox\_workspace\_write\.network\_access\=true \-C \{reviewTree\} \- \< \{promptFile\} \> \{outFile\} 2\>\&1 |
-| Grok | Grok CLI | node \"\$GROK\_REVIEW\_RUNNER\" \-\-model \{model\} \-\-effort \{effort\} \-\-review\-tree \{reviewTree\} \-\-mutation\-copy \{mutationCopy\} \-\-prompt\-file \{promptFile\} \-\-out\-file \{outFile\} \-\-change \{change\} \-\-project \{project\} |
+| Codex | codex CLI | codex exec \-m \{model\} \-c model\_reasoning\_effort\=\'\"\{effort\}\"\' \-c approval\_policy\=\'\"never\"\' \-s workspace\-write \-c sandbox\_workspace\_write\.network\_access\=true \-C \{reviewTree\} \-o \{outFile\} \- \< \{promptFile\} |
+| Grok | Grok CLI | grok \-\-cwd \{reviewTree\} \-\-disable\-web\-search \-\-no\-subagents \-\-always\-approve \-\-model \{model\} \-\-reasoning\-effort \{effort\} \-\-prompt\-file \{promptFile\} \> \{outFile\} |
+| Gemini | Gemini CLI | GEMINI\_EFFORT\=\{effort\} gemini \-\-model \{model\} \-\-approval\-mode plan \-\-include\-directories \{mutationCopy\} \-p \"\$\(cat \{promptFile\}\)\" \> \{outFile\} |
 
 送審產生器另外要的：PR 網址樣板 https\:\/\/github\.com\/\{project\}\/pull\/\{change\}；留言網址樣板 https\:\/\/github\.com\/\{project\}\/pull\/\{change\}\#issuecomment\-\{comment\}；複審者貼結論的指令 gh pr comment \{change\} \-R \{project\} \-\-body\-file \<你寫好的結論檔\>；在突變副本裡跑考題 npm \-\-prefix \{mutationCopy\} test \-\- \<考題檔\>
 
@@ -226,8 +218,6 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | 清版本控制環境變數的共用實作（GIT\_ 前綴整族清） | E4 | 已啟用 | 2026\-09\-13 |
 | 閘的退出路徑與進入點行為題（每一道閘的考題各有「真的跑一遍指令」與「問不到＝退 2」） | E5 | 已啟用 | 2026\-09\-13 |
 | 檔名考題（已追蹤路徑只用可見 ASCII；例外名單寫死、只出不進） | E6 | 已啟用 | 2026\-09\-13 |
-| 掃描前試探（禁區各埋一個假機密，從盒內試讀試寫；隔離本身由專案設定指定誰提供） | G2 | 已啟用 | 2026\-09\-12 |
-| 掃描後比對（假機密與未給盒子的真值不得出現在回覆、日誌、檔名） | G2 | 已啟用 | 2026\-09\-12 |
 | 合併閘登記對帳題（磁碟上的閘 vs 設定登記的閘） | H1 | 已啟用 | 2026\-09\-13 |
 | 堆疊閘（底必須是主幹、不可以有別支疊在上面） | H2 | 已啟用 | 2026\-09\-27 |
 | 真考卷閘（必過檢查在那顆版本上真的跑過且成功） | H3 | 已啟用 | 2026\-09\-27 |
