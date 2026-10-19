@@ -262,7 +262,7 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
   assert.equal(u.checks.mainWorktree, UNSET, '主目錄布局要沒登記（三關執行器照舊放行、全綠那一行說沒驗）');
   assert.deepEqual(u.checks.indexAnchors, [UNSET], '索引錨點要沒登記');
   for (const p of u.participants) assert.equal(p.id, UNSET, `身分「${p.role}」要沒填`);
-  assert.deepEqual(u.defaultDivision, { implementer: UNSET, reviewer: UNSET }, '預設分工要沒填（空白範本不可以帶套件倉庫自己的分工）');
+  assert.deepEqual(u.defaultDivision, { implementer: UNSET, reviewer: UNSET }, '分工設定要沒填（空白範本不可以帶套件倉庫自己的分工）');
   assert.equal(u.owner, UNSET, '擁有者要沒填（空白範本不可以帶套件倉庫自己的擁有者）');
 });
 
@@ -270,7 +270,7 @@ test('⑨b 空白設定跟 settings.json 在套件共用的欄位逐字相同（
   // 為什麼（2026-09-26 套件倉庫填了自己的設定之後）：根目錄那份從此是套件倉庫自己的值、空白範本是給新專案的正本，
   // 變成兩份。⑨ 只比形狀、陣列只看「是陣列」，所以套件共用的東西（機器表的名字與條號、閘的名字／條號／指令、
   // 位置表的項目與條號、貼文帳號資格）在其中一份改了、另一份沒跟上，⑨ 不會紅——新專案會拿到少一列機器或指錯條號的範本。
-  // 刻意不比的：識別值值域（使用專案可以放寬）、參與者、預設分工、來源字串、位置的值、掃描發射者、機器與閘的狀態——那些本來就是專案自己的值。
+  // 刻意不比的：識別值值域（使用專案可以放寬）、參與者、分工設定、來源字串、位置的值、掃描發射者、機器與閘的狀態——那些本來就是專案自己的值。
   // 閘的順序各專案可以不同（合併指令照登記順序跑），所以排序後比。
   const a = read();
   const u = unfilled();

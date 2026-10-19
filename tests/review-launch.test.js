@@ -16,7 +16,10 @@
 //     找不到＝退 2；暫存區比開樹晚的逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2；
 //   ⑩分級腳本判能走快速通道（AI）（F12）：本輪範圍＝只核差異、提示寫明為什麼；這一位連兩輪沒「通過」（輪次相鄰；每一輪算不算
-//     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道。
+//     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道；
+//   ⑪通用插座（SAFE 字元集與 --post 外殼代貼結論）：非 ASCII 模型／推理名放行、殼解讀字元與空白照擋；--post 每輪排他鎖（post.lock）與獨立結論暫存檔、
+//     先核兩棵樹未收、已登記、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、
+//     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -25,9 +28,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SAFE } = require('../tools/review-launch.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -404,17 +407,25 @@ test('⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫�
 });
 
 test('⑧指令入口：參數不對＝退 2；空白設定的複本裡跑＝退 2 不產生', () => {
-  for (const bad of [[], ['7'], ['--reviewer', 'Beta'], ['7', '--reviewer'], ['7', '--reviewer', 'Beta', '--oops'], ['7', '8', '--reviewer', 'Beta'], ['--close'], ['--close', '7', '--reviewer', 'Beta']]) {
+  for (const bad of [
+    [], ['7'], ['--reviewer', 'Beta'], ['7', '--reviewer'], ['7', '--reviewer', 'Beta', '--oops'], ['7', '8', '--reviewer', 'Beta'],
+    ['--close'], ['--close', '7', '--reviewer', 'Beta'], ['--close', '7', '--post', '7'], ['--close', '7', '--file', 'x'],
+    ['--post'], ['--post', '7', '--reviewer', 'Beta'], ['--post', '7', '8'], ['7', '--reviewer', 'Beta', '--file', 'x'],
+  ]) {
     assert.ok(parseArgs(bad).error, JSON.stringify(bad));
     assert.equal(main(bad).code, 2, JSON.stringify(bad));
   }
   assert.match(parseArgs(['--oops', '--reviewer', 'Beta']).error, /不認得的參數：--oops/u, '不認得的旗標不可以被當成變更編號');
-  assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, dir: '/x' });
+  assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, post: undefined, file: undefined, dir: '/x' });
+  assert.deepEqual(parseArgs(['--post', '7', '--file', '/tmp/v.md', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: '7', file: '/tmp/v.md', dir: '/x' });
   const r = runInCopy('tools/review-launch.js', ['7', '--reviewer', 'Codex']);
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout, /沒有產生/u);
   assert.equal(runInCopy('tools/review-launch.js').status, 2, '沒給參數也要退 2');
   assert.equal(runInCopy('tools/review-launch.js', ['--close', '7']).status, 2, '空白設定收樹也退 2');
+  const p = runInCopy('tools/review-launch.js', ['--post', '7']);
+  assert.equal(p.status, 2, p.stdout + p.stderr);
+  assert.match(p.stdout, /沒有貼/u, '空白設定代貼也退 2');
 });
 
 test('⑨設定裡填了的樣板逐一核：記號都認得、啟動指令帶模型與推理；本倉庫那一份要過', () => {
@@ -671,4 +682,438 @@ test('指定裁示者的發審索引顯示指派來源，壞設定在開樹前�
   const rejectedDir = tmp('review-assignment-rejected-');
   assert.throws(() => launch('7', 'Beta', { settings: s, platform, cwd: r.dir, dir: rejectedDir, template: TEMPLATE }), /相關裁示算不出來/u);
   assert.deepEqual(fs.readdirSync(rejectedDir), []);
+});
+
+test('⑪SAFE 字元集：接受非 ASCII 字母數字（如中文模型與推理名），仍拒絕空白、控制字元與殼會解讀的字元', () => {
+  for (const ok of ['xhigh', '最高', '高', '假的最強', 'gemini-3.1-pro', '模型_4.7@v1+max']) {
+    assert.ok(SAFE.test(ok), `要接受「${ok}」`);
+    assert.equal(substitute('run --model {model}', { model: ok }, '樣板').text, `run --model ${ok}`);
+  }
+  for (const bad of ['', '有 空白', 'a\nb', 'a\tb', 'a;b', 'a|b', 'a&b', 'a$b', 'a`b', 'a"b', "a'b", 'a(b)', 'a<b', 'a>b']) {
+    assert.ok(!SAFE.test(bad), `要拒絕「${JSON.stringify(bad)}」`);
+    assert.throws(() => substitute('run --model {model}', { model: bad }, '樣板'), /空白或殼會另外解讀的字元/u);
+  }
+});
+
+test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」；核對角色、來源、輪次、版本短碼與固定小標（擁有者豁免）', () => {
+  const roles = ['Boss', 'Alpha', 'Beta'];
+  const head = '0123456789abcdef0123456789abcdef01234567';
+  const baseOpts = { reviewer: 'Beta', source: 'beta CLI', round: 1, head, usable: roles, ownerRole: 'Boss' };
+  const passBody = `\n\n🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- 未貼這兩個字在內文裡不剝\n\n未貼  \n\n`;
+  const got = prepareVerdict(passBody, baseOpts);
+  assert.equal(got.strippedUnposted, true);
+  assert.equal(got.header.verdict, '通過');
+  assert.ok(!got.body.trimEnd().endsWith('未貼'), '文末單獨一行的「未貼」要剝掉');
+  assert.ok(got.body.includes('未貼這兩個字在內文裡不剝'), '內文裡的字不碰');
+
+  const direct = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：需修改後再審\n\n- R1\n`, baseOpts);
+  assert.equal(direct.strippedUnposted, false);
+  assert.equal(direct.header.verdict, '需修改後再審');
+
+  // 擁有者走快速通道（擁有者）（F12）豁免兩行固定小標
+  const ownerPass = prepareVerdict(`🤖 Boss｜來源：boss UI｜審 \`0123456\`｜r1｜結論：通過\n\n通過\n未貼\n`, { ...baseOpts, reviewer: 'Boss', source: 'boss UI' });
+  assert.equal(ownerPass.header.verdict, '通過');
+
+  for (const [what, raw, re] of [
+    ['空字串', '  \n\n ', /結論檔是空的/u],
+    ['只有未貼', '\n未貼\n', /只有「未貼」/u],
+    ['標頭前有前言', `前言\n🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：需修改後再審\n`, /第一行不是合規標頭/u],
+    ['角色不符', `🤖 Alpha｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：需修改後再審\n`, /角色是「Alpha」，不是本輪複審者 Beta/u],
+    ['來源不符', `🤖 Beta｜來源：other CLI｜審 \`0123456\`｜r1｜結論：需修改後再審\n`, /來源是「other CLI」，不是設定登記的「beta CLI」/u],
+    ['輪次不符', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r2｜結論：需修改後再審\n`, /輪次是 r2，不是本輪 r1/u],
+    ['版本短碼不符', `🤖 Beta｜來源：beta CLI｜審 \`fedcba9\`｜r1｜結論：需修改後再審\n`, /審的是 fedcba9，對不上本輪受審版本 0123456/u],
+    ['通過缺固定小標', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n`, /少了固定小標：### 清單逐項結果/u],
+  ]) {
+    assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
+  }
+});
+
+test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／乾淨／HEAD／沒上鎖，再核標頭、引號參數與平台狀態，剝除「未貼」後逐字代貼並記下 postedAt', () => {
+  const r = repo();
+  const dir = tmp('review-launch-post-');
+  const extDir = tmp('review-launch-ext-');
+  try {
+    const s = settingsFor({ owner: 'Boss' });
+    const platform = fakePlatform(answersFor(r));
+    const launched = launch('7', 'Beta', { settings: s, platform, cwd: r.dir, dir, template: TEMPLATE });
+    assert.equal(launched.code, 0, launched.lines.join('\n'));
+    const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+    const recFile = path.join(folder, 'launch.json');
+    const recOrig = fs.readFileSync(recFile, 'utf8');
+    const expectedBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- m-strong / max\n\n### 清單逐項結果\n- 全過\n`;
+    const validPass = `\n${expectedBody}\n未貼  \n\n`;
+    fs.writeFileSync(path.join(folder, 'output.log'), validPass);
+
+    // ① 審查樹或突變副本不乾淨、HEAD 變了、上了鎖、紀錄標已收、或不在 git worktree 登記裡＝退 1，而且絕對不呼叫 runPost
+    const calls = [];
+    const recordPost = (cmd, args) => {
+      const sentBody = fs.readFileSync(args.at(-1), 'utf8');
+      calls.push({ cmd, args, sentBody });
+    };
+    fs.writeFileSync(path.join(folder, 'tree', 'a.txt'), 'dirty\n');
+    let res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /審查樹不乾淨/u);
+    assert.equal(calls.length, 0, '樹不乾淨時不可呼叫貼結論指令');
+    sh(path.join(folder, 'tree'), 'checkout', '-q', '--', 'a.txt');
+
+    sh(path.join(folder, 'mutation'), 'checkout', '-q', '--detach', r.base);
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本的 HEAD 是/u);
+    assert.equal(calls.length, 0);
+    sh(path.join(folder, 'mutation'), 'checkout', '-q', '--detach', r.head);
+
+    sh(r.dir, 'worktree', 'lock', path.join(folder, 'mutation'));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本上了鎖/u);
+    assert.equal(calls.length, 0);
+    sh(r.dir, 'worktree', 'unlock', path.join(folder, 'mutation'));
+
+    const recParsed = JSON.parse(recOrig);
+    fs.writeFileSync(recFile, `${JSON.stringify({ ...recParsed, removed: [recParsed.mutation] }, null, 1)}\n`);
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本已經收掉了/u);
+    assert.equal(calls.length, 0);
+    fs.writeFileSync(recFile, recOrig);
+
+    const extClone = path.join(extDir, 'unregistered-clone');
+    sh(r.dir, 'clone', '-q', r.dir, extClone);
+    sh(extClone, 'checkout', '-q', '--detach', r.head);
+    fs.writeFileSync(recFile, `${JSON.stringify({ ...recParsed, mutation: extClone }, null, 1)}\n`);
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /突變副本不在 git worktree 登記裡/u);
+    assert.equal(calls.length, 0);
+    fs.writeFileSync(recFile, recOrig);
+
+    // ② 結論檔放在審查樹或突變副本裡面、或是連結／資料夾＝退 2，不貼
+    const inTree = path.join(folder, 'tree', 'a.txt');
+    res = main(['--post', '7', '--file', inTree, '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 2, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /不可放在審查樹裡面/u);
+
+    const sym = path.join(extDir, 'sym.md');
+    fs.symlinkSync(path.join(folder, 'output.log'), sym);
+    res = main(['--post', '7', '--file', sym, '--dir', dir], { settings: s, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /不是一般檔案/u);
+    assert.equal(calls.length, 0);
+
+    // ③ 平台受審版本已變、PR 說明複審者被改掉、或平台上已有同輪結論＝退 2，不貼
+    const changedHeadPlatform = fakePlatform(answersFor(r, { change: { ...answersFor(r).change, headSha: r.base } }));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform: changedHeadPlatform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /版本已變，不代貼舊版結論/u);
+
+    const changedReviewerPlatform = fakePlatform(answersFor(r, {
+      change: { ...answersFor(r).change, body: answersFor(r).change.body.replace('**複審者**：Beta', '**複審者**：Alpha') },
+    }));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform: changedReviewerPlatform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /PR說明的「複審者」欄目前是「Alpha」，不是開樹時的 Beta：不代貼/u);
+
+    const dupOnPlatform = fakePlatform(answersFor(r, { comments: [verdict('Beta', 1, r.head, '通過')] }));
+    res = main(['--post', '7', '--dir', dir], { settings: s, platform: dupOnPlatform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /平台上已經有 Beta（beta CLI）的 r1 結論留言：不重複貼/u);
+    assert.equal(calls.length, 0);
+
+    // ④ postComment 樣板沒帶 {change}、沒帶獨立的 <你寫好的結論檔>、或引號未閉合＝退 2；splitCommandArgs 保留單雙引號與空白參數
+    assert.deepEqual(
+      splitCommandArgs('post 7 -R "acme/kit" --label \'needs review\' --tag "a \\"quoted\\" tag" --path /tmp/my\\ dir --file "<你寫好的結論檔>"'),
+      ['post', '7', '-R', 'acme/kit', '--label', 'needs review', '--tag', 'a "quoted" tag', '--path', '/tmp/my dir', '--file', '<你寫好的結論檔>'],
+    );
+    assert.throws(() => splitCommandArgs('post 7 -R "acme/kit'), /引號或跳脫字元沒有閉合/u);
+    assert.throws(() => splitCommandArgs('post 7 \\'), /引號或跳脫字元沒有閉合/u);
+
+    const noChangeSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: 'post -R {project} --file <你寫好的結論檔>' } });
+    res = main(['--post', '7', '--dir', dir], { settings: noChangeSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /reviewLaunch\.postComment 沒帶 \{change\}/u);
+
+    const noFileSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: '假的貼法 {change}' } });
+    res = main(['--post', '7', '--dir', dir], { settings: noFileSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /要包含獨立的 <你寫好的結論檔> 佔位/u);
+
+    const unclosedQuoteSettings = settingsFor({ owner: 'Boss', reviewLaunch: { ...s.reviewLaunch, postComment: 'post {change} -R "{project} --file <你寫好的結論檔>' } });
+    res = main(['--post', '7', '--dir', dir], { settings: unclosedQuoteSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /引號或跳脫字元沒有閉合/u);
+    assert.equal(calls.length, 0);
+
+    // ⑤ 發現死程序殘留鎖（post.lock 的 PID 已不存在）＝退 2、保留殘留鎖不自動刪除、零貼文；手動移除殘留鎖後正常代貼（含單雙引號與帶空白參數樣板、預設讀 outFile、自動剝除文末「未貼」、逐字比對送出全文）
+    let deadPid = 999999;
+    while (deadPid > 200000) {
+      try { process.kill(deadPid, 0); deadPid -= 1; } catch (e) { if (e && e.code === 'ESRCH') break; deadPid -= 1; }
+    }
+    const lockFile = path.join(folder, 'post.lock');
+    fs.writeFileSync(lockFile, `${deadPid}\n`);
+    const quotedSettings = settingsFor({
+      owner: 'Boss',
+      reviewLaunch: {
+        ...s.reviewLaunch,
+        postComment: 'post {change} -R "{project}" --label \'needs review\' --tag "a \\"quoted\\" tag" --path /tmp/my\\ dir --file "<你寫好的結論檔>"',
+      },
+    });
+    res = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 2);
+    assert.match(res.lines.join('\n'), /發現殘留的代貼鎖 .*（原持有程序 PID .* 已結束）/u);
+    assert.equal(calls.length, 0, '遇殘留鎖時不可呼叫貼結論指令');
+    assert.ok(fs.existsSync(lockFile), '遇殘留鎖時不可非原子自動刪除 post.lock');
+    fs.unlinkSync(lockFile);
+
+    res = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
+    assert.equal(res.code, 0, res.lines.join('\n'));
+    assert.match(res.lines.join('\n'), /已代貼 r1 結論.*結論：通過（已剝除文末「未貼」）/u);
+    assert.equal(calls.length, 1);
+    const recAfter = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    assert.ok(recAfter.postedAt, 'launch.json 記下 postedAt');
+    assert.equal(recAfter.verdict, '通過');
+    assert.ok(recAfter.verdictFile.startsWith(path.join(folder, 'verdict-')), '結論暫存檔為每輪每次獨立檔名');
+    assert.deepEqual(calls[0].cmd, 'post');
+    assert.deepEqual(calls[0].args, [
+      '7', '-R', 'acme/kit', '--label', 'needs review', '--tag', 'a "quoted" tag', '--path', '/tmp/my dir', '--file', recAfter.verdictFile,
+    ]);
+    assert.equal(calls[0].sentBody, expectedBody, '送給貼結論指令的檔案內容須與期望全文逐字一致');
+    assert.equal(fs.readFileSync(recAfter.verdictFile, 'utf8'), expectedBody, '暫存檔全文須與期望全文逐字一致');
+    assert.ok(!fs.existsSync(path.join(folder, 'post.lock')), '代貼完成後釋放 post.lock');
+
+    // ⑥ 同一輪重複跑 --post＝退 2，不重複呼叫
+    const dupLocal = main(['--post', '7', '--dir', dir], { settings: quotedSettings, platform, runPost: recordPost });
+    assert.equal(dupLocal.code, 2);
+    assert.match(dupLocal.lines.join('\n'), /已經在 .* 代貼過結論，不重複貼/u);
+    assert.equal(calls.length, 1);
+
+    // ⑦ 代貼後照常 --close 收樹
+    const closed = close('7', { settings: s, dir, leftoverRoots: [] });
+    assert.equal(closed.code, 0, closed.lines.join('\n'));
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    for (const d of [dir, extDir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與獨立暫存檔保證只送出一次，且不會誤刪持有者的鎖', async () => {
+  const r = repo();
+  const dir = tmp('review-launch-race-');
+  const ext = tmp('review-launch-race-ext-');
+  const s = settingsFor({ owner: 'Boss' });
+  const answers = answersFor(r);
+  const launched = launch('7', 'Beta', { settings: s, platform: fakePlatform(answers), cwd: r.dir, dir, template: TEMPLATE });
+  assert.equal(launched.code, 0, launched.lines.join('\n'));
+  const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+  const lockFile = path.join(folder, 'post.lock');
+  const expectedA = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n### 本輪實際用的設定\n- A-original\n\n### 清單逐項結果\n- A-original\n`;
+  const expectedB = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- B-original\n\n### 清單逐項結果\n- B-original\n`;
+  const fileA = path.join(ext, 'A.md');
+  const fileB = path.join(ext, 'B.md');
+  fs.writeFileSync(fileA, `${expectedA}\n未貼\n`);
+  fs.writeFileSync(fileB, `${expectedB}\n未貼\n`);
+
+  // (a) 固定交錯點 1：兩個程序處理同一舊殘留鎖（A 讀到死 PID 後暫停，期間舊鎖已除且 B 取得新鎖進入 runPost；A 恢復後不得刪掉 B 的鎖，也不能再送出一則）
+  let deadPid = 999999;
+  while (deadPid > 200000) {
+    try { process.kill(deadPid, 0); deadPid -= 1; } catch (e) { if (e && e.code === 'ESRCH') break; deadPid -= 1; }
+  }
+  fs.writeFileSync(lockFile, `${deadPid}\n`);
+
+  function staleWorkerMain() {
+    const wfs = require('node:fs');
+    const wpath = require('node:path');
+    const o = JSON.parse(process.argv[2]);
+    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    if (o.tag === 'A') {
+      const origRead = wfs.readFileSync;
+      let hooked = false;
+      wfs.readFileSync = function patchedRead(p, ...rest) {
+        const res = origRead.call(this, p, ...rest);
+        if (!hooked && String(p).endsWith('post.lock')) {
+          hooked = true;
+          wfs.writeFileSync(wpath.join(o.ext, 'stale-a-read-pid'), '1');
+          const bInPost = wpath.join(o.ext, 'stale-b-in-runpost');
+          const until = Date.now() + 10000;
+          while (!origRead && false || !wfs.existsSync(bInPost)) {
+            if (Date.now() > until) throw new Error('timeout waiting for B to acquire new lock');
+            sleep(10);
+          }
+        }
+        return res;
+      };
+    } else {
+      const aRead = wpath.join(o.ext, 'stale-a-read-pid');
+      const until = Date.now() + 10000;
+      while (!wfs.existsSync(aRead)) {
+        if (Date.now() > until) throw new Error('timeout waiting for A to read stale PID');
+        sleep(10);
+      }
+      try { wfs.unlinkSync(o.lockFile); } catch { /* removed */ }
+    }
+    const { main: runMain } = require(o.modulePath);
+    const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
+      settings: o.settings,
+      platform: {
+        ask(op) {
+          if (op === 'change') return o.change;
+          if (op === 'comments') return [];
+          throw new Error(`unexpected op: ${op}`);
+        },
+      },
+      runPost(_cmd, args) {
+        if (o.tag === 'B') {
+          wfs.writeFileSync(wpath.join(o.ext, 'stale-b-in-runpost'), '1');
+          const aDone = wpath.join(o.ext, 'stale-a-done');
+          const until = Date.now() + 10000;
+          while (!wfs.existsSync(aDone)) {
+            if (Date.now() > until) break;
+            sleep(10);
+          }
+          if (!wfs.existsSync(o.lockFile)) throw new Error('B lock was deleted by A');
+        }
+        const body = wfs.readFileSync(args.at(-1), 'utf8');
+        wfs.appendFileSync(wpath.join(o.ext, 'stale-posts.jsonl'), `${JSON.stringify({ tag: o.tag, body })}\n`);
+      },
+    });
+    if (o.tag === 'A') wfs.writeFileSync(wpath.join(o.ext, 'stale-a-done'), '1');
+    process.stdout.write(`${JSON.stringify({ tag: o.tag, code: res.code, verdict: res.header ? res.header.verdict : null, lines: res.lines })}\n`);
+    process.exitCode = res.code;
+  }
+
+  const staleWorkerFile = path.join(ext, 'stale-worker.js');
+  fs.writeFileSync(staleWorkerFile, `(${staleWorkerMain.toString()})();\n`);
+  const runStaleWorker = (tag, file) => new Promise((resolve, reject) => {
+    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: gitEnv() });
+    let stdout = '';
+    let stderr = '';
+    p.stdout.on('data', (d) => { stdout += d; });
+    p.stderr.on('data', (d) => { stderr += d; });
+    p.on('error', reject);
+    p.on('close', (code) => resolve({ code, stdout, stderr, out: stdout.trim() ? JSON.parse(stdout.trim()) : null }));
+  });
+
+  // (b) 固定交錯點 2：一般同輪雙程序並發（A 持鎖在 runPost 內、B 後到排隊等候，A 完成後 B 重讀 launch.json 拒絕重貼）
+  function workerMain() {
+    const wfs = require('node:fs');
+    const wpath = require('node:path');
+    const o = JSON.parse(process.argv[2]);
+    const { main: runMain } = require(o.modulePath);
+    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    if (o.tag === 'B') {
+      const aEntered = wpath.join(o.ext, 'a-entered-runpost');
+      const until = Date.now() + 10000;
+      while (!wfs.existsSync(aEntered)) {
+        if (Date.now() > until) throw new Error('timeout waiting for A to enter runPost');
+        sleep(10);
+      }
+      wfs.writeFileSync(wpath.join(o.ext, 'b-calling-post'), '1');
+    }
+    const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
+      settings: o.settings,
+      platform: {
+        ask(op) {
+          if (op === 'change') return o.change;
+          if (op === 'comments') return [];
+          throw new Error(`unexpected op: ${op}`);
+        },
+      },
+      runPost(_cmd, args) {
+        if (o.tag === 'A') {
+          wfs.writeFileSync(wpath.join(o.ext, 'a-entered-runpost'), '1');
+          const bCalling = wpath.join(o.ext, 'b-calling-post');
+          const until = Date.now() + 10000;
+          while (!wfs.existsSync(bCalling)) {
+            if (Date.now() > until) throw new Error('timeout waiting for B to call post');
+            sleep(10);
+          }
+          sleep(80);
+        }
+        const body = wfs.readFileSync(args.at(-1), 'utf8');
+        wfs.appendFileSync(wpath.join(o.ext, 'posts.jsonl'), `${JSON.stringify({ tag: o.tag, body })}\n`);
+      },
+    });
+    process.stdout.write(`${JSON.stringify({ tag: o.tag, code: res.code, verdict: res.header ? res.header.verdict : null, lines: res.lines })}\n`);
+    process.exitCode = res.code;
+  }
+
+  const workerFile = path.join(ext, 'worker.js');
+  fs.writeFileSync(workerFile, `(${workerMain.toString()})();\n`);
+  const runWorker = (tag, file) => new Promise((resolve, reject) => {
+    const payload = { tag, ext, dir, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: gitEnv() });
+    let stdout = '';
+    let stderr = '';
+    p.stdout.on('data', (d) => { stdout += d; });
+    p.stderr.on('data', (d) => { stderr += d; });
+    p.on('error', reject);
+    p.on('close', (code) => resolve({ code, stdout, stderr, out: stdout.trim() ? JSON.parse(stdout.trim()) : null }));
+  });
+
+  try {
+    const [staleA, staleB] = await Promise.all([runStaleWorker('A', fileA), runStaleWorker('B', fileB)]);
+    assert.equal(staleA.code, 2, `staleA should reject stale lock; got ${JSON.stringify(staleA)}`);
+    assert.match(staleA.out.lines.join('\n'), /發現殘留的代貼鎖/u);
+    assert.equal(staleB.code, 0, `staleB stderr: ${staleB.stderr}`);
+    const stalePosts = fs.readFileSync(path.join(ext, 'stale-posts.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(stalePosts.length, 1, '殘留鎖交錯時全程只可送出一則');
+    assert.equal(stalePosts[0].tag, 'B');
+    assert.equal(stalePosts[0].body, expectedB);
+
+    // 重設 postedAt 以驗證一般同輪並發排隊
+    const recFile = path.join(folder, 'launch.json');
+    const recReset = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    delete recReset.postedAt;
+    delete recReset.verdict;
+    delete recReset.verdictFile;
+    fs.writeFileSync(recFile, `${JSON.stringify(recReset, null, 1)}\n`);
+
+    const [resA, resB] = await Promise.all([runWorker('A', fileA), runWorker('B', fileB)]);
+    assert.equal(resA.code, 0, `A stderr: ${resA.stderr}`);
+    assert.equal(resA.out.verdict, '需修改後再審');
+    assert.equal(resB.code, 2, `B should be rejected after A posts; got ${JSON.stringify(resB)}`);
+    assert.match(resB.out.lines.join('\n'), /已經在 .* 代貼過結論，不重複貼/u);
+
+    const posts = fs.readFileSync(path.join(ext, 'posts.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(posts.length, 1, '同輪並行 --post 只可送出一則結論');
+    assert.equal(posts[0].tag, 'A');
+    assert.equal(posts[0].body, expectedA, '送出全文須與 A 核對通過的結論逐字一致，不可被 B 覆寫');
+
+    const recAfter = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    assert.equal(recAfter.verdict, '需修改後再審');
+    assert.equal(fs.readFileSync(recAfter.verdictFile, 'utf8'), expectedA);
+  } finally {
+    close('7', { settings: s, dir, leftoverRoots: [] });
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    for (const d of [dir, ext, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('⑪defaultRunPost：不開 shell 直接執行，並清掉整個 GIT_* 家族與 clearEnv；失敗或起不來丟 LaunchError', () => {
+  const d = tmp('review-launch-runpost-');
+  const out = path.join(d, 'env.json');
+  const savedGit = process.env.GIT_DIR;
+  const savedIdx = process.env.GIT_INDEX_FILE;
+  const savedCustom = process.env.SECRET_TOKEN_FOR_TEST;
+  try {
+    process.env.GIT_DIR = '/decoy/git';
+    process.env.GIT_INDEX_FILE = '/decoy/index';
+    process.env.SECRET_TOKEN_FOR_TEST = 'should-be-cleared';
+    defaultRunPost(process.execPath, [
+      '-e',
+      'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ git: Object.keys(process.env).filter((k) => k.startsWith("GIT_")), token: process.env.SECRET_TOKEN_FOR_TEST || null }))',
+      out,
+    ], { clearEnv: ['SECRET_TOKEN_FOR_TEST'] });
+    const got = JSON.parse(fs.readFileSync(out, 'utf8'));
+    assert.deepEqual(got, { git: [], token: null });
+    assert.throws(() => defaultRunPost(process.execPath, ['-e', 'console.error("貼失敗"); process.exit(3)']), /貼結論指令退 3：貼失敗/u);
+    assert.throws(() => defaultRunPost(path.join(d, 'no-such-bin'), []), /貼結論指令起不來/u);
+  } finally {
+    if (savedGit === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGit;
+    if (savedIdx === undefined) delete process.env.GIT_INDEX_FILE; else process.env.GIT_INDEX_FILE = savedIdx;
+    if (savedCustom === undefined) delete process.env.SECRET_TOKEN_FOR_TEST; else process.env.SECRET_TOKEN_FOR_TEST = savedCustom;
+    fs.rmSync(d, { recursive: true, force: true });
+  }
 });
