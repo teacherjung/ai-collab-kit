@@ -68,9 +68,9 @@ function build(data) {
     out.push(`| ${plain(p.role, '參與者角色')} | ${plain(p.id, '識別值')} | ${plain(p.account, '貼文帳號')} |`);
   }
   out.push('', `貼文帳號資格：${plain(data.accountRule, '貼文帳號資格')}`, '');
-  // 預設分工（A1）只排版、沒有機器讀它；要在這裡明寫——產生器不認得的欄位不會自己出現在說明書裡
+  // 分工設定（A1）只排版、沒有機器讀它；要在這裡明寫——產生器不認得的欄位不會自己出現在說明書裡
   const division = data.defaultDivision || {};
-  out.push(`預設分工（規矩 A1；裁示者沒有逐支指定時，PR說明的「實作者」「複審者」兩欄照這個填）：實作者＝${plain(division.implementer, '預設分工的實作者')}；複審者＝${plain(division.reviewer, '預設分工的複審者')}`, '');
+  out.push(`分工設定（規矩 A1；裁示者沒有逐支指定時，PR說明的「實作者」「複審者」兩欄照這個填）：實作者＝${plain(division.implementer, '分工設定的實作者')}；複審者＝${plain(division.reviewer, '分工設定的複審者')}`, '');
   // 擁有者另登一欄、不從參與者的角色字樣去猜：裁示者可以由擁有者指定給別人（A1），快速通道（擁有者）（F12）的複審者卻一定是擁有者
   const owner = data.owner === undefined ? '未設定' : data.owner;
   if (typeof owner === 'string' && owner.trim() !== '未設定' && !(data.participants || []).some((p) => p && typeof p.id === 'string' && p.id.trim() === owner.trim())) {
