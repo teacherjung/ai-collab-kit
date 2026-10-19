@@ -255,8 +255,9 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
   assert.equal(u.platform.project, UNSET);
   for (const [op, argv] of Object.entries(u.platform.operations)) assert.deepEqual(argv, [UNSET], `平台動作 ${op} 要沒填`);
   assert.equal(u.forbidden.name, UNSET);
-  assert.equal(u.scanner.isolation.provider, UNSET);
-  assert.deepEqual(u.scanner.isolation.forbidden, [], '空白設定不可以登記任何禁區（複本裡跑試探才不會去埋）');
+  assert.equal(u.scanner.participant, UNSET);
+  assert.equal(u.scanner.source, UNSET);
+  assert.equal(u.scanner.command, UNSET);
   assert.equal(u.mergeCommand.command, UNSET);
   assert.deepEqual(u.checks.commands, [[UNSET]]);
   assert.equal(u.checks.mainWorktree, UNSET, '主目錄布局要沒登記（三關執行器照舊放行、全綠那一行說沒驗）');
