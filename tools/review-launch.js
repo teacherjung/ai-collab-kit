@@ -42,12 +42,12 @@ const UNSET = '未設定';
 const TEMPLATE = path.join(__dirname, '..', 'templates', 'review-request.md');
 const SCAN_TEMPLATE = path.join(__dirname, '..', 'templates', 'scan-record.md');
 const FILE_SLOT = '<你寫好的結論檔>';
-const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--dir <放樹的資料夾>]
-      node tools/review-launch.js --post <變更編號> [--file <結論檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --close <變更編號> [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan-post <變更編號> [--file <回覆檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan-close <變更編號> [--dir <放樹的資料夾>]`;
+const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--run] [--purge] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --post <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--file <結論檔>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --close <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--purge] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--run] [--purge] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan-post <變更編號> [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--file <回覆檔>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan-close <變更編號> [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--purge] [--dir <放樹的資料夾>]`;
 const TIER_ORDER = ['高', '中', '低'];
 
 /** 範本裡每一格照出現順序要填什麼；null＝留給複審者。 */
@@ -411,6 +411,7 @@ function freshEntries(roots, folder, since, re) {
     try { names = fs.readdirSync(real); } catch { unreadable.push(real); continue; }
     const group = [];
     for (const n of names) {
+      if (n.startsWith('.') && n.endsWith('.lock')) continue;
       const p = path.join(real, n);
       if (p === mine || mine.startsWith(`${p}${path.sep}`) || re.test(n)) continue;
       try { const t = fs.lstatSync(p).mtimeMs; if (t >= since) group.push({ p, t }); } catch { /* 讀的當下被刪了 */ }
@@ -422,12 +423,54 @@ function freshEntries(roots, folder, since, re) {
   return { fresh, groups, unreadable };
 }
 
+function unwrapScanOutput(raw, kindLabel = '掃描回覆') {
+  const text = String(raw ?? '');
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    const ndLines = trimmed.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+    if (ndLines.length > 1 && ndLines.every((l) => l.startsWith('{') && l.endsWith('}'))) {
+      try {
+        parsed = ndLines.map((l) => JSON.parse(l));
+      } catch {
+        return text;
+      }
+    } else {
+      return text;
+    }
+  }
+  const pickResult = (obj) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
+      throw new LaunchError(`${kindLabel} JSON 標示執行失敗（is_error 或非 success），不代貼`);
+    }
+    return typeof obj.result === 'string' ? obj.result : null;
+  };
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i -= 1) {
+      const item = parsed[i];
+      if (item && typeof item === 'object' && item.type === 'result') {
+        const res = pickResult(item);
+        if (res !== null) return res;
+      }
+    }
+    return text;
+  }
+  const res = pickResult(parsed);
+  return res !== null ? res : text;
+}
+
 /**
- * 核對純文字結論：去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
+ * 核對純文字結論（若為 CLI 結構化 JSON 成功包裹如 Claude `--output-format json` 則先解開 `result`）：
+ * 去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
  * 核第一行標頭（角色、來源、輪次、受審版本短碼）與「通過」的兩行固定小標（F4、F5、F7；擁有者照 F12 豁免小標）。
  */
 function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null }) {
-  const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const unwrapped = unwrapScanOutput(raw, '複審結論');
+  const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (!lines.length) throw new LaunchError('結論檔是空的');
@@ -526,14 +569,43 @@ function writeJsonAtomic(filePath, obj) {
   fs.renameSync(tmpFile, filePath);
 }
 
-/** 每輪排他鎖（post.lock）：同輪並發呼叫 --post 時依序排隊，取得鎖後重讀 launch.json 與平台狀態；遇死程序殘留鎖明確拒絕、不自動刪鎖（避免非原子回收誤刪他程序新鎖）。 */
+function unlinkIfOwned(lockFile, token) {
+  try {
+    if (fs.readFileSync(lockFile, 'utf8') === token) {
+      fs.unlinkSync(lockFile);
+    }
+  } catch { /* ignore */ }
+}
+
+/** 每輪排他鎖（post.lock）＋外層容器鎖協同：同輪並發呼叫 --post 時依序排隊，取得 post.lock 後必須一併取得容器外的 .<basename>.lock 並重驗容器 inode、post.lock 憑證與紀錄身分未在等待期間被刪除重建；釋放時僅刪除自己持有的鎖實例。 */
 function withPostLock(folder, fn) {
   const lockFile = path.join(folder, 'post.lock');
+  const containerLockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
+  const readContainerStamp = () => {
+    for (const name of ['launch.json', 'scan.json']) {
+      const p = path.join(folder, name);
+      if (fs.existsSync(p)) {
+        try {
+          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+          return `${name}:${j.round ?? ''}:${j.head ?? ''}:${j.startedAt ?? ''}`;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  };
+  let initialFolderIno = null;
+  try { initialFolderIno = fs.lstatSync(folder).ino; } catch { /* ignore */ }
+  const initialStamp = readContainerStamp();
+  const lockToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
+  const containerToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
   const deadline = Date.now() + 15000;
   let acquired = false;
+  let containerAcquired = false;
   while (!acquired) {
     try {
-      fs.writeFileSync(lockFile, `${process.pid}\n`, { flag: 'wx' });
+      fs.writeFileSync(lockFile, lockToken, { flag: 'wx' });
       acquired = true;
     } catch (e) {
       if (!e || e.code !== 'EEXIST') throw new LaunchError(`建立代貼鎖失敗：${(e && (e.code || e.message)) || e}`);
@@ -551,9 +623,71 @@ function withPostLock(folder, fn) {
     }
   }
   try {
+    try {
+      fs.writeFileSync(containerLockFile, containerToken, { flag: 'wx' });
+      containerAcquired = true;
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        let ownerPid = 0;
+        try { ownerPid = Number.parseInt(fs.readFileSync(containerLockFile, 'utf8').trim(), 10); } catch { /* ignore */ }
+        if (ownerPid > 0 && ownerPid !== process.pid) {
+          try { process.kill(ownerPid, 0); } catch (ke) {
+            if (ke && ke.code === 'ESRCH') {
+              throw new LaunchError(`發現殘留的容器鎖 ${containerLockFile}（原持有程序 PID ${ownerPid} 已結束）：請先確認該容器狀態，手動移除該鎖檔後再重試`);
+            }
+          }
+        }
+        throw new LaunchError(`${folder} 正在被另一個程序操作：請稍後再試`);
+      }
+      throw new LaunchError(`建立容器鎖失敗：${(e && (e.code || e.message)) || e}`);
+    }
+    let currentFolderIno = null;
+    try { currentFolderIno = fs.lstatSync(folder).ino; } catch { /* ignore */ }
+    let currentPostLock = null;
+    try { currentPostLock = fs.readFileSync(lockFile, 'utf8'); } catch { /* ignore */ }
+    const currentStamp = readContainerStamp();
+    if (
+      currentPostLock !== lockToken
+      || (initialFolderIno !== null && currentFolderIno !== initialFolderIno)
+      || (initialStamp !== null && currentStamp !== initialStamp)
+    ) {
+      throw new LaunchError(`${folder} 正在被另一個程序操作：請稍後再試`);
+    }
     return fn();
   } finally {
-    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+    if (containerAcquired) unlinkIfOwned(containerLockFile, containerToken);
+    if (acquired) unlinkIfOwned(lockFile, lockToken);
+  }
+}
+
+/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，且若代貼鎖 post.lock 存在亦立即拒絕，釋放時僅刪除自己持有的鎖實例。 */
+function withContainerLock(folder, busyMsg, fn) {
+  const lockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
+  const lockToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
+  try {
+    fs.writeFileSync(lockFile, lockToken, { flag: 'wx' });
+  } catch (e) {
+    if (e && e.code === 'EEXIST') {
+      let ownerPid = 0;
+      try { ownerPid = Number.parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10); } catch { /* ignore */ }
+      if (ownerPid > 0 && ownerPid !== process.pid) {
+        try { process.kill(ownerPid, 0); } catch (ke) {
+          if (ke && ke.code === 'ESRCH') {
+            throw new LaunchError(`發現殘留的容器鎖 ${lockFile}（原持有程序 PID ${ownerPid} 已結束）：請先確認該容器狀態，手動移除該鎖檔後再重試`);
+          }
+        }
+      }
+      throw new LaunchError(busyMsg);
+    }
+    throw new LaunchError(`建立容器鎖失敗：${(e && (e.code || e.message)) || e}`);
+  }
+  try {
+    if (fs.existsSync(path.join(folder, 'post.lock'))) {
+      throw new LaunchError(busyMsg);
+    }
+    return fn();
+  } finally {
+    unlinkIfOwned(lockFile, lockToken);
   }
 }
 
@@ -569,11 +703,37 @@ function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
   }
 }
 
+function matchesExpectHead(rec, expectHead) {
+  if (expectHead === null || expectHead === undefined) return true;
+  const want = String(expectHead).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,40}$/u.test(want)) return false;
+  const actual = typeof (rec && rec.head) === 'string' ? rec.head.trim().toLowerCase() : '';
+  if (!actual) return false;
+  if (want.length === 40) return actual === want;
+  if (!actual.startsWith(want)) return false;
+  if (rec && rec.root && fs.existsSync(rec.root)) {
+    if (!gitOk(rec.root, ['rev-parse', '--verify', '--quiet', `${want}^{commit}`])) return false;
+    const resolved = git(rec.root, ['rev-parse', '--verify', '--quiet', `${want}^{commit}`]).toLowerCase();
+    return resolved === actual;
+  }
+  return true;
+}
+
+function formatHeadPair(actualHead, expectHead) {
+  const actual = String(actualHead || '');
+  const want = String(expectHead || '');
+  const shortActual = actual.slice(0, 7);
+  const shortWant = want.slice(0, 7);
+  if (shortActual.toLowerCase() !== shortWant.toLowerCase()) return [shortActual, shortWant];
+  return [actual, want];
+}
+
 /**
  * 外殼代貼結論（--post）：任何 AI 複審者只需輸出純文字結論（文末可單獨寫「未貼」），不需在盒內持有平台憑證。
  * 先核審查樹與突變副本都在、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔、標頭與小標、平台版本與同輪未重複，通過才代貼並記下 postedAt。
+ * 當一鍵模式（--run）傳入 allowAlreadyPosted: true 時，若複審者已依提示自行貼出唯一一則合規當輪結論，核驗無誤後承接該結果並記下 postedAt，不重複貼。
  */
-function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date() } = {}) {
+function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), allowAlreadyPosted = false, expectRound = null, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
@@ -581,19 +741,39 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
   if (!filled(rl.postComment)) throw new LaunchError('專案設定的 reviewLaunch.postComment 還沒填：不知道怎麼貼結論');
   const { usable } = rolesOf(settings);
   const ownerRole = canonicalRole(settings && settings.owner, usable);
-  const re = folderRe(slugOf(project), String(changeArg).replace(/[^A-Za-z0-9._-]/gu, ''));
+  const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
+  const re = folderRe(slugOf(project), cleanId);
   let entries;
   try { entries = fs.readdirSync(dir); } catch (e) { throw new LaunchError(`讀不了 ${dir}（${e.code || e.message}）`); }
   const open = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
     try { return !JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8')).closedAt; } catch { return false; }
   });
-  if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
-  if (open.length > 1) throw new LaunchError(`在 ${dir} 底下找到 ${open.length} 個還開著的審查資料夾（${open.map((f) => path.basename(f)).join('、')}）：請先整理到只剩本輪一個`);
-  const folder = open[0];
+  let folder;
+  if (expectRound !== null && expectRound !== undefined) {
+    const targetFolder = path.join(dir, `review-${slugOf(project)}-${cleanId}-r${expectRound}`);
+    if (!open.includes(targetFolder)) {
+      throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 本輪 r${expectRound} 還開著的審查樹（${path.basename(targetFolder)}）`);
+    }
+    folder = targetFolder;
+  } else {
+    if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+    if (open.length > 1) throw new LaunchError(`在 ${dir} 底下找到 ${open.length} 個還開著的審查資料夾（${open.map((f) => path.basename(f)).join('、')}）：請先整理到只剩本輪一個`);
+    folder = open[0];
+  }
   const recFile = path.join(folder, 'launch.json');
   return withPostLock(folder, () => {
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (String(rec.change) !== String(changeArg)) throw new LaunchError(`launch.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
+    if (expectRound !== null && expectRound !== undefined && rec.round !== expectRound) {
+      throw new LaunchError(`launch.json 記的輪次是 r${rec.round}，不是本次啟動的 r${expectRound}`);
+    }
+    if (!matchesExpectHead(rec, expectHead)) {
+      const [shownActual, shownWant] = formatHeadPair(rec.head, expectHead);
+      throw new LaunchError(`launch.json 記的受審版本是 ${shownActual}，不是本次啟動的 ${shownWant}`);
+    }
+    if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
+      throw new LaunchError(`launch.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
+    }
     if (rec.closedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.closedAt} 收樹，不代貼結論`);
     if (rec.postedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.postedAt} 代貼過結論，不重複貼`);
     const entry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === rec.reviewer);
@@ -638,7 +818,19 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
-    const prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+    const unwrappedRaw = unwrapScanOutput(raw, '複審結論');
+    let prepared = null;
+    let prepareErr = null;
+    if (!allowAlreadyPosted) {
+      prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+    } else {
+      try {
+        prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      } catch (e) {
+        if (e instanceof LaunchError) prepareErr = e;
+        else throw e;
+      }
+    }
 
     const sub = substitute(rl.postComment, { project, change: rec.change }, '貼結論的指令');
     if (!sub.used.includes('change')) throw new LaunchError('reviewLaunch.postComment 沒帶 {change}：不知道要貼到哪一支');
@@ -657,17 +849,78 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     }
     const comments = askPlatform(platform, settings, 'comments', { change: rec.change });
     const wantSource = String(entry.source).trim().replace(/\s+/gu, ' ');
-    const alreadyOnPlatform = comments.some((c) => {
+    const roundComments = comments.filter((c) => {
       const h = headerOf(c.body, usable);
       return h && h.role === rec.reviewer && h.source === wantSource && h.round === rec.round;
     });
-    if (alreadyOnPlatform) throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
+    if (roundComments.length > 0) {
+      if (!allowAlreadyPosted) {
+        throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
+      }
+      if (roundComments.length > 1) {
+        throw new LaunchError(`平台上已經有 ${roundComments.length} 則 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：重複或衝突，不自動收尾`);
+      }
+      const normalizedComments = comments.map((c, idx) => (c && c.createdAt === undefined ? { ...c, createdAt: new Date(idx * 1000).toISOString() } : c));
+      const evaluated = evaluateVerdicts(normalizedComments, rec.head, rec.reviewer, usable, { ownerRole });
+      if (evaluated.unsure) {
+        throw new LaunchError('平台上留言時間讀不出來或沒帶時區：不自動收尾');
+      }
+      const unvoidedMalformed = evaluated.problems.find((p) => p.includes('用了 🤖 記號、但標頭格式不合規'));
+      if (unvoidedMalformed) {
+        throw new LaunchError(`平台上出現未作廢的壞標頭 🤖 留言（${unvoidedMalformed.split('\n')[0]}）：不自動收尾`);
+      }
+      let platformPrepared;
+      try {
+        platformPrepared = prepareVerdict(roundComments[0].body, {
+          reviewer: rec.reviewer,
+          source: entry.source,
+          round: rec.round,
+          head: rec.head,
+          usable,
+          ownerRole,
+        });
+      } catch (e) {
+        throw new LaunchError(`平台上已有的 r${rec.round} 結論留言不合規（${e.message}）：不自動收尾`);
+      }
+      if (platformPrepared.strippedUnposted) {
+        throw new LaunchError(`平台上已有的 r${rec.round} 結論留言文末仍帶「未貼」：不自動收尾`);
+      }
+      if (prepared && prepared.body !== platformPrepared.body) {
+        throw new LaunchError(`輸出檔的 r${rec.round} 結論與平台上已貼出的結論內容不一致：不自動收尾`);
+      }
+      if (!prepared && /🤖/u.test(unwrappedRaw)) {
+        throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
+      }
+      const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+        throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+      }
+      rec.postedAt = now().toISOString();
+      rec.verdict = platformPrepared.header.verdict;
+      writeJsonAtomic(recFile, rec);
+      return {
+        code: 0,
+        lines: [
+          `已確認複審者自行貼出 r${rec.round} 結論｜變更 ${rec.change}｜複審者 ${rec.reviewer}（來源 ${wantSource}）｜審 ${rec.head.slice(0, 7)}｜結論：${platformPrepared.header.verdict}（不重複代貼）`,
+          `  兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨；下一步跑結論閘確認，審完跑：node tools/review-launch.js --close ${rec.change}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`}`,
+        ],
+        record: rec,
+        header: platformPrepared.header,
+        body: platformPrepared.body,
+        selfPosted: true,
+      };
+    }
+    if (prepareErr) throw prepareErr;
 
     const verdictFile = path.join(folder, `verdict-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.md`);
     fs.writeFileSync(verdictFile, prepared.body, { flag: 'wx' });
     const argv = parts.map((p) => (p === FILE_SLOT ? verdictFile : p));
     const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
     runPost(argv[0], argv.slice(1), { clearEnv });
+    const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+      throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+    }
     rec.postedAt = now().toISOString();
     rec.verdict = prepared.header.verdict;
     rec.verdictFile = verdictFile;
@@ -696,70 +949,135 @@ function removeTree(root, t) {
   return r.error || r.status !== 0 ? ((r.error && r.error.message) || (r.stderr || '').trim() || `退 ${r.status}`) : null;
 }
 
-function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree } = {}) {
+function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false, expectRound = null, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
-  const re = folderRe(slugOf(project), String(changeArg).replace(/[^A-Za-z0-9._-]/gu, ''));
+  const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
+  const re = folderRe(slugOf(project), cleanId);
   let entries;
   try { entries = fs.readdirSync(dir); } catch (e) { throw new LaunchError(`讀不了 ${dir}（${e.code || e.message}）`); }
-  const open = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
+  const targetFolder = expectRound !== null && expectRound !== undefined
+    ? path.join(dir, `review-${slugOf(project)}-${cleanId}-r${expectRound}`)
+    : null;
+  const allFolders = entries
+    .filter((n) => re.test(n))
+    .map((n) => path.join(dir, n))
+    .filter((f) => !targetFolder || f === targetFolder)
+    .filter((f) => {
+      try { return Boolean(JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8'))); } catch { return false; }
+    });
+  const open = allFolders.filter((f) => {
     try { return !JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8')).closedAt; } catch { return false; }
   });
-  if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+  if (!open.length && !(purge && allFolders.length)) {
+    throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+  }
   const lines = [];
   let refused = false;
   for (const folder of open) {
-    const recFile = path.join(folder, 'launch.json');
-    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-    const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
-    rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
-    const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
-    const locks = lockedTrees(rec.root);
-    const problems = [];
-    for (const [what, t] of todo) {
-      if (!fs.existsSync(t)) {
-        // 目錄不在、git 也沒登記＝已經有人收過了（照上面的提示手動收的那一棵）；目錄不在但 git 還登記著＝被搬走或刪掉，要人看
-        if (!locks.has(t)) { rec.removed.push(t); save(); lines.push(`  r${rec.round} 的${what}已經不在、git 也沒登記：當作收過。`); continue; }
-        problems.push(`${what}不見了（${t}），git 還登記著`);
-        continue;
+    withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+      const recFile = path.join(folder, 'launch.json');
+      const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      if (
+        (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
+        || !matchesExpectHead(rec, expectHead)
+        || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+      ) {
+        refused = true;
+        lines.push(`沒收 r${rec.round}（${folder}）：容器紀錄已非本次啟動的那一輪（輪次、版本或開始時間不符）。`);
+        return;
       }
-      if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
-      const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-      if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-      if (st === null) problems.push(`${what}的狀態讀不出`);
-      else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
-    }
-    const already = rec.removed.length ? `（先前已收：${rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本')).join('、')}）` : '';
-    if (problems.length) {
-      refused = true;
-      lines.push(`沒收 r${rec.round}（${folder}）${already}：`, ...problems.map((p) => `  ・${p}`), `  還沒收的${todo.map(([w]) => w).join('、')}都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。`);
-      continue;
-    }
-    let failed = null;
-    for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
-      const why = remove(rec.root, t);
-      if (why) { failed = `${what}移除失敗：${why}`; break; }
-      rec.removed.push(t);
+      const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
+      rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
+      const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
+      const locks = lockedTrees(rec.root);
+      const problems = [];
+      for (const [what, t] of todo) {
+        if (!fs.existsSync(t)) {
+          // 目錄不在、git 也沒登記＝已經有人收過了（照上面的提示手動收的那一棵）；目錄不在但 git 還登記著＝被搬走或刪掉，要人看
+          if (!locks.has(t)) { rec.removed.push(t); save(); lines.push(`  r${rec.round} 的${what}已經不在、git 也沒登記：當作收過。`); continue; }
+          problems.push(`${what}不見了（${t}），git 還登記著`);
+          continue;
+        }
+        if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
+        const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+        if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
+        const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+        if (st === null) problems.push(`${what}的狀態讀不出`);
+        else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+      }
+      const already = rec.removed.length ? `（先前已收：${rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本')).join('、')}）` : '';
+      if (problems.length) {
+        refused = true;
+        lines.push(`沒收 r${rec.round}（${folder}）${already}：`, ...problems.map((p) => `  ・${p}`), `  還沒收的${todo.map(([w]) => w).join('、')}都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。`);
+        return;
+      }
+      let failed = null;
+      for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
+        const why = remove(rec.root, t);
+        if (why) { failed = `${what}移除失敗：${why}`; break; }
+        rec.removed.push(t);
+        save();
+      }
+      if (failed) {
+        refused = true;
+        const done = rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本'));
+        lines.push(`收到一半 r${rec.round}（${folder}）：${done.length ? `已收 ${done.join('、')}；` : ''}${failed}。紀錄已記下收了哪幾棵，排除原因後重跑只會收剩下的。`);
+        return;
+      }
+      rec.closedAt = new Date().toISOString();
       save();
+      const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+      const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+      const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+      lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
+      for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
+      for (const g of groups) {
+        lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
+        for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+        if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+      }
+    });
+  }
+  if (!refused && purge) {
+    const purgeProblems = [];
+    const purgedNames = [];
+    for (const folder of allFolders) {
+      withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+        if (!fs.existsSync(path.join(folder, 'launch.json'))) return;
+        const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+        const locks = lockedTrees(rec.root);
+        let folderHasProblem = false;
+        if (
+          (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
+          || !matchesExpectHead(rec, expectHead)
+          || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+        ) {
+          purgeProblems.push(`${path.basename(folder)} 的容器紀錄已非本次啟動的那一輪（輪次、版本或開始時間不符）`);
+          folderHasProblem = true;
+        }
+        if (!rec.closedAt) {
+          purgeProblems.push(`${path.basename(folder)} 還沒收樹（缺少 closedAt）`);
+          folderHasProblem = true;
+        }
+        for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+          if (t && (fs.existsSync(t) || locks.has(t))) {
+            purgeProblems.push(`${path.basename(folder)} 的${what}還在或仍登記在 git worktree（${t}）`);
+            folderHasProblem = true;
+          }
+        }
+        if (!folderHasProblem) {
+          fs.rmSync(folder, { recursive: true, force: true });
+          purgedNames.push(path.basename(folder));
+        }
+      });
     }
-    if (failed) {
-      refused = true;
-      const done = rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本'));
-      lines.push(`收到一半 r${rec.round}（${folder}）：${done.length ? `已收 ${done.join('、')}；` : ''}${failed}。紀錄已記下收了哪幾棵，排除原因後重跑只會收剩下的。`);
-      continue;
+    if (purgeProblems.length) {
+      lines.push('沒清除審查資料夾（--purge）：', ...purgeProblems.map((p) => `  ・${p}`));
+      return { code: 1, lines };
     }
-    rec.closedAt = new Date().toISOString();
-    save();
-    lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
-    const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
-    for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-    for (const g of groups) {
-      lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
-      for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
-      if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
-    }
+    lines.push(`已清除變更 ${changeArg} 已收樹的審查資料夾：${purgedNames.join('、')}`);
   }
   return { code: refused ? 1 : 0, lines };
 }
@@ -938,33 +1256,62 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     fullDiff: `git diff ${base}...${head}`,
   };
   const prompt = fill(tpl, values, SCAN_FILL);
-  if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+  const canReplaceClosedScan = () => {
+    try {
+      if (fs.existsSync(path.join(folder, 'post.lock'))) return false;
+      const prevScan = JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8'));
+      const prevLocks = prevScan && prevScan.root ? lockedTrees(prevScan.root) : new Map();
+      return Boolean(
+        prevScan
+        && prevScan.closedAt
+        && (!prevScan.tree || (!fs.existsSync(prevScan.tree) && !prevLocks.has(prevScan.tree)))
+        && (prevScan.head !== head || !prevScan.postedAt),
+      );
+    } catch {
+      return false;
+    }
+  };
+  if (fs.existsSync(folder) && !canReplaceClosedScan()) {
+    throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+  }
 
   const record = {
     change: id, scanner, source: spec.source, reviewer, implementer, tier,
     head, base, passCommentId: passComment.id, passCommentLink,
     root, tree, promptFile, outFile, startedAt: now().toISOString(),
   };
-  const before = new Set(lockedTrees(root).keys());
-  try { fs.mkdirSync(folder); } catch (e) {
-    if (e && e.code === 'EEXIST') throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`);
-    throw e;
-  }
-  const created = [];
-  try {
-    git(root, ['worktree', 'add', '--detach', '-q', tree, head]);
-    created.push(tree);
-    const got = git(tree, ['rev-parse', 'HEAD']);
-    if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
-    fs.writeFileSync(promptFile, prompt);
-    fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
-  } catch (e) {
-    let registered = created;
-    try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
-    for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
-    fs.rmSync(folder, { recursive: true, force: true });
-    throw e;
-  }
+  withContainerLock(
+    folder,
+    `${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`,
+    () => {
+      if (fs.existsSync(folder)) {
+        if (!canReplaceClosedScan()) {
+          throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+        }
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+      const before = new Set(lockedTrees(root).keys());
+      try { fs.mkdirSync(folder); } catch (e) {
+        if (e && e.code === 'EEXIST') throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`);
+        throw e;
+      }
+      const created = [];
+      try {
+        git(root, ['worktree', 'add', '--detach', '-q', tree, head]);
+        created.push(tree);
+        const got = git(tree, ['rev-parse', 'HEAD']);
+        if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
+        fs.writeFileSync(promptFile, prompt);
+        fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
+      } catch (e) {
+        let registered = created;
+        try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
+        for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
+        fs.rmSync(folder, { recursive: true, force: true });
+        throw e;
+      }
+    },
+  );
   const lines = [
     `掃描準備｜變更 ${id}｜掃描者 ${scanner}（來源 ${spec.source}）｜掃 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
     `  風險級別：${tier}（分級表規定：${tierRow.scan}）｜依據的複審通過留言：${passCommentLink}`,
@@ -978,41 +1325,10 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   return { code: 0, lines, record, command, prompt };
 }
 
-function unwrapScanOutput(raw) {
-  const text = String(raw ?? '');
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return text;
-  }
-  const pickResult = (obj) => {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
-      throw new LaunchError('掃描回覆 JSON 標示執行失敗（is_error 或非 success），不代貼');
-    }
-    return typeof obj.result === 'string' ? obj.result : null;
-  };
-  if (Array.isArray(parsed)) {
-    for (let i = parsed.length - 1; i >= 0; i -= 1) {
-      const item = parsed[i];
-      if (item && typeof item === 'object' && item.type === 'result') {
-        const res = pickResult(item);
-        if (res !== null) return res;
-      }
-    }
-    return text;
-  }
-  const res = pickResult(parsed);
-  return res !== null ? res : text;
-}
-
 /**
  * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
  * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
- * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭攔截）；
+ * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭擋下）；
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
@@ -1071,7 +1387,7 @@ function prepareScan(raw, { scanner, source, head, usable, passCommentLink = nul
   };
 }
 
-function scanPost(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date() } = {}) {
+function scanPost(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
@@ -1084,6 +1400,13 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   return withPostLock(folder, () => {
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (String(rec.change) !== String(changeArg)) throw new LaunchError(`scan.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
+    if (!matchesExpectHead(rec, expectHead)) {
+      const [shownActual, shownWant] = formatHeadPair(rec.head, expectHead);
+      throw new LaunchError(`scan.json 記的掃描版本是 ${shownActual}，不是本次啟動的 ${shownWant}`);
+    }
+    if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
+      throw new LaunchError(`scan.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
+    }
     if (rec.closedAt) throw new LaunchError(`掃描樹（${folder}）已經在 ${rec.closedAt} 收樹，不代貼掃描留言`);
     if (rec.postedAt) throw new LaunchError(`掃描樹（${folder}）已經在 ${rec.postedAt} 代貼過掃描留言，不重複貼`);
 
@@ -1159,6 +1482,10 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
     const argv = parts.map((p) => (p === FILE_SLOT ? replyFile : p));
     const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
     runPost(argv[0], argv.slice(1), { clearEnv });
+    const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+      throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+    }
     rec.postedAt = nowIso;
     rec.replyFile = replyFile;
     writeJsonAtomic(recFile, rec);
@@ -1176,60 +1503,84 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   });
 }
 
-function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree } = {}) {
+function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
   const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
   const folder = path.join(dir, `scan-${slugOf(project)}-${cleanId}`);
-  const recFile = path.join(folder, 'scan.json');
-  if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
-  const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-  if (rec.closedAt) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
-  const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
-  rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
-  const t = rec.tree;
-  const locks = lockedTrees(rec.root);
-  const problems = [];
-  const lines = [];
-  if (!rec.removed.includes(t)) {
-    if (!fs.existsSync(t)) {
-      if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
-      else problems.push(`掃描樹不見了（${t}），git 還登記著`);
-    } else {
-      if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
-      const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-      if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-      if (st === null) problems.push('掃描樹的狀態讀不出');
-      else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+  return withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+    const recFile = path.join(folder, 'scan.json');
+    if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
+    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (
+      !matchesExpectHead(rec, expectHead)
+      || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+    ) {
+      return {
+        code: 1,
+        lines: [`沒收掃描樹（${folder}）：掃描容器紀錄已非本次啟動的那一輪（版本或開始時間不符）。`],
+      };
     }
-  }
-  if (problems.length) {
-    lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
-    return { code: 1, lines };
-  }
-  if (!rec.removed.includes(t)) {
-    const why = remove(rec.root, t);
-    if (why) {
-      lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
-      return { code: 1, lines };
+    if (rec.closedAt && !purge) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
+    const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
+    rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
+    const t = rec.tree;
+    const lines = [];
+    if (!rec.closedAt) {
+      const locks = lockedTrees(rec.root);
+      const problems = [];
+      if (!rec.removed.includes(t)) {
+        if (!fs.existsSync(t)) {
+          if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
+          else problems.push(`掃描樹不見了（${t}），git 還登記著`);
+        } else {
+          if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
+          const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+          if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
+          const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+          if (st === null) problems.push('掃描樹的狀態讀不出');
+          else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+        }
+      }
+      if (problems.length) {
+        lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
+        return { code: 1, lines };
+      }
+      if (!rec.removed.includes(t)) {
+        const why = remove(rec.root, t);
+        if (why) {
+          lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
+          return { code: 1, lines };
+        }
+        rec.removed.push(t);
+        save();
+      }
+      rec.closedAt = new Date().toISOString();
+      save();
+      const re = scanFolderRe(slugOf(project), cleanId);
+      const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+      const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+      const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+      lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
+      for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
+      for (const g of groups) {
+        lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
+        for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+        if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+      }
     }
-    rec.removed.push(t);
-    save();
-  }
-  rec.closedAt = new Date().toISOString();
-  save();
-  lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
-  const re = scanFolderRe(slugOf(project), cleanId);
-  const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
-  for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-  for (const g of groups) {
-    lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
-    for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
-    if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
-  }
-  return { code: 0, lines };
+    if (purge) {
+      const locks = lockedTrees(rec.root);
+      if (t && (fs.existsSync(t) || locks.has(t))) {
+        lines.push('沒清除掃描資料夾（--purge）：', `  ・${path.basename(folder)} 的掃描樹還在或仍登記在 git worktree（${t}）`);
+        return { code: 1, lines };
+      }
+      fs.rmSync(folder, { recursive: true, force: true });
+      lines.push(`已清除變更 ${changeArg} 已收樹的掃描資料夾：${path.basename(folder)}`);
+    }
+    return { code: 0, lines };
+  });
 }
 
 const GROK_PINNED_ISSUER = 'https://auth.x.ai';
@@ -2015,6 +2366,25 @@ function stripGrokPreamble(rawOutput, mode = 'scan') {
     : text;
 }
 
+/** 執行複審／掃描啟動指令（清掉 GIT_* 與 platform.clearEnv；以 record.root 為工作目錄跑 shell 指令）。 */
+function defaultRunExec(command, { record, clearEnv = [] } = {}) {
+  const env = gitEnv();
+  for (const k of Array.isArray(clearEnv) ? clearEnv : []) delete env[k];
+  const cwd = (record && record.root) || process.cwd();
+  const r = spawnSync('/bin/sh', ['-c', command], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (r.error) throw new LaunchError(`啟動指令起不來：${r.error.message}`);
+  if (r.status !== 0) {
+    const msg = `${r.stderr || ''}\n${r.stdout || ''}`.trim().slice(0, 300);
+    throw new LaunchError(`啟動指令退 ${r.status === null ? '（被殺掉）' : r.status}：${msg || '（沒有訊息）'}`);
+  }
+}
+
 function parseArgs(argv) {
   const out = { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: undefined };
   const flagMap = {
@@ -2028,6 +2398,9 @@ function parseArgs(argv) {
     '--tier': 'tier',
     '--scan-post': 'scanPost',
     '--scan-close': 'scanClose',
+    '--round': 'round',
+    '--expect-head': 'expectHead',
+    '--expect-started-at': 'expectStartedAt',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -2036,31 +2409,54 @@ function parseArgs(argv) {
       if (v === undefined || v.startsWith('--')) return { error: `${a} 後面要接值` };
       out[flagMap[a]] = v;
       i += 1;
-    } else if (a.startsWith('--')) return { error: `不認得的參數：${a}` };
+    } else if (a === '--run') out.run = true;
+    else if (a === '--purge') out.purge = true;
+    else if (a.startsWith('--')) return { error: `不認得的參數：${a}` };
     else if (out.change === undefined) out.change = a;
     else return { error: `多給了一個參數：${a}` };
   }
   const modes = ['close', 'post', 'scan', 'scanPost', 'scanClose'].filter((k) => out[k] !== undefined);
   if (modes.length > 1) return { error: '一次只能指定一種模式（--close、--post、--scan、--scan-post、--scan-close）' };
+  if (out.purge && !out.run && out.close === undefined && out.scanClose === undefined) {
+    return { error: '--purge 只能配 --close、--scan-close 或 --run 用' };
+  }
+  if (out.round !== undefined) {
+    if (out.close === undefined && out.post === undefined) return { error: '--round 只能配 --close 或 --post 用' };
+    if (!/^[1-9]\d*$/u.test(out.round)) return { error: '--round 要是正整數' };
+    out.expectRound = Number.parseInt(out.round, 10);
+  }
+  if (out.expectHead !== undefined) {
+    if (out.close === undefined && out.post === undefined && out.scanClose === undefined && out.scanPost === undefined) {
+      return { error: '--expect-head 只能配 --close、--post、--scan-close 或 --scan-post 用' };
+    }
+    if (!/^[0-9a-fA-F]{7,40}$/u.test(out.expectHead)) return { error: '--expect-head 要是 7〜40 碼十六進位版本碼' };
+    out.expectHead = out.expectHead.toLowerCase();
+  }
+  if (out.expectStartedAt !== undefined) {
+    if (out.close === undefined && out.post === undefined && out.scanClose === undefined && out.scanPost === undefined) {
+      return { error: '--expect-started-at 只能配 --close、--post、--scan-close 或 --scan-post 用' };
+    }
+    if (parseInstant(out.expectStartedAt) === null) return { error: '--expect-started-at 要是帶時區的合法 ISO 時間' };
+  }
   if (out.close !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
-      ? out : { error: '--close 只收變更編號（和 --dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
+      ? out : { error: '--close 只收變更編號（和選填的 --round、--expect-head、--expect-started-at、--purge、--dir）' };
   }
   if (out.post !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
-      ? out : { error: '--post 只收變更編號（和選填的 --file、--dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
+      ? out : { error: '--post 只收變更編號（和選填的 --round、--expect-head、--expect-started-at、--file、--dir）' };
   }
   if (out.scan !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.file === undefined
-      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--tier、--dir）' };
+      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--tier、--run、--purge、--dir）' };
   }
   if (out.scanPost !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
-      ? out : { error: '--scan-post 只收變更編號（和選填的 --file、--dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
+      ? out : { error: '--scan-post 只收變更編號（和選填的 --expect-head、--expect-started-at、--file、--dir）' };
   }
   if (out.scanClose !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
-      ? out : { error: '--scan-close 只收變更編號（和 --dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
+      ? out : { error: '--scan-close 只收變更編號（和選填的 --expect-head、--expect-started-at、--purge、--dir）' };
   }
   if (out.scanner !== undefined) return { error: '--scanner 只能配 --scan 用' };
   if (out.tier !== undefined) return { error: '--tier 只能配 --scan 用' };
@@ -2073,13 +2469,146 @@ function main(argv, opts = {}) {
   const a = parseArgs(argv);
   if (a.error) return { code: 2, lines: [a.error, USAGE] };
   const dir = a.dir || opts.dir;
+  const purge = Boolean(a.purge || opts.purge);
+  const expectOpts = {
+    ...(a.expectRound !== undefined ? { expectRound: a.expectRound } : {}),
+    ...(a.expectHead !== undefined ? { expectHead: a.expectHead } : {}),
+    ...(a.expectStartedAt !== undefined ? { expectStartedAt: a.expectStartedAt } : {}),
+  };
   try {
-    if (a.close !== undefined) return close(a.close, { ...opts, ...(dir ? { dir } : {}) });
-    if (a.post !== undefined) return post(a.post, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scan !== undefined) return scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
-    if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...(dir ? { dir } : {}) });
-    return launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
+    if (a.close !== undefined) return close(a.close, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    if (a.post !== undefined) return post(a.post, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
+    if (a.scan !== undefined) {
+      const launched = scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
+      if (!a.run || launched.code !== 0) return launched;
+      const s = opts.settings || readSettings();
+      const clearEnv = Array.isArray(s.platform && s.platform.clearEnv) ? s.platform.clearEnv : [];
+      const runExec = opts.runExec || defaultRunExec;
+      const folder = path.dirname(launched.record.promptFile);
+      try {
+        runExec(launched.command, { record: launched.record, clearEnv });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          return { code: 1, lines: [...launched.lines, `執行掃描啟動指令失敗：${e.message}（掃描樹與輸出檔留在 ${folder} 供檢查，未代貼、未收樹）`] };
+        }
+        throw e;
+      }
+      let posted;
+      try {
+        posted = scanPost(launched.record.change, {
+          ...opts,
+          ...(dir ? { dir } : {}),
+          expectHead: launched.record.head,
+          expectStartedAt: launched.record.startedAt,
+        });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（掃描樹與輸出檔留在 ${folder}，未收樹）。`] };
+        }
+        throw e;
+      }
+      if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
+      let closed;
+      try {
+        closed = scanClose(launched.record.change, {
+          ...opts,
+          ...(dir ? { dir } : {}),
+          ...(purge ? { purge: true } : {}),
+          expectHead: launched.record.head,
+          expectStartedAt: launched.record.startedAt,
+        });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          const resolvedDir = path.dirname(folder);
+          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${resolvedDir}` : ''}`;
+          return {
+            code: 2,
+            lines: [
+              ...launched.lines,
+              ...posted.lines,
+              `送審產生器：已貼，收尾失敗（${e.message}）——沒有收（掃描樹與輸出檔留在 ${folder}，可重跑 ${retryCmd}）。`,
+            ],
+          };
+        }
+        throw e;
+      }
+      return {
+        code: closed.code,
+        lines: [...launched.lines, ...posted.lines, ...closed.lines],
+        record: posted.record,
+        header: posted.header,
+        body: posted.body,
+        command: launched.command,
+        prompt: launched.prompt,
+      };
+    }
+    if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
+    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    const launched = launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
+    if (!a.run || launched.code !== 0) return launched;
+    const s = opts.settings || readSettings();
+    const clearEnv = Array.isArray(s.platform && s.platform.clearEnv) ? s.platform.clearEnv : [];
+    const runExec = opts.runExec || defaultRunExec;
+    const folder = path.dirname(launched.record.promptFile);
+    try {
+      runExec(launched.command, { record: launched.record, clearEnv });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        return { code: 1, lines: [...launched.lines, `執行複審啟動指令失敗：${e.message}（審查樹與輸出檔留在 ${folder} 供檢查，未代貼、未收樹）`] };
+      }
+      throw e;
+    }
+    let posted;
+    try {
+      posted = post(launched.record.change, {
+        ...opts,
+        ...(dir ? { dir } : {}),
+        allowAlreadyPosted: true,
+        expectRound: launched.record.round,
+        expectHead: launched.record.head,
+        expectStartedAt: launched.record.startedAt,
+      });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（審查樹與輸出檔留在 ${folder}，未收樹）。`] };
+      }
+      throw e;
+    }
+    if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
+    let closed;
+    try {
+      closed = close(launched.record.change, {
+        ...opts,
+        ...(dir ? { dir } : {}),
+        ...(purge ? { purge: true } : {}),
+        expectRound: launched.record.round,
+        expectHead: launched.record.head,
+        expectStartedAt: launched.record.startedAt,
+      });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        const resolvedDir = path.dirname(folder);
+        const retryCmd = `node tools/review-launch.js --close ${launched.record.change} --round ${launched.record.round} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${resolvedDir}` : ''}`;
+        return {
+          code: 2,
+          lines: [
+            ...launched.lines,
+            ...posted.lines,
+            `送審產生器：已貼，收尾失敗（${e.message}）——沒有收（審查樹與輸出檔留在 ${folder}，可重跑 ${retryCmd}）。`,
+          ],
+        };
+      }
+      throw e;
+    }
+    return {
+      code: closed.code,
+      lines: [...launched.lines, ...posted.lines, ...closed.lines],
+      record: posted.record,
+      header: posted.header,
+      body: posted.body,
+      command: launched.command,
+      prompt: launched.prompt,
+    };
   } catch (e) {
     if (e instanceof LaunchError) {
       const action = (a.close !== undefined || a.scanClose !== undefined)
@@ -2114,4 +2643,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
