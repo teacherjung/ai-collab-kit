@@ -43,11 +43,11 @@ const TEMPLATE = path.join(__dirname, '..', 'templates', 'review-request.md');
 const SCAN_TEMPLATE = path.join(__dirname, '..', 'templates', 'scan-record.md');
 const FILE_SLOT = '<你寫好的結論檔>';
 const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--run] [--purge] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --post <變更編號> [--file <結論檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --close <變更編號> [--purge] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --post <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--file <結論檔>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --close <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--purge] [--dir <放樹的資料夾>]
       node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--run] [--purge] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan-post <變更編號> [--file <回覆檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan-close <變更編號> [--purge] [--dir <放樹的資料夾>]`;
+      node tools/review-launch.js --scan-post <變更編號> [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--file <回覆檔>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan-close <變更編號> [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--purge] [--dir <放樹的資料夾>]`;
 const TIER_ORDER = ['高', '中', '低'];
 
 /** 範本裡每一格照出現順序要填什麼；null＝留給複審者。 */
@@ -569,14 +569,43 @@ function writeJsonAtomic(filePath, obj) {
   fs.renameSync(tmpFile, filePath);
 }
 
-/** 每輪排他鎖（post.lock）：同輪並發呼叫 --post 時依序排隊，取得鎖後重讀 launch.json 與平台狀態；遇死程序殘留鎖明確拒絕、不自動刪鎖（避免非原子回收誤刪他程序新鎖）。 */
+function unlinkIfOwned(lockFile, token) {
+  try {
+    if (fs.readFileSync(lockFile, 'utf8') === token) {
+      fs.unlinkSync(lockFile);
+    }
+  } catch { /* ignore */ }
+}
+
+/** 每輪排他鎖（post.lock）＋外層容器鎖協同：同輪並發呼叫 --post 時依序排隊，取得 post.lock 後必須一併取得容器外的 .<basename>.lock 並重驗容器 inode、post.lock 憑證與紀錄身分未在等待期間被刪除重建；釋放時僅刪除自己持有的鎖實例。 */
 function withPostLock(folder, fn) {
   const lockFile = path.join(folder, 'post.lock');
+  const containerLockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
+  const readContainerStamp = () => {
+    for (const name of ['launch.json', 'scan.json']) {
+      const p = path.join(folder, name);
+      if (fs.existsSync(p)) {
+        try {
+          const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+          return `${name}:${j.round ?? ''}:${j.head ?? ''}:${j.startedAt ?? ''}`;
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  };
+  let initialFolderIno = null;
+  try { initialFolderIno = fs.lstatSync(folder).ino; } catch { /* ignore */ }
+  const initialStamp = readContainerStamp();
+  const lockToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
+  const containerToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
   const deadline = Date.now() + 15000;
   let acquired = false;
+  let containerAcquired = false;
   while (!acquired) {
     try {
-      fs.writeFileSync(lockFile, `${process.pid}\n`, { flag: 'wx' });
+      fs.writeFileSync(lockFile, lockToken, { flag: 'wx' });
       acquired = true;
     } catch (e) {
       if (!e || e.code !== 'EEXIST') throw new LaunchError(`建立代貼鎖失敗：${(e && (e.code || e.message)) || e}`);
@@ -593,22 +622,50 @@ function withPostLock(folder, fn) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
-  const containerLockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
   try {
-    if (fs.existsSync(containerLockFile)) {
+    try {
+      fs.writeFileSync(containerLockFile, containerToken, { flag: 'wx' });
+      containerAcquired = true;
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        let ownerPid = 0;
+        try { ownerPid = Number.parseInt(fs.readFileSync(containerLockFile, 'utf8').trim(), 10); } catch { /* ignore */ }
+        if (ownerPid > 0 && ownerPid !== process.pid) {
+          try { process.kill(ownerPid, 0); } catch (ke) {
+            if (ke && ke.code === 'ESRCH') {
+              throw new LaunchError(`發現殘留的容器鎖 ${containerLockFile}（原持有程序 PID ${ownerPid} 已結束）：請先確認該容器狀態，手動移除該鎖檔後再重試`);
+            }
+          }
+        }
+        throw new LaunchError(`${folder} 正在被另一個程序操作：請稍後再試`);
+      }
+      throw new LaunchError(`建立容器鎖失敗：${(e && (e.code || e.message)) || e}`);
+    }
+    let currentFolderIno = null;
+    try { currentFolderIno = fs.lstatSync(folder).ino; } catch { /* ignore */ }
+    let currentPostLock = null;
+    try { currentPostLock = fs.readFileSync(lockFile, 'utf8'); } catch { /* ignore */ }
+    const currentStamp = readContainerStamp();
+    if (
+      currentPostLock !== lockToken
+      || (initialFolderIno !== null && currentFolderIno !== initialFolderIno)
+      || (initialStamp !== null && currentStamp !== initialStamp)
+    ) {
       throw new LaunchError(`${folder} 正在被另一個程序操作：請稍後再試`);
     }
     return fn();
   } finally {
-    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+    if (containerAcquired) unlinkIfOwned(containerLockFile, containerToken);
+    if (acquired) unlinkIfOwned(lockFile, lockToken);
   }
 }
 
-/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，且若代貼鎖 post.lock 存在亦立即拒絕，不覆蓋先到者。 */
+/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，且若代貼鎖 post.lock 存在亦立即拒絕，釋放時僅刪除自己持有的鎖實例。 */
 function withContainerLock(folder, busyMsg, fn) {
   const lockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
+  const lockToken = `${process.pid}:${Date.now()}:${crypto.randomBytes(8).toString('hex')}\n`;
   try {
-    fs.writeFileSync(lockFile, `${process.pid}\n`, { flag: 'wx' });
+    fs.writeFileSync(lockFile, lockToken, { flag: 'wx' });
   } catch (e) {
     if (e && e.code === 'EEXIST') {
       let ownerPid = 0;
@@ -630,7 +687,7 @@ function withContainerLock(folder, busyMsg, fn) {
     }
     return fn();
   } finally {
-    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+    unlinkIfOwned(lockFile, lockToken);
   }
 }
 
@@ -2314,6 +2371,9 @@ function parseArgs(argv) {
     '--tier': 'tier',
     '--scan-post': 'scanPost',
     '--scan-close': 'scanClose',
+    '--round': 'round',
+    '--expect-head': 'expectHead',
+    '--expect-started-at': 'expectStartedAt',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -2333,13 +2393,30 @@ function parseArgs(argv) {
   if (out.purge && !out.run && out.close === undefined && out.scanClose === undefined) {
     return { error: '--purge 只能配 --close、--scan-close 或 --run 用' };
   }
+  if (out.round !== undefined) {
+    if (out.close === undefined && out.post === undefined) return { error: '--round 只能配 --close 或 --post 用' };
+    if (!/^[1-9]\d*$/u.test(out.round)) return { error: '--round 要是正整數' };
+    out.expectRound = Number.parseInt(out.round, 10);
+  }
+  if (out.expectHead !== undefined) {
+    if (out.close === undefined && out.post === undefined && out.scanClose === undefined && out.scanPost === undefined) {
+      return { error: '--expect-head 只能配 --close、--post、--scan-close 或 --scan-post 用' };
+    }
+    if (!/^[0-9a-fA-F]{7,40}$/u.test(out.expectHead)) return { error: '--expect-head 要是 7〜40 碼十六進位版本碼' };
+  }
+  if (out.expectStartedAt !== undefined) {
+    if (out.close === undefined && out.post === undefined && out.scanClose === undefined && out.scanPost === undefined) {
+      return { error: '--expect-started-at 只能配 --close、--post、--scan-close 或 --scan-post 用' };
+    }
+    if (parseInstant(out.expectStartedAt) === null) return { error: '--expect-started-at 要是帶時區的合法 ISO 時間' };
+  }
   if (out.close !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
-      ? out : { error: '--close 只收變更編號（和選填的 --purge、--dir）' };
+      ? out : { error: '--close 只收變更編號（和選填的 --round、--expect-head、--expect-started-at、--purge、--dir）' };
   }
   if (out.post !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
-      ? out : { error: '--post 只收變更編號（和選填的 --file、--dir）' };
+      ? out : { error: '--post 只收變更編號（和選填的 --round、--expect-head、--expect-started-at、--file、--dir）' };
   }
   if (out.scan !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.file === undefined
@@ -2347,11 +2424,11 @@ function parseArgs(argv) {
   }
   if (out.scanPost !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
-      ? out : { error: '--scan-post 只收變更編號（和選填的 --file、--dir）' };
+      ? out : { error: '--scan-post 只收變更編號（和選填的 --expect-head、--expect-started-at、--file、--dir）' };
   }
   if (out.scanClose !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
-      ? out : { error: '--scan-close 只收變更編號（和選填的 --purge、--dir）' };
+      ? out : { error: '--scan-close 只收變更編號（和選填的 --expect-head、--expect-started-at、--purge、--dir）' };
   }
   if (out.scanner !== undefined) return { error: '--scanner 只能配 --scan 用' };
   if (out.tier !== undefined) return { error: '--tier 只能配 --scan 用' };
@@ -2365,9 +2442,14 @@ function main(argv, opts = {}) {
   if (a.error) return { code: 2, lines: [a.error, USAGE] };
   const dir = a.dir || opts.dir;
   const purge = Boolean(a.purge || opts.purge);
+  const expectOpts = {
+    ...(a.expectRound !== undefined ? { expectRound: a.expectRound } : {}),
+    ...(a.expectHead !== undefined ? { expectHead: a.expectHead } : {}),
+    ...(a.expectStartedAt !== undefined ? { expectStartedAt: a.expectStartedAt } : {}),
+  };
   try {
-    if (a.close !== undefined) return close(a.close, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
-    if (a.post !== undefined) return post(a.post, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
+    if (a.close !== undefined) return close(a.close, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    if (a.post !== undefined) return post(a.post, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
     if (a.scan !== undefined) {
       const launched = scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
       if (!a.run || launched.code !== 0) return launched;
@@ -2409,7 +2491,7 @@ function main(argv, opts = {}) {
         });
       } catch (e) {
         if (e instanceof LaunchError) {
-          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
           return {
             code: 2,
             lines: [
@@ -2431,8 +2513,8 @@ function main(argv, opts = {}) {
         prompt: launched.prompt,
       };
     }
-    if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
+    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
     const launched = launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
     if (!a.run || launched.code !== 0) return launched;
     const s = opts.settings || readSettings();
@@ -2476,7 +2558,7 @@ function main(argv, opts = {}) {
       });
     } catch (e) {
       if (e instanceof LaunchError) {
-        const retryCmd = `node tools/review-launch.js --close ${launched.record.change}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+        const retryCmd = `node tools/review-launch.js --close ${launched.record.change} --round ${launched.record.round} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
         return {
           code: 2,
           lines: [
