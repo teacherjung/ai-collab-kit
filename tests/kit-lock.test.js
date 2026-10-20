@@ -690,14 +690,24 @@ test('--sync 非阻擋預檢提醒：①同一倉庫其他工作樹有未提交�
   assert.match(text, /提醒（範本對照）：套件這一版改動了範本，且專案裡有對應抄出去的檔案/u, text);
   assert.match(text, / {2}・templates\/ci-github\.yml（內容不同）→ 請對照專案的 \.github\/workflows\/ci\.yml/u, text);
 
-  // 對照組：另一棵工作樹移除、專案檔不再引用退場檔、沒有抄出去的範本對照檔時，不印三段提醒
-  r.git('worktree', 'remove', '--force', otherWt);
+  // 孤立分支（尚無提交、HEAD 為 40 個零）：先測試乾淨孤立分支不印提醒，再測試有未提交內容時印「分支 pages-new，尚無提交」提醒，預演與 --apply 均不中止
+  assert.equal(spawnSync('git', ['checkout', '--', 'tools/a.js'], { cwd: otherWt, env: r.env }).status, 0);
+  assert.equal(spawnSync('git', ['switch', '-q', '--orphan', 'pages-new'], { cwd: otherWt, env: r.env }).status, 0);
   r.put('lib/own.js', '// 專案自己的乾淨內容\n');
   r.git('rm', '-q', '.github/workflows/ci.yml');
-  r.commit('清掉三項預檢條件');
+  r.commit('清掉三項預檢條件（保留乾淨孤立分支工作樹）');
   const cleanDry = r.doSync(vNext);
   assert.equal(cleanDry.ok, true, cleanDry.lines.join('\n'));
   assert.doesNotMatch(cleanDry.lines.join('\n'), /提醒（其他工作樹）|提醒（退場共用檔引用）|提醒（範本對照）/u, cleanDry.lines.join('\n'));
+
+  fs.mkdirSync(path.join(otherWt, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(otherWt, 'tools', 'a.js'), '// 孤立分支裡未提交的共用檔\n');
+  const orphanDirty = r.doSync(vNext);
+  assert.equal(orphanDirty.ok, true, orphanDirty.lines.join('\n'));
+  assert.match(orphanDirty.lines.join('\n'), new RegExp(`工作樹 ${otherWt.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}（分支 pages-new，尚無提交）：有 1 處未提交改動（含共用路徑：tools/a\\.js）`, 'u'));
+  assert.doesNotMatch(orphanDirty.lines.join('\n'), /尚未併入目前 HEAD|無法比對提交歷史/u);
+  const applied = r.doSync(vNext, { apply: true });
+  assert.equal(applied.ok, true, applied.lines.join('\n'));
 });
 
 test('名單對得上：指紋清單、Codex 接線範本、工具自己的路徑；SHARED_PATHS 那一行的寫法讀得回來（--sync 從套件舊版讀它）', () => {

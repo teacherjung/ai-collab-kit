@@ -525,9 +525,10 @@ function worktreeWarnings(root) {
     let wtReal;
     try { wtReal = fs.realpathSync(f.worktree); } catch { wtReal = path.resolve(f.worktree); }
     if (wtReal === rootReal || !fs.existsSync(f.worktree)) continue;
+    const isUnborn = typeof f.HEAD === 'string' && /^0+$/u.test(f.HEAD);
     const label = typeof f.branch === 'string' && f.branch
-      ? `分支 ${f.branch.replace(/^refs\/heads\//u, '')}`
-      : `分離 HEAD ${typeof f.HEAD === 'string' ? f.HEAD.slice(0, 7) : '不明'}`;
+      ? `分支 ${f.branch.replace(/^refs\/heads\//u, '')}${isUnborn ? '，尚無提交' : ''}`
+      : `分離 HEAD ${typeof f.HEAD === 'string' && !isUnborn ? f.HEAD.slice(0, 7) : '不明'}`;
     const r = spawnSync('git', ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: f.worktree, env: gitEnv(), encoding: 'utf8', maxBuffer: BIG });
     if (r.error || r.status !== 0) {
       items.push(`  ・工作樹 ${f.worktree}（${label}）：無法讀取狀態（git status 退 ${r.status ?? '錯誤'}）`);
@@ -544,12 +545,15 @@ function worktreeWarnings(root) {
       dirtyPaths.push(rel);
     }
     const sharedDirty = dirtyPaths.filter((p) => touchesShared(p) || p.toLowerCase() === LOCK_FILE);
-    const unmerged = typeof f.HEAD === 'string' && HEX40.test(f.HEAD) && !gitYes(root, ['merge-base', '--is-ancestor', f.HEAD, 'HEAD']);
     const parts = [];
     if (dirtyPaths.length) {
       parts.push(`有 ${dirtyPaths.length} 處未提交改動${sharedDirty.length ? `（含共用路徑：${sharedDirty.slice(0, 5).join('、')}）` : ''}`);
     }
-    if (unmerged) parts.push('有尚未併入目前 HEAD 的提交');
+    if (!isUnborn && typeof f.HEAD === 'string' && HEX40.test(f.HEAD)) {
+      const mb = spawnSync('git', ['merge-base', '--is-ancestor', f.HEAD, 'HEAD'], { cwd: root, env: gitEnv(), encoding: 'utf8' });
+      if (mb.status === 1) parts.push('有尚未併入目前 HEAD 的提交');
+      else if (mb.error || mb.status !== 0) parts.push(`無法比對提交歷史（git merge-base 退 ${mb.status ?? '錯誤'}）`);
+    }
     if (parts.length) items.push(`  ・工作樹 ${f.worktree}（${label}）：${parts.join('，且')}`);
   }
   return items.length ? ['提醒（其他工作樹）：查到同一倉庫的其他工作樹有未提交改動或未合併提交（小心與其他工作線衝突）：', ...items] : [];
