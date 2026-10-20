@@ -2024,10 +2024,6 @@ const GROK_ATTEMPTED_HEADER = {
   review: /🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審/u,
 };
 
-function isGrokCliProgressPrefix(prefix) {
-  return /[。！？.!！]\s*$/u.test(prefix) && !/[🤖🔍]/u.test(prefix);
-}
-
 function stripGrokPreamble(rawOutput, mode = 'scan') {
   const normalized = String(rawOutput ?? '').replace(/\r\n?/g, '\n');
   const rawLines = normalized.split('\n');
@@ -2039,24 +2035,14 @@ function stripGrokPreamble(rawOutput, mode = 'scan') {
     return String(rawOutput ?? '');
   }
   const standaloneHeader = mode === 'scan' ? GROK_STANDALONE_HEADER.scan : GROK_STANDALONE_HEADER.review;
-  const headerBody = mode === 'scan' ? GROK_SCAN_HEADER_BODY : GROK_REVIEW_HEADER_BODY;
   const attemptedHeader = mode === 'scan' ? GROK_ATTEMPTED_HEADER.scan : GROK_ATTEMPTED_HEADER.review;
-  if (attemptedHeader.test(firstLine) && !/^\s*(?:[>*+#`-]|(?:\d+)[.)])/u.test(firstLine)) {
-    const m = headerBody.exec(firstLine);
-    if (!m || m.index === 0) return String(rawOutput ?? '');
-    const prefix = firstLine.slice(0, m.index);
-    const hasLaterStandalone = rawLines.slice(firstIdx + 1).some((l) => standaloneHeader.test(l));
-    if (isGrokCliProgressPrefix(prefix) && !hasLaterStandalone) {
-      return [firstLine.slice(m.index), ...rawLines.slice(firstIdx + 1)].join('\n');
-    }
-    return String(rawOutput ?? '');
-  }
+  const hasUnquotedAttempt = (l) => attemptedHeader.test(l) && !/^\s*(?:[>*+#`-]|(?:\d+)[.)])/u.test(l);
   const standaloneIdx = rawLines.findIndex((l, i) => i > firstIdx && standaloneHeader.test(l));
   if (standaloneIdx > firstIdx) {
     const preambleLines = rawLines.slice(0, standaloneIdx);
     const blocked = mode === 'scan'
-      ? preambleLines.some((l) => /🤖/u.test(l) || lineStart.test(l))
-      : preambleLines.some((l) => lineStart.test(l));
+      ? preambleLines.some((l) => /🤖/u.test(l) || lineStart.test(l) || hasUnquotedAttempt(l))
+      : preambleLines.some((l) => lineStart.test(l) || hasUnquotedAttempt(l));
     if (!blocked) {
       return rawLines.slice(standaloneIdx).join('\n');
     }

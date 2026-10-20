@@ -1724,20 +1724,23 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
     assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
 
-    // 同行緊貼進度前言與跨行提及不完整標頭（r3 R4、r4 R5）：涵蓋三種正式結論（通過、需修改後再審、不可合併）；scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
+    // 跨行提及不完整標頭（r3 R4、r4 R5）可剝除跨行前言；同行緊貼進度前言一律不剝除（r6 R7 裁示選 A：交由 --post／--scan-post 拒收）；scan 模式若前言含 🤖 亦不剝除
+    const sameLineScan = '我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
     assert.equal(
-      stripGrokPreamble('我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
-      '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+      stripGrokPreamble(sameLineScan, 'scan'),
+      sameLineScan,
+      '同行緊貼前言不剝除，保留原樣交由 --scan-post 拒收',
     );
     assert.equal(
       stripGrokPreamble('我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
       '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
     );
     for (const v of Object.keys(VERDICTS)) {
+      const sameLineReview = `我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`;
       assert.equal(
-        stripGrokPreamble(`我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`, 'review'),
-        `🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`,
-        `同行前言＋${v}`,
+        stripGrokPreamble(sameLineReview, 'review'),
+        sameLineReview,
+        `同行前言＋${v} 不剝除`,
       );
       assert.equal(
         stripGrokPreamble(`我會使用 🤖 Grok｜來源：Grok CLI 格式輸出。\n🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`, 'review'),
@@ -1756,7 +1759,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       );
     }
 
-    // 首行已是阻擋結論（不可合併）或非正式結論詞、或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或同行候選矛盾時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6 完整代貼與結論閘回歸）
+    // 首行已是阻擋結論（不可合併）或非正式結論詞、或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或同行黏字／兩段同行矛盾結論時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6、r6 R7 完整代貼與結論閘回歸）
     for (const [label, rawStdout, expectPostCode, expectVerdict] of [
       [
         '首行非正式結論詞＋內文通過範例',
@@ -1779,6 +1782,12 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       [
         '同行通過標頭＋後續獨立行不可合併（候選矛盾）',
         (h, s, p) => `我現在開始複審。${p}\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        2,
+        null,
+      ],
+      [
+        '兩段同行進度句各帶矛盾標頭：前段通過＋後段不可合併（r6 R7）',
+        (h, s, p) => `我現在開始複審。${p}\n進一步核對後更新結論。🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
         2,
         null,
       ],
