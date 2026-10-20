@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 跨PR試合併閘（規矩 H4）：把每一支以主幹為底、開著的PR，真的跟這一支合起來跑三關。
+// 跨PR試合併閘（規矩 H4）：把每一支以主幹為底、開著的PR（以及分支切出後若已前進的最新主幹），真的跟這一支合起來跑三關。
 //
 // 為什麼：「兩支各自全綠」不等於「合起來全綠」。原專案一個晚上撞了兩次，形狀一樣——一支加的規則
 // 禁止了另一支的內容；兩支沒改到同一行，平台不顯示衝突、各自的檢查都綠，合併第二支的當下主幹就紅了。
@@ -95,6 +95,14 @@ function realRepo(run) {
   return {
     root: (cwd) => { const r = run(['git', 'rev-parse', '--show-toplevel'], cwd); return r.status === 0 ? r.stdout.trim() : null; },
     has: (root, sha) => run(['git', 'cat-file', '-e', `${sha}^{commit}`], root).status === 0,
+    branchSha: (root, branch) => {
+      for (const ref of [`refs/remotes/origin/${branch}^{commit}`, `refs/heads/${branch}^{commit}`]) {
+        const r = run(['git', 'rev-parse', '--verify', '--quiet', ref], root);
+        if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
+      }
+      return null;
+    },
+    isAncestor: (root, ancestor, descendant) => run(['git', 'merge-base', '--is-ancestor', ancestor, descendant], root).status === 0,
     worktreeAdd: (root, dir, sha) => run(['git', 'worktree', 'add', '--detach', '-q', dir, sha], root),
     /** 回 { ok } 或 { ok:false, unmerged:[…] } 或 { ok:false, unmerged:null, detail }（失敗卻沒有未合併檔案） */
     merge: (dir, sha) => {
@@ -110,7 +118,8 @@ function realRepo(run) {
 
 /** 在拋棄式工作樹裡把 other 合進 self，跑準備指令與三關。回一筆結果（失敗必帶 kind）。 */
 function tryMerge({ repo, run, root, selfSha, otherSha, otherId, prepare, commands }) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cross-merge-${otherId}-`));
+  const safeId = String(otherId).replace(/[^A-Za-z0-9._-]/gu, '_') || 'target';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cross-merge-${safeId}-`));
   try {
     const add = repo.worktreeAdd(root, dir, selfSha);
     if (add.status !== 0) return { id: otherId, ok: false, kind: 'cantRun', why: `建不出臨時樹：${detail(add)}` };
@@ -163,12 +172,20 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask }, run 
     throw e;
   }
   const others = open.filter((c) => c.id !== self.id && c.baseBranch === mainBranch).sort((a, b) => a.id.localeCompare(b.id));
-  if (!others.length) return { code: 0, lines: [evaluate([]).message] };
+  const checkMainMoved = typeof repo.branchSha === 'function' && typeof repo.isAncestor === 'function';
+  if (!others.length && !checkMainMoved) return { code: 0, lines: [evaluate([]).message] };
   const root = repo.root(cwd);
   if (!root) return { code: 2, lines: ['這裡不是版本控制的工作樹：不知道要在哪棵樹上試合併，不放行。'] };
+  const mainSha = checkMainMoved ? repo.branchSha(root, mainBranch) : null;
+  if (!others.length && !mainSha) return { code: 0, lines: [evaluate([]).message] };
   const missing = [self, ...others].filter((c) => !repo.has(root, c.headSha));
   if (missing.length) return { code: 2, lines: [`本機沒有這幾支的版本（${missing.map((c) => c.id).join('、')}）：先把它們抓下來再跑，查不到不放行。`] };
-  const results = others.map((o) => tryMerge({ repo, run, root, selfSha: self.headSha, otherSha: o.headSha, otherId: o.id, prepare: checks.prepare, commands: checks.commands }));
+  const mainTarget = mainSha && !repo.isAncestor(root, mainSha, self.headSha)
+    ? [{ id: `主幹-${mainBranch}`, headSha: mainSha, baseBranch: mainBranch }]
+    : [];
+  const targets = [...mainTarget, ...others];
+  if (!targets.length) return { code: 0, lines: [evaluate([]).message] };
+  const results = targets.map((o) => tryMerge({ repo, run, root, selfSha: self.headSha, otherSha: o.headSha, otherId: o.id, prepare: checks.prepare, commands: checks.commands }));
   const v = evaluate(results);
   return { code: v.code, lines: v.message.split('\n') };
 }

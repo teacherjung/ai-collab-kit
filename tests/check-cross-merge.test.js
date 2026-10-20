@@ -113,13 +113,17 @@ function tempRepo() {
   return { root, self, compatible, conflict, forbids };
 }
 
-test('⑦真的跑一遍：相容＝綠、文字衝突＝1、一支的規則擋掉另一支的內容＝1（平台看不到的那種）', () => {
+test('⑦真的跑一遍：相容＝綠、草稿PR也試、文字衝突＝1、一支的規則擋掉另一支的內容＝1；主幹在切出後前進也一併試合併', () => {
   const repo = tempRepo();
   try {
     const settings = { mainBranch: 'main', checks: { prepareWorktree: ['無'], commands: [[process.execPath, 'check.js']] } };
-    const platformFor = (others) => ({ ask: (op) => (op === 'change' ? { id: 'self', headSha: repo.self, baseBranch: 'main' } : others.map(([id, sha]) => ({ id, headSha: sha, baseBranch: 'main' }))) });
+    const platformFor = (others) => ({ ask: (op) => (op === 'change' ? { id: 'self', headSha: repo.self, baseBranch: 'main' } : others.map(([id, sha, isDraft = false]) => ({ id, headSha: sha, baseBranch: 'main', isDraft }))) });
     const green = gateRun('self', { settings, platform: platformFor([['compatible', repo.compatible]]), cwd: repo.root });
     assert.equal(green.code, 0, green.lines.join('\n'));
+    // 草稿 PR（isDraft: true）在 openChanges 裡照樣拿去試、不濾掉
+    const draftConflict = gateRun('self', { settings, platform: platformFor([['draft-pr', repo.conflict, true]]), cwd: repo.root });
+    assert.equal(draftConflict.code, 1, '草稿 PR 衝突照樣擋下');
+    assert.match(draftConflict.lines.join('\n'), /draft-pr.*文字衝突/u);
     const c = gateRun('self', { settings, platform: platformFor([['conflict', repo.conflict]]), cwd: repo.root });
     assert.equal(c.code, 1, c.lines.join('\n'));
     assert.match(c.lines.join('\n'), /文字衝突/u);
@@ -130,6 +134,26 @@ test('⑦真的跑一遍：相容＝綠、文字衝突＝1、一支的規則擋�
     const all = gateRun('self', { settings, platform: platformFor([['compatible', repo.compatible], ['conflict', repo.conflict], ['forbids', repo.forbids]]), cwd: repo.root });
     assert.equal(all.code, 1);
     assert.match(all.lines.join('\n'), /conflict/u); assert.match(all.lines.join('\n'), /forbids/u);
+    // 沒有其他開著的 PR、且主幹還沒前進＝不需試（綠）
+    const noOthersUnmoved = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
+    assert.equal(noOthersUnmoved.code, 0);
+    assert.match(noOthersUnmoved.lines.join('\n'), /不需要試/u);
+    // 主幹在 self 切出後前進（相容）＝自動與主幹-main 試合併跑三關（綠）
+    const advanceMain = (sha) => spawnSync('git', ['update-ref', 'refs/heads/main', sha], { cwd: repo.root, encoding: 'utf8', env: gitEnv() });
+    advanceMain(repo.compatible);
+    const mainCompatible = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
+    assert.equal(mainCompatible.code, 0, mainCompatible.lines.join('\n'));
+    assert.match(mainCompatible.lines.join('\n'), /主幹-main/u);
+    // 主幹在 self 切出後前進（規則擋內容）＝即使沒有其他開著的 PR，與主幹-main 合起來三關紅也擋下（退出碼 1）
+    advanceMain(repo.forbids);
+    const mainForbids = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
+    assert.equal(mainForbids.code, 1, mainForbids.lines.join('\n'));
+    assert.match(mainForbids.lines.join('\n'), /主幹-main.*三關指令紅了/u);
+    // 主幹在 self 切出後前進（文字衝突）＝擋下（退出碼 1）
+    advanceMain(repo.conflict);
+    const mainConflict = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
+    assert.equal(mainConflict.code, 1, mainConflict.lines.join('\n'));
+    assert.match(mainConflict.lines.join('\n'), /主幹-main.*文字衝突/u);
     // 臨時樹要清掉：倉庫的 worktree 清單只剩主樹
     const wt = spawnSync('git', ['worktree', 'list'], { cwd: repo.root, encoding: 'utf8', env: gitEnv() }).stdout.trim().split('\n');
     assert.equal(wt.length, 1, `臨時樹沒清乾淨：\n${wt.join('\n')}`);

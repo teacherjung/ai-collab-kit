@@ -29,6 +29,7 @@
   "pending-rulings.test.js",
   "placement.test.js",
   "platform.test.js",
+  "preflight.test.js",
   "review-launch.test.js",
   "risk-tier.test.js",
   "rules-length.test.js",
