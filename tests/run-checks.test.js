@@ -148,13 +148,19 @@ test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 G
   assert.doesNotMatch(hook, /npm (run|test)/u, '鉤子不抄三關');
   // 只看生效的行：範本的註解本來就會提到「不可以接 || true」，不剝註解會誤紅
   const effective = (text) => text.split('\n').filter((l) => !/^\s*#/u.test(l)).join('\n');
-  const ci = effective(fs.readFileSync(path.join(ROOT, 'templates', 'ci-github.yml'), 'utf8'));
-  assert.match(ci, /node tools\/run-checks\.js/u);
-  assert.doesNotMatch(ci, /npm run (typecheck|lint)|npm test/u, '雲端不抄三關');
-  assert.doesNotMatch(ci, /continue-on-error/u);
-  // 轉正式不重跑雲端三關：主幹在分岔後前進時改由跨PR試合併閘在本機試合併跑三關（擁有者 2026-10-20 裁「方案 A＋B納入」）
-  assert.match(ci, /pull_request:\s*\n\s*types: \[opened, synchronize, reopened\]/u, '雲端範本只在開PR、推新版、重開時跑');
-  assert.doesNotMatch(ci, /\bready_for_review\b/u, '雲端範本轉正式不重跑');
+  const ciFiles = [path.join(ROOT, 'templates', 'ci-github.yml')];
+  if (fs.existsSync(path.join(ROOT, 'tests', 'kit-only', 'settings-pin.test.js')) && fs.existsSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'))) {
+    ciFiles.push(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
+  }
+  for (const ciPath of ciFiles) {
+    const ci = effective(fs.readFileSync(ciPath, 'utf8'));
+    assert.match(ci, /node tools\/run-checks\.js/u);
+    assert.doesNotMatch(ci, /npm run (typecheck|lint)|npm test/u, '雲端不抄三關');
+    assert.doesNotMatch(ci, /continue-on-error/u);
+    // 轉正式不重跑雲端三關：主幹在分岔後前進時改由跨PR試合併閘在本機試合併跑三關（擁有者 2026-10-20 裁「方案 A＋B納入」）
+    assert.match(ci, /pull_request:\s*\n\s*types: \[opened, synchronize, reopened\]/u, '雲端範本與本倉工作流只在開PR、推新版、重開時跑');
+    assert.doesNotMatch(ci, /\bready_for_review\b/u, '雲端範本與本倉工作流轉正式不重跑');
+  }
   const cf = effective(fs.readFileSync(path.join(ROOT, 'templates', 'collab-fields-github.yml'), 'utf8'));
   assert.match(cf, /types: \[.*edited.*\]/u, '改說明也要重跑');
   assert.match(cf, /tools\/gates\/check-collab-fields\.js/u);

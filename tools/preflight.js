@@ -55,9 +55,19 @@ function parseArgs(argv = []) {
   return out;
 }
 
-/** 在環境 PATH 與常見本機安裝路徑裡找可執行檔（純檔案系統檢查，不起子行程）。 */
+/** 在環境 PATH 與常見本機安裝路徑裡找可執行檔（純檔案系統檢查，不起子行程）；若已帶路徑則只驗該路徑本身。 */
 function defaultWhich(bin, { env = process.env, homedir = os.homedir(), fsImpl = fs } = {}) {
   if (!bin || typeof bin !== 'string') return null;
+  if (bin.includes('/') || bin.includes(path.sep)) {
+    try {
+      const st = fsImpl.statSync(bin);
+      if (!st.isFile()) return null;
+      fsImpl.accessSync(bin, fsImpl.constants.X_OK);
+      return bin;
+    } catch {
+      return null;
+    }
+  }
   const home = homedir || '';
   const extra = [
     '/opt/homebrew/bin',
@@ -80,11 +90,11 @@ function defaultWhich(bin, { env = process.env, homedir = os.homedir(), fsImpl =
   return null;
 }
 
-/** 從 command 樣板擷取要檢查的 CLI 執行檔名，以及是否走 --grok-exec 沙盒通道。 */
+/** 從 command 樣板擷取要檢查的 CLI 執行檔（保留明確路徑），以及是否走 --grok-exec 沙盒通道。 */
 function extractCommandSpec(command) {
   const text = String(command || '').trim();
   if (!text || text === UNSET) return { bin: null, usesGrokExec: false };
-  if (/\breview-launch\.js\s+--grok-exec\b/u.test(text)) {
+  if (/(?:^|[\s/\\])review-launch\.js(?:\s+[^\n]*?)?\s+--grok-exec(?=\s|$)/u.test(text)) {
     return { bin: 'grok', usesGrokExec: true };
   }
   const segments = text.split(/\s*(?:&&|;)\s*/u).map((s) => s.trim()).filter(Boolean);
@@ -97,12 +107,11 @@ function extractCommandSpec(command) {
     if (idx >= tokens.length) continue;
     const first = tokens[idx].replace(/^['"]|['"]$/gu, '');
     const base = path.basename(first);
-    if (base && base !== 'cd' && base !== 'export') {
-      return { bin: base, usesGrokExec: false };
-    }
+    if (base === 'cd' || base === 'export') continue;
+    if (!first || first.startsWith('-') || first.startsWith('{')) return { bin: null, usesGrokExec: false };
+    return { bin: first, usesGrokExec: false };
   }
-  const first = text.split(/\s+/u)[0].replace(/^['"]|['"]$/gu, '');
-  return { bin: path.basename(first), usesGrokExec: false };
+  return { bin: null, usesGrokExec: false };
 }
 
 /**
@@ -110,10 +119,11 @@ function extractCommandSpec(command) {
  * 唯讀、只列不擋（退出碼永遠 0），絕不讀取或輸出憑證檔內容。
  */
 function checkSeats(settings = {}, {
-  which = (b) => defaultWhich(b),
+  which,
   authFile = path.join(os.homedir(), '.grok', 'auth.json'),
   fsImpl = fs,
 } = {}) {
+  const resolveBin = typeof which === 'function' ? which : (b) => defaultWhich(b, { fsImpl });
   const div = settings.defaultDivision || {};
   const impl = filled(div.implementer) ? div.implementer : '未設定';
   const rev = filled(div.reviewer) ? div.reviewer : '未設定';
@@ -129,14 +139,14 @@ function checkSeats(settings = {}, {
       source: filled(r.source) ? r.source : '未填來源',
       model: filled(r.strongest) ? r.strongest : '未填模型',
       effort: filled(r.maxEffort) ? r.maxEffort : '未填推理',
-      command: r.command,
+      commands: [r.command],
     });
   }
   if (sc && sc.tool !== '無' && filled(sc.participant)) {
     const existing = seats.get(sc.participant);
     if (existing) {
       existing.roles.push('掃描者');
-      if (/\b--grok-exec\b/u.test(String(sc.command || ''))) existing.command = sc.command;
+      existing.commands.push(sc.command);
     } else {
       seats.set(sc.participant, {
         participant: sc.participant,
@@ -144,7 +154,7 @@ function checkSeats(settings = {}, {
         source: filled(sc.source) ? sc.source : '未填來源',
         model: filled(sc.strongest) ? sc.strongest : '未填模型',
         effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
-        command: sc.command,
+        commands: [sc.command],
       });
     }
   }
@@ -159,13 +169,19 @@ function checkSeats(settings = {}, {
 
   const results = [];
   for (const seat of seats.values()) {
-    const { bin, usesGrokExec } = extractCommandSpec(seat.command);
-    if (!bin) {
-      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：⚠️ 啟動指令未填`);
+    const specs = seat.commands.map((c) => extractCommandSpec(c));
+    const usesGrokExec = specs.some((s) => s.usesGrokExec);
+    if (!specs.length || specs.some((s) => !s.bin)) {
+      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：⚠️ 啟動指令未填或無法解析執行檔`);
       results.push({ participant: seat.participant, bin: null, binPath: null, usesGrokExec, authReady: null, ok: false });
       continue;
     }
-    const binPath = which(bin);
+    const uniqueBins = [...new Set(specs.map((s) => s.bin))];
+    const resolved = uniqueBins.map((b) => ({ bin: b, path: resolveBin(b) }));
+    const missingBins = resolved.filter((r) => !r.path).map((r) => r.bin);
+    const allBinsOk = missingBins.length === 0;
+    const bin = allBinsOk ? uniqueBins.join('、') : missingBins.join('、');
+    const binPath = allBinsOk ? resolved.map((r) => r.path).join('、') : null;
     let authReady = null;
     let authNote = '';
     if (usesGrokExec) {

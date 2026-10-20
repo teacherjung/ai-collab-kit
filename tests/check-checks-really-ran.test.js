@@ -18,7 +18,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { gateRun, evaluate, parseCliArgs, DEFAULT_WAIT_MS } = require('../tools/gates/check-checks-really-ran.js');
+const { gateRun, evaluate, parseCliArgs, DEFAULT_WAIT_MS, DEFAULT_POLL_MS } = require('../tools/gates/check-checks-really-ran.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -243,8 +243,10 @@ test('還在跑時自動輪詢等待（方案 A）：轉完正式還在跑的場
   assert.equal(r4.code, 1);
   assert.deepEqual(slept4, []);
 
-  // 5. CLI 參數解析：預設等待 DEFAULT_WAIT_MS；--no-wait＝0；--wait-ms 指定毫秒；壞參數回 error
-  assert.deepEqual(parseCliArgs(['7']), { changeId: '7', waitMs: DEFAULT_WAIT_MS });
+  // 5. CLI 參數解析：預設等待 300000ms（輪詢間隔 5000ms）；--no-wait＝0；--wait-ms 指定毫秒；壞參數回 error
+  assert.equal(DEFAULT_WAIT_MS, 300000);
+  assert.equal(DEFAULT_POLL_MS, 5000);
+  assert.deepEqual(parseCliArgs(['7']), { changeId: '7', waitMs: 300000 });
   assert.deepEqual(parseCliArgs(['7', '--no-wait']), { changeId: '7', waitMs: 0 });
   assert.deepEqual(parseCliArgs(['7', '--wait-ms', '12000']), { changeId: '7', waitMs: 12000 });
   assert.ok(parseCliArgs([]).error);

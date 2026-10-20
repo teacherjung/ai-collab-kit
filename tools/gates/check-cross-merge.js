@@ -164,9 +164,19 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask }, run 
   if (!checks) return { code: 2, lines: ['專案設定裡沒有登記三關指令：什麼都沒跑就說合起來是綠的，比不跑更危險，不放行。'] };
   let self;
   let open;
+  let remoteMainSha = null;
+  const hasPlatformBranchSha = Boolean(settings.platform && settings.platform.operations && settings.platform.operations.branchSha);
   try {
     self = platform.ask('change', { change: String(changeId) }, { settings });
     open = platform.ask('openChanges', {}, { settings });
+    if (hasPlatformBranchSha || platform.ask !== ask) {
+      try {
+        const b = platform.ask('branchSha', { branch: mainBranch }, { settings });
+        if (b && !Array.isArray(b) && typeof b.sha === 'string') remoteMainSha = b.sha;
+      } catch (e) {
+        if (hasPlatformBranchSha) throw e;
+      }
+    }
   } catch (e) {
     if (e instanceof PlatformError || (e && e.name === 'PlatformError')) return { code: 2, lines: [`跨變更試合併閘：問不到平台（${e.message}）——查不到一律當未通過。`] };
     throw e;
@@ -176,11 +186,19 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask }, run 
   if (!others.length && !checkMainMoved) return { code: 0, lines: [evaluate([]).message] };
   const root = repo.root(cwd);
   if (!root) return { code: 2, lines: ['這裡不是版本控制的工作樹：不知道要在哪棵樹上試合併，不放行。'] };
-  const mainSha = checkMainMoved ? repo.branchSha(root, mainBranch) : null;
-  if (!others.length && !mainSha) return { code: 0, lines: [evaluate([]).message] };
+  let mainSha = null;
+  if (checkMainMoved) {
+    mainSha = remoteMainSha || repo.branchSha(root, mainBranch);
+    if (!mainSha || !repo.has(root, mainSha)) {
+      return {
+        code: 2,
+        lines: [`本機找不到主幹 ${mainBranch} 的最新版本${remoteMainSha ? `（${remoteMainSha}）` : ''}：請先 git fetch origin ${mainBranch} 抓下來再跑，查不到不放行。`],
+      };
+    }
+  }
   const missing = [self, ...others].filter((c) => !repo.has(root, c.headSha));
   if (missing.length) return { code: 2, lines: [`本機沒有這幾支的版本（${missing.map((c) => c.id).join('、')}）：先把它們抓下來再跑，查不到不放行。`] };
-  const mainTarget = mainSha && !repo.isAncestor(root, mainSha, self.headSha)
+  const mainTarget = checkMainMoved && !repo.isAncestor(root, mainSha, self.headSha)
     ? [{ id: `主幹-${mainBranch}`, headSha: mainSha, baseBranch: mainBranch }]
     : [];
   const targets = [...mainTarget, ...others];

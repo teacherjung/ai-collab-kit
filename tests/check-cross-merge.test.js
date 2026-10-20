@@ -154,6 +154,26 @@ test('⑦真的跑一遍：相容＝綠、草稿PR也試、文字衝突＝1、�
     const mainConflict = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
     assert.equal(mainConflict.code, 1, mainConflict.lines.join('\n'));
     assert.match(mainConflict.lines.join('\n'), /主幹-main.*文字衝突/u);
+    // 平台回報的遠端主幹 SHA 本機還沒抓下來＝退 2，不拿舊的本機 main 呼攏放行
+    const platformWithRemoteMain = (remoteSha, others = []) => ({
+      ask: (op) => {
+        if (op === 'change') return { id: 'self', headSha: repo.self, baseBranch: 'main' };
+        if (op === 'branchSha') return { sha: remoteSha };
+        return others.map(([id, sha, isDraft = false]) => ({ id, headSha: sha, baseBranch: 'main', isDraft }));
+      },
+    });
+    const unfetchedMain = gateRun('self', { settings, platform: platformWithRemoteMain('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'), cwd: repo.root });
+    assert.equal(unfetchedMain.code, 2, '遠端主幹 SHA 本機沒有時必須退 2');
+    assert.match(unfetchedMain.lines.join('\n'), /本機找不到主幹 main 的最新版本/u);
+    // 本機連 origin/main 與 main 參照都沒有時，不管有沒有其他 PR 都要退 2（不靜默回 0）
+    spawnSync('git', ['update-ref', '-d', 'refs/heads/main'], { cwd: repo.root, encoding: 'utf8', env: gitEnv() });
+    const missingMainNoOthers = gateRun('self', { settings, platform: platformFor([]), cwd: repo.root });
+    assert.equal(missingMainNoOthers.code, 2, '缺主幹參照且無其他 PR 時必須退 2');
+    assert.match(missingMainNoOthers.lines.join('\n'), /本機找不到主幹 main 的最新版本/u);
+    const missingMainWithOthers = gateRun('self', { settings, platform: platformFor([['compatible', repo.compatible]]), cwd: repo.root });
+    assert.equal(missingMainWithOthers.code, 2, '缺主幹參照且有其他 PR 時也必須退 2');
+    assert.match(missingMainWithOthers.lines.join('\n'), /本機找不到主幹 main 的最新版本/u);
+    advanceMain(repo.compatible);
     // 臨時樹要清掉：倉庫的 worktree 清單只剩主樹
     const wt = spawnSync('git', ['worktree', 'list'], { cwd: repo.root, encoding: 'utf8', env: gitEnv() }).stdout.trim().split('\n');
     assert.equal(wt.length, 1, `臨時樹沒清乾淨：\n${wt.join('\n')}`);

@@ -29,6 +29,8 @@ test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', ()
   assert.deepEqual(extractCommandSpec('codex exec --cd {reviewTree}'), { bin: 'codex', usesGrokExec: false });
   assert.deepEqual(extractCommandSpec('cd {reviewTree} && claude -p --model {model}'), { bin: 'claude', usesGrokExec: false });
   assert.deepEqual(extractCommandSpec('cd {scanTree} && GEMINI_EFFORT={effort} gemini -p -m {model}'), { bin: 'gemini', usesGrokExec: false });
+  assert.deepEqual(extractCommandSpec('/custom/dir/gemini -p'), { bin: '/custom/dir/gemini', usesGrokExec: false });
+  assert.deepEqual(extractCommandSpec('cd {reviewTree}'), { bin: null, usesGrokExec: false });
   assert.deepEqual(extractCommandSpec('node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree}'), { bin: 'grok', usesGrokExec: true });
   assert.deepEqual(extractCommandSpec('未設定'), { bin: null, usesGrokExec: false });
 });
@@ -64,7 +66,7 @@ test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子
   assert.deepEqual(called, ['pending', 'backlog:', 'downstream']);
 });
 
-test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、Grok 盒外憑證只驗一般檔案存在且絕不讀印內容', () => {
+test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路徑、同人雙角色命令聯集，且盒外憑證只 lstatSync 絕不讀取或輸出內容', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-preflight-test-'));
   try {
     const binDir = path.join(tmp, 'bin');
@@ -75,10 +77,30 @@ test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、Grok 盒外憑�
     }
     assert.equal(defaultWhich('codex', { env: { PATH: binDir }, homedir: tmp }), path.join(binDir, 'codex'));
     assert.equal(defaultWhich('no-such-cli', { env: { PATH: binDir }, homedir: tmp }), null);
+    assert.equal(defaultWhich(path.join(tmp, 'no-such-dir', 'gemini'), { env: { PATH: binDir }, homedir: tmp }), null, '帶明確路徑時只查該路徑，不拿 PATH 同名檔冒充');
 
     const secretMarker = 'SUPER-SECRET-GROK-BEARER-DO-NOT-READ';
     const authFile = path.join(tmp, 'auth.json');
     fs.writeFileSync(authFile, JSON.stringify({ key: secretMarker }), { mode: 0o600 });
+
+    let lstatCalls = 0;
+    let readCalls = 0;
+    const denyRead = (target) => {
+      if (String(target) === authFile) readCalls += 1;
+      throw new Error(`禁止讀取憑證檔內容：${target}`);
+    };
+    const spyFs = {
+      ...fs,
+      lstatSync: (p, ...rest) => {
+        if (String(p) === authFile) lstatCalls += 1;
+        return fs.lstatSync(p, ...rest);
+      },
+      readFileSync: denyRead,
+      readFile: denyRead,
+      openSync: denyRead,
+      open: denyRead,
+      createReadStream: denyRead,
+    };
 
     const settings = {
       defaultDivision: { implementer: 'Gemini', reviewer: 'Codex' },
@@ -99,13 +121,51 @@ test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、Grok 盒外憑�
     };
 
     const okRes = checkSeats(settings, {
-      which: (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp }),
+      which: (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp, fsImpl: spyFs }),
       authFile,
+      fsImpl: spyFs,
     });
     assert.equal(okRes.code, 0);
     assert.equal(okRes.seats.length, 4);
     assert.ok(okRes.seats.every((s) => s.ok), '4 家 CLI 與 Grok auth.json 皆就緒');
+    assert.ok(lstatCalls > 0, '有執行 lstatSync 檢查狀態');
+    assert.equal(readCalls, 0, '絕不呼叫任何檔案讀取 API 讀取 auth.json 內容');
     assert.equal(okRes.lines.join('\n').includes(secretMarker), false, '絕不可讀取或印出 auth.json 內的憑證內容');
+
+    // 指定了不存在的絕對路徑時，即使 PATH 有同名 gemini 也必須報未就緒（Finding 2）
+    const badPathRes = checkSeats({
+      ...settings,
+      reviewers: [
+        { participant: 'Gemini', source: 'Gemini CLI', strongest: 'gemini-3.1-pro-preview', maxEffort: 'high', command: `${path.join(tmp, 'no-such-dir', 'gemini')} -p` },
+      ],
+      scanner: { tool: '無' },
+    }, {
+      which: (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp }),
+      authFile,
+    });
+    assert.equal(badPathRes.seats[0].ok, false, '明確路徑不存在時不可因 PATH 同名執行檔而報就緒');
+
+    // 同一參與者複審用一般指令（grok -p）、掃描用 --grok-exec 時，仍必須檢查盒外憑證檔（Finding 3）
+    const splitRoleRes = checkSeats({
+      defaultDivision: { implementer: 'Gemini', reviewer: 'Grok' },
+      reviewers: [
+        { participant: 'Grok', source: 'Grok CLI', strongest: 'grok-4.7', maxEffort: 'xhigh', command: 'grok -p' },
+      ],
+      scanner: {
+        participant: 'Grok',
+        tool: 'Grok CLI',
+        source: 'Grok CLI',
+        strongest: 'grok-4.7',
+        maxEffort: 'xhigh',
+        command: 'node tools/review-launch.js --grok-exec --mode scan',
+      },
+    }, {
+      which: (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp }),
+      authFile: path.join(tmp, 'missing-auth.json'),
+    });
+    assert.equal(splitRoleRes.seats[0].usesGrokExec, true, '同名座位其中一角走 --grok-exec 時必須驗憑證檔');
+    assert.equal(splitRoleRes.seats[0].authReady, false);
+    assert.equal(splitRoleRes.seats[0].ok, false);
 
     // 符號連結的 auth.json 不算一般檔案
     const linkAuth = path.join(tmp, 'link-auth.json');
