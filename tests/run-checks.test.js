@@ -138,7 +138,7 @@ test('⑥子行程看不到 GIT_ 那一族', () => {
   } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; }
 });
 
-test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 GIT_；雲端範本轉正式也跑；欄位閘範本訂閱 edited 且不接 || true', () => {
+test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 GIT_；雲端範本轉正式不重跑；欄位閘範本訂閱 edited 且不接 || true', () => {
   const hook = fs.readFileSync(path.join(ROOT, 'templates', 'pre-push'), 'utf8');
   // 鉤子沒有執行權＝git 靜靜略過它（搬家前準備）：版本控制裡要記成可執行，搬進專案時才帶得過去
   const mode = spawnSync('git', ['ls-files', '-s', 'templates/pre-push'], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }).stdout.split(/\s+/u)[0];
@@ -148,12 +148,19 @@ test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 G
   assert.doesNotMatch(hook, /npm (run|test)/u, '鉤子不抄三關');
   // 只看生效的行：範本的註解本來就會提到「不可以接 || true」，不剝註解會誤紅
   const effective = (text) => text.split('\n').filter((l) => !/^\s*#/u.test(l)).join('\n');
-  const ci = effective(fs.readFileSync(path.join(ROOT, 'templates', 'ci-github.yml'), 'utf8'));
-  assert.match(ci, /node tools\/run-checks\.js/u);
-  assert.doesNotMatch(ci, /npm run (typecheck|lint)|npm test/u, '雲端不抄三關');
-  assert.doesNotMatch(ci, /continue-on-error/u);
-  // 轉正式也要跑一場：主幹在最後一次推送之後變了的話，它是合併前唯一考到「這支＋最新主幹」的一場（擁有者 2026-10-04 選「A：留著」）
-  assert.match(ci, /pull_request:\s*\n\s*types: \[[^\]]*\bready_for_review\b[^\]]*\]/u, '雲端範本要在轉正式時也跑一場');
+  const ciFiles = [path.join(ROOT, 'templates', 'ci-github.yml')];
+  if (fs.existsSync(path.join(ROOT, 'kit-only', 'settings-pin.test.js')) && fs.existsSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'))) {
+    ciFiles.push(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
+  }
+  for (const ciPath of ciFiles) {
+    const ci = effective(fs.readFileSync(ciPath, 'utf8'));
+    assert.match(ci, /node tools\/run-checks\.js/u);
+    assert.doesNotMatch(ci, /npm run (typecheck|lint)|npm test/u, '雲端不抄三關');
+    assert.doesNotMatch(ci, /continue-on-error/u);
+    // 轉正式不重跑雲端三關：主幹在分岔後前進時改由跨PR試合併閘在本機試合併跑三關（擁有者 2026-10-20 裁「方案 A＋B納入」）
+    assert.match(ci, /pull_request:\s*\n\s*types: \[opened, synchronize, reopened\]/u, '雲端範本與本倉工作流只在開PR、推新版、重開時跑');
+    assert.doesNotMatch(ci, /\bready_for_review\b/u, '雲端範本與本倉工作流轉正式不重跑');
+  }
   const cf = effective(fs.readFileSync(path.join(ROOT, 'templates', 'collab-fields-github.yml'), 'utf8'));
   assert.match(cf, /types: \[.*edited.*\]/u, '改說明也要重跑');
   assert.match(cf, /tools\/gates\/check-collab-fields\.js/u);

@@ -1817,8 +1817,8 @@ async function runGrokExec(argv, deps = {}) {
     fs.writeFileSync(boxPromptFile, promptText);
 
     const instruction = parsed.mode === 'scan'
-      ? `請讀取 ${boxPromptFile} 的掃描提示並照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）`
-      : `請讀取 ${boxPromptFile} 的送審提示並照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）`;
+      ? `以下是掃描提示（亦存於 ${boxPromptFile}），請直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）：\n\n${promptText}`
+      : `以下是送審提示（亦存於 ${boxPromptFile}），請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）：\n\n${promptText}`;
     const grokArgs = [
       '--sandbox', 'off',
       '--no-subagents',
@@ -1886,12 +1886,18 @@ async function runGrokExec(argv, deps = {}) {
     if (afterWorktreeSnap !== beforeWorktreeSnap || (boxMutation && afterMutationGitSnap !== beforeMutationGitSnap)) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹或 .git 狀態被改動（違反唯讀邊界）——已拒絕寫出結果。'] };
     }
-    const outputText = String(runResult.stdout || '');
+    const rawOutput = String(runResult.stdout || '');
     const activeNeedles = authInfo.needles.filter((n) => n && !promptText.includes(n));
-    if (activeNeedles.some((n) => outputText.includes(n))) {
+    if (activeNeedles.some((n) => rawOutput.includes(n))) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
     }
-    fs.writeFileSync(outPath, outputText);
+    const rawLines = rawOutput.replace(/\r\n?/g, '\n').split('\n');
+    const headerPrefix = parsed.mode === 'scan' ? '🔍 ' : '🤖 ';
+    const headerIdx = rawLines.findIndex((l) => l.startsWith(headerPrefix));
+    const cleanedOutput = (headerIdx > 0 && !(parsed.mode === 'scan' && rawLines.slice(0, headerIdx).some((l) => /🤖/u.test(l))))
+      ? `${rawLines.slice(headerIdx).join('\n')}`
+      : rawOutput;
+    fs.writeFileSync(outPath, cleanedOutput);
     return { code: 0, lines: [] };
   } finally {
     if (relay) await relay.close();

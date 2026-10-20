@@ -1573,20 +1573,43 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       authFile,
       authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
       probeFn: () => ({ ok: true }),
-      spawnGrok: async ({ boxWorktree, boxMutation, boxPromptFile }) => {
+      spawnGrok: async ({ boxWorktree, boxMutation, boxPromptFile, grokArgs }) => {
         const pTxt = fs.readFileSync(boxPromptFile, 'utf8');
         assert.ok(pTxt.includes(boxWorktree) && pTxt.includes(boxMutation), '提示檔內審查樹與突變副本路徑皆已改寫為盒內路徑');
+        assert.ok(grokArgs.at(-1).includes(pTxt), '-p 指令直接帶入完整提示全文，避免跨目錄讀檔卡住');
         const leak = spawnSync('git', ['-C', boxWorktree, 'show', `${unrelatedSha}:private-branch.txt`], { env: gitEnv(), encoding: 'utf8' });
         assert.notEqual(leak.status, 0, '盒內工作樹不可含未送審本機分支物件');
         const prevDiff = sh(boxWorktree, 'diff', `${prevRoundSha}..${r.head}`);
         assert.match(prevDiff, /-prev-round-diverged/u, '盒內工作樹必須保留非祖先的上一輪提交並可比對跨輪差異');
         // 盒內突變副本的工作區可改檔，盒內審查樹與兩邊 .git 保持不變
         fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
-        return { status: 0, stdout: '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
+        return { status: 0, stdout: '我先檢查一下變更。\n\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
       },
     });
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
-    assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u);
+    assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
+
+    // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 在剝除前言前即攔截並退 2
+    const dlpOut = path.join(tmp, 'dlp-out.md');
+    const dlpRun = await runGrokExec([
+      '--mode', 'scan',
+      '--cwd', r.dir,
+      '--model', 'grok-4.7',
+      '--reasoning-effort', 'xhigh',
+      '--prompt-file', promptFile,
+      '--out', dlpOut,
+    ], {
+      authFile,
+      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async () => ({
+        status: 0,
+        stdout: '前言洩漏 NEW-KEY-SECRET-3333\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+        stderr: '',
+      }),
+    });
+    assert.equal(dlpRun.code, 2, '前言含憑證針必須被 DLP 攔截');
+    assert.equal(fs.existsSync(dlpOut), false);
 
     // (e) 盒內若改動 .git/config（如寫入 core.fsmonitor），盒外收尾絕不執行該腳本且退 2 拒寫輸出（r5 R1 路徑 A）
     const marker = path.join(tmp, 'outside-box-marker.txt');

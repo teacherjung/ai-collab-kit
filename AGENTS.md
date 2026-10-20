@@ -13,7 +13,7 @@
 
 1. **讀 [RULES.md](RULES.md) 全文**：協作規矩的正本。
 2. **以 GitHub 上的最新版為準**：桌面這一份是主目錄，不會自己更新，也不在這裡施工（D2）。先 `git fetch`，從 `origin/main` 開分支，在自己的常設工作樹做（例如同層的 `ai-collab-kit-gemini`、`ai-collab-kit-claude`）。
-3. **看有沒有還沒回的待裁**：`node tools/pending-rulings.js`（D1）。 指派誰、何時有效及怎麼留痕，先看 [裁示者設定與標準留痕](templates/ruling-record.md)；設定正本是 `settings.json`，不要從工作階段暱稱或貼文帳號猜裁示者。
+3. **看有沒有還沒回的待裁**：`node tools/pending-rulings.js`（D1；第 3〜5 步與 AI 座位體檢也可一鍵跑 `node tools/preflight.js`，送審前帶 `<編號>` 一併跑舊文字掃描與風險分級）。指派誰、何時有效及怎麼留痕，先看 [裁示者設定與標準留痕](templates/ruling-record.md)；設定正本是 `settings.json`，不要從工作階段暱稱或貼文帳號猜裁示者。
 4. **看待辦裡有沒有提到這支要改的檔**：`node tools/backlog-touch.js`（只列不擋；開工時多半還沒改檔，送審前再跑一次）。條件到了的，問裁示者要不要併進手上這支或另開。
 5. **看使用專案落後套件多少**：`node tools/downstream-lag.js`（只列不擋、不排程；要網路與 gh 登入；擁有者 2026-10-07 裁開工時手動跑）。要不要同步照 README「專案裡改到套件的檔」與常設指示。
 6. **錢與禁區（B1〜B3）**：任何 AI 都不碰禁區清單上的工具與能力，發現可能碰到的新工具先停下來通報擁有者。本倉庫自己沒接禁區攔截器（設定位置表 B1 那一列）；空白範本的 forbidden 那一塊與 `tools/forbidden-tools.js` 是每個專案拿到的清單與判斷，改到它們的 PR 先等擁有者點頭（A5）。
@@ -47,6 +47,7 @@
 - **2026-10-19｜啟用 Gemini 實作、Codex 複審、Grok 掃描並改由本倉庫自管掃描**：擁有者於本工作階段選「A」並裁示「可以開工」，將本倉庫參與者補入 Gemini（AI 丁）、分工設定改為 Gemini 實作與 Codex 複審，掃描模型與推理讀本倉庫 `settings.json` 的 `scanner`，整條鏈在本倉庫執行，不改動理財設定、不同步理財（同日第二階段約分優化改由 `tools/review-launch.js --scan`／`--scan-post`／`--scan-close` 統一管理）。
 - **2026-10-19｜「預設分工」正名為「分工設定」並併入複審通用插座 PR**：擁有者原話：「1. 預設分工改為...：這裡的預設應該改成“分工設定”，因為改過的分工就已經不是預設了。」「3. 選項一：先開「通用插座（移除廠商寫死限制）」PR。」其後選「A（建議預設）：採用「分工設定」，並直接併入現在要開的「通用插座（移除廠商寫死限制）」PR 一起施工送審（省下一整支 PR 的複審與掃描時間；不動 rules.json 以免影響施工中的 #107 說明書核對碼）。」並接著指示：「我把107關掉讓道給你了，你可以動rules.json」。也就是：規矩本文 A1、專案設定與相關說明的「預設分工」一併改稱「分工設定」（`settings.json` 的 JSON 鍵名 `defaultDivision` 維持相容；`manual/handbook.md` 依 2026-10-05 常設指示留待擁有者要求更新說明書網頁時再重對核對碼），並與複審通用插座（`tools/review-launch.js --post` 外殼統一驗樹、驗標頭與代貼結論，並放寬模型／推理值字元限制）併為同一支 PR 施工送審。
 - **2026-10-19｜套件約分優化：掃描生命週期併入 review-launch.js、退場 7 支舊隔離探針檔、4 家 CLI 原生旗標對齊**：擁有者於設計對齊與 Codex／Grok 雙審後裁定：「方案 A：維持叫「複審者」「掃描者」；掃描改用 review-launch.js 統一啟動與 --post 自動貼成 PR 留言（🔍 標頭，不改 PR 說明、不重觸發雲端三關），並將規矩 G2〜G4 精簡為共用外殼驗樹與代貼（廢除獨立埋針五步曲與手抄表格）」「全部採納 Codex 與 Grok 的 5 項補強建議（包含保留 settings-pin.test.js 前半段設定釘值、刪 fake-isolation.js 共 7 支舊隔離檔、掃描留言禁含 🤖 防呆、4 家 CLI 真實旗標對齊），現在直接開工寫第 2 支 PR」[本人留痕](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6275570433)。也就是：複審與複審後掃統一由 `tools/review-launch.js`（新增 `--scan`、`--scanner`、`--scan-post`、`--scan-close` 及 Grok 隔離執行 `--grok-exec`）管理唯讀工作樹、提示範本填充與外殼驗樹代貼（掃描留言標頭 `🔍`、禁含 `🤖`、貼前自動補 `> 掃描時序：…`），退場 7 支舊隔離與假機密探針檔，Grok 經 `--grok-exec` 以預設拒絕 Seatbelt、本機受控認證轉送通道（真實 `auth.json` 維持在沙盒外，盒內僅寫白名單 6 欄與假權杖）及啟動前預檢執行，保留 `kit-only/settings-pin.test.js` 前半段設定釘值。
+- **2026-10-20｜合併流程防重跑兩趟（方案 A＋B）與開工／送審前體檢總表**：針對合併指令常因草稿轉正式重觸發雲端三關、尚在跑而需跑兩趟，擁有者原話：「方案 A＋B納入。接著做下一項套件優化」。也就是：真考卷閘（H3，`tools/gates/check-checks-really-ran.js`）遇「還有場次在跑」時預設自動輪詢等待最多 5 分鐘（等待期間版本改變立即退 2）；雲端三關（`.github/workflows/ci.yml` 與 `templates/ci-github.yml`）移除 `ready_for_review` 重複觸發（草稿轉正式沒改程式碼時不重跑，主幹若在分支切出後有前進則由跨PR試合併閘 H4 自動將本支與最新主幹試合併跑三關）；並新增 `tools/preflight.js` 將開工／送審前 5 支唯讀檢查與 4 個 AI 座位體檢整合為一鍵執行。
 
 這一節是本倉庫放「常設指示」的地方（規矩 K6；`PROJECT-SETTINGS.md` 第三節登記在這裡）。擁有者（識別值 William）2026-10-03 對這件事的原話：「立一條兩邊都適用的規矩：你下了跨 PR 都適用的指示，收到的那一方當下就寫進兩邊都會讀的檔，不能只留在對話或筆記裡。這條放進套件的規矩：同意」。
 
