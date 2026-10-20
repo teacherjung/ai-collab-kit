@@ -703,6 +703,31 @@ function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
   }
 }
 
+function matchesExpectHead(rec, expectHead) {
+  if (expectHead === null || expectHead === undefined) return true;
+  const want = String(expectHead).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,40}$/u.test(want)) return false;
+  const actual = typeof (rec && rec.head) === 'string' ? rec.head.trim().toLowerCase() : '';
+  if (!actual) return false;
+  if (want.length === 40) return actual === want;
+  if (!actual.startsWith(want)) return false;
+  if (rec && rec.root && fs.existsSync(rec.root)) {
+    if (!gitOk(rec.root, ['rev-parse', '--verify', '--quiet', `${want}^{commit}`])) return false;
+    const resolved = git(rec.root, ['rev-parse', '--verify', '--quiet', `${want}^{commit}`]).toLowerCase();
+    return resolved === actual;
+  }
+  return true;
+}
+
+function formatHeadPair(actualHead, expectHead) {
+  const actual = String(actualHead || '');
+  const want = String(expectHead || '');
+  const shortActual = actual.slice(0, 7);
+  const shortWant = want.slice(0, 7);
+  if (shortActual.toLowerCase() !== shortWant.toLowerCase()) return [shortActual, shortWant];
+  return [actual, want];
+}
+
 /**
  * 外殼代貼結論（--post）：任何 AI 複審者只需輸出純文字結論（文末可單獨寫「未貼」），不需在盒內持有平台憑證。
  * 先核審查樹與突變副本都在、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔、標頭與小標、平台版本與同輪未重複，通過才代貼並記下 postedAt。
@@ -742,8 +767,9 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     if (expectRound !== null && expectRound !== undefined && rec.round !== expectRound) {
       throw new LaunchError(`launch.json 記的輪次是 r${rec.round}，不是本次啟動的 r${expectRound}`);
     }
-    if (expectHead !== null && expectHead !== undefined && rec.head !== expectHead) {
-      throw new LaunchError(`launch.json 記的受審版本是 ${String(rec.head).slice(0, 7)}，不是本次啟動的 ${String(expectHead).slice(0, 7)}`);
+    if (!matchesExpectHead(rec, expectHead)) {
+      const [shownActual, shownWant] = formatHeadPair(rec.head, expectHead);
+      throw new LaunchError(`launch.json 記的受審版本是 ${shownActual}，不是本次啟動的 ${shownWant}`);
     }
     if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
       throw new LaunchError(`launch.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
@@ -955,7 +981,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
       const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
       if (
         (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
-        || (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+        || !matchesExpectHead(rec, expectHead)
         || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
       ) {
         refused = true;
@@ -1025,7 +1051,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
         let folderHasProblem = false;
         if (
           (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
-          || (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+          || !matchesExpectHead(rec, expectHead)
           || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
         ) {
           purgeProblems.push(`${path.basename(folder)} 的容器紀錄已非本次啟動的那一輪（輪次、版本或開始時間不符）`);
@@ -1374,8 +1400,9 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   return withPostLock(folder, () => {
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (String(rec.change) !== String(changeArg)) throw new LaunchError(`scan.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
-    if (expectHead !== null && expectHead !== undefined && rec.head !== expectHead) {
-      throw new LaunchError(`scan.json 記的掃描版本是 ${String(rec.head).slice(0, 7)}，不是本次啟動的 ${String(expectHead).slice(0, 7)}`);
+    if (!matchesExpectHead(rec, expectHead)) {
+      const [shownActual, shownWant] = formatHeadPair(rec.head, expectHead);
+      throw new LaunchError(`scan.json 記的掃描版本是 ${shownActual}，不是本次啟動的 ${shownWant}`);
     }
     if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
       throw new LaunchError(`scan.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
@@ -1487,7 +1514,7 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
     if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (
-      (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+      !matchesExpectHead(rec, expectHead)
       || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
     ) {
       return {
@@ -2403,6 +2430,7 @@ function parseArgs(argv) {
       return { error: '--expect-head 只能配 --close、--post、--scan-close 或 --scan-post 用' };
     }
     if (!/^[0-9a-fA-F]{7,40}$/u.test(out.expectHead)) return { error: '--expect-head 要是 7〜40 碼十六進位版本碼' };
+    out.expectHead = out.expectHead.toLowerCase();
   }
   if (out.expectStartedAt !== undefined) {
     if (out.close === undefined && out.post === undefined && out.scanClose === undefined && out.scanPost === undefined) {
@@ -2491,7 +2519,8 @@ function main(argv, opts = {}) {
         });
       } catch (e) {
         if (e instanceof LaunchError) {
-          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+          const resolvedDir = path.dirname(folder);
+          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${resolvedDir}` : ''}`;
           return {
             code: 2,
             lines: [
@@ -2558,7 +2587,8 @@ function main(argv, opts = {}) {
       });
     } catch (e) {
       if (e instanceof LaunchError) {
-        const retryCmd = `node tools/review-launch.js --close ${launched.record.change} --round ${launched.record.round} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+        const resolvedDir = path.dirname(folder);
+        const retryCmd = `node tools/review-launch.js --close ${launched.record.change} --round ${launched.record.round} --expect-head ${launched.record.head} --expect-started-at ${launched.record.startedAt}${purge ? ' --purge' : ''}${dir ? ` --dir ${resolvedDir}` : ''}`;
         return {
           code: 2,
           lines: [

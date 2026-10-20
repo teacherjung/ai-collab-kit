@@ -2696,6 +2696,154 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.equal(finalNewScanJson.startedAt, '2026-10-20T04:00:00.000Z', 'scan.json 維持新容器身分');
     assert.equal(finalNewScanJson.postedAt, '2026-10-20T04:05:00.000Z', 'scan.json 記下新代貼時間');
     assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // (j) r6 R1：--expect-head 支援 7〜40 碼大小寫版本碼（短碼經 git rev-parse 解析為唯一完整版本），四個入口（--post、--close、--scan-post、--scan-close）合法形式與錯版對照（含前 7 碼相同但完整碼不同的錯誤訊息不印出兩個相同短碼）
+    const shortLower = r.head.slice(0, 7).toLowerCase();
+    const shortUpper = r.head.slice(0, 7).toUpperCase();
+    const fullUpper = r.head.toUpperCase();
+    const samePrefixWrongFull = `${r.head.slice(0, 7)}${r.head.slice(7).replace(/./gu, (ch) => (ch === 'a' ? 'b' : 'a'))}`;
+
+    for (const validHead of [shortLower, shortUpper, fullUpper]) {
+      assert.equal(launch('7', 'Beta', { settings: s, platform: fakePlatform(baseAns), cwd: r.dir, dir, template: TEMPLATE }).code, 0);
+      fs.writeFileSync(
+        path.join(reviewFolder, 'output.log'),
+        `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+      );
+      let postCount = 0;
+      const postRes = main(['--post', '7', '--round', '1', '--expect-head', validHead, '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(baseAns),
+        runPost() { postCount += 1; },
+      });
+      assert.equal(postRes.code, 0, `--post 接受合法 --expect-head (${validHead})：${postRes.lines.join('\n')}`);
+      assert.equal(postCount, 1);
+
+      // 對照：同前 7 碼但後段不同的錯版，錯誤訊息必須顯示完整碼以區分兩者（不可印成兩個相同的 7 碼）
+      const recForMismatch = JSON.parse(fs.readFileSync(path.join(reviewFolder, 'launch.json'), 'utf8'));
+      delete recForMismatch.postedAt;
+      fs.writeFileSync(path.join(reviewFolder, 'launch.json'), `${JSON.stringify(recForMismatch, null, 2)}\n`);
+      const wrongSamePrefixPost = main(['--post', '7', '--round', '1', '--expect-head', samePrefixWrongFull, '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(baseAns),
+        runPost() { throw new Error('不應送出'); },
+      });
+      assert.equal(wrongSamePrefixPost.code, 2);
+      assert.match(wrongSamePrefixPost.lines.join('\n'), new RegExp(`受審版本是 ${r.head}，不是本次啟動的 ${samePrefixWrongFull.toLowerCase()}`, 'u'));
+
+      const wrongCloseRes = main(['--close', '7', '--round', '1', '--expect-head', samePrefixWrongFull, '--purge', '--dir', dir], {
+        settings: s,
+        leftoverRoots: [],
+      });
+      assert.equal(wrongCloseRes.code, 1);
+      assert.ok(fs.existsSync(path.join(reviewFolder, 'tree')), '錯版時審查樹保留');
+
+      const closeRes = main(['--close', '7', '--round', '1', '--expect-head', validHead, '--purge', '--dir', dir], {
+        settings: s,
+        leftoverRoots: [],
+      });
+      assert.equal(closeRes.code, 0, `--close 接受合法 --expect-head (${validHead})：${closeRes.lines.join('\n')}`);
+      assert.ok(!fs.existsSync(reviewFolder));
+
+      assert.equal(main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir }).code, 0);
+      fs.writeFileSync(
+        path.join(scanFolder, 'output.log'),
+        `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+      );
+      const wrongScanPost = main(['--scan-post', '7', '--expect-head', samePrefixWrongFull, '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(withPass),
+        runPost() { throw new Error('不應送出'); },
+      });
+      assert.equal(wrongScanPost.code, 2);
+      assert.match(wrongScanPost.lines.join('\n'), new RegExp(`掃描版本是 ${r.head}，不是本次啟動的 ${samePrefixWrongFull.toLowerCase()}`, 'u'));
+
+      let scanPostCount = 0;
+      const scanPostRes = main(['--scan-post', '7', '--expect-head', validHead, '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(withPass),
+        runPost() { scanPostCount += 1; },
+      });
+      assert.equal(scanPostRes.code, 0, `--scan-post 接受合法 --expect-head (${validHead})：${scanPostRes.lines.join('\n')}`);
+      assert.equal(scanPostCount, 1);
+
+      const wrongScanClose = main(['--scan-close', '7', '--expect-head', samePrefixWrongFull, '--purge', '--dir', dir], {
+        settings: s,
+        leftoverRoots: [],
+      });
+      assert.equal(wrongScanClose.code, 1);
+      assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), '錯版時掃描樹保留');
+
+      const scanCloseRes = main(['--scan-close', '7', '--expect-head', validHead, '--purge', '--dir', dir], {
+        settings: s,
+        leftoverRoots: [],
+      });
+      assert.equal(scanCloseRes.code, 0, `--scan-close 接受合法 --expect-head (${validHead})：${scanCloseRes.lines.join('\n')}`);
+      assert.ok(!fs.existsSync(scanFolder));
+    }
+
+    // (k) r6 R2：--dir 為含空白的 symlink 別名、指向不含空白的實體安全目錄 → 收尾失敗時印出的恢復指令以實體安全目錄呈現，經 splitCommandArgs 拆解後重跑成功收尾
+    const aliasParent = tmp('review-launch-r6-r2-');
+    const aliasWithSpaces = path.join(aliasParent, 'alias with spaces');
+    fs.symlinkSync(dir, aliasWithSpaces, 'dir');
+
+    let aliasRevOut = '';
+    try {
+      const aliasRevFail = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', aliasWithSpaces], {
+        settings: s,
+        platform: fakePlatform(baseAns),
+        cwd: r.dir,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          fs.writeFileSync(
+            record.outFile,
+            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          );
+        },
+        runPost() {
+          fs.writeFileSync(revLockPath, '999999\n');
+        },
+      });
+      assert.equal(aliasRevFail.code, 2, aliasRevFail.lines.join('\n'));
+      aliasRevOut = aliasRevFail.lines.join('\n');
+    } finally {
+      fs.rmSync(revLockPath, { force: true });
+    }
+    const aliasRevCmdMatch = /可重跑 node tools\/review-launch\.js ([^）。]+)）/u.exec(aliasRevOut);
+    assert.ok(aliasRevCmdMatch, `應擷取複審恢復指令：${aliasRevOut}`);
+    const aliasRevParsed = splitCommandArgs(aliasRevCmdMatch[1].trim());
+    const aliasRevRetry = main(aliasRevParsed, { settings: s, leftoverRoots: [] });
+    assert.equal(aliasRevRetry.code, 0, `含空白別名複審恢復指令重跑應成功：${aliasRevRetry.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(reviewFolder), '複審容器已收樹並清除');
+
+    let aliasScanOut = '';
+    try {
+      const aliasScanFail = main(['--scan', '7', '--run', '--purge', '--dir', aliasWithSpaces], {
+        settings: s,
+        platform: fakePlatform(withPass),
+        cwd: r.dir,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          fs.writeFileSync(
+            record.outFile,
+            `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+          );
+        },
+        runPost() {
+          fs.writeFileSync(scanContainerLockPath, '999999\n');
+        },
+      });
+      assert.equal(aliasScanFail.code, 2, aliasScanFail.lines.join('\n'));
+      aliasScanOut = aliasScanFail.lines.join('\n');
+    } finally {
+      fs.rmSync(scanContainerLockPath, { force: true });
+    }
+    const aliasScanCmdMatch = /可重跑 node tools\/review-launch\.js ([^）。]+)）/u.exec(aliasScanOut);
+    assert.ok(aliasScanCmdMatch, `應擷取掃描恢復指令：${aliasScanOut}`);
+    const aliasScanParsed = splitCommandArgs(aliasScanCmdMatch[1].trim());
+    const aliasScanRetry = main(aliasScanParsed, { settings: s, leftoverRoots: [] });
+    assert.equal(aliasScanRetry.code, 0, `含空白別名掃描恢復指令重跑應成功：${aliasScanRetry.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(scanFolder), '掃描容器已收樹並清除');
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
