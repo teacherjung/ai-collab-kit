@@ -138,7 +138,7 @@ test('⑥子行程看不到 GIT_ 那一族', () => {
   } finally { if (prev === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prev; }
 });
 
-test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 GIT_；雲端範本轉正式不重跑；欄位閘範本訂閱 edited 且不接 || true', () => {
+test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 GIT_；雲端範本轉正式不重跑、設 concurrency 與 timeout-minutes；欄位閘範本訂閱 edited 且不接 || true', () => {
   const hook = fs.readFileSync(path.join(ROOT, 'templates', 'pre-push'), 'utf8');
   // 鉤子沒有執行權＝git 靜靜略過它（搬家前準備）：版本控制裡要記成可執行，搬進專案時才帶得過去
   const mode = spawnSync('git', ['ls-files', '-s', 'templates/pre-push'], { cwd: ROOT, encoding: 'utf8', env: gitEnv() }).stdout.split(/\s+/u)[0];
@@ -160,11 +160,21 @@ test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 G
     // 轉正式不重跑雲端三關：主幹在分岔後前進時改由跨PR試合併閘在本機試合併跑三關（擁有者 2026-10-20 裁「方案 A＋B納入」）
     assert.match(ci, /pull_request:\s*\n\s*types: \[opened, synchronize, reopened\]/u, '雲端範本與本倉工作流只在開PR、推新版、重開時跑');
     assert.doesNotMatch(ci, /\bready_for_review\b/u, '雲端範本與本倉工作流轉正式不重跑');
+    assert.match(ci, /concurrency:\s*\n\s*group:\s*ci-\$\{\{\s*github\.event\.pull_request\.number\s*\|\|\s*github\.ref\s*\}\}\s*\n\s*cancel-in-progress:\s*true/u, '雲端三關設同 PR 併發自動取消');
+    assert.match(ci, /^\s*timeout-minutes:\s*15\s*$/mu, '雲端三關設逾時上限 15 分鐘');
   }
-  const cf = effective(fs.readFileSync(path.join(ROOT, 'templates', 'collab-fields-github.yml'), 'utf8'));
-  assert.match(cf, /types: \[.*edited.*\]/u, '改說明也要重跑');
-  assert.match(cf, /tools\/gates\/check-collab-fields\.js/u);
-  assert.doesNotMatch(cf, /\|\| true|continue-on-error/u, '不可以有永遠放行的接法');
+  const cfFiles = [path.join(ROOT, 'templates', 'collab-fields-github.yml')];
+  if (fs.existsSync(path.join(ROOT, 'kit-only', 'settings-pin.test.js')) && fs.existsSync(path.join(ROOT, '.github', 'workflows', 'collab-fields.yml'))) {
+    cfFiles.push(path.join(ROOT, '.github', 'workflows', 'collab-fields.yml'));
+  }
+  for (const cfPath of cfFiles) {
+    const cf = effective(fs.readFileSync(cfPath, 'utf8'));
+    assert.match(cf, /types: \[.*edited.*\]/u, '改說明也要重跑');
+    assert.match(cf, /tools\/gates\/check-collab-fields\.js/u);
+    assert.doesNotMatch(cf, /\|\| true|continue-on-error/u, '不可以有永遠放行的接法');
+    assert.match(cf, /concurrency:\s*\n\s*group:\s*collab-fields-\$\{\{\s*github\.event\.pull_request\.number\s*\|\|\s*github\.ref\s*\}\}\s*\n\s*cancel-in-progress:\s*true/u, '協作欄位設同 PR 併發自動取消');
+    assert.match(cf, /^\s*timeout-minutes:\s*5\s*$/mu, '協作欄位設逾時上限 5 分鐘');
+  }
 });
 
 test('⑨三關跑的過程中改了倉庫設定＝1（就算從這棵樹看還健康）；索引檔不見＝2、跑完才不見＝1；沒登記時這幾種形狀都＝0（搬家前準備）', () => {

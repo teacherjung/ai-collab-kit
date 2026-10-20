@@ -114,22 +114,24 @@ test('整份考卷在「每一欄都填了假值」的設定底下跑：全綠�
     assert.deepEqual(settings.machines.filter((m) => m.name === CASEBOOK).map((m) => m.state), ['未移植'], '前提：複本把案例簿登記成不帶');
     const build = sh([process.execPath, 'tools/build-settings.js']);
     assert.equal(build.status, 0, `前提：假設定產得出設定說明（${build.stderr}）`);
-    for (const step of [['git', 'init', '-q'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
+    for (const step of [['git', 'init', '-q'], ['git', 'config', 'maintenance.auto', 'false'], ['git', 'config', 'gc.auto', '0'], ['git', 'add', '-A']]) assert.equal(sh(step).status, 0, `前提：複本要是版本控制目錄（git ${step[1]}）`);
     assert.deepEqual(settings.machines.filter((m) => m.name === KIT_LOCK).map((m) => m.state), ['已啟用'], '前提：複本把共用檔清單登記成帶（使用專案的樣子）');
     const kitSrc = path.join(scratch, 'kit-src');
     fs.mkdirSync(kitSrc);
     for (const p of SHARED_PATHS) if (fs.existsSync(path.join(copy, p))) fs.cpSync(path.join(copy, p), path.join(kitSrc, p), { recursive: true });
     const inKit = (args) => spawnSync('git', args, { cwd: kitSrc, env: { ...env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' }, encoding: 'utf8' });
     fs.writeFileSync(path.join(kitSrc, 'settings.json'), '{"mainBranch":"main"}\n');
-    for (const step of [['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'kit'], ['update-ref', 'refs/remotes/origin/main', 'HEAD']]) assert.equal(inKit(step).status, 0, `前提：假套件倉庫 git ${step[0]}`);
+    for (const step of [['init', '-q'], ['config', 'maintenance.auto', 'false'], ['config', 'gc.auto', '0'], ['add', '-A'], ['commit', '-q', '-m', 'kit'], ['update-ref', 'refs/remotes/origin/main', 'HEAD']]) assert.equal(inKit(step).status, 0, `前提：假套件倉庫 git ${step[0]}`);
     const kitVersion = inKit(['rev-parse', 'HEAD']).stdout.trim();
     const lockRun = sh([process.execPath, 'tools/kit-lock.js', '--write', '--kit', kitSrc, '--version', kitVersion, '--repo', 'acct/kit', '--date', '2026-09-29']);
     assert.equal(lockRun.status, 0, `前提：複本寫得出共用檔清單（${lockRun.stdout}${lockRun.stderr}）`);
     assert.ok(fs.existsSync(path.join(copy, LOCK_FILE)), '前提：複本有共用檔清單');
 
     for (const d of watched) fs.utimesSync(d, PAST, PAST);
-    // 報告格式固定成 spec：下面數跳過原因靠的是報告文字（裁示批 r1 T1：換成別的格式會假紅）
-    const r = sh([process.execPath, '--test', '--test-reporter=spec']);
+    // 報告格式固定成 spec：下面數跳過原因靠的是報告文字（裁示批 r1 T1：換成別的格式會假紅）；
+    // 巢狀並行度設在 2〜4（雲端 2 核心 runner 預設 availableParallelism()-1＝1 會退化成全序列，本機多核兩題巢狀同時跑預設又會起太多子行程互搶）
+    const nestedConcurrency = Math.max(2, Math.min(4, Math.ceil((typeof os.availableParallelism === 'function' ? os.availableParallelism() : 4) / 2)));
+    const r = sh([process.execPath, '--test', `--test-concurrency=${nestedConcurrency}`, '--test-reporter=spec']);
     const failing = r.stdout.split('\n').filter((l) => /^✖|^not ok/u.test(l)).slice(0, 12).join('\n');
     assert.equal(r.status, 0, `填了假設定的整份考卷不是全綠：\n${failing}`);
     const skippedCasebook = r.stdout.split(NOT_CARRIED_REASON).length - 1;
