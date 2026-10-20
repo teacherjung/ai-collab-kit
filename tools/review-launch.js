@@ -771,6 +771,8 @@ function deriveScanCommand(reviewCmd) {
     .replace(/,[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\)|[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\),/gu, '')
     .replace(/,Bash\(gh pr comment \{change\} \*\)/gu, '')
     .replace(/\s+--[A-Za-z-]+\s+\{mutationCopy\}/gu, '')
+    .replace(/\s+--verbose\b/gu, '')
+    .replace(/\s+--output-format\s+json\b/gu, '')
     .replace(/,[^,'"\s]*\{mutationCopy\}[^,'"\s]*|[^,'"\s]*\{mutationCopy\}[^,'"\s]*,/gu, '')
     .replace(/請執行複審/gu, '請執行掃描')
     .replace(/\{reviewTree\}/gu, '{scanTree}');
@@ -976,14 +978,50 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   return { code: 0, lines, record, command, prompt };
 }
 
+function unwrapScanOutput(raw) {
+  const text = String(raw ?? '');
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return text;
+  }
+  const pickResult = (obj) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
+      throw new LaunchError('掃描回覆 JSON 標示執行失敗（is_error 或非 success），不代貼');
+    }
+    return typeof obj.result === 'string' ? obj.result : null;
+  };
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i -= 1) {
+      const item = parsed[i];
+      if (item && typeof item === 'object' && item.type === 'result') {
+        const res = pickResult(item);
+        if (res !== null) return res;
+      }
+    }
+    return text;
+  }
+  const res = pickResult(parsed);
+  return res !== null ? res : text;
+}
+
 /**
- * 核對掃描回覆：去除首尾空行，若最後一行單獨是「未貼」就剝掉；
+ * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
+ * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
  * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭攔截）；
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
 function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null }) {
-  const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n');
+  if (/🤖/u.test(String(raw ?? ''))) {
+    throw new LaunchError('掃描回覆含有複審結論記號 🤖：結論聯集閘會把含 🤖 的非結論留言當成壞標頭擋下（F4、G1），請移除後再代貼');
+  }
+  const unwrapped = unwrapScanOutput(raw);
+  const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (!lines.length) throw new LaunchError('掃描回覆檔是空的');

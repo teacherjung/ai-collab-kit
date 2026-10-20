@@ -455,6 +455,12 @@ test('⑨設定裡填了的樣板逐一核：記號都認得、啟動指令帶�
   assert.match(got, /reviewLaunch\.changeLink 有認不得的記號：comment/u);
   const noSource = settingsFor({ reviewers: [{ ...s.reviewers[0], source: '未設定' }] });
   assert.match(templateProblems(noSource).join('\n'), /「Beta」的 source 還沒填/u, '登記了的複審者少一格要看得出來');
+  const badDerivedScan = settingsFor({
+    reviewers: [{ ...s.reviewers[0], scanCommand: 'scan {model} {effort} {mutationCopy}' }],
+  });
+  const gotScan = templateProblems(badDerivedScan).join('\n');
+  assert.match(gotScan, /「Beta」轉換後的掃描啟動指令樣板有認不得的記號：mutationCopy/u);
+  assert.match(gotScan, /「Beta」轉換後的掃描啟動指令樣板沒帶 \{scanTree\}/u);
 });
 
 test('⑥暫存區清單：比開樹晚的列出、早的不列；自己那一層與它的上層不算；讀不了的分開回報（#49 r1 R4）', () => {
@@ -1465,7 +1471,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     // (h) --scanner <識別值>：4 家 AI 隨時切換掃描者（deriveScanCommand 與 resolveScannerSpec）
     assert.equal(
       deriveScanCommand("cd {reviewTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --add-dir {mutationCopy} --verbose --output-format json --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(npm --prefix {mutationCopy} test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(git -C {mutationCopy} rev-parse HEAD),Bash(git -C {mutationCopy} status --porcelain),Bash(git -C {mutationCopy} diff),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Bash(gh pr comment {change} *),Edit(/{mutationCopy}/**),Workflow' --disallowedTools 'Write,Edit(/{reviewTree}/**)' < /dev/null > {outFile}"),
-      "cd {scanTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --verbose --output-format json --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Workflow' --disallowedTools 'Write,Edit(/{scanTree}/**)' < /dev/null > {outFile}",
+      "cd {scanTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Workflow' --disallowedTools 'Write,Edit(/{scanTree}/**)' < /dev/null > {outFile}",
     );
     assert.equal(
       deriveScanCommand('codex exec -C {reviewTree} --add-dir {mutationCopy} -s read-only -m {model} -c model_reasoning_effort={effort} -o {outFile} - < {promptFile}'),
@@ -1480,7 +1486,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
       '(cd {scanTree} && gemini -m {model} --approval-mode plan --include-directories {scanTree} -p "請執行掃描（推理強度：{effort}）" < {promptFile}) > {outFile}',
     );
 
-    // 若本倉庫 settings.json 登記了 3 位以上複審者（如 Claude、Codex、Grok、Gemini），逐一以實際設定走 main --scan --scanner 驗證皆可開出掃描樹與替換指令
+    // 若本倉庫 settings.json 登記了 3 位以上複審者（如 Claude、Codex、Grok、Gemini），逐一以實際設定走 main --scan --scanner 並一路走到 --scan-post 與 --scan-close
     const realS = readSettings();
     const realReviewers = Array.isArray(realS.reviewers) ? realS.reviewers.filter((rev) => rev && rev.participant) : [];
     if (realReviewers.length >= 3) {
@@ -1495,20 +1501,42 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
           createdAt: '2026-10-19T12:00:00Z',
           body: `🤖 ${revr.participant}｜來源：${revr.source}｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
         });
+        const realPlatform = fakePlatform({
+          ...baseAns,
+          change: { ...baseAns.change, body: bodyForTarget },
+          comments: [passForTarget],
+        });
         const realDirTmp = tmp(`scan-real-${target}-`);
         const realOut = main(['--scan', '7', '--scanner', target, '--dir', realDirTmp], {
           settings: realS,
-          platform: fakePlatform({
-            ...baseAns,
-            change: { ...baseAns.change, body: bodyForTarget },
-            comments: [passForTarget],
-          }),
+          platform: realPlatform,
           cwd: r.dir,
         });
         assert.equal(realOut.code, 0, `${target} 實際設定切換掃描失敗：${realOut.lines.join('\n')}`);
         assert.equal(realOut.record.scanner, target);
         assert.ok(!realOut.command.includes('{mutationCopy}') && !realOut.command.includes('{reviewTree}'), `${target} 掃描指令不可殘留未替換記號`);
         assert.ok(!/git -C\s+(?:rev-parse|status|diff)/u.test(realOut.command), `${target} 掃描指令不可留下失去路徑的 git -C`);
+        assert.ok(!/--output-format\s+json\b/u.test(realOut.command), `${target} 掃描指令應輸出純文字而非 JSON 包裹`);
+
+        const cleanMarkdown = `🔍 ${target}｜來源：${realOut.record.source}｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- 模型：${rev.strongest}\n\n### 掃描結果\n- 零發現\n未貼\n`;
+        if (target === 'Claude') {
+          // 若舊設定或外部呼叫產生 Claude JSON 包裹：失敗 JSON 拒貼、成功 JSON 自動解開 result 並完成代貼
+          fs.writeFileSync(realOut.record.outFile, JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: cleanMarkdown }));
+          const errJsonPost = main(['--scan-post', '7', '--dir', realDirTmp], { settings: realS, platform: realPlatform, runPost() {} });
+          assert.equal(errJsonPost.code, 2);
+          assert.match(errJsonPost.lines.join('\n'), /掃描回覆 JSON 標示執行失敗/u);
+          fs.writeFileSync(realOut.record.outFile, JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: cleanMarkdown }));
+        } else {
+          fs.writeFileSync(realOut.record.outFile, cleanMarkdown);
+        }
+        let postedForTarget = null;
+        const realPostRes = main(['--scan-post', '7', '--dir', realDirTmp], {
+          settings: realS,
+          platform: realPlatform,
+          runPost(_cmd, args) { postedForTarget = fs.readFileSync(args.at(-1), 'utf8'); },
+        });
+        assert.equal(realPostRes.code, 0, `${target} --scan-post 失敗：${realPostRes.lines.join('\n')}`);
+        assert.match(postedForTarget, new RegExp(`^🔍 ${target}｜來源：${realOut.record.source}｜掃 `, 'u'));
         assert.equal(main(['--scan-close', '7', '--dir', realDirTmp], { settings: realS }).code, 0);
         fs.rmSync(realDirTmp, { recursive: true, force: true });
       }
