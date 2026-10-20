@@ -35,7 +35,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
 const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
-const { evaluate: evaluateVerdicts } = require('../tools/gates/check-review-verdicts.js');
+const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
@@ -1718,13 +1718,13 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         assert.match(prevDiff, /-prev-round-diverged/u, '盒內工作樹必須保留非祖先的上一輪提交並可比對跨輪差異');
         // 盒內突變副本的工作區可改檔，盒內審查樹與兩邊 .git 保持不變
         fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
-        return { status: 0, stdout: '我先檢查一下變更。\n\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
+        return { status: 0, stdout: '我先檢查一下變更。\n\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
       },
     });
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
     assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
 
-    // 同行緊貼進度前言（沒有換行符直接接 🔍 或 🤖 標頭）亦自動剝除；前言若提及不完整標頭（如「我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。」）不會誤截在半個標頭處（r3 R4）；scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
+    // 同行緊貼進度前言與跨行提及不完整標頭（r3 R4、r4 R5）：涵蓋三種正式結論（通過、需修改後再審、不可合併）；scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
     assert.equal(
       stripGrokPreamble('我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
       '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
@@ -1733,20 +1733,92 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       stripGrokPreamble('我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
       '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
     );
-    assert.equal(
-      stripGrokPreamble('我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n', 'review'),
-      '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n',
-    );
-    assert.equal(
-      stripGrokPreamble('我會使用 🤖 Grok｜來源：Grok CLI 格式輸出。\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n', 'review'),
-      '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n',
-    );
+    for (const v of Object.keys(VERDICTS)) {
+      assert.equal(
+        stripGrokPreamble(`我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`, 'review'),
+        `🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`,
+        `同行前言＋${v}`,
+      );
+      assert.equal(
+        stripGrokPreamble(`我會使用 🤖 Grok｜來源：Grok CLI 格式輸出。\n🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`, 'review'),
+        `🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`,
+        `跨行半標頭前言＋${v}`,
+      );
+    }
     const leakyRobotPrefix = '誤帶 🤖 記號的前言🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
     assert.equal(
       stripGrokPreamble(leakyRobotPrefix, 'scan'),
       leakyRobotPrefix,
       'scan 模式若標頭前含有 🤖 不可偷剝掉，必須保留讓 --scan-post 攔截',
     );
+
+    // 首行已是阻擋結論（不可合併）或非正式結論詞（不同意（建議撤回或重開））、內文引用「通過」範例時，絕不可跳過首行改把內文範例當正式結論（r4 R5 完整代貼與結論閘回歸）
+    const postDirR5 = path.join(tmp, 'post-r5');
+    fs.mkdirSync(postDirR5);
+    const sR5 = settingsFor({ owner: 'Boss' });
+    const platformR5 = fakePlatform(answersFor(r));
+    const launchR5 = launch('7', 'Beta', { settings: sR5, platform: platformR5, cwd: r.dir, dir: postDirR5, template: TEMPLATE });
+    assert.equal(launchR5.code, 0, launchR5.lines.join('\n'));
+    const sectionsR5 = '\n\n### 本輪實際用的設定\n- 合成測試\n\n### 清單逐項結果\n- 合成測試\n';
+    const passExampleR5 = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過${sectionsR5}`;
+    const invalidVerdictWithPassBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：不同意（建議撤回或重開）${sectionsR5}\n下列通過範例不可當結論：\n\`\`\`text\n${passExampleR5}\`\`\`\n`;
+    const invalidExec = await runGrokExec([
+      '--mode', 'review',
+      '--cwd', launchR5.record.tree,
+      '--mutation-copy', launchR5.record.mutation,
+      '--model', 'grok-4.7',
+      '--reasoning-effort', 'xhigh',
+      '--prompt-file', launchR5.record.promptFile,
+      '--out', launchR5.record.outFile,
+    ], {
+      authFile,
+      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async () => ({ status: 0, stdout: invalidVerdictWithPassBody, stderr: '' }),
+    });
+    assert.equal(invalidExec.code, 0);
+    let sentR5 = null;
+    const postInvalidR5 = main(['--post', '7', '--dir', postDirR5], {
+      settings: sR5,
+      platform: platformR5,
+      runPost(_cmd, args) { sentR5 = fs.readFileSync(args.at(-1), 'utf8'); },
+    });
+    assert.equal(postInvalidR5.code, 2, '首行為非正式結論詞時不可跳去內文通過範例放行');
+    assert.equal(sentR5, null);
+
+    const blockingFullBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：不可合併${sectionsR5}\n下列同輪錯誤通過範例不可當成本輪結論：\n\`\`\`text\n${passExampleR5}\`\`\`\n`;
+    const blockingExec = await runGrokExec([
+      '--mode', 'review',
+      '--cwd', launchR5.record.tree,
+      '--mutation-copy', launchR5.record.mutation,
+      '--model', 'grok-4.7',
+      '--reasoning-effort', 'xhigh',
+      '--prompt-file', launchR5.record.promptFile,
+      '--out', launchR5.record.outFile,
+    ], {
+      authFile,
+      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+      probeFn: () => ({ ok: true }),
+      spawnGrok: async () => ({ status: 0, stdout: blockingFullBody, stderr: '' }),
+    });
+    assert.equal(blockingExec.code, 0);
+    const postBlockingR5 = main(['--post', '7', '--dir', postDirR5], {
+      settings: sR5,
+      platform: platformR5,
+      runPost(_cmd, args) { sentR5 = fs.readFileSync(args.at(-1), 'utf8'); },
+    });
+    assert.equal(postBlockingR5.code, 0, postBlockingR5.lines.join('\n'));
+    assert.equal(postBlockingR5.header.verdict, '不可合併');
+    assert.equal(sentR5, blockingFullBody, '送出的全文必須完整保留首行不可合併與內文範例');
+    const gateR5 = evaluateVerdicts(
+      [{ id: 'r5-block', author: 'ai-acct', createdAt: '2026-10-19T12:00:00Z', body: sentR5 }],
+      r.head,
+      'Beta',
+      ['Boss', 'Alpha', 'Beta'],
+      { ownerRole: 'Boss' },
+    );
+    assert.ok(gateR5.problems.length > 0, '結論聯集閘必須維持阻擋、不可誤判為通過');
+    assert.equal(close('7', { settings: sR5, dir: postDirR5, leftoverRoots: [] }).code, 0);
 
     // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 在剝除前言前即攔截並退 2
     const dlpOut = path.join(tmp, 'dlp-out.md');

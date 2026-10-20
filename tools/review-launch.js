@@ -34,7 +34,7 @@ const { read: readSettings } = require('./settings-data.js');
 const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./gates/check-collab-fields.js');
-const { headerOf, missingHeadings, PASS_HEADINGS, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
+const { headerOf, missingHeadings, PASS_HEADINGS, VERDICTS, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
 const { evaluate: evaluateRulings, deciderOf, rulingLink } = require('./pending-rulings.js');
 const { run: riskRun, gitIn } = require('./risk-tier.js');
 
@@ -2005,25 +2005,27 @@ async function runGrokExec(argv, deps = {}) {
   }
 }
 
+const GROK_VERDICT_PATTERN = Object.keys(VERDICTS).join('|');
 const GROK_SCAN_HEADER_AT_END = /🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃\s*`?[0-9a-fA-F]{7,40}`?(?:\*\*|__)?[ \t]*(?=\n|$)/u;
-const GROK_REVIEW_HEADER_AT_END = /🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審\s*`?[0-9a-fA-F]{7,40}`?｜r\d+｜(?:結論：)?(?:通過|需修改後再審|不同意（建議撤回或重開）)(?:\*\*|__)?[ \t]*(?=\n|$)/u;
+const GROK_REVIEW_HEADER_AT_END = new RegExp(
+  `🤖\\s*[A-Za-z]+｜來源：[^｜\\n]+｜審\\s*\`?[0-9a-fA-F]{7,40}\`?｜r\\d+｜結論：(?:${GROK_VERDICT_PATTERN})[。．.]?(?:\\*\\*|__)?[ \\t]*(?=\\n|$)`,
+  'u',
+);
+const GROK_HEADER_LINE_START = {
+  scan: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃/mu,
+  review: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審/mu,
+};
 
 function stripGrokPreamble(rawOutput, mode = 'scan') {
   const normalized = String(rawOutput ?? '').replace(/\r\n?/g, '\n');
   const fullHeader = mode === 'scan' ? GROK_SCAN_HEADER_AT_END : GROK_REVIEW_HEADER_AT_END;
+  const lineStart = mode === 'scan' ? GROK_HEADER_LINE_START.scan : GROK_HEADER_LINE_START.review;
   const m = fullHeader.exec(normalized);
   if (m && m.index > 0) {
     const prefix = normalized.slice(0, m.index);
-    if (!(mode === 'scan' && /🤖/u.test(prefix))) {
+    if (prefix.trim() !== '' && !lineStart.test(prefix) && !(mode === 'scan' && /🤖/u.test(prefix))) {
       return normalized.slice(m.index);
     }
-    return String(rawOutput ?? '');
-  }
-  const rawLines = normalized.split('\n');
-  const headerPrefix = mode === 'scan' ? '🔍 ' : '🤖 ';
-  const headerIdx = rawLines.findIndex((l) => l.startsWith(headerPrefix));
-  if (headerIdx > 0 && !(mode === 'scan' && rawLines.slice(0, headerIdx).some((l) => /🤖/u.test(l)))) {
-    return rawLines.slice(headerIdx).join('\n');
   }
   return String(rawOutput ?? '');
 }
