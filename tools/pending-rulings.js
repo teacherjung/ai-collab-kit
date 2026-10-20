@@ -22,8 +22,8 @@
 // 掃整個專案的留言（平台動作 allComments）：題目所屬的PR關了照樣列、裁示貼在別支照樣配（搬家驗屋 09-13 前只掃開著的PR）。
 // 誠實劃界：「已裁」是推導不是事實（引了編號不等於
 // 在回答它）；原話那一行只驗形狀，驗不出引號裡是不是他真的說的；分頁是那條登記指令的責任。
-// 退出碼：0＝算出來了（含「沒有還沒回的」）；2＝算不出來（設定沒填、平台問不到）。刻意沒有 1。
-// 指令列在輸出後面印 D1 與 I 節的原文（開工先看待裁、怎麼問、問了就等、怎麼留痕）。只多印，不改退出碼；
+// 退出碼：0＝算出來了（含「沒有還沒回的」）；2＝算不出來（設定沒填、平台問不到、標準輸出寫不完）。刻意沒有 1。
+// 指令列在輸出後面印 D1 與 I 節的原文（開工先看待裁、怎麼問、問了就等、怎麼留痕），設 process.exitCode 並等標準輸出自然排空後才結束（避免長輸出在管線超過 64 KiB 緩衝時被 process.exit 截短）。只多印，不改退出碼；
 // 模組用法（待裁閘、送審產生器、本週成果產生器引的 evaluate 等）不受影響。
 'use strict';
 const { ask, PlatformError } = require('./platform.js');
@@ -269,8 +269,9 @@ if (require.main === module) {
   let result;
   const argProblem = cliArgsProblem(process.argv.slice(2));
   try { result = argProblem ? { code: 2, lines: [argProblem] } : run(); } catch (e) { result = { code: 2, lines: [`待裁清單：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] }; }
+  process.exitCode = result.code;
+  process.stdout.on('error', () => { process.exitCode = 2; });
   process.stdout.write(`${[...result.lines, ...ruleFooter(RULES_SHOWN)].join('\n')}\n`);
-  process.exit(result.code);
 }
 
 module.exports = { rulingLink, run, evaluate, render, deciderOf, cites, realDate, readPart, cliArgsProblem, RULES_SHOWN };

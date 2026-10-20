@@ -19,15 +19,21 @@
 //     圍欄開頭行後面的「<!--」也屬於圍欄（r4 Medium②）。
 //   ⑭驗收留痕（H6；擁有者 2026-10-07 裁）：形狀合的另列成「驗收留痕」並印出來，不進待裁、不算疑似、引到 ❓ 的編號也不關題；
 //     日期假的、少原話行、不是登記帳號貼的、第一行像但形狀不合、標題不在第一行＝疑似；別的打勾標題不算像。
+//   ⑮真 CLI 長輸出經管線（pipe）與普通檔案 fd 逐位元組一致：超過 64 KiB 管線緩衝時自然排空後才結束，不因提早 process.exit 截短；
+//     成功退 0、失敗與管線寫入錯誤（EPIPE 等）退 2（刻意沒有 1）。
 // ⚠️ 守不到的：整個專案的留言有沒有給齊（分頁收齊是那條登記指令的責任）；已裁是推導不是事實；原話只驗形狀。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync, spawn } = require('node:child_process');
+const { gitEnv } = require('../tools/git-env.js');
 const { run, evaluate, deciderOf, cites, realDate, readPart, cliArgsProblem, RULES_SHOWN } = require('../tools/pending-rulings.js');
 const { excerpt, read: readRules } = require('../tools/build-rules.js');
 const { PlatformError } = require('../tools/platform.js');
-const { runInCopy } = require('./helpers/kit-copy.js');
+const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
 
 const D = { id: 'Boss', account: 'boss-acct', ids: ['Boss', 'Alpha'], accounts: ['boss-acct', 'ai-acct'] };
 let n = 0;
@@ -389,3 +395,104 @@ test('指令列在輸出後面印 D1 與 I 節原文（開工看待裁、怎麼�
   assert.match(copy.stdout, /^待裁清單不收任何參數/u, '工具自己的輸出照舊在前面');
   assert.ok(copy.stdout.includes(`\n${excerpt(readRules(), RULES_SHOWN)}\n`), `沒印出 D1 與 I 節原文：\n${copy.stdout}`);
 });
+
+test('⑮真 CLI 長輸出經管線與普通檔案 fd 逐位元組一致；成功退 0、失敗與管線寫入錯誤退 2（刻意沒有 1）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pending-rulings-pipe-'));
+  try {
+    const kitRoot = path.join(__dirname, '..');
+    fs.cpSync(path.join(kitRoot, 'tools'), path.join(dir, 'tools'), { recursive: true });
+    fs.copyFileSync(path.join(kitRoot, 'rules.json'), path.join(dir, 'rules.json'));
+    const comments = Array.from({ length: 2000 }, (_, i) => ({
+      id: String(100000 + i),
+      author: 'ai-acct',
+      createdAt: new Date(Date.UTC(2026, 8, 13, 0, Math.floor(i / 60), i % 60)).toISOString(),
+      change: String((i % 20) + 1),
+      body: `## ❓ 待裁（2026-09-13）：長輸出管線完整性第 ${String(i + 1).padStart(4, '0')} 題（避免超過 64 KiB 管線緩衝未排空即 process.exit 截短）\n選項：甲／乙\n建議：甲`,
+    }));
+    fs.writeFileSync(path.join(dir, 'comments.json'), JSON.stringify(comments));
+    fs.writeFileSync(path.join(dir, 'dump-comments.js'), "const fs = require('node:fs'); process.stdout.write(fs.readFileSync('comments.json'));\n");
+    const baseSettings = unfilled();
+    const settings = {
+      ...baseSettings,
+      owner: 'Boss',
+      participants: [
+        { role: '裁示者（人）', id: 'Boss', account: 'boss-acct' },
+        { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' },
+      ],
+      platform: {
+        ...baseSettings.platform,
+        name: 'Fake',
+        project: 'fake/repo',
+        clearEnv: [],
+        operations: {
+          ...baseSettings.platform.operations,
+          allComments: [process.execPath, 'dump-comments.js'],
+        },
+      },
+    };
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
+    const env = gitEnv();
+    delete env.NODE_TEST_CONTEXT;
+    const cli = path.join(dir, 'tools/pending-rulings.js');
+
+    // 1. 普通檔案 fd 對照組
+    const outFile = path.join(dir, 'out.txt');
+    const fd = fs.openSync(outFile, 'w');
+    let fileRes;
+    try {
+      fileRes = spawnSync(process.execPath, [cli], { cwd: dir, env, stdio: ['ignore', fd, 'pipe'] });
+    } finally {
+      fs.closeSync(fd);
+    }
+    assert.equal(fileRes.status, 0, fileRes.stderr && fileRes.stderr.toString('utf8'));
+    const fileBytes = fs.readFileSync(outFile);
+    assert.ok(fileBytes.length > 65536 * 4, `合成輸出需明顯大於 64 KiB 管線緩衝（實際 ${fileBytes.length} 位元組）`);
+    const fileText = fileBytes.toString('utf8');
+    assert.match(fileText, /^還沒回：2000 則$/mu);
+    assert.match(fileText, /長輸出管線完整性第 2000 題/u);
+    assert.ok(fileText.includes(`\n${excerpt(readRules(), RULES_SHOWN)}\n`), '檔案輸出尾端需含完整 D1 與 I 節條文');
+
+    // 2. 管線（pipe）輸出：必須與普通檔案 fd 逐位元組一致，不可只留前 65,536 位元組
+    const pipeRes = spawnSync(process.execPath, [cli], {
+      cwd: dir,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.equal(pipeRes.status, 0, pipeRes.stderr && pipeRes.stderr.toString('utf8'));
+    assert.equal(pipeRes.stdout.length, fileBytes.length, `管線輸出位元組數（${pipeRes.stdout.length}）與檔案 fd（${fileBytes.length}）不一致`);
+    assert.equal(Buffer.compare(pipeRes.stdout, fileBytes), 0, '管線輸出與檔案 fd 必須逐位元組完全相同');
+
+    // 3. 失敗退出碼維持 2（平台失敗）
+    const failSettings = {
+      ...settings,
+      platform: {
+        ...settings.platform,
+        operations: {
+          ...settings.platform.operations,
+          allComments: [process.execPath, '-e', 'process.stderr.write("boom\\n"); process.exit(1);'],
+        },
+      },
+    };
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(failSettings));
+    const failRes = spawnSync(process.execPath, [cli], { cwd: dir, env, encoding: 'utf8' });
+    assert.equal(failRes.status, 2, `平台失敗時退出碼應為 2（實際 ${failRes.status}）`);
+    assert.match(failRes.stdout, /待裁清單：問不到平台/u);
+
+    // 4. 下游提早關閉管線（EPIPE）：不可因未處理的 stream error 退 1，也不可假綠退 0，必須退 2
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
+    const epipeExit = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [cli], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let errOut = '';
+      child.stderr.on('data', (chunk) => { errOut += chunk.toString('utf8'); });
+      child.stdout.once('data', () => { child.stdout.destroy(); });
+      child.on('error', reject);
+      child.on('close', (code, signal) => resolve({ code, signal, errOut }));
+    });
+    assert.equal(epipeExit.signal, null);
+    assert.equal(epipeExit.code, 2, `下游提早關閉管線（EPIPE）應退 2、不可退 0 或 1（實際 code=${epipeExit.code}, stderr=${epipeExit.errOut}）`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
