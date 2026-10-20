@@ -236,6 +236,38 @@ test('還在跑時自動輪詢等待（方案 A）：轉完正式還在跑的場
   assert.equal(r3.code, 2);
   assert.match(r3.lines.join('\n'), /等待必過檢查完成期間版本變了/u);
 
+  // 3b. 等待途中問不到平台（輪詢第二次查詢拋 PlatformError）＝立刻退 2 不放行（r3 Finding 1）
+  for (const failOp of ['change', 'checks']) {
+    let pollStep = 0;
+    let clock3b = 0;
+    const p3b = {
+      ask(op) {
+        if (op === 'requiredChecks') return [need()];
+        if (op === 'change') {
+          pollStep += 1;
+          if (pollStep >= 2 && failOp === 'change') throw new PlatformError('輪詢期間平台中斷');
+          return change({ headSha: 'abc123' });
+        }
+        if (op === 'checks') {
+          if (pollStep >= 2 && failOp === 'checks') throw new PlatformError('輪詢期間查場次中斷');
+          return [run({ status: 'in_progress', conclusion: null, completedAt: null })];
+        }
+        throw new PlatformError(`unexpected ${op}`);
+      },
+    };
+    const r3b = gateRun('7', {
+      settings,
+      platform: p3b,
+      waitMs: 10000,
+      pollMs: 5000,
+      now: () => clock3b,
+      sleep: (ms) => { clock3b += ms; },
+    });
+    assert.ok(pollStep >= 2, `${failOp} 確實進入第二次輪詢查詢`);
+    assert.equal(r3b.code, 2, `輪詢期間 ${failOp} 查詢失敗必須退 2`);
+    assert.match(r3b.lines.join('\n'), /問不到平台.*不放行/u);
+  }
+
   // 4. 已經完成的失敗結論不輪詢空等
   const slept4 = [];
   const p4 = fakePlatform({ change: change(), requiredChecks: [need()], checks: [run({ conclusion: 'failure' })] });
