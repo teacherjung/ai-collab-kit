@@ -95,18 +95,23 @@ function cleanSettingToken(raw) {
   return m ? m[1] : null;
 }
 
+const PAREN_CONFUSER_RE = /\b(?:gpt|claude|gemini|grok|o[134]|opus|sonnet|haiku|flash|pro|ultra|mini|nano|luna|astra|low|medium|high|xhigh|max|minimal)\b/iu;
+const SLASH_EFFORT_RE = /^(?:low|medium|high|xhigh|max|maximum|minimal|none|auto|ultra)$/iu;
+const CLAUSE_SPLIT_RE = /[；;，,｜|](?=[ \t]*(?:\*\*|__)?[\p{L}\p{N}_／/ -]{1,24}(?:\*\*|__)?[ \t]*[：:])/u;
+const COMBINED_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[／/][ \t]*(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
+const MODEL_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
+const EFFORT_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
+
 /**
  * 從「### 本輪實際用的設定」段落解析唯一宣告的實際模型與推理強度欄位。
  * 只認欄位名「（實際／本輪）模型」與「（實際／本輪）推理（強度／檔位）」（或合併欄「模型／推理（強度）」），
- * 「要求模型」「設定模型」等其他前綴不算實際欄位；缺漏、重複宣告或值不符皆由 settingProblems 擋下。
+ * 「要求模型」「設定模型」等其他前綴不算實際欄位；同一行若以分號／逗號／豎線隔開多欄，分隔符後必須緊接下一欄「欄位名：值」，
+ * 否則整段文字視為同一欄的值（防止 `模型：gpt-6-astra, gpt-6-luna` 或 `推理強度：max, low` 被截斷成單一合格值，#121 r2 R3）。
  */
-function parseSettingFields(sectionLines, allowedModels) {
+function parseSettingFields(sectionLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
   const effortValues = [];
   let inFence = false;
-  const combinedRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[／/][ \t]*(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
-  const modelRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
-  const effortRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
 
   for (const line of sectionLines) {
     if (/^\s*(?:```|~~~)/u.test(line)) {
@@ -114,41 +119,70 @@ function parseSettingFields(sectionLines, allowedModels) {
       continue;
     }
     if (inFence || /^\s*>/u.test(line)) continue;
-    let restLine = line;
-    for (const m of line.matchAll(combinedRe)) {
-      const val = m[1].trim();
-      const parts = val.split(/[ \t]*[／/][ \t]*/u);
-      const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
-      const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
-      if (mTok && eTok) {
-        modelValues.push(mTok);
-        effortValues.push(eTok);
-      } else {
-        modelValues.push(val || '（空）');
-        effortValues.push(val || '（空）');
+    const segments = [];
+    const outer = line.replace(/[（(]([^）)]*)[）)]/gu, (full, inner) => {
+      if (/[：:]/u.test(inner)) {
+        segments.push(inner);
+        return ' ';
       }
-      restLine = restLine.replace(m[0], ' ');
-    }
-    for (const m of restLine.matchAll(modelRe)) {
-      const val = m[1].trim();
-      const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
-      if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
-        modelValues.push(unwrapped);
-        continue;
+      if (PAREN_CONFUSER_RE.test(inner) || allowedModels.some((am) => am && inner.toLowerCase().includes(am.toLowerCase()))) {
+        return full;
       }
-      const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
-      const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
-      const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
-      if (mTok && eTok) {
-        modelValues.push(mTok);
-        effortValues.push(eTok);
-      } else {
-        modelValues.push(cleanSettingToken(val) || val || '（空）');
+      return ' ';
+    });
+    segments.unshift(outer);
+
+    for (const seg of segments) {
+      const cleanedSeg = seg
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '')
+        .trim()
+        .replace(/。+$/u, '')
+        .trim();
+      if (!cleanedSeg) continue;
+      const clauses = cleanedSeg.split(CLAUSE_SPLIT_RE);
+      for (const rawClause of clauses) {
+        const clause = rawClause.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
+        if (!clause) continue;
+        const cm = COMBINED_CLAUSE_RE.exec(clause);
+        if (cm) {
+          const val = cm[1].trim();
+          const parts = val.split(/[ \t]*[／/][ \t]*/u);
+          const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
+          const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
+          if (mTok && eTok) {
+            modelValues.push(mTok);
+            effortValues.push(eTok);
+          } else {
+            modelValues.push(val || '（空）');
+            effortValues.push(val || '（空）');
+          }
+          continue;
+        }
+        const mm = MODEL_CLAUSE_RE.exec(clause);
+        if (mm) {
+          const val = mm[1].trim();
+          const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
+          if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
+            modelValues.push(unwrapped);
+            continue;
+          }
+          const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
+          const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
+          const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
+          if (mTok && eTok && (SLASH_EFFORT_RE.test(eTok) || (allowedEffort && eqSettingToken(eTok, allowedEffort)))) {
+            modelValues.push(mTok);
+            effortValues.push(eTok);
+          } else {
+            modelValues.push(cleanSettingToken(val) || val || '（空）');
+          }
+          continue;
+        }
+        const em = EFFORT_CLAUSE_RE.exec(clause);
+        if (em) {
+          const val = em[1].trim();
+          effortValues.push(cleanSettingToken(val) || val || '（空）');
+        }
       }
-    }
-    for (const m of restLine.matchAll(effortRe)) {
-      const val = m[1].trim();
-      effortValues.push(cleanSettingToken(val) || val || '（空）');
     }
   }
   return { modelValues, effortValues };
@@ -173,7 +207,7 @@ function settingProblems(body, role, reviewers) {
     .filter((s) => s && s !== '未設定');
   const effort = typeof cfg.maxEffort === 'string' && cfg.maxEffort.trim() && cfg.maxEffort.trim() !== '未設定'
     ? cfg.maxEffort.trim() : '';
-  const { modelValues, effortValues } = parseSettingFields(sectionLines, models);
+  const { modelValues, effortValues } = parseSettingFields(sectionLines, models, effort);
   const out = [];
   if (models.length) {
     if (modelValues.length === 0) {

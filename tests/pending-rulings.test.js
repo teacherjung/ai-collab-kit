@@ -101,6 +101,16 @@ test('④配對：引在引用區塊裡不算；先貼的不算；編號要整�
   const res = evaluate([q, q2, q3, r1Only], D);
   assert.deepEqual(res.ruled.map((x) => x.ask.id), [q.id]);
   assert.deepEqual(res.open.map((x) => x.id), [q2.id, q3.id]);
+  // r2 R8：兩個網址以「、」或「;」緊接且無空白時，不可跨過第一個 # 誤配到後一題
+  for (const sep of ['、', ';', '，', ',']) {
+    const tight = `原題：https://x/pull/1#issuecomment-${q.id}${sep}https://x/pull/2#issuecomment-${q2.id}（後者未答）`;
+    assert.equal(cites(tight, q.id), true, `以「${sep}」相連無空白時，第一題應命中`);
+    assert.equal(cites(tight, q2.id), false, `以「${sep}」相連無空白時，第二題不可誤中`);
+    const tightRuling = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${tight}`, { author: 'boss-acct', change: '1' });
+    const crossEval = evaluate([{ ...q, change: '1' }, { ...q2, change: '2' }, tightRuling], D);
+    assert.deepEqual(crossEval.ruled.map((x) => x.ask.id), [q.id], `跨 PR 以「${sep}」緊接時只關第一題`);
+    assert.deepEqual(crossEval.open.map((x) => x.id), [q2.id], `跨 PR 以「${sep}」緊接時第二題維持待裁`);
+  }
 });
 
 test('⑤長得像但不合形狀＝疑似，並說原因', () => {

@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { readSettings } = require('../tools/settings-data.js');
+const settingsData = require('../tools/settings-data.js');
 
 const ROOT = path.join(__dirname, '..');
 /** 既有的路徑例外，只出不進（本倉庫沒有）。 */
@@ -23,14 +23,13 @@ const DEFAULT_BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.i
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/u;
 const CONTROL_ESCAPE_AT = /^\\(?:x[01][0-9a-fA-F]|u00[01][0-9a-fA-F]|u\{0*(?:[0-9a-fA-F]|1[0-9a-fA-F])\})/u;
 const REGEX_START_KEYWORDS = new Set(['return', 'throw', 'case', 'typeof', 'delete', 'void', 'in', 'of', 'instanceof', 'new', 'yield', 'await', 'else', 'do']);
-const BLOCK_START_KEYWORDS = new Set(['else', 'do', 'try', 'finally', 'export']);
+const BLOCK_START_KEYWORDS = new Set(['else', 'do', 'try', 'finally']);
+const DECL_PREFIX_KEYWORDS = new Set(['async', 'export', 'default']);
 const CTRL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with', 'switch']);
 
-function binaryExtensions() {
-  try {
-    const s = readSettings();
-    if (Array.isArray(s.binaryExtensions)) return s.binaryExtensions;
-  } catch { /* fallback to default list */ }
+function binaryExtensions(readFn = settingsData.read) {
+  const s = readFn();
+  if (s && Array.isArray(s.binaryExtensions)) return s.binaryExtensions;
   return DEFAULT_BINARY_EXTENSIONS;
 }
 
@@ -51,7 +50,7 @@ function findControlChar(text) {
   return null;
 }
 
-function scanControlChars({ extraFiles = [], binaryExts = binaryExtensions(), transform = (_f, text) => text } = {}) {
+function scanControlChars({ extraFiles = [], readFn = settingsData.read, binaryExts = binaryExtensions(readFn), transform = (_f, text) => text } = {}) {
   const all = [
     ...trackedFiles().map((f) => ({ name: f, read: () => fs.readFileSync(path.join(ROOT, f), 'utf8') })),
     ...extraFiles.map((item) => ({ name: item.name, read: () => item.content })),
@@ -167,11 +166,11 @@ function extractRegexLiterals(src) {
       while (j < src.length && /[0-9A-Za-z_$]/u.test(src[j])) j++;
       const word = src.slice(i, j);
       if (!afterDot) {
-        if ((word === 'function' || word === 'class') && (stmtStart || lastWord === 'async' || lastWord === 'export')) {
+        if ((word === 'function' || word === 'class') && stmtStart) {
           pendingDeclBody = true;
         }
         canStartRegex = REGEX_START_KEYWORDS.has(word);
-        stmtStart = BLOCK_START_KEYWORDS.has(word);
+        stmtStart = BLOCK_START_KEYWORDS.has(word) || (stmtStart && DECL_PREFIX_KEYWORDS.has(word));
         lastWord = word;
       } else {
         canStartRegex = false;
@@ -267,7 +266,7 @@ function extractRegexLiterals(src) {
       stmtStart = false;
     } else if (/[,:[!&|?~+*%^<>=-]/u.test(ch)) {
       canStartRegex = true;
-      stmtStart = ch === ':';
+      stmtStart = false;
     } else {
       canStartRegex = false;
       stmtStart = false;
@@ -336,11 +335,36 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
   assert.ok(clean.count >= 40, `只掃到 ${clean.count} 個文字檔：前提變了`);
   assert.deepEqual(clean.bad, [], `這些文字檔含控制字元：\n${clean.bad.join('\n')}`);
 
-  // 二進位副檔名允許清單（如 .png 含 \x1a）依副檔名排除，不誤判為文字檔控制字元（#121 r1 R1）
+  // 二進位副檔名允許清單（如 .png 含 \x1a）依副檔名排除，且支援經 settings-data.read() 讀取自訂 binaryExtensions（#121 r1 R1、r2 R1）
   const withPng = scanControlChars({
     extraFiles: [{ name: 'assets/review-probe.png', content: '\x89PNG\r\n\x1a\n' }],
   });
-  assert.deepEqual(withPng.bad, [], '二進位副檔名（.png）應由副檔名允許清單排除');
+  assert.deepEqual(withPng.bad, [], '二進位副檔名（.png）應由預設副檔名允許清單排除');
+
+  const withCustomReadFn = scanControlChars({
+    readFn: () => ({ binaryExtensions: ['.bmp'] }),
+    extraFiles: [{ name: 'assets/custom.bmp', content: 'BM\u0000\u0000' }],
+  });
+  assert.deepEqual(withCustomReadFn.bad, [], '自訂 binaryExtensions（.bmp）應生效並排除');
+
+  const desc = Object.getOwnPropertyDescriptor(settingsData, 'read');
+  if (desc && desc.writable) {
+    const origRead = settingsData.read;
+    let readCalls = 0;
+    try {
+      settingsData.read = () => {
+        readCalls += 1;
+        return { ...origRead(), binaryExtensions: ['.bmp'] };
+      };
+      const withCustomBmp = scanControlChars({
+        extraFiles: [{ name: 'assets/custom.bmp', content: 'BM\u0000\u0000' }],
+      });
+      assert.ok(readCalls >= 1, '預設必須實際呼叫 settingsData.read() 讀取專案設定');
+      assert.deepEqual(withCustomBmp.bad, [], 'settings.binaryExtensions 登記的自訂二進位副檔名（.bmp）應生效並排除');
+    } finally {
+      settingsData.read = origRead;
+    }
+  }
 
   // 接線與長檔尾端誘餌：將已追蹤文字檔在超過 16 KiB 後附加空字元，掃描迴圈必須抓出檔名、精確位置與字碼
   const realSelf = fs.readFileSync(__filename, 'utf8');
@@ -358,7 +382,7 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
   }
 });
 
-test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控制字元跳脫（#71、#77、#121 r1 R2）', () => {
+test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控制字元跳脫（#71、#77、#121 r1 R2、r2 R2）', () => {
   const clean = scanRepoRegexLint();
   assert.ok(clean.count >= 70, `只掃到 ${clean.count} 支 JS 檔：前提變了`);
   assert.deepEqual(clean.problems, []);
@@ -367,7 +391,7 @@ test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控
   const decoy = scanRepoRegexLint((f, raw) => (f === 'tests/file-names.test.js' && raw.includes('extractRegexLiterals') ? `${raw}\nconst _decoy = /a  b/u;\n` : raw));
   assert.equal(decoy.problems.length, 1);
 
-  // 判準本身：抓得到連續空白、控制字元跳脫、奇數反斜線後接控制跳脫、跳脫方括號與 if (...) 後的正規式，且不誤傷跳脫反斜線、字元集內空白或函式表達式後的除法（#121 r1 R2）
+  // 判準本身：抓得到連續空白、控制字元跳脫、奇數反斜線後接控制跳脫、跳脫方括號、if (...) 與 async 宣告後的正規式，且不誤傷跳脫反斜線、字元集內空白或一般／非同步函式表達式後的除法（#121 r1 R2、r2 R2）
   assert.equal(regexLintProblems('const r = /a  b/u;', 'x.js').length, 1);
   assert.equal(regexLintProblems('const r = /[\\x00-\\x1f]/u;', 'x.js').length, 1);
   assert.equal(regexLintProblems('const r = /\\u0007/u;', 'x.js').length, 1);
@@ -375,9 +399,12 @@ test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控
   assert.equal(regexLintProblems('const r = /\\\\\\x00/u;', 'x.js').length, 1, '奇數個反斜線後的 \\x00 是控制字元跳脫，要抓');
   assert.equal(regexLintProblems('const r = /\\[  \\]/u;', 'x.js').length, 1, '已跳脫的 \\[ 不是字元集，內含兩個空白要抓');
   assert.equal(regexLintProblems('if (ok) /a  b/u.test(s);', 'x.js').length, 1, 'if (...) 條件後的正規式字面量要掃到');
+  assert.equal(regexLintProblems('async function f() {} /a  b/u.test(s);', 'x.js').length, 1, 'async 函式宣告後的正規式字面量要掃到');
   assert.equal(regexLintProblems('const s = `${x.replace(/a  b/g, "")}`;', 'x.js').length, 1);
   assert.deepEqual(regexLintProblems('const r = /\\\\x00/u;', 'x.js'), [], '已跳脫的反斜線後接 x00 不是控制字元跳脫，不誤判');
   assert.deepEqual(regexLintProblems('const r = /[  ]/u;', 'x.js'), [], '字元集 [...] 內的連續空白不觸發 ESLint no-regex-spaces，不誤判');
   assert.deepEqual(regexLintProblems('const r = function(){} /  2; const next = 4 / 3;', 'x.js'), [], '函式表達式大括號後的除法不可誤判為正規式');
+  assert.deepEqual(regexLintProblems('const f = async function(){} /  2; const next = 4 / 3;', 'x.js'), [], '非同步函式表達式大括號後的除法不可誤判為正規式');
+  assert.deepEqual(regexLintProblems('const o = { a: function(){} /  2, b: 4 / 3 };', 'x.js'), [], '物件屬性冒號後的函式表達式除法不可誤判為正規式');
   assert.deepEqual(regexLintProblems('// /a  b/ in comment\nconst s = "/a  b/ \\\\x00";\nconst ok = /a {2}b/u;', 'x.js'), []);
 });

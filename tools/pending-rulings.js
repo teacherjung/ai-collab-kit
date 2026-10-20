@@ -63,7 +63,7 @@ const TRACE_HEAD = /^## (?:❓|⚖|🚫|✅ 驗收)/mu;
 function cites(body, id) {
   const part = readPart(body);
   const s = String(id);
-  const firstUrl = /https?:\/\/[^\s)>]+#(?:issuecomment-|c-)?([A-Za-z0-9_-]+)(?![0-9A-Za-z])/u.exec(part);
+  const firstUrl = /https?:\/\/[^\s)>#，,、；;。｜|）\]`'"]+#(?:issuecomment-|c-)?([A-Za-z0-9_-]+)(?![0-9A-Za-z])/u.exec(part);
   if (firstUrl) return firstUrl[1] === s || firstUrl[0].endsWith(`#${s}`);
   if (/^\d+$/u.test(s)) return false;
   return new RegExp(`(?<![0-9A-Za-z])${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9A-Za-z])`, 'u').test(part);

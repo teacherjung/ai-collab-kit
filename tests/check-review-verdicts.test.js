@@ -23,7 +23,7 @@
 //     對目前版本的通過）才列成擋下的原因，否則只提醒；缺小標的通過裡的作廢行照樣生效；現況那一行照實列出不算數的那則。
 //   ⑭快速通道（擁有者）（F12）：專案設定登記的擁有者（owner 那一欄，要是參與者，去前後空白比）的通過不要求小標；認擁有者不認裁示者
 //     （裁示者指定給 AI 時，那個 AI 的通過照樣要小標、擁有者的原話照樣接受）；沒登記＝不豁免，訊息提醒先登記、不要替他的原話補小標；AI 的通過不跟著豁免。
-//   ⑮本輪實際用的設定（F11）：專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，「通過」的「### 本輪實際用的設定」段落須以獨立詞邊界出現合格模型與最高推理，缺漏或寫成別的模型／推理則該則「通過」不算數（擁有者豁免同 ⑭）。
+//   ⑮本輪實際用的設定（F11）：專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，「通過」的「### 本輪實際用的設定」段落須以唯一實際欄位寫明合格模型與最高推理，缺漏、多值並列、重複矛盾或寫成別的模型／推理則該則「通過」不算數（擁有者豁免同 ⑭）。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。複審者用反例推翻（舊版本 01:00、目前版本 02:00、
 //    反序餵入：有排序退 1、沒排序退 0）——當時同輪同結論異版本是「先遇到哪一則就用哪一則」，排序決定了誰先。
 //    現在同輪異版本一律判不明，**判決**跟順序無關（⑨那題把每一種排列都跑一遍、比對整份 problems）。
@@ -742,11 +742,20 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.equal(settingProblems(mkBody('- 要求模型：gpt-6-astra；要求推理：max'), 'Beta', reviewerConfigs).length, 2);
   assert.equal(settingProblems(mkBody('- 模型／推理：本輪未提供獨立核實值。專案設定要求 `gpt-6-astra`／`max`'), 'Beta', reviewerConfigs).length, 2);
 
-  // 重複或矛盾宣告實際模型／推理欄位，必須拒收
+  // 重複或矛盾宣告實際模型／推理欄位，或以半形／全形逗號、分號並列多值，必須拒收（#121 r1 R3、r2 R3）
   const dupProblems = settingProblems(mkBody('- 實際模型：gpt-6-luna；實際推理：low（模型：gpt-6-astra；推理：max）'), 'Beta', reviewerConfigs);
   assert.equal(dupProblems.length, 2, dupProblems.join('\n'));
   assert.ok(dupProblems.some((x) => x.includes('模型欄位重複或矛盾')));
   assert.ok(dupProblems.some((x) => x.includes('推理強度欄位重複或矛盾')));
+
+  for (const commaBody of [
+    mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'),
+    mkBody('- 模型：gpt-6-astra，gpt-6-luna\n- 推理強度：max，low'),
+    mkBody('- 模型：gpt-6-astra；gpt-6-luna\n- 推理強度：max；low'),
+  ]) {
+    const commaProbs = settingProblems(commaBody, 'Beta', reviewerConfigs);
+    assert.equal(commaProbs.length, 2, `並列多值應拒收：${commaBody} -> ${commaProbs.join(' / ')}`);
+  }
 
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
@@ -758,8 +767,10 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
-  // evaluate 與 gateRun 整合：不合規的通過不算數、不能解除阻擋；合規放行
+  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值）不算數、不能解除阻擋；合規放行
   const badComment = c(honestLowWithReq, 'bad-set');
+  const commaBadComment = c(mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'), 'comma-bad');
+  const fullCommaBadComment = c(mkBody('- 模型：gpt-6-astra，gpt-6-luna\n- 推理強度：max，low'), 'full-comma-bad');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
@@ -773,6 +784,8 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
     reviewers: reviewerConfigs,
   };
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [badComment] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [commaBadComment] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [fullCommaBadComment] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [goodComment] }) }).code, 0);
 });
 

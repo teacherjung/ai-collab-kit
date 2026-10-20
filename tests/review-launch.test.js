@@ -761,6 +761,8 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過缺固定小標', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n`, /少了固定小標：### 清單逐項結果/u],
     ['通過未填實際模型與推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（需以「模型：<模型名>」填 m-strong 或 m-second）/u],
     ['通過誠實填低檔模型但附要求值', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 實際模型：wrong；實際推理：low（要求模型：m-strong；要求推理：max）\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
+    ['通過以半形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong, wrong\n- 推理強度：max, low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong, wrong」，需為 m-strong 或 m-second）/u],
+    ['通過以全形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong，wrong\n- 推理強度：max，low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong，wrong」，需為 m-strong 或 m-second）/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
