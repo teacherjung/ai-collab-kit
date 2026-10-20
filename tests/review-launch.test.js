@@ -2360,7 +2360,9 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.ok(typeof finalScanJson.postedAt === 'string', 'A 完成代貼後 scan.json 正常寫入 postedAt');
     assert.equal(finalScanJson.closedAt, undefined, 'B 的並發 close --purge 被擋下、未寫入 closedAt');
 
-    // 交錯 4（容器操作已持鎖→代貼後到）：A 在 --scan-close 持有容器鎖期間，B 呼叫 --scan-post 立即退 2
+    // 交錯 4（容器操作已持鎖→代貼後到）：先將 scan.json 改回未貼狀態，確認 A 在 --scan-close 持有容器鎖期間，B 呼叫 --scan-post 是因容器鎖退 2（而非已貼過）
+    delete finalScanJson.postedAt;
+    fs.writeFileSync(path.join(scanFolder, 'scan.json'), `${JSON.stringify(finalScanJson, null, 2)}\n`);
     let latePostDuringClose = null;
     const closeWithLatePost = scanClose('7', {
       settings: s,
@@ -2380,6 +2382,132 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.equal(latePostDuringClose && latePostDuringClose.code, 2, latePostDuringClose ? latePostDuringClose.lines.join('\n') : 'latePost did not run');
     assert.match(latePostDuringClose.lines.join('\n'), /正在被另一個程序操作/u);
     assert.ok(!fs.existsSync(scanFolder));
+
+    // (g) r4 R1：平台正規化編號（例如輸入 '007'、平台回 id: '7'）時，複審與掃描的 --run --purge 全程沿用正規化編號，不會找錯容器
+    const normReviewRes = main(['007', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        fs.writeFileSync(
+          record.outFile,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+        );
+      },
+      runPost() {},
+    });
+    assert.equal(normReviewRes.code, 0, normReviewRes.lines.join('\n'));
+    assert.ok(!fs.existsSync(reviewFolder), '前導零編號 007 經正規化為 7 後，複審一鍵執行與收樹清除成功');
+
+    const normScanRes = main(['--scan', '007', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      cwd: r.dir,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        fs.writeFileSync(
+          record.outFile,
+          `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+        );
+      },
+      runPost() {},
+    });
+    assert.equal(normScanRes.code, 0, normScanRes.lines.join('\n'));
+    assert.ok(!fs.existsSync(scanFolder), '前導零編號 007 經正規化為 7 後，掃描一鍵執行與收樹清除成功');
+
+    // (h) r4 R2：--run 已完成代貼，但收尾 close / scanClose 拋 LaunchError（如容器鎖被占）時，必須保留已開樹與已貼出訊息、明確回報「已貼，收尾失敗——沒有收」並保留現場
+    const revLockPath = path.join(fs.realpathSync(dir), '.review-acme-kit-7-r1.lock');
+    let revCloseFailPostCalls = 0;
+    try {
+      const revRunCloseFail = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(baseAns),
+        cwd: r.dir,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          fs.writeFileSync(
+            record.outFile,
+            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          );
+        },
+        runPost() {
+          revCloseFailPostCalls += 1;
+          // 模擬代貼完成後、進入 close 前，容器鎖被另一程序持有
+          fs.writeFileSync(revLockPath, '999999\n');
+        },
+      });
+      assert.equal(revRunCloseFail.code, 2, revRunCloseFail.lines.join('\n'));
+      assert.equal(revCloseFailPostCalls, 1, '代貼確實已執行一次');
+      const revOutTxt = revRunCloseFail.lines.join('\n');
+      assert.match(revOutTxt, /送審產生器｜變更 7｜複審者 Beta/u, '保留啟動成功輸出');
+      assert.match(revOutTxt, /已代貼 r1 結論｜變更 7/u, '保留已貼出結論輸出');
+      assert.match(revOutTxt, /送審產生器：已貼，收尾失敗.*沒有收/u, '明確回報已貼但收尾失敗，不誤報「沒有產生」');
+      assert.doesNotMatch(revOutTxt, /沒有產生/u, '不誤報沒有產生');
+      const revRecAfterFail = JSON.parse(fs.readFileSync(path.join(reviewFolder, 'launch.json'), 'utf8'));
+      assert.ok(typeof revRecAfterFail.postedAt === 'string', 'launch.json 已記下 postedAt');
+      assert.equal(revRecAfterFail.closedAt, undefined, '收尾失敗時未寫入 closedAt');
+      assert.ok(fs.existsSync(path.join(reviewFolder, 'tree')), '工作樹仍留在現場供補跑 --close');
+    } finally {
+      fs.rmSync(revLockPath, { force: true });
+    }
+    // 測試 close 與 post 的 expectHead / expectStartedAt 防呆：傳入不符的 expectHead 或 expectStartedAt 應拒收、不誤動後來的容器
+    assert.throws(() => post('7', { settings: s, dir, expectHead: 'deadbeef' }), /不是本次啟動的/u);
+    assert.throws(() => post('7', { settings: s, dir, expectStartedAt: '1999-01-01T00:00:00.000Z' }), /不是本次啟動的/u);
+    const mismatchRevHead = close('7', { settings: s, dir, leftoverRoots: [], purge: true, expectRound: 1, expectHead: 'deadbeef' });
+    assert.equal(mismatchRevHead.code, 1);
+    assert.match(mismatchRevHead.lines.join('\n'), /不符/u);
+    const mismatchRevStart = close('7', { settings: s, dir, leftoverRoots: [], purge: true, expectRound: 1, expectStartedAt: '1999-01-01T00:00:00.000Z' });
+    assert.equal(mismatchRevStart.code, 1);
+    assert.match(mismatchRevStart.lines.join('\n'), /不符/u);
+    assert.ok(fs.existsSync(path.join(reviewFolder, 'tree')), '不符時複審樹分毫未動');
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    let scanCloseFailPostCalls = 0;
+    try {
+      const scanRunCloseFail = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(withPass),
+        cwd: r.dir,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          fs.writeFileSync(
+            record.outFile,
+            `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+          );
+        },
+        runPost() {
+          scanCloseFailPostCalls += 1;
+          fs.writeFileSync(scanContainerLockPath, '999999\n');
+        },
+      });
+      assert.equal(scanRunCloseFail.code, 2, scanRunCloseFail.lines.join('\n'));
+      assert.equal(scanCloseFailPostCalls, 1, '掃描代貼確實已執行一次');
+      const scanOutTxt = scanRunCloseFail.lines.join('\n');
+      assert.match(scanOutTxt, /掃描準備｜變更 7｜掃描者 Gamma/u, '保留掃描啟動成功輸出');
+      assert.match(scanOutTxt, /已代貼掃描留言｜變更 7/u, '保留掃描已貼出輸出');
+      assert.match(scanOutTxt, /送審產生器：已貼，收尾失敗.*沒有收/u, '明確回報掃描已貼但收尾失敗');
+      assert.doesNotMatch(scanOutTxt, /沒有產生/u, '不誤報沒有產生');
+      const scanRecAfterFail = JSON.parse(fs.readFileSync(path.join(scanFolder, 'scan.json'), 'utf8'));
+      assert.ok(typeof scanRecAfterFail.postedAt === 'string', 'scan.json 已記下 postedAt');
+      assert.equal(scanRecAfterFail.closedAt, undefined, '收尾失敗時未寫入 closedAt');
+      assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), '掃描樹仍留在現場供補跑 --scan-close');
+    } finally {
+      fs.rmSync(scanContainerLockPath, { force: true });
+    }
+    // 測試 scanClose 與 scanPost 的 expectHead / expectStartedAt 防呆：傳入不符的 expectHead 或 expectStartedAt 應拒收、不誤動後來的掃描容器
+    assert.throws(() => scanPost('7', { settings: s, dir, expectHead: 'deadbeef' }), /不是本次啟動的/u);
+    assert.throws(() => scanPost('7', { settings: s, dir, expectStartedAt: '1999-01-01T00:00:00.000Z' }), /不是本次啟動的/u);
+    const mismatchScanHead = scanClose('7', { settings: s, dir, leftoverRoots: [], purge: true, expectHead: 'deadbeef' });
+    assert.equal(mismatchScanHead.code, 1);
+    assert.match(mismatchScanHead.lines.join('\n'), /不符/u);
+    const mismatchScanStart = scanClose('7', { settings: s, dir, leftoverRoots: [], purge: true, expectStartedAt: '1999-01-01T00:00:00.000Z' });
+    assert.equal(mismatchScanStart.code, 1);
+    assert.match(mismatchScanStart.lines.join('\n'), /不符/u);
+    assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), '不符時掃描樹分毫未動');
+    assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });

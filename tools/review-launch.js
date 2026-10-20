@@ -2385,7 +2385,7 @@ function main(argv, opts = {}) {
       }
       let posted;
       try {
-        posted = scanPost(a.scan, {
+        posted = scanPost(launched.record.change, {
           ...opts,
           ...(dir ? { dir } : {}),
           expectHead: launched.record.head,
@@ -2398,13 +2398,29 @@ function main(argv, opts = {}) {
         throw e;
       }
       if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
-      const closed = scanClose(a.scan, {
-        ...opts,
-        ...(dir ? { dir } : {}),
-        ...(purge ? { purge: true } : {}),
-        expectHead: launched.record.head,
-        expectStartedAt: launched.record.startedAt,
-      });
+      let closed;
+      try {
+        closed = scanClose(launched.record.change, {
+          ...opts,
+          ...(dir ? { dir } : {}),
+          ...(purge ? { purge: true } : {}),
+          expectHead: launched.record.head,
+          expectStartedAt: launched.record.startedAt,
+        });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          const retryCmd = `node tools/review-launch.js --scan-close ${launched.record.change}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+          return {
+            code: 2,
+            lines: [
+              ...launched.lines,
+              ...posted.lines,
+              `送審產生器：已貼，收尾失敗（${e.message}）——沒有收（掃描樹與輸出檔留在 ${folder}，可重跑 ${retryCmd}）。`,
+            ],
+          };
+        }
+        throw e;
+      }
       return {
         code: closed.code,
         lines: [...launched.lines, ...posted.lines, ...closed.lines],
@@ -2433,7 +2449,7 @@ function main(argv, opts = {}) {
     }
     let posted;
     try {
-      posted = post(a.change, {
+      posted = post(launched.record.change, {
         ...opts,
         ...(dir ? { dir } : {}),
         allowAlreadyPosted: true,
@@ -2448,14 +2464,30 @@ function main(argv, opts = {}) {
       throw e;
     }
     if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
-    const closed = close(a.change, {
-      ...opts,
-      ...(dir ? { dir } : {}),
-      ...(purge ? { purge: true } : {}),
-      expectRound: launched.record.round,
-      expectHead: launched.record.head,
-      expectStartedAt: launched.record.startedAt,
-    });
+    let closed;
+    try {
+      closed = close(launched.record.change, {
+        ...opts,
+        ...(dir ? { dir } : {}),
+        ...(purge ? { purge: true } : {}),
+        expectRound: launched.record.round,
+        expectHead: launched.record.head,
+        expectStartedAt: launched.record.startedAt,
+      });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        const retryCmd = `node tools/review-launch.js --close ${launched.record.change}${purge ? ' --purge' : ''}${dir ? ` --dir ${dir}` : ''}`;
+        return {
+          code: 2,
+          lines: [
+            ...launched.lines,
+            ...posted.lines,
+            `送審產生器：已貼，收尾失敗（${e.message}）——沒有收（審查樹與輸出檔留在 ${folder}，可重跑 ${retryCmd}）。`,
+          ],
+        };
+      }
+      throw e;
+    }
     return {
       code: closed.code,
       lines: [...launched.lines, ...posted.lines, ...closed.lines],
