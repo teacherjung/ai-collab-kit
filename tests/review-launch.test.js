@@ -1759,29 +1759,23 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       );
     }
 
-    // 首行已是阻擋結論（不可合併）或非正式結論詞、或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或同行黏字／兩段同行矛盾結論時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6、r6 R7 完整代貼與結論閘回歸）
+    // 首行已是阻擋結論（不可合併）、非正式結論詞、漏來源欄或半形冒號，或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或兩段同行矛盾結論時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6、r6 R7、r7 R8 完整代貼與結論閘回歸）
     for (const [label, rawStdout, expectPostCode, expectVerdict] of [
       [
-        '首行非正式結論詞＋內文通過範例',
+        '首行非正式結論詞＋內文通過範例（r4 R5）',
         (h, s, p) => `🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不同意（建議撤回或重開）${s}\n下列通過範例不可當結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
         null,
       ],
       [
-        '同行非正式結論詞＋後續獨立行通過範例',
-        (h, s, p) => `我現在開始複審。🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不同意${s}\n${p}`,
+        '首行不可合併漏來源欄＋圍欄通過範例（r7 R8）',
+        (h, s, p) => `🤖 Beta｜審 \`${h}\`｜r1｜結論：不可合併${s}\n以下通過範例不可當作本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
         null,
       ],
       [
-        '同行冒號引出通過範例（非 CLI 進度句）＋後續獨立行不可合併',
-        (h, s, p) => `以下是不可採用的通過範例：${p}\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
-        2,
-        null,
-      ],
-      [
-        '同行通過標頭＋後續獨立行不可合併（候選矛盾）',
-        (h, s, p) => `我現在開始複審。${p}\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        '首行不可合併來源欄用半形冒號 來源:＋圍欄通過範例（r7 R8）',
+        (h, s, p) => `🤖 Beta｜來源: beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}\n以下通過範例不可當作本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
         null,
       ],
@@ -1810,7 +1804,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         '不可合併',
       ],
     ]) {
-      const caseDir = fs.mkdtempSync(path.join(tmp, 'post-r5-r6-'));
+      const caseDir = fs.mkdtempSync(path.join(tmp, 'post-r5-r8-'));
       const sCase = settingsFor({ owner: 'Boss' });
       const platformCase = fakePlatform(answersFor(r));
       const launchCase = launch('7', 'Beta', { settings: sCase, platform: platformCase, cwd: r.dir, dir: caseDir, template: TEMPLATE });
@@ -1840,12 +1834,15 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         runPost(_cmd, args) { sentCase = fs.readFileSync(args.at(-1), 'utf8'); },
       });
       assert.equal(postCase.code, expectPostCode, `${label} --post code: ${postCase.lines.join('\n')}`);
+      const launchMetaAfter = JSON.parse(fs.readFileSync(path.join(path.dirname(launchCase.record.outFile), 'launch.json'), 'utf8'));
       if (expectPostCode !== 0) {
         assert.equal(sentCase, null, `${label} 應拒貼`);
+        assert.equal(launchMetaAfter.postedAt, undefined, `${label} 拒貼時不可寫入 postedAt`);
       } else {
         assert.equal(postCase.header.verdict, expectVerdict, `${label} 代貼結論應為 ${expectVerdict}`);
+        assert.ok(typeof launchMetaAfter.postedAt === 'string', `${label} 成功代貼時寫入 postedAt`);
         const gateCase = evaluateVerdicts(
-          [{ id: 'r5-r6-comment', author: 'ai-acct', createdAt: '2026-10-19T12:00:00Z', body: sentCase }],
+          [{ id: 'r5-r8-comment', author: 'ai-acct', createdAt: '2026-10-19T12:00:00Z', body: sentCase }],
           r.head,
           'Beta',
           ['Boss', 'Alpha', 'Beta'],
