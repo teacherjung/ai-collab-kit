@@ -411,6 +411,7 @@ function freshEntries(roots, folder, since, re) {
     try { names = fs.readdirSync(real); } catch { unreadable.push(real); continue; }
     const group = [];
     for (const n of names) {
+      if (n.startsWith('.') && n.endsWith('.lock')) continue;
       const p = path.join(real, n);
       if (p === mine || mine.startsWith(`${p}${path.sep}`) || re.test(n)) continue;
       try { const t = fs.lstatSync(p).mtimeMs; if (t >= since) group.push({ p, t }); } catch { /* 讀的當下被刪了 */ }
@@ -557,6 +558,33 @@ function withPostLock(folder, fn) {
   }
 }
 
+/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，不覆蓋先到者。 */
+function withContainerLock(folder, busyMsg, fn) {
+  const lockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
+  try {
+    fs.writeFileSync(lockFile, `${process.pid}\n`, { flag: 'wx' });
+  } catch (e) {
+    if (e && e.code === 'EEXIST') {
+      let ownerPid = 0;
+      try { ownerPid = Number.parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10); } catch { /* ignore */ }
+      if (ownerPid > 0 && ownerPid !== process.pid) {
+        try { process.kill(ownerPid, 0); } catch (ke) {
+          if (ke && ke.code === 'ESRCH') {
+            throw new LaunchError(`發現殘留的容器鎖 ${lockFile}（原持有程序 PID ${ownerPid} 已結束）：請先確認該容器狀態，手動移除該鎖檔後再重試`);
+          }
+        }
+      }
+      throw new LaunchError(busyMsg);
+    }
+    throw new LaunchError(`建立容器鎖失敗：${(e && (e.code || e.message)) || e}`);
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+  }
+}
+
 /** 執行貼結論指令（不開 shell；清掉 GIT_* 與 platform.clearEnv）。 */
 function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
   const env = gitEnv();
@@ -572,8 +600,9 @@ function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
 /**
  * 外殼代貼結論（--post）：任何 AI 複審者只需輸出純文字結論（文末可單獨寫「未貼」），不需在盒內持有平台憑證。
  * 先核審查樹與突變副本都在、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔、標頭與小標、平台版本與同輪未重複，通過才代貼並記下 postedAt。
+ * 當一鍵模式（--run）傳入 allowAlreadyPosted: true 時，若複審者已依提示自行貼出唯一一則合規當輪結論，核驗無誤後承接該結果並記下 postedAt，不重複貼。
  */
-function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date() } = {}) {
+function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), allowAlreadyPosted = false } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
@@ -638,7 +667,18 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
-    const prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+    let prepared = null;
+    let prepareErr = null;
+    if (!allowAlreadyPosted) {
+      prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+    } else {
+      try {
+        prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      } catch (e) {
+        if (e instanceof LaunchError) prepareErr = e;
+        else throw e;
+      }
+    }
 
     const sub = substitute(rl.postComment, { project, change: rec.change }, '貼結論的指令');
     if (!sub.used.includes('change')) throw new LaunchError('reviewLaunch.postComment 沒帶 {change}：不知道要貼到哪一支');
@@ -657,11 +697,58 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     }
     const comments = askPlatform(platform, settings, 'comments', { change: rec.change });
     const wantSource = String(entry.source).trim().replace(/\s+/gu, ' ');
-    const alreadyOnPlatform = comments.some((c) => {
+    const roundComments = comments.filter((c) => {
       const h = headerOf(c.body, usable);
       return h && h.role === rec.reviewer && h.source === wantSource && h.round === rec.round;
     });
-    if (alreadyOnPlatform) throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
+    if (roundComments.length > 0) {
+      if (!allowAlreadyPosted) {
+        throw new LaunchError(`平台上已經有 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：不重複貼`);
+      }
+      if (roundComments.length > 1) {
+        throw new LaunchError(`平台上已經有 ${roundComments.length} 則 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：重複或衝突，不自動收尾`);
+      }
+      if (comments.some((c) => /🤖/u.test(String(c.body || '')) && !headerOf(c.body, usable))) {
+        throw new LaunchError('平台上出現標頭格式不合規的 🤖 留言：不自動收尾');
+      }
+      let platformPrepared;
+      try {
+        platformPrepared = prepareVerdict(roundComments[0].body, {
+          reviewer: rec.reviewer,
+          source: entry.source,
+          round: rec.round,
+          head: rec.head,
+          usable,
+          ownerRole,
+        });
+      } catch (e) {
+        throw new LaunchError(`平台上已有的 r${rec.round} 結論留言不合規（${e.message}）：不自動收尾`);
+      }
+      if (platformPrepared.strippedUnposted) {
+        throw new LaunchError(`平台上已有的 r${rec.round} 結論留言文末仍帶「未貼」：不自動收尾`);
+      }
+      if (prepared && prepared.body !== platformPrepared.body) {
+        throw new LaunchError(`輸出檔的 r${rec.round} 結論與平台上已貼出的結論內容不一致：不自動收尾`);
+      }
+      if (!prepared && /🤖/u.test(raw)) {
+        throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
+      }
+      rec.postedAt = now().toISOString();
+      rec.verdict = platformPrepared.header.verdict;
+      writeJsonAtomic(recFile, rec);
+      return {
+        code: 0,
+        lines: [
+          `已確認複審者自行貼出 r${rec.round} 結論｜變更 ${rec.change}｜複審者 ${rec.reviewer}（來源 ${wantSource}）｜審 ${rec.head.slice(0, 7)}｜結論：${platformPrepared.header.verdict}（不重複代貼）`,
+          `  兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨；下一步跑結論閘確認，審完跑：node tools/review-launch.js --close ${rec.change}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`}`,
+        ],
+        record: rec,
+        header: platformPrepared.header,
+        body: platformPrepared.body,
+        selfPosted: true,
+      };
+    }
+    if (prepareErr) throw prepareErr;
 
     const verdictFile = path.join(folder, `verdict-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.md`);
     fs.writeFileSync(verdictFile, prepared.body, { flag: 'wx' });
@@ -715,76 +802,91 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
   const lines = [];
   let refused = false;
   for (const folder of open) {
-    const recFile = path.join(folder, 'launch.json');
-    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-    const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
-    rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
-    const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
-    const locks = lockedTrees(rec.root);
-    const problems = [];
-    for (const [what, t] of todo) {
-      if (!fs.existsSync(t)) {
-        // 目錄不在、git 也沒登記＝已經有人收過了（照上面的提示手動收的那一棵）；目錄不在但 git 還登記著＝被搬走或刪掉，要人看
-        if (!locks.has(t)) { rec.removed.push(t); save(); lines.push(`  r${rec.round} 的${what}已經不在、git 也沒登記：當作收過。`); continue; }
-        problems.push(`${what}不見了（${t}），git 還登記著`);
-        continue;
+    withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+      const recFile = path.join(folder, 'launch.json');
+      const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
+      rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
+      const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
+      const locks = lockedTrees(rec.root);
+      const problems = [];
+      for (const [what, t] of todo) {
+        if (!fs.existsSync(t)) {
+          // 目錄不在、git 也沒登記＝已經有人收過了（照上面的提示手動收的那一棵）；目錄不在但 git 還登記著＝被搬走或刪掉，要人看
+          if (!locks.has(t)) { rec.removed.push(t); save(); lines.push(`  r${rec.round} 的${what}已經不在、git 也沒登記：當作收過。`); continue; }
+          problems.push(`${what}不見了（${t}），git 還登記著`);
+          continue;
+        }
+        if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
+        const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+        if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
+        const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+        if (st === null) problems.push(`${what}的狀態讀不出`);
+        else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
       }
-      if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
-      const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-      if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-      if (st === null) problems.push(`${what}的狀態讀不出`);
-      else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
-    }
-    const already = rec.removed.length ? `（先前已收：${rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本')).join('、')}）` : '';
-    if (problems.length) {
-      refused = true;
-      lines.push(`沒收 r${rec.round}（${folder}）${already}：`, ...problems.map((p) => `  ・${p}`), `  還沒收的${todo.map(([w]) => w).join('、')}都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。`);
-      continue;
-    }
-    let failed = null;
-    for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
-      const why = remove(rec.root, t);
-      if (why) { failed = `${what}移除失敗：${why}`; break; }
-      rec.removed.push(t);
+      const already = rec.removed.length ? `（先前已收：${rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本')).join('、')}）` : '';
+      if (problems.length) {
+        refused = true;
+        lines.push(`沒收 r${rec.round}（${folder}）${already}：`, ...problems.map((p) => `  ・${p}`), `  還沒收的${todo.map(([w]) => w).join('、')}都留著；看完要收就自己 git worktree remove（突變副本有改過的檔要加 --force）。`);
+        return;
+      }
+      let failed = null;
+      for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
+        const why = remove(rec.root, t);
+        if (why) { failed = `${what}移除失敗：${why}`; break; }
+        rec.removed.push(t);
+        save();
+      }
+      if (failed) {
+        refused = true;
+        const done = rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本'));
+        lines.push(`收到一半 r${rec.round}（${folder}）：${done.length ? `已收 ${done.join('、')}；` : ''}${failed}。紀錄已記下收了哪幾棵，排除原因後重跑只會收剩下的。`);
+        return;
+      }
+      rec.closedAt = new Date().toISOString();
       save();
-    }
-    if (failed) {
-      refused = true;
-      const done = rec.removed.map((t) => (t === rec.tree ? '審查樹' : '突變副本'));
-      lines.push(`收到一半 r${rec.round}（${folder}）：${done.length ? `已收 ${done.join('、')}；` : ''}${failed}。紀錄已記下收了哪幾棵，排除原因後重跑只會收剩下的。`);
-      continue;
-    }
-    rec.closedAt = new Date().toISOString();
-    save();
-    const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
-    const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
-    const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
-    lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
-    for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-    for (const g of groups) {
-      lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
-      for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
-      if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
-    }
+      const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+      const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+      const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+      lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
+      for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
+      for (const g of groups) {
+        lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
+        for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+        if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+      }
+    });
   }
   if (!refused && purge) {
     const purgeProblems = [];
+    const purgedNames = [];
     for (const folder of allFolders) {
-      const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
-      const locks = lockedTrees(rec.root);
-      for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
-        if (t && (fs.existsSync(t) || locks.has(t))) {
-          purgeProblems.push(`${path.basename(folder)} 的${what}還在或仍登記在 git worktree（${t}）`);
+      withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+        if (!fs.existsSync(path.join(folder, 'launch.json'))) return;
+        const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+        const locks = lockedTrees(rec.root);
+        let folderHasProblem = false;
+        if (!rec.closedAt) {
+          purgeProblems.push(`${path.basename(folder)} 還沒收樹（缺少 closedAt）`);
+          folderHasProblem = true;
         }
-      }
+        for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+          if (t && (fs.existsSync(t) || locks.has(t))) {
+            purgeProblems.push(`${path.basename(folder)} 的${what}還在或仍登記在 git worktree（${t}）`);
+            folderHasProblem = true;
+          }
+        }
+        if (!folderHasProblem) {
+          fs.rmSync(folder, { recursive: true, force: true });
+          purgedNames.push(path.basename(folder));
+        }
+      });
     }
     if (purgeProblems.length) {
       lines.push('沒清除審查資料夾（--purge）：', ...purgeProblems.map((p) => `  ・${p}`));
       return { code: 1, lines };
     }
-    for (const folder of allFolders) fs.rmSync(folder, { recursive: true, force: true });
-    lines.push(`已清除變更 ${changeArg} 已收樹的審查資料夾：${allFolders.map((f) => path.basename(f)).join('、')}`);
+    lines.push(`已清除變更 ${changeArg} 已收樹的審查資料夾：${purgedNames.join('、')}`);
   }
   return { code: refused ? 1 : 0, lines };
 }
@@ -963,25 +1065,22 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     fullDiff: `git diff ${base}...${head}`,
   };
   const prompt = fill(tpl, values, SCAN_FILL);
-  if (fs.existsSync(folder)) {
-    let canReplaceClosed = false;
+  const canReplaceClosedScan = () => {
     try {
       const prevScan = JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8'));
       const prevLocks = prevScan && prevScan.root ? lockedTrees(prevScan.root) : new Map();
-      if (
+      return Boolean(
         prevScan
         && prevScan.closedAt
         && (!prevScan.tree || (!fs.existsSync(prevScan.tree) && !prevLocks.has(prevScan.tree)))
-        && (prevScan.head !== head || !prevScan.postedAt)
-      ) {
-        canReplaceClosed = true;
-      }
-    } catch { /* ignore */ }
-    if (canReplaceClosed) {
-      fs.rmSync(folder, { recursive: true, force: true });
-    } else {
-      throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+        && (prevScan.head !== head || !prevScan.postedAt),
+      );
+    } catch {
+      return false;
     }
+  };
+  if (fs.existsSync(folder) && !canReplaceClosedScan()) {
+    throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
   }
 
   const record = {
@@ -989,26 +1088,38 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     head, base, passCommentId: passComment.id, passCommentLink,
     root, tree, promptFile, outFile, startedAt: now().toISOString(),
   };
-  const before = new Set(lockedTrees(root).keys());
-  try { fs.mkdirSync(folder); } catch (e) {
-    if (e && e.code === 'EEXIST') throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`);
-    throw e;
-  }
-  const created = [];
-  try {
-    git(root, ['worktree', 'add', '--detach', '-q', tree, head]);
-    created.push(tree);
-    const got = git(tree, ['rev-parse', 'HEAD']);
-    if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
-    fs.writeFileSync(promptFile, prompt);
-    fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
-  } catch (e) {
-    let registered = created;
-    try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
-    for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
-    fs.rmSync(folder, { recursive: true, force: true });
-    throw e;
-  }
+  withContainerLock(
+    folder,
+    `${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`,
+    () => {
+      if (fs.existsSync(folder)) {
+        if (!canReplaceClosedScan()) {
+          throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+        }
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+      const before = new Set(lockedTrees(root).keys());
+      try { fs.mkdirSync(folder); } catch (e) {
+        if (e && e.code === 'EEXIST') throw new LaunchError(`${folder} 已經在了：另一個掃描剛好在開同一支，或上一次的掃描樹還沒收（先跑 --scan-close ${id}）`);
+        throw e;
+      }
+      const created = [];
+      try {
+        git(root, ['worktree', 'add', '--detach', '-q', tree, head]);
+        created.push(tree);
+        const got = git(tree, ['rev-parse', 'HEAD']);
+        if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
+        fs.writeFileSync(promptFile, prompt);
+        fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
+      } catch (e) {
+        let registered = created;
+        try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
+        for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
+        fs.rmSync(folder, { recursive: true, force: true });
+        throw e;
+      }
+    },
+  );
   const lines = [
     `掃描準備｜變更 ${id}｜掃描者 ${scanner}（來源 ${spec.source}）｜掃 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
     `  風險級別：${tier}（分級表規定：${tierRow.scan}）｜依據的複審通過留言：${passCommentLink}`,
@@ -1056,7 +1167,7 @@ function unwrapScanOutput(raw) {
 /**
  * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
  * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
- * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭攔截）；
+ * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭擋下）；
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
@@ -1226,67 +1337,69 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
   const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
   const folder = path.join(dir, `scan-${slugOf(project)}-${cleanId}`);
-  const recFile = path.join(folder, 'scan.json');
-  if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
-  const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-  if (rec.closedAt && !purge) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
-  const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
-  rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
-  const t = rec.tree;
-  const lines = [];
-  if (!rec.closedAt) {
-    const locks = lockedTrees(rec.root);
-    const problems = [];
-    if (!rec.removed.includes(t)) {
-      if (!fs.existsSync(t)) {
-        if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
-        else problems.push(`掃描樹不見了（${t}），git 還登記著`);
-      } else {
-        if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
-        const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-        if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
-        const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-        if (st === null) problems.push('掃描樹的狀態讀不出');
-        else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+  return withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
+    const recFile = path.join(folder, 'scan.json');
+    if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
+    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (rec.closedAt && !purge) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
+    const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
+    rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
+    const t = rec.tree;
+    const lines = [];
+    if (!rec.closedAt) {
+      const locks = lockedTrees(rec.root);
+      const problems = [];
+      if (!rec.removed.includes(t)) {
+        if (!fs.existsSync(t)) {
+          if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
+          else problems.push(`掃描樹不見了（${t}），git 還登記著`);
+        } else {
+          if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
+          const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+          if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
+          const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+          if (st === null) problems.push('掃描樹的狀態讀不出');
+          else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+        }
       }
-    }
-    if (problems.length) {
-      lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
-      return { code: 1, lines };
-    }
-    if (!rec.removed.includes(t)) {
-      const why = remove(rec.root, t);
-      if (why) {
-        lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
+      if (problems.length) {
+        lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
         return { code: 1, lines };
       }
-      rec.removed.push(t);
+      if (!rec.removed.includes(t)) {
+        const why = remove(rec.root, t);
+        if (why) {
+          lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
+          return { code: 1, lines };
+        }
+        rec.removed.push(t);
+        save();
+      }
+      rec.closedAt = new Date().toISOString();
       save();
+      const re = scanFolderRe(slugOf(project), cleanId);
+      const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+      const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+      const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+      lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
+      for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
+      for (const g of groups) {
+        lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
+        for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+        if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+      }
     }
-    rec.closedAt = new Date().toISOString();
-    save();
-    const re = scanFolderRe(slugOf(project), cleanId);
-    const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
-    const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
-    const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
-    lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
-    for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-    for (const g of groups) {
-      lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
-      for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
-      if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+    if (purge) {
+      const locks = lockedTrees(rec.root);
+      if (t && (fs.existsSync(t) || locks.has(t))) {
+        lines.push('沒清除掃描資料夾（--purge）：', `  ・${path.basename(folder)} 的掃描樹還在或仍登記在 git worktree（${t}）`);
+        return { code: 1, lines };
+      }
+      fs.rmSync(folder, { recursive: true, force: true });
+      lines.push(`已清除變更 ${changeArg} 已收樹的掃描資料夾：${path.basename(folder)}`);
     }
-  }
-  if (purge) {
-    const locks = lockedTrees(rec.root);
-    if (t && (fs.existsSync(t) || locks.has(t))) {
-      lines.push('沒清除掃描資料夾（--purge）：', `  ・${path.basename(folder)} 的掃描樹還在或仍登記在 git worktree（${t}）`);
-      return { code: 1, lines };
-    }
-    fs.rmSync(folder, { recursive: true, force: true });
-    lines.push(`已清除變更 ${changeArg} 已收樹的掃描資料夾：${path.basename(folder)}`);
-  }
-  return { code: 0, lines };
+    return { code: 0, lines };
+  });
 }
 
 const GROK_PINNED_ISSUER = 'https://auth.x.ai';
@@ -2212,7 +2325,7 @@ function main(argv, opts = {}) {
     }
     let posted;
     try {
-      posted = post(a.change, { ...opts, ...(dir ? { dir } : {}) });
+      posted = post(a.change, { ...opts, ...(dir ? { dir } : {}), allowAlreadyPosted: true });
     } catch (e) {
       if (e instanceof LaunchError) {
         return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（審查樹與輸出檔留在 ${folder}，未收樹）。`] };

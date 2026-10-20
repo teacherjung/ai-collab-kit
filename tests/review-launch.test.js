@@ -2060,6 +2060,151 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.match(postedScanBody, /\n> 掃描時序：依據複審留言 /u);
     const scanFolder = path.join(fs.realpathSync(dir), 'scan-acme-kit-7');
     assert.ok(!fs.existsSync(scanFolder), '掃描 --scan --run --purge 成功後掃描容器已自動清除');
+
+    // (e) R2：複審 --run --purge 自行貼文成功路徑（含輸出檔同正文、輸出檔僅寫摘要連結，以及矛盾／重複留言拒收）
+    let selfPostCalls = 0;
+    const dynamicComments = [];
+    const selfPostAns = {
+      ...baseAns,
+      comments: () => [...dynamicComments],
+    };
+    const validSelfVerdict = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`;
+    const selfPostedSameOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'self-1', author: 'ai-acct', createdAt: '2026-10-20T00:00:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, validSelfVerdict);
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(selfPostedSameOut.code, 0, selfPostedSameOut.lines.join('\n'));
+    assert.equal(selfPostCalls, 0, '自行貼文成功時外殼不重複呼叫 runPost');
+    assert.match(selfPostedSameOut.lines.join('\n'), /已確認複審者自行貼出 r1 結論.*（不重複代貼）/u);
+    assert.ok(!fs.existsSync(reviewFolder), '自行貼文成功後 --run --purge 已正常收樹並清除容器');
+
+    // 自行貼文成功且輸出檔只寫簡短回報／摘要（不含 🤖 標頭）
+    dynamicComments.length = 0;
+    const selfPostedSummaryOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({
+          id: 'self-2',
+          author: 'ai-acct',
+          createdAt: '2026-10-20T00:00:00Z',
+          body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- R1\n`,
+        });
+        fs.writeFileSync(record.outFile, '已貼：#7 r1（詳見 PR 留言）\n');
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(selfPostedSummaryOut.code, 0, selfPostedSummaryOut.lines.join('\n'));
+    assert.equal(selfPostCalls, 0);
+    assert.ok(!fs.existsSync(reviewFolder), '自行貼文且輸出摘要時 --run --purge 亦正常收樹並清除容器');
+
+    // 自行貼文但輸出檔寫了矛盾的 🤖 結論 → 退 2、不收樹、保留容器
+    dynamicComments.length = 0;
+    const conflictOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'self-3', author: 'ai-acct', createdAt: '2026-10-20T00:00:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- R1\n`);
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(conflictOut.code, 2);
+    assert.match(conflictOut.lines.join('\n'), /輸出檔的 r1 結論與平台上已貼出的結論內容不一致/u);
+    assert.ok(fs.existsSync(path.join(reviewFolder, 'tree')), '結論矛盾時應保留審查樹供查');
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // 自行貼出重複同輪留言 → 退 2、不收樹
+    dynamicComments.length = 0;
+    const dupOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push(
+          { id: 'self-4a', author: 'ai-acct', createdAt: '2026-10-20T00:00:00Z', body: validSelfVerdict },
+          { id: 'self-4b', author: 'ai-acct', createdAt: '2026-10-20T00:00:01Z', body: validSelfVerdict },
+        );
+        fs.writeFileSync(record.outFile, validSelfVerdict);
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(dupOut.code, 2);
+    assert.match(dupOut.lines.join('\n'), /重複或衝突，不自動收尾/u);
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // (f) R1：替換已收樹掃描容器的確定性交錯考題（排他鎖與鎖內重驗，保護先到者的樹、紀錄與輸出）
+    // 交錯 1：A 在進鎖前讀完舊 scan.json，B 先完成替換並寫入 output.log，A 進鎖後重驗必須退 2、不刪 B
+    assert.equal(main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir }).code, 0);
+    assert.equal(main(['--scan-close', '7', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    const realReadFileSync = fs.readFileSync;
+    const scanJsonPath = path.join(scanFolder, 'scan.json');
+    let bRes1 = null;
+    let hookedRead = false;
+    try {
+      fs.readFileSync = (p, ...rest) => {
+        const content = realReadFileSync(p, ...rest);
+        if (!hookedRead && String(p) === scanJsonPath) {
+          hookedRead = true;
+          bRes1 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+          fs.writeFileSync(path.join(scanFolder, 'output.log'), 'B 先完成替換的唯一合成值\n');
+        }
+        return content;
+      };
+      const aRes1 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+      fs.readFileSync = realReadFileSync;
+      assert.equal(bRes1 && bRes1.code, 0, bRes1 ? bRes1.lines.join('\n') : 'B did not run');
+      assert.equal(aRes1.code, 2, aRes1.lines.join('\n'));
+      assert.match(aRes1.lines.join('\n'), /已經在了/u);
+      assert.equal(fs.readFileSync(path.join(scanFolder, 'output.log'), 'utf8'), 'B 先完成替換的唯一合成值\n', 'B 的輸出逐字保留');
+      assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), 'B 的掃描樹仍在');
+      assert.ok(sh(r.dir, 'worktree', 'list', '--porcelain').includes(path.join(scanFolder, 'tree')), 'B 的 Git 工作樹登記一致');
+    } finally {
+      fs.readFileSync = realReadFileSync;
+    }
+
+    // 交錯 2：A 已取得容器鎖準備刪除舊容器時，B 並發呼叫 --scan → B 立即退 2，A 完成建立並保留新樹與輸出
+    assert.equal(main(['--scan-close', '7', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    const realRmSync = fs.rmSync;
+    let bRes2 = null;
+    let hookedRm = false;
+    try {
+      fs.rmSync = (target, opts) => {
+        if (!hookedRm && String(target) === scanFolder) {
+          hookedRm = true;
+          bRes2 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+        }
+        return realRmSync(target, opts);
+      };
+      const aRes2 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+      fs.rmSync = realRmSync;
+      assert.equal(aRes2.code, 0, aRes2.lines.join('\n'));
+      assert.equal(bRes2 && bRes2.code, 2, bRes2 ? bRes2.lines.join('\n') : 'B did not run');
+      assert.match(bRes2.lines.join('\n'), /已經在了：另一個掃描剛好在開同一支/u);
+      fs.writeFileSync(path.join(scanFolder, 'output.log'), 'A 鎖內建立的唯一合成值\n');
+      assert.equal(fs.readFileSync(path.join(scanFolder, 'output.log'), 'utf8'), 'A 鎖內建立的唯一合成值\n');
+      assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), 'A 的掃描樹仍在');
+      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+      assert.ok(!fs.existsSync(scanFolder));
+    } finally {
+      fs.rmSync = realRmSync;
+    }
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
