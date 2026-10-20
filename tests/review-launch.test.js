@@ -1464,8 +1464,8 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
 
     // (h) --scanner <識別值>：4 家 AI 隨時切換掃描者（deriveScanCommand 與 resolveScannerSpec）
     assert.equal(
-      deriveScanCommand('claude -p --model {model} --effort {effort} --permission-mode plan --add-dir {reviewTree} --add-dir {mutationCopy} < {promptFile} > {outFile}'),
-      'claude -p --model {model} --effort {effort} --permission-mode plan --add-dir {scanTree} < {promptFile} > {outFile}',
+      deriveScanCommand("cd {reviewTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --add-dir {mutationCopy} --verbose --output-format json --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(npm --prefix {mutationCopy} test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(git -C {mutationCopy} rev-parse HEAD),Bash(git -C {mutationCopy} status --porcelain),Bash(git -C {mutationCopy} diff),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Bash(gh pr comment {change} *),Edit(/{mutationCopy}/**),Workflow' --disallowedTools 'Write,Edit(/{reviewTree}/**)' < /dev/null > {outFile}"),
+      "cd {scanTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --verbose --output-format json --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Workflow' --disallowedTools 'Write,Edit(/{scanTree}/**)' < /dev/null > {outFile}",
     );
     assert.equal(
       deriveScanCommand('codex exec -C {reviewTree} --add-dir {mutationCopy} -s read-only -m {model} -c model_reasoning_effort={effort} -o {outFile} - < {promptFile}'),
@@ -1479,6 +1479,40 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
       deriveScanCommand('(cd {reviewTree} && gemini -m {model} --approval-mode plan --include-directories {reviewTree},{mutationCopy} -p "請執行複審（推理強度：{effort}）" < {promptFile}) > {outFile}'),
       '(cd {scanTree} && gemini -m {model} --approval-mode plan --include-directories {scanTree} -p "請執行掃描（推理強度：{effort}）" < {promptFile}) > {outFile}',
     );
+
+    // 若本倉庫 settings.json 登記了 3 位以上複審者（如 Claude、Codex、Grok、Gemini），逐一以實際設定走 main --scan --scanner 驗證皆可開出掃描樹與替換指令
+    const realS = readSettings();
+    const realReviewers = Array.isArray(realS.reviewers) ? realS.reviewers.filter((rev) => rev && rev.participant) : [];
+    if (realReviewers.length >= 3) {
+      for (const rev of realReviewers) {
+        const target = rev.participant;
+        const others = realReviewers.filter((x) => x.participant !== target);
+        const impl = others[0].participant;
+        const revr = others[1];
+        const bodyForTarget = BODY.replace('- **實作者**：Alpha', `- **實作者**：${impl}`).replace('- **複審者**：Beta', `- **複審者**：${revr.participant}`);
+        const passForTarget = verdict(revr.participant, 1, r.head, '通過', {
+          id: `pass-${target}`,
+          createdAt: '2026-10-19T12:00:00Z',
+          body: `🤖 ${revr.participant}｜來源：${revr.source}｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
+        });
+        const realDirTmp = tmp(`scan-real-${target}-`);
+        const realOut = main(['--scan', '7', '--scanner', target, '--dir', realDirTmp], {
+          settings: realS,
+          platform: fakePlatform({
+            ...baseAns,
+            change: { ...baseAns.change, body: bodyForTarget },
+            comments: [passForTarget],
+          }),
+          cwd: r.dir,
+        });
+        assert.equal(realOut.code, 0, `${target} 實際設定切換掃描失敗：${realOut.lines.join('\n')}`);
+        assert.equal(realOut.record.scanner, target);
+        assert.ok(!realOut.command.includes('{mutationCopy}') && !realOut.command.includes('{reviewTree}'), `${target} 掃描指令不可殘留未替換記號`);
+        assert.ok(!/git -C\s+(?:rev-parse|status|diff)/u.test(realOut.command), `${target} 掃描指令不可留下失去路徑的 git -C`);
+        assert.equal(main(['--scan-close', '7', '--dir', realDirTmp], { settings: realS }).code, 0);
+        fs.rmSync(realDirTmp, { recursive: true, force: true });
+      }
+    }
 
     const sWithDelta = {
       ...s,

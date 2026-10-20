@@ -217,6 +217,11 @@ function templateProblems(settings) {
     const bad = used.filter((t) => !COMMAND_TOKENS.includes(t));
     if (bad.length) out.push(`「${r.participant}」的啟動指令樣板有認不得的記號：${bad.join('、')}`);
     for (const t of ['model', 'effort', 'reviewTree']) if (!used.includes(t)) out.push(`「${r.participant}」的啟動指令樣板沒帶 {${t}}`);
+    const scanCmd = filled(r.scanCommand) ? r.scanCommand : deriveScanCommand(r.command);
+    const scanUsed = tokensOf(scanCmd);
+    const scanBad = scanUsed.filter((t) => !SCAN_COMMAND_TOKENS.includes(t));
+    if (scanBad.length) out.push(`「${r.participant}」轉換後的掃描啟動指令樣板有認不得的記號：${scanBad.join('、')}`);
+    for (const t of ['model', 'effort', 'scanTree']) if (!scanUsed.includes(t)) out.push(`「${r.participant}」轉換後的掃描啟動指令樣板沒帶 {${t}}`);
   }
   const sc = settings.scanner || {};
   if (filled(sc.participant) || (filled(sc.command) && sc.tool !== '無')) {
@@ -763,10 +768,10 @@ function deriveScanCommand(reviewCmd) {
   if (!filled(reviewCmd)) return '';
   return String(reviewCmd)
     .replace(/--mode\s+review\b/gu, '--mode scan')
-    .replace(/\s+--[A-Za-z-]+\s+\{mutationCopy\}/gu, '')
-    .replace(/,[^,'"\s]*\{mutationCopy\}[^,'"\s]*/gu, '')
-    .replace(/[^,'"\s]*\{mutationCopy\}[^,'"\s]*,/gu, '')
+    .replace(/,[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\)|[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\),/gu, '')
     .replace(/,Bash\(gh pr comment \{change\} \*\)/gu, '')
+    .replace(/\s+--[A-Za-z-]+\s+\{mutationCopy\}/gu, '')
+    .replace(/,[^,'"\s]*\{mutationCopy\}[^,'"\s]*|[^,'"\s]*\{mutationCopy\}[^,'"\s]*,/gu, '')
     .replace(/請執行複審/gu, '請執行掃描')
     .replace(/\{reviewTree\}/gu, '{scanTree}');
 }
