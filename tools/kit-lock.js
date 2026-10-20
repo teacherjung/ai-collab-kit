@@ -528,7 +528,7 @@ function worktreeWarnings(root) {
     const label = typeof f.branch === 'string' && f.branch
       ? `分支 ${f.branch.replace(/^refs\/heads\//u, '')}`
       : `分離 HEAD ${typeof f.HEAD === 'string' ? f.HEAD.slice(0, 7) : '不明'}`;
-    const r = spawnSync('git', ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: f.worktree, env: gitEnv(), encoding: 'utf8' });
+    const r = spawnSync('git', ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: f.worktree, env: gitEnv(), encoding: 'utf8', maxBuffer: BIG });
     if (r.error || r.status !== 0) {
       items.push(`  ・工作樹 ${f.worktree}（${label}）：無法讀取狀態（git status 退 ${r.status ?? '錯誤'}）`);
       continue;
