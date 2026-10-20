@@ -34,7 +34,7 @@ const { read: readSettings } = require('./settings-data.js');
 const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./gates/check-collab-fields.js');
-const { headerOf, missingHeadings, PASS_HEADINGS, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
+const { headerOf, missingHeadings, settingProblems, PASS_HEADINGS, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
 const { evaluate: evaluateRulings, deciderOf, rulingLink } = require('./pending-rulings.js');
 const { run: riskRun, gitIn } = require('./risk-tier.js');
 
@@ -158,7 +158,7 @@ function roundsOf(comments, reviewer, source, roles) {
  * 每一輪算不算「通過」照結論閘的判法，不另寫一套（Codex #96 r1 R2）：把那一輪這一位貼的結論單獨交給結論閘看——
  * 缺固定小標的「通過」不算、同一輪相反結論或對不同版本各給結論＝衝突、算阻擋；那一輪沒有一則算數的「通過」＝沒過。輪次要相鄰。
  */
-function twoMissesInARow(comments, reviewer, source, roles) {
+function twoMissesInARow(comments, reviewer, source, roles, { ownerRole = null, reviewerConfigs = [] } = {}) {
   const want = String(source).trim().replace(/\s+/gu, ' ');
   const rounds = new Map();
   for (const c of comments) {
@@ -168,7 +168,7 @@ function twoMissesInARow(comments, reviewer, source, roles) {
     rounds.get(h.round).push(c);
   }
   const passedIn = (k) => {
-    const state = evaluateVerdicts(rounds.get(k), '', reviewer, roles).reviewers[`${reviewer}（${want}）`];
+    const state = evaluateVerdicts(rounds.get(k), '', reviewer, roles, { ownerRole, reviewerConfigs }).reviewers[`${reviewer}（${want}）`];
     return Boolean(state) && !state.blocking;
   };
   return [...rounds.keys()].some((k) => rounds.has(k + 1) && !passedIn(k) && !passedIn(k + 1));
@@ -289,15 +289,16 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   if (risk.result.head !== head) throw new LaunchError(`產生送審提示期間這一支換了版本（受審 ${String(head).slice(0, 12)}，算風險時是 ${String(risk.result.head).slice(0, 12)}）：審查樹與風險範圍會對不上，重跑一次`);
   const tier = risk.result.level;
   const { round, previous } = roundsOf(comments, reviewer, entry.source, usable);
-  // 上一輪算不算「通過」照結論閘的判斷，不另寫一套：缺固定小標的通過不算（F7；#49 r1 R3），同一輪相反結論或對不同版本各給結論＝衝突、算阻擋（#49 r2 R1）。
+  const ownerRole = canonicalRole(settings && settings.owner, usable);
+  // 上一輪算不算「通過」照結論閘的判斷，不另寫一套：缺固定小標或設定不合規的通過不算（F7、F11；#49 r1 R3），同一輪相反結論或對不同版本各給結論＝衝突、算阻擋（#49 r2 R1）。
   // 閘合併後這一位最新的有效狀態要正好是最近貼的那一輪、而且不是阻擋，才照「通過後回頭改」那一格縮範圍。
-  const verdicts = evaluateVerdicts(comments, head, reviewer, usable);
+  const verdicts = evaluateVerdicts(comments, head, reviewer, usable, { ownerRole, reviewerConfigs: settings.reviewers });
   if (verdicts.unsure) throw new LaunchError('這一支有結論留言的時間讀不出來：上一輪判不了');
   const state = previous ? verdicts.reviewers[`${reviewer}（${previous.h.source}）`] : null;
   const passed = Boolean(state) && !state.blocking && state.round === previous.h.round;
   // 快速通道（AI）（F12）：第 1 輪起只核差異；這一位連兩輪沒「通過」，這一輪起照這一級走一般流程
   const lane = risk.result.fastLaneAI === true;
-  const exhausted = lane && twoMissesInARow(comments, reviewer, entry.source, usable);
+  const exhausted = lane && twoMissesInARow(comments, reviewer, entry.source, usable, { ownerRole, reviewerConfigs: settings.reviewers });
   const scope = lane && !exhausted ? '只核差異' : scopeOf((settings.reviewTiers || {})[tier], round, passed);
   if (!scope) throw new LaunchError(`複審與掃描分級表「${tier}」那一列讀不出第 ${round} 輪該全審還是只核差異`);
   const tierWhy = !lane ? '照表算的'
@@ -333,7 +334,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   const prompt = fill(tpl, values);
   if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的樹還沒收（先跑 --close ${id}），或這一輪已經送過`);
 
-  const record = { change: id, reviewer, round, head, base, root, tree, mutation, promptFile, outFile, startedAt: now().toISOString() };
+  const record = { change: id, reviewer, model: entry.strongest, effort: entry.maxEffort, round, head, base, root, tree, mutation, promptFile, outFile, startedAt: now().toISOString() };
   const before = new Set(lockedTrees(root).keys());
   // 排他地建（不帶 recursive：已經在就丟 EEXIST）：上面那一次檢查跟這裡之間，另一個送審可能剛好建好同一輪的資料夾；
   // 帶 recursive 會接受別人的資料夾，下面開樹失敗時再把它整個刪掉（理財 #672 r4 第 1 條）。建成的才是自己的，失敗才收。
@@ -468,7 +469,7 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆') {
  * 去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
  * 核第一行標頭（角色、來源、輪次、受審版本短碼）與「通過」的兩行固定小標（F4、F5、F7；擁有者照 F12 豁免小標）。
  */
-function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null }) {
+function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null, reviewerConfigs = [] }) {
   const unwrapped = unwrapScanOutput(raw, '複審結論');
   const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
@@ -496,6 +497,8 @@ function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole 
   if (!h.blocking && h.role !== ownerRole) {
     const miss = missingHeadings(body);
     if (miss.length) throw new LaunchError(`結論是「通過」但少了固定小標：${miss.join('、')}（F7：${PASS_HEADINGS.join('、')} 都要有）`);
+    const badSettings = settingProblems(body, h.role, reviewerConfigs);
+    if (badSettings.length) throw new LaunchError(`結論是「通過」但本輪實際用的設定不合規：${badSettings.join('；')}（F7、F11）`);
   }
   return { body, header: h, strippedUnposted };
 }
@@ -822,10 +825,10 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     let prepared = null;
     let prepareErr = null;
     if (!allowAlreadyPosted) {
-      prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole, reviewerConfigs: settings.reviewers });
     } else {
       try {
-        prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+        prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole, reviewerConfigs: settings.reviewers });
       } catch (e) {
         if (e instanceof LaunchError) prepareErr = e;
         else throw e;
@@ -861,7 +864,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
         throw new LaunchError(`平台上已經有 ${roundComments.length} 則 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：重複或衝突，不自動收尾`);
       }
       const normalizedComments = comments.map((c, idx) => (c && c.createdAt === undefined ? { ...c, createdAt: new Date(idx * 1000).toISOString() } : c));
-      const evaluated = evaluateVerdicts(normalizedComments, rec.head, rec.reviewer, usable, { ownerRole });
+      const evaluated = evaluateVerdicts(normalizedComments, rec.head, rec.reviewer, usable, { ownerRole, reviewerConfigs: settings.reviewers });
       if (evaluated.unsure) {
         throw new LaunchError('平台上留言時間讀不出來或沒帶時區：不自動收尾');
       }
@@ -878,6 +881,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
           head: rec.head,
           usable,
           ownerRole,
+          reviewerConfigs: settings.reviewers,
         });
       } catch (e) {
         throw new LaunchError(`平台上已有的 r${rec.round} 結論留言不合規（${e.message}）：不自動收尾`);
@@ -1213,7 +1217,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   const tier = [fileTier, bodyTier, tierArg].filter(Boolean).reduce((a, b) => (TIER_ORDER.indexOf(b) < TIER_ORDER.indexOf(a) ? b : a));
   const reviewerEntry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === reviewer);
   const lane = risk.result.fastLaneAI === true;
-  const exhausted = lane && reviewerEntry && filled(reviewerEntry.source) && twoMissesInARow(comments, reviewer, reviewerEntry.source, usable);
+  const exhausted = lane && reviewerEntry && filled(reviewerEntry.source) && twoMissesInARow(comments, reviewer, reviewerEntry.source, usable, { ownerRole, reviewerConfigs: settings.reviewers });
   if (lane && !exhausted) {
     throw new LaunchError('這一支走快速通道（AI），照 G1、F12 不掃描（PR說明的「### 複審後掃」下寫「未執行：快速通道（AI）」）');
   }
@@ -1223,7 +1227,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     throw new LaunchError(`這一支是${tier}風險，照分級表不掃描（PR說明的「### 複審後掃」下寫「未執行：${tier}風險，表定不掃」）`);
   }
 
-  const verdicts = evaluateVerdicts(comments, head, reviewer, usable, { ownerRole });
+  const verdicts = evaluateVerdicts(comments, head, reviewer, usable, { ownerRole, reviewerConfigs: settings.reviewers });
   if (verdicts.unsure) throw new LaunchError('這一支有結論留言的時間讀不出來：判不了是否已通過複審');
   if (verdicts.problems.length > 0) {
     throw new LaunchError(`目前版本 ${head.slice(0, 7)} 還沒有指定複審者 ${reviewer} 的合格「通過」結論（或尚有阻擋結論）：G1 規定複審「通過」之後才起掃描`);
@@ -1231,7 +1235,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   const time = (c) => { const v = parseInstant(c.createdAt); return v === null ? Infinity : v; };
   const passComments = comments
     .map((c) => ({ c, h: headerOf(c.body, usable) }))
-    .filter((x) => x.h && x.h.role === reviewer && !x.h.blocking && (x.h.role === ownerRole || missingHeadings(x.c.body).length === 0) && String(head).toLowerCase().startsWith(x.h.sha))
+    .filter((x) => x.h && x.h.role === reviewer && !x.h.blocking && (x.h.role === ownerRole || (missingHeadings(x.c.body).length === 0 && settingProblems(x.c.body, x.h.role, settings.reviewers).length === 0)) && String(head).toLowerCase().startsWith(x.h.sha))
     .sort((a, b) => time(a.c) - time(b.c));
   if (!passComments.length) throw new LaunchError(`找不到 ${reviewer} 對目前版本 ${head.slice(0, 7)} 的合格「通過」留言`);
   const passComment = passComments[0].c;

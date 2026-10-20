@@ -707,7 +707,7 @@ test('F7 收據前綴：有效歷史收據仍解除，無記號壞收據只提�
   assert.equal(run([block, pass, marked, current]).code, 1, F5_HINT);
 });
 
-test('⑮「通過」小節「### 本輪實際用的設定」核對登記的最強／次強模型與最高推理強度（F7、F11）', () => {
+test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對登記的最強／次強模型與最高推理強度（F7、F11）', () => {
   const reviewerConfigs = [
     { participant: 'Beta', strongest: 'gpt-6-astra', second: 'gpt-5.4', maxEffort: 'max' },
   ];
@@ -725,22 +725,41 @@ test('⑮「通過」小節「### 本輪實際用的設定」核對登記的最�
   assert.deepEqual(settingProblems(mkBody('- 模型：`gpt-6-astra`\n- 推理強度：`max`'), 'Beta', reviewerConfigs), []);
   // 次強模型＋最高推理＝通過
   assert.deepEqual(settingProblems(mkBody('- 模型：gpt-5.4，推理：max'), 'Beta', reviewerConfigs), []);
-  // 大小寫相容、不可為別的識別字串子字串
+  // 大小寫相容、合併欄位寫法、不可為別的識別字串子字串
   assert.deepEqual(settingProblems(mkBody('- 模型：GPT-6-ASTRA / MAX'), 'Beta', reviewerConfigs), []);
+  assert.deepEqual(settingProblems(mkBody('- 模型／推理強度：`gpt-6-astra`／`max`'), 'Beta', reviewerConfigs), []);
   assert.ok(settingProblems(mkBody('- 模型：gpt-6-astra-mini / max'), 'Beta', reviewerConfigs).some((x) => x.includes('模型')));
   assert.ok(settingProblems(mkBody('- 模型：gpt-6-astra / maximum'), 'Beta', reviewerConfigs).some((x) => x.includes('最高推理強度')));
+
+  // 誠實宣告低檔模型／低推理，同段再提要求值，仍必須拒收（#121 r1 R3）
+  const honestLowWithReq = mkBody('- 實際模型：gpt-6-luna；實際推理：low（要求模型：gpt-6-astra；要求推理：max）');
+  const honestProblems = settingProblems(honestLowWithReq, 'Beta', reviewerConfigs);
+  assert.equal(honestProblems.length, 2, honestProblems.join('\n'));
+  assert.ok(honestProblems.some((x) => x.includes('實際填「gpt-6-luna」')));
+  assert.ok(honestProblems.some((x) => x.includes('實際填「low」')));
+
+  // 只提要求值或敘述、未填實際模型／推理欄位，必須拒收
+  assert.equal(settingProblems(mkBody('- 要求模型：gpt-6-astra；要求推理：max'), 'Beta', reviewerConfigs).length, 2);
+  assert.equal(settingProblems(mkBody('- 模型／推理：本輪未提供獨立核實值。專案設定要求 `gpt-6-astra`／`max`'), 'Beta', reviewerConfigs).length, 2);
+
+  // 重複或矛盾宣告實際模型／推理欄位，必須拒收
+  const dupProblems = settingProblems(mkBody('- 實際模型：gpt-6-luna；實際推理：low（模型：gpt-6-astra；推理：max）'), 'Beta', reviewerConfigs);
+  assert.equal(dupProblems.length, 2, dupProblems.join('\n'));
+  assert.ok(dupProblems.some((x) => x.includes('模型欄位重複或矛盾')));
+  assert.ok(dupProblems.some((x) => x.includes('推理強度欄位重複或矛盾')));
+
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
     `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
     '### 本輪實際用的設定',
     '- 略',
     '### 清單逐項結果',
-    '- gpt-6-astra max',
+    '- 模型：gpt-6-astra；推理強度：max',
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
   // evaluate 與 gateRun 整合：不合規的通過不算數、不能解除阻擋；合規放行
-  const badComment = c(mkBody('- 模型：unknown-model\n- 推理強度：low'), 'bad-set');
+  const badComment = c(honestLowWithReq, 'bad-set');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));

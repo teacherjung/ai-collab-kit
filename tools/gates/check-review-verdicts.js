@@ -24,7 +24,7 @@
 // ## 「通過」要帶兩個固定小標與合格設定（規矩 F7、F11；裁示者 2026-10-03 選「A」）
 // 原專案 PFW #655 第三輪的送審提示自訂了回報格式，結論裡沒有清單、也沒寫實際用了什麼設定，而這道閘只看第一行，
 // 沒人發現。所以「通過」那一則還要有兩行固定小標，且專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，
-// 「### 本輪實際用的設定」段落須以獨立詞邊界寫明合格模型與最高推理；缺小標或設定不合規，那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
+// 「### 本輪實際用的設定」段落須以唯一固定欄位（`模型：<模型名>`、`推理強度：<推理強度>` 或 `模型／推理強度：<模型名>／<推理強度>`）寫明合格模型與最高推理；缺小標或設定欄位缺漏、重複、不合規，那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
 // 要重貼一則合格的。清單逐項結果只看小標在不在——擋不住「寫了不適用卻沒查」。
 // 「快速通道（擁有者）」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定登記的擁有者（owner 那一欄）的，就不要求。
 // 認的是擁有者、不是裁示者（#32 r1）：裁示者可以由擁有者指定給別人（A1），認裁示者的話，裁示者若指定給某個 AI，
@@ -87,11 +87,75 @@ function missingHeadings(body) {
   return PASS_HEADINGS.filter((h) => !lines.includes(h));
 }
 
-const hasSettingToken = (text, token) =>
-  new RegExp(`(?<![0-9A-Za-z._-])${String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9A-Za-z._-])`, 'iu').test(text);
+const eqSettingToken = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
+function cleanSettingToken(raw) {
+  const s = String(raw || '').trim().replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim();
+  const m = /^[`'"]?([\p{L}\p{N}._:@+=-]+)[`'"]?$/u.exec(s);
+  return m ? m[1] : null;
+}
 
 /**
- * 核「### 本輪實際用的設定」段落有沒有寫出該複審者登記在 settings.reviewers 的合格模型（strongest／second）與最高推理（maxEffort）（F11）。
+ * 從「### 本輪實際用的設定」段落解析唯一宣告的實際模型與推理強度欄位。
+ * 只認欄位名「（實際／本輪）模型」與「（實際／本輪）推理（強度／檔位）」（或合併欄「模型／推理（強度）」），
+ * 「要求模型」「設定模型」等其他前綴不算實際欄位；缺漏、重複宣告或值不符皆由 settingProblems 擋下。
+ */
+function parseSettingFields(sectionLines, allowedModels) {
+  const modelValues = [];
+  const effortValues = [];
+  let inFence = false;
+  const combinedRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[／/][ \t]*(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
+  const modelRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
+  const effortRe = /(?<![\p{L}\p{N}_*-])(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*([^\n；;，,。｜|（(）)]*)/gu;
+
+  for (const line of sectionLines) {
+    if (/^\s*(?:```|~~~)/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || /^\s*>/u.test(line)) continue;
+    let restLine = line;
+    for (const m of line.matchAll(combinedRe)) {
+      const val = m[1].trim();
+      const parts = val.split(/[ \t]*[／/][ \t]*/u);
+      const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
+      const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
+      if (mTok && eTok) {
+        modelValues.push(mTok);
+        effortValues.push(eTok);
+      } else {
+        modelValues.push(val || '（空）');
+        effortValues.push(val || '（空）');
+      }
+      restLine = restLine.replace(m[0], ' ');
+    }
+    for (const m of restLine.matchAll(modelRe)) {
+      const val = m[1].trim();
+      const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
+      if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
+        modelValues.push(unwrapped);
+        continue;
+      }
+      const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
+      const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
+      const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
+      if (mTok && eTok) {
+        modelValues.push(mTok);
+        effortValues.push(eTok);
+      } else {
+        modelValues.push(cleanSettingToken(val) || val || '（空）');
+      }
+    }
+    for (const m of restLine.matchAll(effortRe)) {
+      const val = m[1].trim();
+      effortValues.push(cleanSettingToken(val) || val || '（空）');
+    }
+  }
+  return { modelValues, effortValues };
+}
+
+/**
+ * 核「### 本輪實際用的設定」段落有沒有以唯一欄位寫出該複審者登記在 settings.reviewers 的合格模型（strongest／second）與最高推理（maxEffort）（F11）。
  * 呼叫端未傳 reviewers 或該角色未登記模型／推理時回空陣列（相容只驗小標的合成夾具）。
  */
 function settingProblems(body, role, reviewers) {
@@ -103,18 +167,31 @@ function settingProblems(body, role, reviewers) {
   if (start < 0) return [];
   const rest = lines.slice(start + 1);
   const end = rest.findIndex((l) => /^###\s/u.test(l));
-  const section = (end < 0 ? rest : rest.slice(0, end)).join('\n');
+  const sectionLines = end < 0 ? rest : rest.slice(0, end);
   const models = [cfg.strongest, cfg.second]
     .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter((s) => s && s !== '未設定');
   const effort = typeof cfg.maxEffort === 'string' && cfg.maxEffort.trim() && cfg.maxEffort.trim() !== '未設定'
     ? cfg.maxEffort.trim() : '';
+  const { modelValues, effortValues } = parseSettingFields(sectionLines, models);
   const out = [];
-  if (models.length && !models.some((m) => hasSettingToken(section, m))) {
-    out.push(`未寫明合格模型（需為 ${models.join(' 或 ')}）`);
+  if (models.length) {
+    if (modelValues.length === 0) {
+      out.push(`未寫明合格模型（需以「模型：<模型名>」填 ${models.join(' 或 ')}）`);
+    } else if (modelValues.length > 1) {
+      out.push(`模型欄位重複或矛盾（出現 ${modelValues.join('、')}；需唯一填 ${models.join(' 或 ')}）`);
+    } else if (!models.some((m) => eqSettingToken(modelValues[0], m))) {
+      out.push(`未寫明合格模型（實際填「${modelValues[0]}」，需為 ${models.join(' 或 ')}）`);
+    }
   }
-  if (effort && !hasSettingToken(section, effort)) {
-    out.push(`未寫明最高推理強度（需為 ${effort}）`);
+  if (effort) {
+    if (effortValues.length === 0) {
+      out.push(`未寫明最高推理強度（需以「推理強度：<推理強度>」填 ${effort}）`);
+    } else if (effortValues.length > 1) {
+      out.push(`推理強度欄位重複或矛盾（出現 ${effortValues.join('、')}；需唯一填 ${effort}）`);
+    } else if (!eqSettingToken(effortValues[0], effort)) {
+      out.push(`未寫明最高推理強度（實際填「${effortValues[0]}」，需為 ${effort}）`);
+    }
   }
   return out;
 }

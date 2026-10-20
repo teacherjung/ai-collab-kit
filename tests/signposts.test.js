@@ -37,14 +37,19 @@ function scanFiles() {
   return [...first, ...helpers];
 }
 
-test('tests/ 裡每一支檔的路標都指得到（含檔數下限與接線誘餌）', () => {
+function scanRepoSignposts(transform = (_f, text) => text) {
   const files = scanFiles();
-  assert.ok(files.length >= 20, `只掃到 ${files.length} 支檔：前提變了`);
-  assert.ok(files.includes(path.join('tests', 'signposts.test.js')), '必須掃到本檔自己');
-  const problems = files.flatMap((f) => problemsIn(fs.readFileSync(path.join(ROOT, f), 'utf8'), f));
-  assert.deepEqual(problems, []);
-  const selfSource = fs.readFileSync(__filename, 'utf8');
-  assert.equal(problemsIn(selfSource.replace(/\ntest\('判準本身：/u, "\ntest('被改名："), 'tests/signposts.test.js').length, 1, '本檔頂端的接線誘餌路標在目標題名改掉時必須抓到');
+  const problems = files.flatMap((f) => problemsIn(transform(f, fs.readFileSync(path.join(ROOT, f), 'utf8')), f));
+  return { files, problems };
+}
+
+test('tests/ 裡每一支檔的路標都指得到（含檔數下限與接線誘餌）', () => {
+  const clean = scanRepoSignposts();
+  assert.ok(clean.files.length >= 20, `只掃到 ${clean.files.length} 支檔：前提變了`);
+  assert.ok(clean.files.includes(path.join('tests', 'signposts.test.js')), '必須掃到本檔自己');
+  assert.deepEqual(clean.problems, []);
+  const decoy = scanRepoSignposts((f, src) => (f === path.join('tests', 'signposts.test.js') ? src.replace(/\ntest\('判準本身：/u, "\ntest('被改名：") : src));
+  assert.equal(decoy.problems.length, 1, '本檔頂端的接線誘餌路標在目標題名改掉時必須由掃描迴圈抓到');
 });
 
 test('判準本身：指不到要抓、指得到放行、不可以自己滿足自己、全空白與壞路標要抓', () => {
