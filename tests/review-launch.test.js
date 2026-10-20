@@ -2209,6 +2209,79 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.match(unvoidedBadOut.lines.join('\n'), /未作廢的壞標頭 🤖 留言.*不自動收尾/u);
     assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
 
+    // CLI JSON 輸出包裹（如 Claude --output-format json）：自行貼文成功且 JSON result 含同一份完整結論或摘要時 --run --purge 正常收尾；矛盾或 is_error 則退 2（r3 R2）
+    dynamicComments.length = 0;
+    const jsonSelfSameOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'self-json-1', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: validSelfVerdict }));
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(jsonSelfSameOut.code, 0, jsonSelfSameOut.lines.join('\n'));
+    assert.equal(selfPostCalls, 0);
+    assert.ok(!fs.existsSync(reviewFolder), 'JSON 包裹同正文自貼成功後 --run --purge 已正常收樹並清除容器');
+
+    dynamicComments.length = 0;
+    const jsonSelfConflictOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'self-json-conflict', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        fs.writeFileSync(
+          record.outFile,
+          JSON.stringify([{ type: 'system' }, { type: 'result', subtype: 'success', is_error: false, result: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- R1\n` }]),
+        );
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(jsonSelfConflictOut.code, 2);
+    assert.match(jsonSelfConflictOut.lines.join('\n'), /輸出檔的 r1 結論與平台上已貼出的結論內容不一致/u);
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // r3 R1：r1 的 --run --purge 在代貼期間（r1 結論已在平台可見），另一程序正式開出 r2 並寫入唯一輸出；r1 收尾只關 r1，r2 的樹、Git 登記與唯一輸出逐字保留
+    dynamicComments.length = 0;
+    const r2Folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r2');
+    let r2LaunchRes = null;
+    const r1RunWithConcurrentR2 = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        fs.writeFileSync(
+          record.outFile,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- R1\n未貼\n`,
+        );
+      },
+      runPost(_cmd, args) {
+        const body = fs.readFileSync(args.at(-1), 'utf8');
+        dynamicComments.push({ id: 'r1-posted', author: 'ai-acct', createdAt: '2026-10-20T00:20:00Z', body });
+        r2LaunchRes = launch('7', 'Beta', { settings: s, platform: fakePlatform(selfPostAns), cwd: r.dir, dir, template: TEMPLATE });
+        fs.writeFileSync(path.join(r2Folder, 'output.log'), 'R2 專屬唯一合成輸出\n');
+      },
+    });
+    assert.equal(r1RunWithConcurrentR2.code, 0, r1RunWithConcurrentR2.lines.join('\n'));
+    assert.equal(r2LaunchRes && r2LaunchRes.code, 0, r2LaunchRes ? r2LaunchRes.lines.join('\n') : 'r2 launch did not run');
+    assert.ok(!fs.existsSync(reviewFolder), 'r1 自身的容器已收樹並清除');
+    assert.ok(fs.existsSync(path.join(r2Folder, 'tree')), 'r2 的審查樹保留');
+    assert.ok(fs.existsSync(path.join(r2Folder, 'mutation')), 'r2 的突變副本保留');
+    assert.equal(fs.readFileSync(path.join(r2Folder, 'output.log'), 'utf8'), 'R2 專屬唯一合成輸出\n', 'r2 的唯一輸出逐字保留');
+    const wtListAfterR1 = sh(r.dir, 'worktree', 'list', '--porcelain');
+    assert.ok(wtListAfterR1.includes(path.join(r2Folder, 'tree')), 'r2 審查樹的 Git 工作樹登記仍在');
+    assert.ok(wtListAfterR1.includes(path.join(r2Folder, 'mutation')), 'r2 突變副本的 Git 工作樹登記仍在');
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    assert.ok(!fs.existsSync(r2Folder));
+
     // (f) R1：替換已收樹掃描容器與代貼／容器鎖協同的確定性交錯考題
     // 交錯 1：A 已通過進鎖前的 canReplaceClosedScan 初檢、正要寫入容器鎖檔時，B 先完成替換並寫入 output.log；A 進鎖後靠鎖內 canReplaceClosedScan 重驗退 2、不刪 B
     assert.equal(main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir }).code, 0);
@@ -2286,7 +2359,26 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     const finalScanJson = JSON.parse(fs.readFileSync(path.join(scanFolder, 'scan.json'), 'utf8'));
     assert.ok(typeof finalScanJson.postedAt === 'string', 'A 完成代貼後 scan.json 正常寫入 postedAt');
     assert.equal(finalScanJson.closedAt, undefined, 'B 的並發 close --purge 被擋下、未寫入 closedAt');
-    assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // 交錯 4（容器操作已持鎖→代貼後到）：A 在 --scan-close 持有容器鎖期間，B 呼叫 --scan-post 立即退 2
+    let latePostDuringClose = null;
+    const closeWithLatePost = scanClose('7', {
+      settings: s,
+      dir,
+      leftoverRoots: [],
+      purge: true,
+      remove(root, t) {
+        latePostDuringClose = main(['--scan-post', '7', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(withPass),
+          runPost() {},
+        });
+        return spawnSync('git', ['worktree', 'remove', t], { cwd: root, env: gitEnv(), encoding: 'utf8' }).status === 0 ? null : 'remove fail';
+      },
+    });
+    assert.equal(closeWithLatePost.code, 0, closeWithLatePost.lines.join('\n'));
+    assert.equal(latePostDuringClose && latePostDuringClose.code, 2, latePostDuringClose ? latePostDuringClose.lines.join('\n') : 'latePost did not run');
+    assert.match(latePostDuringClose.lines.join('\n'), /正在被另一個程序操作/u);
     assert.ok(!fs.existsSync(scanFolder));
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });

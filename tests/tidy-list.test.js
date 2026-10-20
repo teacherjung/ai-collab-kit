@@ -255,7 +255,7 @@ test('④暫存資料夾：名字像審查樹而且超過天數的資料夾才�
     r.g('worktree', 'add', '-q', '--detach', path.join(tmpA, 'review-registered'), 'HEAD');
     fs.utimesSync(path.join(tmpA, 'review-registered'), old, old);
     // 裝著樹的容器（#73 r1 R1；送審產生器的布局 review-…/tree、review-…/mutation）：
-    //   這個倉庫登記的（乾淨、上鎖、有改動都一樣歸②）→ 不列；別的倉庫的樹或獨立倉庫：有改動、上鎖、讀不了 → 不列；乾淨沒上鎖 → 照列
+    //   這個倉庫登記的（乾淨、上鎖、有改動都一樣歸②）→ 不列；別的倉庫的樹或獨立倉庫：有改動、上鎖、還沒進主幹、讀不了 → 不列；乾淨、沒上鎖且已進主幹 → 照列
     const nest = (n) => { fs.mkdirSync(path.join(tmpA, n)); return path.join(tmpA, n, 'tree'); };
     r.g('worktree', 'add', '-q', '--detach', nest('review-own-clean'), 'HEAD');
     r.g('worktree', 'add', '-q', '--detach', nest('review-own-locked'), 'HEAD');

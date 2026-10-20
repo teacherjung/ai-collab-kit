@@ -423,12 +423,54 @@ function freshEntries(roots, folder, since, re) {
   return { fresh, groups, unreadable };
 }
 
+function unwrapScanOutput(raw, kindLabel = '掃描回覆') {
+  const text = String(raw ?? '');
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    const ndLines = trimmed.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+    if (ndLines.length > 1 && ndLines.every((l) => l.startsWith('{') && l.endsWith('}'))) {
+      try {
+        parsed = ndLines.map((l) => JSON.parse(l));
+      } catch {
+        return text;
+      }
+    } else {
+      return text;
+    }
+  }
+  const pickResult = (obj) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
+      throw new LaunchError(`${kindLabel} JSON 標示執行失敗（is_error 或非 success），不代貼`);
+    }
+    return typeof obj.result === 'string' ? obj.result : null;
+  };
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i -= 1) {
+      const item = parsed[i];
+      if (item && typeof item === 'object' && item.type === 'result') {
+        const res = pickResult(item);
+        if (res !== null) return res;
+      }
+    }
+    return text;
+  }
+  const res = pickResult(parsed);
+  return res !== null ? res : text;
+}
+
 /**
- * 核對純文字結論：去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
+ * 核對純文字結論（若為 CLI 結構化 JSON 成功包裹如 Claude `--output-format json` 則先解開 `result`）：
+ * 去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
  * 核第一行標頭（角色、來源、輪次、受審版本短碼）與「通過」的兩行固定小標（F4、F5、F7；擁有者照 F12 豁免小標）。
  */
 function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null }) {
-  const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const unwrapped = unwrapScanOutput(raw, '複審結論');
+  const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (!lines.length) throw new LaunchError('結論檔是空的');
@@ -609,7 +651,7 @@ function defaultRunPost(cmd, args, { clearEnv = [] } = {}) {
  * 先核審查樹與突變副本都在、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔、標頭與小標、平台版本與同輪未重複，通過才代貼並記下 postedAt。
  * 當一鍵模式（--run）傳入 allowAlreadyPosted: true 時，若複審者已依提示自行貼出唯一一則合規當輪結論，核驗無誤後承接該結果並記下 postedAt，不重複貼。
  */
-function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), allowAlreadyPosted = false } = {}) {
+function post(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), allowAlreadyPosted = false, expectRound = null, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
@@ -617,19 +659,38 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
   if (!filled(rl.postComment)) throw new LaunchError('專案設定的 reviewLaunch.postComment 還沒填：不知道怎麼貼結論');
   const { usable } = rolesOf(settings);
   const ownerRole = canonicalRole(settings && settings.owner, usable);
-  const re = folderRe(slugOf(project), String(changeArg).replace(/[^A-Za-z0-9._-]/gu, ''));
+  const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
+  const re = folderRe(slugOf(project), cleanId);
   let entries;
   try { entries = fs.readdirSync(dir); } catch (e) { throw new LaunchError(`讀不了 ${dir}（${e.code || e.message}）`); }
   const open = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
     try { return !JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8')).closedAt; } catch { return false; }
   });
-  if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
-  if (open.length > 1) throw new LaunchError(`在 ${dir} 底下找到 ${open.length} 個還開著的審查資料夾（${open.map((f) => path.basename(f)).join('、')}）：請先整理到只剩本輪一個`);
-  const folder = open[0];
+  let folder;
+  if (expectRound !== null && expectRound !== undefined) {
+    const targetFolder = path.join(dir, `review-${slugOf(project)}-${cleanId}-r${expectRound}`);
+    if (!open.includes(targetFolder)) {
+      throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 本輪 r${expectRound} 還開著的審查樹（${path.basename(targetFolder)}）`);
+    }
+    folder = targetFolder;
+  } else {
+    if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+    if (open.length > 1) throw new LaunchError(`在 ${dir} 底下找到 ${open.length} 個還開著的審查資料夾（${open.map((f) => path.basename(f)).join('、')}）：請先整理到只剩本輪一個`);
+    folder = open[0];
+  }
   const recFile = path.join(folder, 'launch.json');
   return withPostLock(folder, () => {
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (String(rec.change) !== String(changeArg)) throw new LaunchError(`launch.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
+    if (expectRound !== null && expectRound !== undefined && rec.round !== expectRound) {
+      throw new LaunchError(`launch.json 記的輪次是 r${rec.round}，不是本次啟動的 r${expectRound}`);
+    }
+    if (expectHead !== null && expectHead !== undefined && rec.head !== expectHead) {
+      throw new LaunchError(`launch.json 記的受審版本是 ${String(rec.head).slice(0, 7)}，不是本次啟動的 ${String(expectHead).slice(0, 7)}`);
+    }
+    if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
+      throw new LaunchError(`launch.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
+    }
     if (rec.closedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.closedAt} 收樹，不代貼結論`);
     if (rec.postedAt) throw new LaunchError(`r${rec.round}（${folder}）已經在 ${rec.postedAt} 代貼過結論，不重複貼`);
     const entry = (Array.isArray(settings.reviewers) ? settings.reviewers : []).find((r) => r && r.participant === rec.reviewer);
@@ -674,13 +735,14 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
+    const unwrappedRaw = unwrapScanOutput(raw, '複審結論');
     let prepared = null;
     let prepareErr = null;
     if (!allowAlreadyPosted) {
-      prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
     } else {
       try {
-        prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+        prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
       } catch (e) {
         if (e instanceof LaunchError) prepareErr = e;
         else throw e;
@@ -743,7 +805,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (prepared && prepared.body !== platformPrepared.body) {
         throw new LaunchError(`輸出檔的 r${rec.round} 結論與平台上已貼出的結論內容不一致：不自動收尾`);
       }
-      if (!prepared && /🤖/u.test(raw)) {
+      if (!prepared && /🤖/u.test(unwrappedRaw)) {
         throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
       }
       const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
@@ -804,16 +866,24 @@ function removeTree(root, t) {
   return r.error || r.status !== 0 ? ((r.error && r.error.message) || (r.stderr || '').trim() || `退 ${r.status}`) : null;
 }
 
-function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false } = {}) {
+function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false, expectRound = null, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
-  const re = folderRe(slugOf(project), String(changeArg).replace(/[^A-Za-z0-9._-]/gu, ''));
+  const cleanId = String(changeArg).replace(/[^A-Za-z0-9._-]/gu, '');
+  const re = folderRe(slugOf(project), cleanId);
   let entries;
   try { entries = fs.readdirSync(dir); } catch (e) { throw new LaunchError(`讀不了 ${dir}（${e.code || e.message}）`); }
-  const allFolders = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
-    try { return Boolean(JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8'))); } catch { return false; }
-  });
+  const targetFolder = expectRound !== null && expectRound !== undefined
+    ? path.join(dir, `review-${slugOf(project)}-${cleanId}-r${expectRound}`)
+    : null;
+  const allFolders = entries
+    .filter((n) => re.test(n))
+    .map((n) => path.join(dir, n))
+    .filter((f) => !targetFolder || f === targetFolder)
+    .filter((f) => {
+      try { return Boolean(JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8'))); } catch { return false; }
+    });
   const open = allFolders.filter((f) => {
     try { return !JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8')).closedAt; } catch { return false; }
   });
@@ -826,6 +896,15 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
     withContainerLock(folder, `${folder} 正在被另一個程序操作：請稍後再試`, () => {
       const recFile = path.join(folder, 'launch.json');
       const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      if (
+        (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
+        || (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+        || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+      ) {
+        refused = true;
+        lines.push(`沒收 r${rec.round}（${folder}）：容器紀錄已非本次啟動的那一輪（輪次、版本或開始時間不符）。`);
+        return;
+      }
       const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
       rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
       const todo = [['審查樹', rec.tree], ['突變副本', rec.mutation]].filter(([, t]) => !rec.removed.includes(t));
@@ -887,6 +966,14 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
         const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
         const locks = lockedTrees(rec.root);
         let folderHasProblem = false;
+        if (
+          (expectRound !== null && expectRound !== undefined && rec.round !== expectRound)
+          || (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+          || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+        ) {
+          purgeProblems.push(`${path.basename(folder)} 的容器紀錄已非本次啟動的那一輪（輪次、版本或開始時間不符）`);
+          folderHasProblem = true;
+        }
         if (!rec.closedAt) {
           purgeProblems.push(`${path.basename(folder)} 還沒收樹（缺少 closedAt）`);
           folderHasProblem = true;
@@ -1155,37 +1242,6 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   return { code: 0, lines, record, command, prompt };
 }
 
-function unwrapScanOutput(raw) {
-  const text = String(raw ?? '');
-  const trimmed = text.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return text;
-  }
-  const pickResult = (obj) => {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
-      throw new LaunchError('掃描回覆 JSON 標示執行失敗（is_error 或非 success），不代貼');
-    }
-    return typeof obj.result === 'string' ? obj.result : null;
-  };
-  if (Array.isArray(parsed)) {
-    for (let i = parsed.length - 1; i >= 0; i -= 1) {
-      const item = parsed[i];
-      if (item && typeof item === 'object' && item.type === 'result') {
-        const res = pickResult(item);
-        if (res !== null) return res;
-      }
-    }
-    return text;
-  }
-  const res = pickResult(parsed);
-  return res !== null ? res : text;
-}
-
 /**
  * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
  * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
@@ -1248,7 +1304,7 @@ function prepareScan(raw, { scanner, source, head, usable, passCommentLink = nul
   };
 }
 
-function scanPost(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date() } = {}) {
+function scanPost(changeArg, { settings = readSettings(), platform = { ask }, dir: dirArg = os.tmpdir(), file: fileArg = null, runPost = defaultRunPost, now = () => new Date(), expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
@@ -1261,6 +1317,12 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   return withPostLock(folder, () => {
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (String(rec.change) !== String(changeArg)) throw new LaunchError(`scan.json 記的變更編號是 ${rec.change}，不是參數給的 ${changeArg}`);
+    if (expectHead !== null && expectHead !== undefined && rec.head !== expectHead) {
+      throw new LaunchError(`scan.json 記的掃描版本是 ${String(rec.head).slice(0, 7)}，不是本次啟動的 ${String(expectHead).slice(0, 7)}`);
+    }
+    if (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt) {
+      throw new LaunchError(`scan.json 記的啟動時間是 ${rec.startedAt}，不是本次啟動的 ${expectStartedAt}`);
+    }
     if (rec.closedAt) throw new LaunchError(`掃描樹（${folder}）已經在 ${rec.closedAt} 收樹，不代貼掃描留言`);
     if (rec.postedAt) throw new LaunchError(`掃描樹（${folder}）已經在 ${rec.postedAt} 代貼過掃描留言，不重複貼`);
 
@@ -1357,7 +1419,7 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   });
 }
 
-function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false } = {}) {
+function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false, expectHead = null, expectStartedAt = null } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
@@ -1367,6 +1429,15 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
     const recFile = path.join(folder, 'scan.json');
     if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
     const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (
+      (expectHead !== null && expectHead !== undefined && rec.head !== expectHead)
+      || (expectStartedAt !== null && expectStartedAt !== undefined && rec.startedAt !== expectStartedAt)
+    ) {
+      return {
+        code: 1,
+        lines: [`沒收掃描樹（${folder}）：掃描容器紀錄已非本次啟動的那一輪（版本或開始時間不符）。`],
+      };
+    }
     if (rec.closedAt && !purge) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
     const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
     rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
@@ -2314,7 +2385,12 @@ function main(argv, opts = {}) {
       }
       let posted;
       try {
-        posted = scanPost(a.scan, { ...opts, ...(dir ? { dir } : {}) });
+        posted = scanPost(a.scan, {
+          ...opts,
+          ...(dir ? { dir } : {}),
+          expectHead: launched.record.head,
+          expectStartedAt: launched.record.startedAt,
+        });
       } catch (e) {
         if (e instanceof LaunchError) {
           return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（掃描樹與輸出檔留在 ${folder}，未收樹）。`] };
@@ -2322,7 +2398,13 @@ function main(argv, opts = {}) {
         throw e;
       }
       if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
-      const closed = scanClose(a.scan, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+      const closed = scanClose(a.scan, {
+        ...opts,
+        ...(dir ? { dir } : {}),
+        ...(purge ? { purge: true } : {}),
+        expectHead: launched.record.head,
+        expectStartedAt: launched.record.startedAt,
+      });
       return {
         code: closed.code,
         lines: [...launched.lines, ...posted.lines, ...closed.lines],
@@ -2351,7 +2433,14 @@ function main(argv, opts = {}) {
     }
     let posted;
     try {
-      posted = post(a.change, { ...opts, ...(dir ? { dir } : {}), allowAlreadyPosted: true });
+      posted = post(a.change, {
+        ...opts,
+        ...(dir ? { dir } : {}),
+        allowAlreadyPosted: true,
+        expectRound: launched.record.round,
+        expectHead: launched.record.head,
+        expectStartedAt: launched.record.startedAt,
+      });
     } catch (e) {
       if (e instanceof LaunchError) {
         return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（審查樹與輸出檔留在 ${folder}，未收樹）。`] };
@@ -2359,7 +2448,14 @@ function main(argv, opts = {}) {
       throw e;
     }
     if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
-    const closed = close(a.change, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    const closed = close(a.change, {
+      ...opts,
+      ...(dir ? { dir } : {}),
+      ...(purge ? { purge: true } : {}),
+      expectRound: launched.record.round,
+      expectHead: launched.record.head,
+      expectStartedAt: launched.record.startedAt,
+    });
     return {
       code: closed.code,
       lines: [...launched.lines, ...posted.lines, ...closed.lines],
