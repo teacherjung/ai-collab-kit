@@ -1474,8 +1474,15 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.match(headClose.lines.join('\n'), /掃描樹的 HEAD 是/u);
     sh(ok.record.tree, 'checkout', '-q', '--detach', r.head);
 
-    const okClose = main(['--scan-close', '7', '--dir', dir], { settings: s });
+    const scanLeftoverDir = tmp('scan-leftover-');
+    const freshLeftover = path.join(scanLeftoverDir, 'fresh-item');
+    fs.writeFileSync(freshLeftover, 'x');
+    const futureTime = new Date(Date.parse(ok.record.startedAt) + 60_000);
+    fs.utimesSync(freshLeftover, futureTime, futureTime);
+    const okClose = main(['--scan-close', '7', '--dir', dir], { settings: s, leftoverRoots: [scanLeftoverDir] });
+    fs.rmSync(scanLeftoverDir, { recursive: true, force: true });
     assert.equal(okClose.code, 0, okClose.lines.join('\n'));
+    assert.match(okClose.lines.join('\n'), /收好掃描樹：.*；暫存區另有 1 筆比開樹晚/u);
     assert.ok(!fs.existsSync(ok.record.tree), '掃描樹已收掉');
     assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8')).closedAt, 'scan.json 已記 closedAt');
 
@@ -2149,26 +2156,78 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.match(dupOut.lines.join('\n'), /重複或衝突，不自動收尾/u);
     assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
 
-    // (f) R1：替換已收樹掃描容器的確定性交錯考題（排他鎖與鎖內重驗，保護先到者的樹、紀錄與輸出）
-    // 交錯 1：A 在進鎖前讀完舊 scan.json，B 先完成替換並寫入 output.log，A 進鎖後重驗必須退 2、不刪 B
+    // 歷史有壞標頭但已被後續留言正式寫「作廢上一則：<id>」→ 自行貼文仍能正常收尾（r2 R2）；未作廢壞標頭則拒收
+    dynamicComments.length = 0;
+    dynamicComments.push(
+      { id: 'bad-0', author: 'ai-acct', createdAt: '2026-10-19T23:50:00Z', body: '🤖 Beta｜審 `deadbee`｜r1｜結論：通過（缺來源欄壞標頭）\n' },
+      {
+        id: 'voided-1',
+        author: 'ai-acct',
+        createdAt: '2026-10-19T23:55:00Z',
+        body: `🤖 Beta｜來源：beta CLI｜審 \`${r.base.slice(0, 7)}\`｜r1｜結論：需修改後再審\n作廢上一則：bad-0\n\n- R1\n`,
+      },
+    );
+    const voidedHistoryOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({
+          id: 'self-r2-ok',
+          author: 'ai-acct',
+          createdAt: '2026-10-20T00:05:00Z',
+          body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r2｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
+        });
+        fs.writeFileSync(record.outFile, '已貼：#7 r2（詳見 PR 留言）\n');
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(voidedHistoryOut.code, 0, voidedHistoryOut.lines.join('\n'));
+    assert.equal(selfPostCalls, 0);
+    assert.match(voidedHistoryOut.lines.join('\n'), /已確認複審者自行貼出 r2 結論.*（不重複代貼）/u);
+    assert.ok(!fs.existsSync( path.join(fs.realpathSync(dir), 'review-acme-kit-7-r2')), '歷史壞標頭已作廢時 r2 --run --purge 正常收尾清除容器');
+
+    dynamicComments.length = 0;
+    dynamicComments.push(
+      { id: 'bad-unvoided', author: 'ai-acct', createdAt: '2026-10-19T23:50:00Z', body: '🤖 Beta｜審 `deadbee`｜r1｜結論：通過（未作廢壞標頭）\n' },
+    );
+    const unvoidedBadOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'self-with-unvoided', author: 'ai-acct', createdAt: '2026-10-20T00:05:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, '已貼：#7 r1\n');
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(unvoidedBadOut.code, 2);
+    assert.match(unvoidedBadOut.lines.join('\n'), /未作廢的壞標頭 🤖 留言.*不自動收尾/u);
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // (f) R1：替換已收樹掃描容器與代貼／容器鎖協同的確定性交錯考題
+    // 交錯 1：A 已通過進鎖前的 canReplaceClosedScan 初檢、正要寫入容器鎖檔時，B 先完成替換並寫入 output.log；A 進鎖後靠鎖內 canReplaceClosedScan 重驗退 2、不刪 B
     assert.equal(main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir }).code, 0);
     assert.equal(main(['--scan-close', '7', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
-    const realReadFileSync = fs.readFileSync;
-    const scanJsonPath = path.join(scanFolder, 'scan.json');
+    const realWriteFileSync = fs.writeFileSync;
+    const scanContainerLockPath = path.join(fs.realpathSync(dir), '.scan-acme-kit-7.lock');
     let bRes1 = null;
-    let hookedRead = false;
+    let hookedLockWrite = false;
     try {
-      fs.readFileSync = (p, ...rest) => {
-        const content = realReadFileSync(p, ...rest);
-        if (!hookedRead && String(p) === scanJsonPath) {
-          hookedRead = true;
+      fs.writeFileSync = (p, data, ...rest) => {
+        if (!hookedLockWrite && String(p) === scanContainerLockPath) {
+          hookedLockWrite = true;
           bRes1 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
-          fs.writeFileSync(path.join(scanFolder, 'output.log'), 'B 先完成替換的唯一合成值\n');
+          realWriteFileSync(path.join(scanFolder, 'output.log'), 'B 先完成替換的唯一合成值\n');
         }
-        return content;
+        return realWriteFileSync(p, data, ...rest);
       };
       const aRes1 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
-      fs.readFileSync = realReadFileSync;
+      fs.writeFileSync = realWriteFileSync;
       assert.equal(bRes1 && bRes1.code, 0, bRes1 ? bRes1.lines.join('\n') : 'B did not run');
       assert.equal(aRes1.code, 2, aRes1.lines.join('\n'));
       assert.match(aRes1.lines.join('\n'), /已經在了/u);
@@ -2176,7 +2235,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), 'B 的掃描樹仍在');
       assert.ok(sh(r.dir, 'worktree', 'list', '--porcelain').includes(path.join(scanFolder, 'tree')), 'B 的 Git 工作樹登記一致');
     } finally {
-      fs.readFileSync = realReadFileSync;
+      fs.writeFileSync = realWriteFileSync;
     }
 
     // 交錯 2：A 已取得容器鎖準備刪除舊容器時，B 並發呼叫 --scan → B 立即退 2，A 完成建立並保留新樹與輸出
@@ -2200,11 +2259,35 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       fs.writeFileSync(path.join(scanFolder, 'output.log'), 'A 鎖內建立的唯一合成值\n');
       assert.equal(fs.readFileSync(path.join(scanFolder, 'output.log'), 'utf8'), 'A 鎖內建立的唯一合成值\n');
       assert.ok(fs.existsSync(path.join(scanFolder, 'tree')), 'A 的掃描樹仍在');
-      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
-      assert.ok(!fs.existsSync(scanFolder));
     } finally {
       fs.rmSync = realRmSync;
     }
+
+    // 交錯 3（r2 R1）：A 正在執行 --scan-post 的 runPost（持有 post.lock）時，B 嘗試 --scan-close --purge 或重跑 --scan 皆立即退 2，不可刪樹或覆寫 scan.json
+    fs.writeFileSync(
+      path.join(scanFolder, 'output.log'),
+      `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+    );
+    let midCloseRes = null;
+    let midLaunchRes = null;
+    const scanPostInterleaved = main(['--scan-post', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      runPost() {
+        midCloseRes = main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] });
+        midLaunchRes = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+      },
+    });
+    assert.equal(scanPostInterleaved.code, 0, scanPostInterleaved.lines.join('\n'));
+    assert.equal(midCloseRes && midCloseRes.code, 2, midCloseRes ? midCloseRes.lines.join('\n') : 'midClose did not run');
+    assert.match(midCloseRes.lines.join('\n'), /正在被另一個程序操作/u);
+    assert.equal(midLaunchRes && midLaunchRes.code, 2, midLaunchRes ? midLaunchRes.lines.join('\n') : 'midLaunch did not run');
+    assert.match(midLaunchRes.lines.join('\n'), /已經在了/u);
+    const finalScanJson = JSON.parse(fs.readFileSync(path.join(scanFolder, 'scan.json'), 'utf8'));
+    assert.ok(typeof finalScanJson.postedAt === 'string', 'A 完成代貼後 scan.json 正常寫入 postedAt');
+    assert.equal(finalScanJson.closedAt, undefined, 'B 的並發 close --purge 被擋下、未寫入 closedAt');
+    assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    assert.ok(!fs.existsSync(scanFolder));
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });

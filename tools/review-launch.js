@@ -551,14 +551,18 @@ function withPostLock(folder, fn) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
   }
+  const containerLockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
   try {
+    if (fs.existsSync(containerLockFile)) {
+      throw new LaunchError(`${folder} 正在被另一個程序操作：請稍後再試`);
+    }
     return fn();
   } finally {
     try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
   }
 }
 
-/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，不覆蓋先到者。 */
+/** 容器級排他鎖（放在容器上層目錄，替換或清除容器時不會把鎖刪掉）：同容器並發開樹／替換／收樹／purge 時後到者立即退出，且若代貼鎖 post.lock 存在亦立即拒絕，不覆蓋先到者。 */
 function withContainerLock(folder, busyMsg, fn) {
   const lockFile = path.join(path.dirname(folder), `.${path.basename(folder)}.lock`);
   try {
@@ -579,6 +583,9 @@ function withContainerLock(folder, busyMsg, fn) {
     throw new LaunchError(`建立容器鎖失敗：${(e && (e.code || e.message)) || e}`);
   }
   try {
+    if (fs.existsSync(path.join(folder, 'post.lock'))) {
+      throw new LaunchError(busyMsg);
+    }
     return fn();
   } finally {
     try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
@@ -708,8 +715,14 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (roundComments.length > 1) {
         throw new LaunchError(`平台上已經有 ${roundComments.length} 則 ${rec.reviewer}（${wantSource}）的 r${rec.round} 結論留言：重複或衝突，不自動收尾`);
       }
-      if (comments.some((c) => /🤖/u.test(String(c.body || '')) && !headerOf(c.body, usable))) {
-        throw new LaunchError('平台上出現標頭格式不合規的 🤖 留言：不自動收尾');
+      const normalizedComments = comments.map((c, idx) => (c && c.createdAt === undefined ? { ...c, createdAt: new Date(idx * 1000).toISOString() } : c));
+      const evaluated = evaluateVerdicts(normalizedComments, rec.head, rec.reviewer, usable, { ownerRole });
+      if (evaluated.unsure) {
+        throw new LaunchError('平台上留言時間讀不出來或沒帶時區：不自動收尾');
+      }
+      const unvoidedMalformed = evaluated.problems.find((p) => p.includes('用了 🤖 記號、但標頭格式不合規'));
+      if (unvoidedMalformed) {
+        throw new LaunchError(`平台上出現未作廢的壞標頭 🤖 留言（${unvoidedMalformed.split('\n')[0]}）：不自動收尾`);
       }
       let platformPrepared;
       try {
@@ -733,6 +746,10 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (!prepared && /🤖/u.test(raw)) {
         throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
       }
+      const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+        throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+      }
       rec.postedAt = now().toISOString();
       rec.verdict = platformPrepared.header.verdict;
       writeJsonAtomic(recFile, rec);
@@ -755,6 +772,10 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     const argv = parts.map((p) => (p === FILE_SLOT ? verdictFile : p));
     const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
     runPost(argv[0], argv.slice(1), { clearEnv });
+    const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+      throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+    }
     rec.postedAt = now().toISOString();
     rec.verdict = prepared.header.verdict;
     rec.verdictFile = verdictFile;
@@ -1067,6 +1088,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   const prompt = fill(tpl, values, SCAN_FILL);
   const canReplaceClosedScan = () => {
     try {
+      if (fs.existsSync(path.join(folder, 'post.lock'))) return false;
       const prevScan = JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8'));
       const prevLocks = prevScan && prevScan.root ? lockedTrees(prevScan.root) : new Map();
       return Boolean(
@@ -1314,6 +1336,10 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
     const argv = parts.map((p) => (p === FILE_SLOT ? replyFile : p));
     const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
     runPost(argv[0], argv.slice(1), { clearEnv });
+    const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
+      throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
+    }
     rec.postedAt = nowIso;
     rec.replyFile = replyFile;
     writeJsonAtomic(recFile, rec);
