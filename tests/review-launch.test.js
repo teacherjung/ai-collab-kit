@@ -1724,13 +1724,21 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
     assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
 
-    // 同行緊貼進度前言（沒有換行符直接接 🔍 或 🤖 標頭）亦自動剝除；但 scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
+    // 同行緊貼進度前言（沒有換行符直接接 🔍 或 🤖 標頭）亦自動剝除；前言若提及不完整標頭（如「我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。」）不會誤截在半個標頭處（r3 R4）；scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
     assert.equal(
       stripGrokPreamble('我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
       '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
     );
     assert.equal(
+      stripGrokPreamble('我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
+      '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+    );
+    assert.equal(
       stripGrokPreamble('我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n', 'review'),
+      '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n',
+    );
+    assert.equal(
+      stripGrokPreamble('我會使用 🤖 Grok｜來源：Grok CLI 格式輸出。\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n', 'review'),
       '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n',
     );
     const leakyRobotPrefix = '誤帶 🤖 記號的前言🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';

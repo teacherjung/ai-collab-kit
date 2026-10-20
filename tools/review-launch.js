@@ -2005,12 +2005,13 @@ async function runGrokExec(argv, deps = {}) {
   }
 }
 
+const GROK_SCAN_HEADER_AT_END = /🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃\s*`?[0-9a-fA-F]{7,40}`?(?:\*\*|__)?[ \t]*(?=\n|$)/u;
+const GROK_REVIEW_HEADER_AT_END = /🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審\s*`?[0-9a-fA-F]{7,40}`?｜r\d+｜(?:結論：)?(?:通過|需修改後再審|不同意（建議撤回或重開）)(?:\*\*|__)?[ \t]*(?=\n|$)/u;
+
 function stripGrokPreamble(rawOutput, mode = 'scan') {
   const normalized = String(rawOutput ?? '').replace(/\r\n?/g, '\n');
-  const inlineMarker = mode === 'scan'
-    ? /🔍\s*[A-Za-z]+｜來源：/u
-    : /🤖\s*[A-Za-z]+｜來源：/u;
-  const m = inlineMarker.exec(normalized);
+  const fullHeader = mode === 'scan' ? GROK_SCAN_HEADER_AT_END : GROK_REVIEW_HEADER_AT_END;
+  const m = fullHeader.exec(normalized);
   if (m && m.index > 0) {
     const prefix = normalized.slice(0, m.index);
     if (!(mode === 'scan' && /🤖/u.test(prefix))) {
