@@ -217,6 +217,11 @@ function templateProblems(settings) {
     const bad = used.filter((t) => !COMMAND_TOKENS.includes(t));
     if (bad.length) out.push(`「${r.participant}」的啟動指令樣板有認不得的記號：${bad.join('、')}`);
     for (const t of ['model', 'effort', 'reviewTree']) if (!used.includes(t)) out.push(`「${r.participant}」的啟動指令樣板沒帶 {${t}}`);
+    const scanCmd = filled(r.scanCommand) ? r.scanCommand : deriveScanCommand(r.command);
+    const scanUsed = tokensOf(scanCmd);
+    const scanBad = scanUsed.filter((t) => !SCAN_COMMAND_TOKENS.includes(t));
+    if (scanBad.length) out.push(`「${r.participant}」轉換後的掃描啟動指令樣板有認不得的記號：${scanBad.join('、')}`);
+    for (const t of ['model', 'effort', 'scanTree']) if (!scanUsed.includes(t)) out.push(`「${r.participant}」轉換後的掃描啟動指令樣板沒帶 {${t}}`);
   }
   const sc = settings.scanner || {};
   if (filled(sc.participant) || (filled(sc.command) && sc.tool !== '無')) {
@@ -759,30 +764,92 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
   return { code: refused ? 1 : 0, lines };
 }
 
+function deriveScanCommand(reviewCmd) {
+  if (!filled(reviewCmd)) return '';
+  return String(reviewCmd)
+    .replace(/--mode\s+review\b/gu, '--mode scan')
+    .replace(/,[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\)|[A-Za-z]+\([^()]*\{mutationCopy\}[^()]*\),/gu, '')
+    .replace(/,Bash\(gh pr comment \{change\} \*\)/gu, '')
+    .replace(/\s+--[A-Za-z-]+\s+\{mutationCopy\}/gu, '')
+    .replace(/\s+--verbose\b/gu, '')
+    .replace(/\s+--output-format\s+json\b/gu, '')
+    .replace(/,[^,'"\s]*\{mutationCopy\}[^,'"\s]*|[^,'"\s]*\{mutationCopy\}[^,'"\s]*,/gu, '')
+    .replace(/請執行複審/gu, '請執行掃描')
+    .replace(/\{reviewTree\}/gu, '{scanTree}');
+}
+
+function resolveScannerSpec(settings, scannerArg, usable) {
+  const sc = (settings && settings.scanner) || {};
+  if (sc.tool === '無') {
+    throw new LaunchError('本專案沒有設定掃描者（PR說明的「### 複審後掃」下寫「未執行：本專案無掃描者」）');
+  }
+  const hasConfigured = filled(sc.participant);
+  const configuredScanner = hasConfigured ? canonicalRole(sc.participant, usable) : null;
+  if (hasConfigured && !configuredScanner) {
+    throw new LaunchError(`專案設定的 scanner.participant「${sc.participant || ''}」不是登記過的參與者`);
+  }
+  if (scannerArg === null || scannerArg === undefined) {
+    if (!hasConfigured) {
+      throw new LaunchError('本專案沒有設定掃描者（PR說明的「### 複審後掃」下寫「未執行：本專案無掃描者」）');
+    }
+    for (const k of ['strongest', 'maxEffort', 'source', 'command']) {
+      if (!filled(sc[k])) throw new LaunchError(`專案設定的 scanner.${k} 還沒填`);
+    }
+    return {
+      scanner: configuredScanner,
+      strongest: sc.strongest,
+      maxEffort: sc.maxEffort,
+      source: sc.source,
+      command: sc.command,
+      origin: 'scanner',
+    };
+  }
+  const want = canonicalRole(scannerArg, usable);
+  if (!want) {
+    throw new LaunchError(`--scanner 給的「${scannerArg || ''}」不是登記過的參與者（${usable.join('／') || '一個都沒登記'}）`);
+  }
+  if (configuredScanner === want && ['strongest', 'maxEffort', 'source', 'command'].every((k) => filled(sc[k]))) {
+    return {
+      scanner: want,
+      strongest: sc.strongest,
+      maxEffort: sc.maxEffort,
+      source: sc.source,
+      command: sc.command,
+      origin: 'scanner',
+    };
+  }
+  const revEntry = (Array.isArray(settings && settings.reviewers) ? settings.reviewers : []).find((r) => r && canonicalRole(r.participant, usable) === want);
+  if (!revEntry) {
+    throw new LaunchError(`--scanner 給的「${scannerArg}」既不是專案設定的預設掃描者，也不在 reviewers 清單裡：不知道它用什麼模型、怎麼起`);
+  }
+  for (const k of ['strongest', 'maxEffort', 'source']) {
+    if (!filled(revEntry[k])) throw new LaunchError(`專案設定裡「${want}」那一列的 ${k} 還沒填`);
+  }
+  const rawCmd = filled(revEntry.scanCommand) ? revEntry.scanCommand : deriveScanCommand(revEntry.command);
+  if (!filled(rawCmd)) throw new LaunchError(`專案設定裡「${want}」那一列的 command 還沒填`);
+  return {
+    scanner: want,
+    strongest: revEntry.strongest,
+    maxEffort: revEntry.maxEffort,
+    source: revEntry.source,
+    command: rawCmd,
+    origin: 'reviewers',
+  };
+}
+
 function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = null, settings = readSettings(), platform = { ask }, cwd = process.cwd(), dir: dirArg = os.tmpdir(), template = null, now = () => new Date() } = {}) {
   const dir = realDir(dirArg);
   const { usable } = rolesOf(settings);
   const ownerRole = canonicalRole(settings && settings.owner, usable);
-  const sc = settings.scanner || {};
-  if (sc.tool === '無' || !filled(sc.participant)) {
-    throw new LaunchError('本專案沒有設定掃描者（PR說明的「### 複審後掃」下寫「未執行：本專案無掃描者」）');
-  }
-  const configuredScanner = canonicalRole(sc.participant, usable);
-  if (!configuredScanner) throw new LaunchError(`專案設定的 scanner.participant「${sc.participant || ''}」不是登記過的參與者`);
-  if (scannerArg !== null && scannerArg !== undefined) {
-    const want = canonicalRole(scannerArg, usable);
-    if (want !== configuredScanner) throw new LaunchError(`--scanner 給的「${scannerArg}」不是專案設定的掃描者 ${configuredScanner}`);
-  }
   if (tierArg !== null && tierArg !== undefined && !TIER_ORDER.includes(tierArg)) {
     throw new LaunchError(`--tier 給的「${tierArg}」不是高／中／低`);
   }
-  const scanner = configuredScanner;
-  for (const k of ['strongest', 'maxEffort', 'source', 'command']) {
-    if (!filled(sc[k])) throw new LaunchError(`專案設定的 scanner.${k} 還沒填`);
-  }
-  const used = new Set([...sc.command.matchAll(TOKEN)].map((m) => m[1]));
+  const spec = resolveScannerSpec(settings, scannerArg, usable);
+  const scanner = spec.scanner;
+  const used = new Set([...spec.command.matchAll(TOKEN)].map((m) => m[1]));
   if (!used.has('model') || !used.has('effort') || !used.has('scanTree')) {
-    throw new LaunchError('scanner.command 沒帶 {model}、{effort} 或 {scanTree}：漏帶時掃描者照預設跑或不在掃描樹目錄下執行（G1）');
+    const label = spec.origin === 'scanner' ? 'scanner.command' : `「${scanner}」的掃描啟動指令樣板`;
+    throw new LaunchError(`${label} 沒帶 {model}、{effort} 或 {scanTree}：漏帶時掃描者照預設跑或不在掃描樹目錄下執行（G1）`);
   }
   const rl = settings.reviewLaunch || {};
   for (const k of ['changeLink', 'commentLink', 'postComment']) {
@@ -859,11 +926,11 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   const tree = path.join(folder, 'tree');
   const promptFile = path.join(folder, 'prompt.md');
   const outFile = path.join(folder, 'output.log');
-  const tokens = { model: sc.strongest, effort: sc.maxEffort, scanTree: tree, promptFile, outFile, change: id, project };
+  const tokens = { model: spec.strongest, effort: spec.maxEffort, scanTree: tree, promptFile, outFile, change: id, project };
   if (Object.keys(tokens).sort().join() !== [...SCAN_COMMAND_TOKENS].sort().join()) throw new Error('SCAN_COMMAND_TOKENS 跟這一張對不上（程式寫錯）');
-  const command = substitute(sc.command, tokens, `掃描者「${scanner}」的啟動指令樣板`).text;
+  const command = substitute(spec.command, tokens, `掃描者「${scanner}」的啟動指令樣板`).text;
   const values = {
-    project, change: id, scanner, implementer, reviewer, source: sc.source,
+    project, change: id, scanner, implementer, reviewer, source: spec.source,
     head, headShort: head.slice(0, 7), baseBranch: change.baseBranch, base, tier,
     changeLink: substitute(rl.changeLink, { project, change: id }, 'PR 網址樣板').text,
     passCommentLink,
@@ -874,7 +941,7 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
   if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
 
   const record = {
-    change: id, scanner, source: sc.source, reviewer, implementer, tier,
+    change: id, scanner, source: spec.source, reviewer, implementer, tier,
     head, base, passCommentId: passComment.id, passCommentLink,
     root, tree, promptFile, outFile, startedAt: now().toISOString(),
   };
@@ -899,26 +966,62 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     throw e;
   }
   const lines = [
-    `掃描準備｜變更 ${id}｜掃描者 ${scanner}（來源 ${sc.source}）｜掃 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
+    `掃描準備｜變更 ${id}｜掃描者 ${scanner}（來源 ${spec.source}）｜掃 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
     `  風險級別：${tier}（分級表規定：${tierRow.scan}）｜依據的複審通過留言：${passCommentLink}`,
     `  掃描樹：${tree}（HEAD ${head.slice(0, 7)}）`,
     `  掃描提示：${promptFile}（照 templates/scan-record.md 填好）`,
     fetched ? null : '  ⚠️ git fetch 沒成功：本機已經有這兩顆版本，照樣開了掃描樹。',
-    `啟動指令（模型 ${sc.strongest}、推理 ${sc.maxEffort}）：`,
+    `啟動指令（模型 ${spec.strongest}、推理 ${spec.maxEffort}）：`,
     command,
     `跑完：跑 node tools/review-launch.js --scan-post ${id}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`} 先核掃描樹乾淨與標頭（且不含 🤖）再代貼 🔍 掃描留言；收樹：node tools/review-launch.js --scan-close ${id}${dir === realDir(os.tmpdir()) ? '' : ` --dir ${dir}`}`,
   ].filter((l) => l !== null);
   return { code: 0, lines, record, command, prompt };
 }
 
+function unwrapScanOutput(raw) {
+  const text = String(raw ?? '');
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return text;
+  }
+  const pickResult = (obj) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
+      throw new LaunchError('掃描回覆 JSON 標示執行失敗（is_error 或非 success），不代貼');
+    }
+    return typeof obj.result === 'string' ? obj.result : null;
+  };
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i -= 1) {
+      const item = parsed[i];
+      if (item && typeof item === 'object' && item.type === 'result') {
+        const res = pickResult(item);
+        if (res !== null) return res;
+      }
+    }
+    return text;
+  }
+  const res = pickResult(parsed);
+  return res !== null ? res : text;
+}
+
 /**
- * 核對掃描回覆：去除首尾空行，若最後一行單獨是「未貼」就剝掉；
+ * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
+ * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
  * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭攔截）；
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
 function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null }) {
-  const lines = String(raw ?? '').replace(/\r\n?/g, '\n').split('\n');
+  if (/🤖/u.test(String(raw ?? ''))) {
+    throw new LaunchError('掃描回覆含有複審結論記號 🤖：結論聯集閘會把含 🤖 的非結論留言當成壞標頭擋下（F4、G1），請移除後再代貼');
+  }
+  const unwrapped = unwrapScanOutput(raw);
+  const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (!lines.length) throw new LaunchError('掃描回覆檔是空的');
@@ -1891,12 +1994,7 @@ async function runGrokExec(argv, deps = {}) {
     if (activeNeedles.some((n) => rawOutput.includes(n))) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
     }
-    const rawLines = rawOutput.replace(/\r\n?/g, '\n').split('\n');
-    const headerPrefix = parsed.mode === 'scan' ? '🔍 ' : '🤖 ';
-    const headerIdx = rawLines.findIndex((l) => l.startsWith(headerPrefix));
-    const cleanedOutput = (headerIdx > 0 && !(parsed.mode === 'scan' && rawLines.slice(0, headerIdx).some((l) => /🤖/u.test(l))))
-      ? `${rawLines.slice(headerIdx).join('\n')}`
-      : rawOutput;
+    const cleanedOutput = stripGrokPreamble(rawOutput, parsed.mode);
     fs.writeFileSync(outPath, cleanedOutput);
     return { code: 0, lines: [] };
   } finally {
@@ -1905,6 +2003,16 @@ async function runGrokExec(argv, deps = {}) {
       try { fs.rmSync(boxDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   }
+}
+
+function stripGrokPreamble(rawOutput, mode = 'scan') {
+  const text = String(rawOutput ?? '');
+  const rawLines = text.replace(/\r\n?/g, '\n').split('\n');
+  const headerPrefix = mode === 'scan' ? '🔍 ' : '🤖 ';
+  const headerIdx = rawLines.findIndex((l) => l.startsWith(headerPrefix));
+  return (headerIdx > 0 && !(mode === 'scan' && rawLines.slice(0, headerIdx).some((l) => /🤖/u.test(l))))
+    ? `${rawLines.slice(headerIdx).join('\n')}`
+    : text;
 }
 
 function parseArgs(argv) {
@@ -2006,4 +2114,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
