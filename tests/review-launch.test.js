@@ -1745,80 +1745,107 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         `跨行半標頭前言＋${v}`,
       );
     }
-    const leakyRobotPrefix = '誤帶 🤖 記號的前言🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
-    assert.equal(
-      stripGrokPreamble(leakyRobotPrefix, 'scan'),
-      leakyRobotPrefix,
-      'scan 模式若標頭前含有 🤖 不可偷剝掉，必須保留讓 --scan-post 攔截',
-    );
+    for (const leaky of [
+      '誤帶 🤖 記號的前言。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+      '誤帶 🤖 記號的前言。\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+    ]) {
+      assert.equal(
+        stripGrokPreamble(leaky, 'scan'),
+        leaky,
+        'scan 模式若標頭前含有 🤖 不可偷剝掉，必須保留讓 --scan-post 攔截',
+      );
+    }
 
-    // 首行已是阻擋結論（不可合併）或非正式結論詞（不同意（建議撤回或重開））、內文引用「通過」範例時，絕不可跳過首行改把內文範例當正式結論（r4 R5 完整代貼與結論閘回歸）
-    const postDirR5 = path.join(tmp, 'post-r5');
-    fs.mkdirSync(postDirR5);
-    const sR5 = settingsFor({ owner: 'Boss' });
-    const platformR5 = fakePlatform(answersFor(r));
-    const launchR5 = launch('7', 'Beta', { settings: sR5, platform: platformR5, cwd: r.dir, dir: postDirR5, template: TEMPLATE });
-    assert.equal(launchR5.code, 0, launchR5.lines.join('\n'));
-    const sectionsR5 = '\n\n### 本輪實際用的設定\n- 合成測試\n\n### 清單逐項結果\n- 合成測試\n';
-    const passExampleR5 = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過${sectionsR5}`;
-    const invalidVerdictWithPassBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：不同意（建議撤回或重開）${sectionsR5}\n下列通過範例不可當結論：\n\`\`\`text\n${passExampleR5}\`\`\`\n`;
-    const invalidExec = await runGrokExec([
-      '--mode', 'review',
-      '--cwd', launchR5.record.tree,
-      '--mutation-copy', launchR5.record.mutation,
-      '--model', 'grok-4.7',
-      '--reasoning-effort', 'xhigh',
-      '--prompt-file', launchR5.record.promptFile,
-      '--out', launchR5.record.outFile,
-    ], {
-      authFile,
-      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
-      probeFn: () => ({ ok: true }),
-      spawnGrok: async () => ({ status: 0, stdout: invalidVerdictWithPassBody, stderr: '' }),
-    });
-    assert.equal(invalidExec.code, 0);
-    let sentR5 = null;
-    const postInvalidR5 = main(['--post', '7', '--dir', postDirR5], {
-      settings: sR5,
-      platform: platformR5,
-      runPost(_cmd, args) { sentR5 = fs.readFileSync(args.at(-1), 'utf8'); },
-    });
-    assert.equal(postInvalidR5.code, 2, '首行為非正式結論詞時不可跳去內文通過範例放行');
-    assert.equal(sentR5, null);
-
-    const blockingFullBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：不可合併${sectionsR5}\n下列同輪錯誤通過範例不可當成本輪結論：\n\`\`\`text\n${passExampleR5}\`\`\`\n`;
-    const blockingExec = await runGrokExec([
-      '--mode', 'review',
-      '--cwd', launchR5.record.tree,
-      '--mutation-copy', launchR5.record.mutation,
-      '--model', 'grok-4.7',
-      '--reasoning-effort', 'xhigh',
-      '--prompt-file', launchR5.record.promptFile,
-      '--out', launchR5.record.outFile,
-    ], {
-      authFile,
-      authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
-      probeFn: () => ({ ok: true }),
-      spawnGrok: async () => ({ status: 0, stdout: blockingFullBody, stderr: '' }),
-    });
-    assert.equal(blockingExec.code, 0);
-    const postBlockingR5 = main(['--post', '7', '--dir', postDirR5], {
-      settings: sR5,
-      platform: platformR5,
-      runPost(_cmd, args) { sentR5 = fs.readFileSync(args.at(-1), 'utf8'); },
-    });
-    assert.equal(postBlockingR5.code, 0, postBlockingR5.lines.join('\n'));
-    assert.equal(postBlockingR5.header.verdict, '不可合併');
-    assert.equal(sentR5, blockingFullBody, '送出的全文必須完整保留首行不可合併與內文範例');
-    const gateR5 = evaluateVerdicts(
-      [{ id: 'r5-block', author: 'ai-acct', createdAt: '2026-10-19T12:00:00Z', body: sentR5 }],
-      r.head,
-      'Beta',
-      ['Boss', 'Alpha', 'Beta'],
-      { ownerRole: 'Boss' },
-    );
-    assert.ok(gateR5.problems.length > 0, '結論聯集閘必須維持阻擋、不可誤判為通過');
-    assert.equal(close('7', { settings: sR5, dir: postDirR5, leftoverRoots: [] }).code, 0);
+    // 首行已是阻擋結論（不可合併）或非正式結論詞、或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或同行候選矛盾時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6 完整代貼與結論閘回歸）
+    for (const [label, rawStdout, expectPostCode, expectVerdict] of [
+      [
+        '首行非正式結論詞＋內文通過範例',
+        (h, s, p) => `🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不同意（建議撤回或重開）${s}\n下列通過範例不可當結論：\n\`\`\`text\n${p}\`\`\`\n`,
+        2,
+        null,
+      ],
+      [
+        '同行非正式結論詞＋後續獨立行通過範例',
+        (h, s, p) => `我現在開始複審。🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不同意${s}\n${p}`,
+        2,
+        null,
+      ],
+      [
+        '同行冒號引出通過範例（非 CLI 進度句）＋後續獨立行不可合併',
+        (h, s, p) => `以下是不可採用的通過範例：${p}\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        2,
+        null,
+      ],
+      [
+        '同行通過標頭＋後續獨立行不可合併（候選矛盾）',
+        (h, s, p) => `我現在開始複審。${p}\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        2,
+        null,
+      ],
+      [
+        '首行不可合併＋內文通過範例（r4 R5）',
+        (h, s, p) => `🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}\n下列同輪錯誤通過範例不可當成本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
+        0,
+        '不可合併',
+      ],
+      [
+        '跨行前言含 > 引用通過範例＋獨立行不可合併（r5 R6 引用案例）',
+        (h, s, p) => `以下是不可採用的通過範例：\n> ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        0,
+        '不可合併',
+      ],
+      [
+        '跨行前言含 - 清單通過範例＋獨立行不可合併（r5 R6 清單案例）',
+        (h, s, p) => `以下是不可採用的通過範例：\n- ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        0,
+        '不可合併',
+      ],
+    ]) {
+      const caseDir = fs.mkdtempSync(path.join(tmp, 'post-r5-r6-'));
+      const sCase = settingsFor({ owner: 'Boss' });
+      const platformCase = fakePlatform(answersFor(r));
+      const launchCase = launch('7', 'Beta', { settings: sCase, platform: platformCase, cwd: r.dir, dir: caseDir, template: TEMPLATE });
+      assert.equal(launchCase.code, 0, `${label} launch: ${launchCase.lines.join('\n')}`);
+      const sectionsCase = '\n\n### 本輪實際用的設定\n- 合成測試\n\n### 清單逐項結果\n- 合成測試\n';
+      const passExampleCase = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過${sectionsCase}`;
+      const stdoutText = rawStdout(r.head.slice(0, 7), sectionsCase, passExampleCase);
+      const execCase = await runGrokExec([
+        '--mode', 'review',
+        '--cwd', launchCase.record.tree,
+        '--mutation-copy', launchCase.record.mutation,
+        '--model', 'grok-4.7',
+        '--reasoning-effort', 'xhigh',
+        '--prompt-file', launchCase.record.promptFile,
+        '--out', launchCase.record.outFile,
+      ], {
+        authFile,
+        authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async () => ({ status: 0, stdout: stdoutText, stderr: '' }),
+      });
+      assert.equal(execCase.code, 0, `${label} runGrokExec`);
+      let sentCase = null;
+      const postCase = main(['--post', '7', '--dir', caseDir], {
+        settings: sCase,
+        platform: platformCase,
+        runPost(_cmd, args) { sentCase = fs.readFileSync(args.at(-1), 'utf8'); },
+      });
+      assert.equal(postCase.code, expectPostCode, `${label} --post code: ${postCase.lines.join('\n')}`);
+      if (expectPostCode !== 0) {
+        assert.equal(sentCase, null, `${label} 應拒貼`);
+      } else {
+        assert.equal(postCase.header.verdict, expectVerdict, `${label} 代貼結論應為 ${expectVerdict}`);
+        const gateCase = evaluateVerdicts(
+          [{ id: 'r5-r6-comment', author: 'ai-acct', createdAt: '2026-10-19T12:00:00Z', body: sentCase }],
+          r.head,
+          'Beta',
+          ['Boss', 'Alpha', 'Beta'],
+          { ownerRole: 'Boss' },
+        );
+        assert.ok(gateCase.problems.length > 0, `${label} 結論聯集閘必須維持阻擋、problems 不可為空`);
+      }
+      assert.equal(close('7', { settings: sCase, dir: caseDir, leftoverRoots: [] }).code, 0, `${label} close`);
+    }
 
     // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 在剝除前言前即攔截並退 2
     const dlpOut = path.join(tmp, 'dlp-out.md');

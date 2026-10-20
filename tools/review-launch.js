@@ -2006,25 +2006,59 @@ async function runGrokExec(argv, deps = {}) {
 }
 
 const GROK_VERDICT_PATTERN = Object.keys(VERDICTS).join('|');
-const GROK_SCAN_HEADER_AT_END = /🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃\s*`?[0-9a-fA-F]{7,40}`?(?:\*\*|__)?[ \t]*(?=\n|$)/u;
-const GROK_REVIEW_HEADER_AT_END = new RegExp(
-  `🤖\\s*[A-Za-z]+｜來源：[^｜\\n]+｜審\\s*\`?[0-9a-fA-F]{7,40}\`?｜r\\d+｜結論：(?:${GROK_VERDICT_PATTERN})[。．.]?(?:\\*\\*|__)?[ \\t]*(?=\\n|$)`,
+const GROK_SCAN_HEADER_BODY = /🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃\s*`?[0-9a-fA-F]{7,40}`?(?:\*\*|__)?[ \t]*$/u;
+const GROK_REVIEW_HEADER_BODY = new RegExp(
+  `🤖\\s*[A-Za-z]+｜來源：[^｜\\n]+｜審\\s*\`?[0-9a-fA-F]{7,40}\`?｜r\\d+｜結論：(?:${GROK_VERDICT_PATTERN})[。．.]?(?:\\*\\*|__)?[ \\t]*$`,
   'u',
 );
-const GROK_HEADER_LINE_START = {
-  scan: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃/mu,
-  review: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審/mu,
+const GROK_STANDALONE_HEADER = {
+  scan: new RegExp(`^[^\\S\\n]*(?:\\*\\*|__)?[^\\S\\n]*${GROK_SCAN_HEADER_BODY.source}`, 'u'),
+  review: new RegExp(`^[^\\S\\n]*(?:\\*\\*|__)?[^\\S\\n]*${GROK_REVIEW_HEADER_BODY.source}`, 'u'),
 };
+const GROK_HEADER_LINE_START = {
+  scan: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃/u,
+  review: /^[^\S\n]*(?:\*\*|__)?[^\S\n]*🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審/u,
+};
+const GROK_ATTEMPTED_HEADER = {
+  scan: /🔍\s*[A-Za-z]+｜來源：[^｜\n]+｜掃/u,
+  review: /🤖\s*[A-Za-z]+｜來源：[^｜\n]+｜審/u,
+};
+
+function isGrokCliProgressPrefix(prefix) {
+  return /[。！？.!！]\s*$/u.test(prefix) && !/[🤖🔍]/u.test(prefix);
+}
 
 function stripGrokPreamble(rawOutput, mode = 'scan') {
   const normalized = String(rawOutput ?? '').replace(/\r\n?/g, '\n');
-  const fullHeader = mode === 'scan' ? GROK_SCAN_HEADER_AT_END : GROK_REVIEW_HEADER_AT_END;
+  const rawLines = normalized.split('\n');
+  const firstIdx = rawLines.findIndex((l) => l.trim() !== '');
+  if (firstIdx < 0) return String(rawOutput ?? '');
   const lineStart = mode === 'scan' ? GROK_HEADER_LINE_START.scan : GROK_HEADER_LINE_START.review;
-  const m = fullHeader.exec(normalized);
-  if (m && m.index > 0) {
-    const prefix = normalized.slice(0, m.index);
-    if (prefix.trim() !== '' && !lineStart.test(prefix) && !(mode === 'scan' && /🤖/u.test(prefix))) {
-      return normalized.slice(m.index);
+  const firstLine = rawLines[firstIdx];
+  if (lineStart.test(firstLine)) {
+    return String(rawOutput ?? '');
+  }
+  const standaloneHeader = mode === 'scan' ? GROK_STANDALONE_HEADER.scan : GROK_STANDALONE_HEADER.review;
+  const headerBody = mode === 'scan' ? GROK_SCAN_HEADER_BODY : GROK_REVIEW_HEADER_BODY;
+  const attemptedHeader = mode === 'scan' ? GROK_ATTEMPTED_HEADER.scan : GROK_ATTEMPTED_HEADER.review;
+  if (attemptedHeader.test(firstLine) && !/^\s*(?:[>*+#`-]|(?:\d+)[.)])/u.test(firstLine)) {
+    const m = headerBody.exec(firstLine);
+    if (!m || m.index === 0) return String(rawOutput ?? '');
+    const prefix = firstLine.slice(0, m.index);
+    const hasLaterStandalone = rawLines.slice(firstIdx + 1).some((l) => standaloneHeader.test(l));
+    if (isGrokCliProgressPrefix(prefix) && !hasLaterStandalone) {
+      return [firstLine.slice(m.index), ...rawLines.slice(firstIdx + 1)].join('\n');
+    }
+    return String(rawOutput ?? '');
+  }
+  const standaloneIdx = rawLines.findIndex((l, i) => i > firstIdx && standaloneHeader.test(l));
+  if (standaloneIdx > firstIdx) {
+    const preambleLines = rawLines.slice(0, standaloneIdx);
+    const blocked = mode === 'scan'
+      ? preambleLines.some((l) => /🤖/u.test(l) || lineStart.test(l))
+      : preambleLines.some((l) => lineStart.test(l));
+    if (!blocked) {
+      return rawLines.slice(standaloneIdx).join('\n');
     }
   }
   return String(rawOutput ?? '');
