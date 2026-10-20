@@ -42,12 +42,12 @@ const UNSET = '未設定';
 const TEMPLATE = path.join(__dirname, '..', 'templates', 'review-request.md');
 const SCAN_TEMPLATE = path.join(__dirname, '..', 'templates', 'scan-record.md');
 const FILE_SLOT = '<你寫好的結論檔>';
-const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--dir <放樹的資料夾>]
+const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--run] [--purge] [--dir <放樹的資料夾>]
       node tools/review-launch.js --post <變更編號> [--file <結論檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --close <變更編號> [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --close <變更編號> [--purge] [--dir <放樹的資料夾>]
+      node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--run] [--purge] [--dir <放樹的資料夾>]
       node tools/review-launch.js --scan-post <變更編號> [--file <回覆檔>] [--dir <放樹的資料夾>]
-      node tools/review-launch.js --scan-close <變更編號> [--dir <放樹的資料夾>]`;
+      node tools/review-launch.js --scan-close <變更編號> [--purge] [--dir <放樹的資料夾>]`;
 const TIER_ORDER = ['高', '中', '低'];
 
 /** 範本裡每一格照出現順序要填什麼；null＝留給複審者。 */
@@ -696,17 +696,22 @@ function removeTree(root, t) {
   return r.error || r.status !== 0 ? ((r.error && r.error.message) || (r.stderr || '').trim() || `退 ${r.status}`) : null;
 }
 
-function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree } = {}) {
+function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到樹放在哪');
   const re = folderRe(slugOf(project), String(changeArg).replace(/[^A-Za-z0-9._-]/gu, ''));
   let entries;
   try { entries = fs.readdirSync(dir); } catch (e) { throw new LaunchError(`讀不了 ${dir}（${e.code || e.message}）`); }
-  const open = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
+  const allFolders = entries.filter((n) => re.test(n)).map((n) => path.join(dir, n)).filter((f) => {
+    try { return Boolean(JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8'))); } catch { return false; }
+  });
+  const open = allFolders.filter((f) => {
     try { return !JSON.parse(fs.readFileSync(path.join(f, 'launch.json'), 'utf8')).closedAt; } catch { return false; }
   });
-  if (!open.length) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+  if (!open.length && !(purge && allFolders.length)) {
+    throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的審查樹（review-${slugOf(project)}-${changeArg}-r*）`);
+  }
   const lines = [];
   let refused = false;
   for (const folder of open) {
@@ -752,14 +757,34 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
     }
     rec.closedAt = new Date().toISOString();
     save();
-    lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
     const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+    const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+    const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+    lines.push(`收好 r${rec.round}${already}：兩棵樹的 HEAD 都還是 ${rec.head.slice(0, 7)}、都乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
     for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
     for (const g of groups) {
       lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`);
       for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
       if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
     }
+  }
+  if (!refused && purge) {
+    const purgeProblems = [];
+    for (const folder of allFolders) {
+      const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+      const locks = lockedTrees(rec.root);
+      for (const [what, t] of [['審查樹', rec.tree], ['突變副本', rec.mutation]]) {
+        if (t && (fs.existsSync(t) || locks.has(t))) {
+          purgeProblems.push(`${path.basename(folder)} 的${what}還在或仍登記在 git worktree（${t}）`);
+        }
+      }
+    }
+    if (purgeProblems.length) {
+      lines.push('沒清除審查資料夾（--purge）：', ...purgeProblems.map((p) => `  ・${p}`));
+      return { code: 1, lines };
+    }
+    for (const folder of allFolders) fs.rmSync(folder, { recursive: true, force: true });
+    lines.push(`已清除變更 ${changeArg} 已收樹的審查資料夾：${allFolders.map((f) => path.basename(f)).join('、')}`);
   }
   return { code: refused ? 1 : 0, lines };
 }
@@ -938,7 +963,26 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
     fullDiff: `git diff ${base}...${head}`,
   };
   const prompt = fill(tpl, values, SCAN_FILL);
-  if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+  if (fs.existsSync(folder)) {
+    let canReplaceClosed = false;
+    try {
+      const prevScan = JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8'));
+      const prevLocks = prevScan && prevScan.root ? lockedTrees(prevScan.root) : new Map();
+      if (
+        prevScan
+        && prevScan.closedAt
+        && (!prevScan.tree || (!fs.existsSync(prevScan.tree) && !prevLocks.has(prevScan.tree)))
+        && (prevScan.head !== head || !prevScan.postedAt)
+      ) {
+        canReplaceClosed = true;
+      }
+    } catch { /* ignore */ }
+    if (canReplaceClosed) {
+      fs.rmSync(folder, { recursive: true, force: true });
+    } else {
+      throw new LaunchError(`${folder} 已經在了：上一次的掃描樹還沒收（先跑 --scan-close ${id}），或這一支已經掃過`);
+    }
+  }
 
   const record = {
     change: id, scanner, source: spec.source, reviewer, implementer, tier,
@@ -1176,7 +1220,7 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
   });
 }
 
-function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree } = {}) {
+function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir(), leftoverRoots = [os.tmpdir(), '/tmp'], remove = removeTree, purge = false } = {}) {
   const dir = realDir(dirArg);
   const project = settings.platform && settings.platform.project;
   if (!filled(project)) throw new LaunchError('專案設定的 platform.project 還沒填：找不到掃描樹放在哪');
@@ -1185,49 +1229,62 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
   const recFile = path.join(folder, 'scan.json');
   if (!fs.existsSync(recFile)) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) }）`);
   const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
-  if (rec.closedAt) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
+  if (rec.closedAt && !purge) throw new LaunchError(`在 ${dir} 底下找不到變更 ${changeArg} 還開著的掃描樹（${ path.basename(folder) } 已於 ${rec.closedAt} 收樹）`);
   const save = () => fs.writeFileSync(recFile, `${JSON.stringify(rec, null, 1)}\n`);
   rec.removed = Array.isArray(rec.removed) ? rec.removed : [];
   const t = rec.tree;
-  const locks = lockedTrees(rec.root);
-  const problems = [];
   const lines = [];
-  if (!rec.removed.includes(t)) {
-    if (!fs.existsSync(t)) {
-      if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
-      else problems.push(`掃描樹不見了（${t}），git 還登記著`);
-    } else {
-      if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
-      const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
-      if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
-      if (st === null) problems.push('掃描樹的狀態讀不出');
-      else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+  if (!rec.closedAt) {
+    const locks = lockedTrees(rec.root);
+    const problems = [];
+    if (!rec.removed.includes(t)) {
+      if (!fs.existsSync(t)) {
+        if (!locks.has(t)) { rec.removed.push(t); save(); lines.push('  掃描樹已經不在、git 也沒登記：當作收過。'); }
+        else problems.push(`掃描樹不見了（${t}），git 還登記著`);
+      } else {
+        if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
+        const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
+        if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
+        const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+        if (st === null) problems.push('掃描樹的狀態讀不出');
+        else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
+      }
     }
-  }
-  if (problems.length) {
-    lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
-    return { code: 1, lines };
-  }
-  if (!rec.removed.includes(t)) {
-    const why = remove(rec.root, t);
-    if (why) {
-      lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
+    if (problems.length) {
+      lines.push(`沒收掃描樹（${folder}）：`, ...problems.map((p) => `  ・${p}`), '  掃描樹留著；看完要收就自己 git worktree remove。');
       return { code: 1, lines };
     }
-    rec.removed.push(t);
+    if (!rec.removed.includes(t)) {
+      const why = remove(rec.root, t);
+      if (why) {
+        lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
+        return { code: 1, lines };
+      }
+      rec.removed.push(t);
+      save();
+    }
+    rec.closedAt = new Date().toISOString();
     save();
+    const re = scanFolderRe(slugOf(project), cleanId);
+    const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
+    const freshCount = groups.reduce((sum, g) => sum + g.paths.length, 0);
+    const freshNote = freshCount > 0 ? `；暫存區另有 ${freshCount} 筆比開樹晚` : '';
+    lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}${freshNote}）。`);
+    for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
+    for (const g of groups) {
+      lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
+      for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
+      if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+    }
   }
-  rec.closedAt = new Date().toISOString();
-  save();
-  lines.push(`收好掃描樹：HEAD 還是 ${rec.head.slice(0, 7)}、狀態乾淨，已移除（提示與輸出檔留在 ${folder}）。`);
-  const re = scanFolderRe(slugOf(project), cleanId);
-  const { groups, unreadable } = freshEntries(leftoverRoots, folder, Date.parse(rec.startedAt), re);
-  for (const u of unreadable) lines.push(`  ⚠️ 讀不了 ${u}，那裡比開樹晚的沒列`);
-  for (const g of groups) {
-    lines.push(`  ${g.root} 第一層比開樹晚的 ${g.paths.length} 筆（新的在前；只列、不刪）：`);
-    for (const p of g.paths.slice(0, 10)) lines.push(`    ${p}`);
-    if (g.paths.length > 10) lines.push(`    另有 ${g.paths.length - 10} 筆沒列`);
+  if (purge) {
+    const locks = lockedTrees(rec.root);
+    if (t && (fs.existsSync(t) || locks.has(t))) {
+      lines.push('沒清除掃描資料夾（--purge）：', `  ・${path.basename(folder)} 的掃描樹還在或仍登記在 git worktree（${t}）`);
+      return { code: 1, lines };
+    }
+    fs.rmSync(folder, { recursive: true, force: true });
+    lines.push(`已清除變更 ${changeArg} 已收樹的掃描資料夾：${path.basename(folder)}`);
   }
   return { code: 0, lines };
 }
@@ -2015,6 +2072,25 @@ function stripGrokPreamble(rawOutput, mode = 'scan') {
     : text;
 }
 
+/** 執行複審／掃描啟動指令（清掉 GIT_* 與 platform.clearEnv；以 record.root 為工作目錄跑 shell 指令）。 */
+function defaultRunExec(command, { record, clearEnv = [] } = {}) {
+  const env = gitEnv();
+  for (const k of Array.isArray(clearEnv) ? clearEnv : []) delete env[k];
+  const cwd = (record && record.root) || process.cwd();
+  const r = spawnSync('/bin/sh', ['-c', command], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (r.error) throw new LaunchError(`啟動指令起不來：${r.error.message}`);
+  if (r.status !== 0) {
+    const msg = `${r.stderr || ''}\n${r.stdout || ''}`.trim().slice(0, 300);
+    throw new LaunchError(`啟動指令退 ${r.status === null ? '（被殺掉）' : r.status}：${msg || '（沒有訊息）'}`);
+  }
+}
+
 function parseArgs(argv) {
   const out = { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: undefined };
   const flagMap = {
@@ -2036,31 +2112,36 @@ function parseArgs(argv) {
       if (v === undefined || v.startsWith('--')) return { error: `${a} 後面要接值` };
       out[flagMap[a]] = v;
       i += 1;
-    } else if (a.startsWith('--')) return { error: `不認得的參數：${a}` };
+    } else if (a === '--run') out.run = true;
+    else if (a === '--purge') out.purge = true;
+    else if (a.startsWith('--')) return { error: `不認得的參數：${a}` };
     else if (out.change === undefined) out.change = a;
     else return { error: `多給了一個參數：${a}` };
   }
   const modes = ['close', 'post', 'scan', 'scanPost', 'scanClose'].filter((k) => out[k] !== undefined);
   if (modes.length > 1) return { error: '一次只能指定一種模式（--close、--post、--scan、--scan-post、--scan-close）' };
+  if (out.purge && !out.run && out.close === undefined && out.scanClose === undefined) {
+    return { error: '--purge 只能配 --close、--scan-close 或 --run 用' };
+  }
   if (out.close !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
-      ? out : { error: '--close 只收變更編號（和 --dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
+      ? out : { error: '--close 只收變更編號（和選填的 --purge、--dir）' };
   }
   if (out.post !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
       ? out : { error: '--post 只收變更編號（和選填的 --file、--dir）' };
   }
   if (out.scan !== undefined) {
     return out.change === undefined && out.reviewer === undefined && out.file === undefined
-      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--tier、--dir）' };
+      ? out : { error: '--scan 只收變更編號（和選填的 --scanner、--tier、--run、--purge、--dir）' };
   }
   if (out.scanPost !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && !out.run && !out.purge
       ? out : { error: '--scan-post 只收變更編號（和選填的 --file、--dir）' };
   }
   if (out.scanClose !== undefined) {
-    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined
-      ? out : { error: '--scan-close 只收變更編號（和 --dir）' };
+    return out.change === undefined && out.reviewer === undefined && out.scanner === undefined && out.tier === undefined && out.file === undefined && !out.run
+      ? out : { error: '--scan-close 只收變更編號（和選填的 --purge、--dir）' };
   }
   if (out.scanner !== undefined) return { error: '--scanner 只能配 --scan 用' };
   if (out.tier !== undefined) return { error: '--tier 只能配 --scan 用' };
@@ -2073,13 +2154,82 @@ function main(argv, opts = {}) {
   const a = parseArgs(argv);
   if (a.error) return { code: 2, lines: [a.error, USAGE] };
   const dir = a.dir || opts.dir;
+  const purge = Boolean(a.purge || opts.purge);
   try {
-    if (a.close !== undefined) return close(a.close, { ...opts, ...(dir ? { dir } : {}) });
+    if (a.close !== undefined) return close(a.close, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
     if (a.post !== undefined) return post(a.post, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scan !== undefined) return scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
+    if (a.scan !== undefined) {
+      const launched = scanLaunch(a.scan, { ...opts, ...(a.scanner ? { scanner: a.scanner } : {}), ...(a.tier ? { tier: a.tier } : {}), ...(dir ? { dir } : {}) });
+      if (!a.run || launched.code !== 0) return launched;
+      const s = opts.settings || readSettings();
+      const clearEnv = Array.isArray(s.platform && s.platform.clearEnv) ? s.platform.clearEnv : [];
+      const runExec = opts.runExec || defaultRunExec;
+      const folder = path.dirname(launched.record.promptFile);
+      try {
+        runExec(launched.command, { record: launched.record, clearEnv });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          return { code: 1, lines: [...launched.lines, `執行掃描啟動指令失敗：${e.message}（掃描樹與輸出檔留在 ${folder} 供檢查，未代貼、未收樹）`] };
+        }
+        throw e;
+      }
+      let posted;
+      try {
+        posted = scanPost(a.scan, { ...opts, ...(dir ? { dir } : {}) });
+      } catch (e) {
+        if (e instanceof LaunchError) {
+          return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（掃描樹與輸出檔留在 ${folder}，未收樹）。`] };
+        }
+        throw e;
+      }
+      if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
+      const closed = scanClose(a.scan, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+      return {
+        code: closed.code,
+        lines: [...launched.lines, ...posted.lines, ...closed.lines],
+        record: posted.record,
+        header: posted.header,
+        body: posted.body,
+        command: launched.command,
+        prompt: launched.prompt,
+      };
+    }
     if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
-    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...(dir ? { dir } : {}) });
-    return launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
+    if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    const launched = launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
+    if (!a.run || launched.code !== 0) return launched;
+    const s = opts.settings || readSettings();
+    const clearEnv = Array.isArray(s.platform && s.platform.clearEnv) ? s.platform.clearEnv : [];
+    const runExec = opts.runExec || defaultRunExec;
+    const folder = path.dirname(launched.record.promptFile);
+    try {
+      runExec(launched.command, { record: launched.record, clearEnv });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        return { code: 1, lines: [...launched.lines, `執行複審啟動指令失敗：${e.message}（審查樹與輸出檔留在 ${folder} 供檢查，未代貼、未收樹）`] };
+      }
+      throw e;
+    }
+    let posted;
+    try {
+      posted = post(a.change, { ...opts, ...(dir ? { dir } : {}) });
+    } catch (e) {
+      if (e instanceof LaunchError) {
+        return { code: 2, lines: [...launched.lines, `送審產生器：${e.message}——沒有貼（審查樹與輸出檔留在 ${folder}，未收樹）。`] };
+      }
+      throw e;
+    }
+    if (posted.code !== 0) return { code: posted.code, lines: [...launched.lines, ...posted.lines] };
+    const closed = close(a.change, { ...opts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
+    return {
+      code: closed.code,
+      lines: [...launched.lines, ...posted.lines, ...closed.lines],
+      record: posted.record,
+      header: posted.header,
+      body: posted.body,
+      command: launched.command,
+      prompt: launched.prompt,
+    };
   } catch (e) {
     if (e instanceof LaunchError) {
       const action = (a.close !== undefined || a.scanClose !== undefined)
@@ -2114,4 +2264,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };

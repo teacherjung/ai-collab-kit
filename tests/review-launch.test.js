@@ -12,8 +12,8 @@
 //   ⑤設定沒填或不對、PR說明指定的複審者不是這一位、平台問不到、本機沒有受審版本、路徑有空白、這一輪的資料夾已經在＝退 2，
 //     而且**一棵樹都沒開、一個檔都沒寫**；開到一半失敗＝只收這一次開的樹（含 add 建好樹才因掛鉤失敗的那一棵），
 //     開樹前就登記著的（登記了、目錄暫時不在）保住，排除原因後重跑送得出去；
-//   ⑥收樹：兩棵都在、乾淨、HEAD 沒變、沒上鎖才收；有一棵不對＝退 1、都留著；收到一半＝照實說收了哪一棵、記進紀錄、重跑只收剩下的；
-//     找不到＝退 2；暫存區比開樹晚的逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；
+//   ⑥收樹（--close 與 --purge）：兩棵都在、乾淨、HEAD 沒變、沒上鎖才收；有一棵不對＝退 1、都留著；收到一半＝照實說收了哪一棵、記進紀錄、重跑只收剩下的；
+//     找不到＝退 2；暫存區比開樹晚的在首行摘要印筆數並逐筆列、不刪（自己那一層與上層不算，讀不了的分開說）；帶 --purge 時收樹成功後一併清除審查容器資料夾（已收過樹的也可補跑 --close --purge 清除）；
 //   ⑦git 那一族環境變數指到別的倉庫，照樣在這一個倉庫開樹（E4）；⑧指令入口：參數不對、空白設定的複本裡跑＝退 2；
 //   ⑩分級腳本判能走快速通道（AI）（F12）：本輪範圍＝只核差異、提示寫明為什麼；這一位連兩輪沒「通過」（輪次相鄰；每一輪算不算
 //     通過照結論閘判：缺小標的不算、同輪相反結論＝衝突算沒過）就改回照分級表；通過之後回頭改的那一輪仍走快速通道；
@@ -21,9 +21,10 @@
 //     先核兩棵樹未收、已登記、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、
 //     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次；
 //   ⑫複審後掃生命週期（G1、G2；--scan、--scanner、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
-//     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；支援 --scanner <識別值> 切換為 reviewers 裡其他第三位 AI（自動從複審指令轉換唯讀掃描指令）；通過後開唯讀掃描樹、印啟動指令與紀錄骨架；
-//     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹；
-//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行、DLP 與同行進度前言剝除（stripGrokPreamble）。
+//     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；支援 --scanner <識別值> 切換為 reviewers 裡其他第三位 AI（自動從複審指令轉換唯讀掃描指令）；通過後開唯讀掃描樹、印啟動指令與紀錄骨架（前版已收樹的舊 scan 資料夾在新提交重掃時自動替換）；
+//     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹（支援 --purge 一併清除掃描容器資料夾）；
+//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行、DLP 與標頭前跨行前言剝除（stripGrokPreamble）；
+//   ⑭一鍵執行（--run 與 --run --purge）：複審與掃描一鍵串聯開樹→執行啟動指令→外殼驗樹代貼→收樹（含 --purge），任一步失敗即停並保留現場供查。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -34,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -59,6 +60,7 @@ function repo() {
   const dir = tmp('review-launch-repo-');
   sh(dir, 'init', '-q', '-b', 'main');
   sh(dir, 'config', 'maintenance.auto', 'false');
+  sh(dir, 'config', 'gc.auto', '0');
   fs.writeFileSync(path.join(dir, 'a.txt'), 'base\n');
   sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base');
   const base = sh(dir, 'rev-parse', 'HEAD');
@@ -378,6 +380,7 @@ test('⑥收樹：乾淨才收；不乾淨或 HEAD 變了＝退 1、兩棵都留
     assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8')).closedAt, '紀錄標成收過');
     assert.ok(fs.existsSync(path.join(folder, 'prompt.md')), '提示與輸出檔留著');
     const text = res.lines.join('\n');
+    assert.match(res.lines[0], /；暫存區另有 1 筆比開樹晚/u, `首行摘要應印比開樹晚的筆數：\n${text}`);
     const planted = path.join(fs.realpathSync(leftovers), 'reviewer-made.json');
     assert.ok(res.lines.includes(`    ${planted}`), `比開樹晚的要逐筆列出來（整行比，#49 r1 R4）：\n${text}`);
     assert.ok(res.lines.includes(`  ${fs.realpathSync(leftovers)} 第一層比開樹晚的 1 筆（新的在前；只列、不刪；可能是複審者另建的，也可能是別的程式同時寫的）：`), `每個暫存區一組、寫出筆數：\n${text}`);
@@ -419,14 +422,21 @@ test('⑧指令入口：參數不對＝退 2；空白設定的複本裡跑＝退
     ['--post'], ['--post', '7', '--reviewer', 'Beta'], ['--post', '7', '8'], ['7', '--reviewer', 'Beta', '--file', 'x'], ['7', '--reviewer', 'Beta', '--tier', '高'],
     ['--scan'], ['--scan', '7', '--reviewer', 'Beta'], ['--scan', '7', '--file', 'x'], ['--scan-post'], ['--scan-close'],
     ['--scan-post', '7', '--scanner', 'Beta'], ['--scan-post', '7', '--tier', '高'], ['--scan-close', '7', '--file', 'x'], ['--scan-close', '7', '--tier', '高'],
+    ['--close', '7', '--run'], ['--post', '7', '--run'], ['--post', '7', '--purge'],
+    ['7', '--reviewer', 'Beta', '--purge'], ['--scan', '7', '--purge'],
+    ['--scan-post', '7', '--run'], ['--scan-post', '7', '--purge'], ['--scan-close', '7', '--run'],
   ]) {
     assert.ok(parseArgs(bad).error, JSON.stringify(bad));
     assert.equal(main(bad).code, 2, JSON.stringify(bad));
   }
   assert.match(parseArgs(['--oops', '--reviewer', 'Beta']).error, /不認得的參數：--oops/u, '不認得的旗標不可以被當成變更編號');
   assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x' });
+  assert.deepEqual(parseArgs(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', '/x']), { change: '7', reviewer: 'Beta', close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x', run: true, purge: true });
   assert.deepEqual(parseArgs(['--post', '7', '--file', '/tmp/v.md', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: '7', scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: '/tmp/v.md', dir: '/x' });
   assert.deepEqual(parseArgs(['--scan', '7', '--scanner', 'Beta', '--tier', '高', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: '7', scanner: 'Beta', tier: '高', scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x' });
+  assert.deepEqual(parseArgs(['--scan', '7', '--run', '--purge', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: '7', scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x', run: true, purge: true });
+  assert.deepEqual(parseArgs(['--close', '7', '--purge', '--dir', '/x']), { change: undefined, reviewer: undefined, close: '7', post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: undefined, file: undefined, dir: '/x', purge: true });
+  assert.deepEqual(parseArgs(['--scan-close', '7', '--purge', '--dir', '/x']), { change: undefined, reviewer: undefined, close: undefined, post: undefined, scan: undefined, scanner: undefined, tier: undefined, scanPost: undefined, scanClose: '7', file: undefined, dir: '/x', purge: true });
   const r = runInCopy('tools/review-launch.js', ['7', '--reviewer', 'Codex']);
   assert.equal(r.status, 2, r.stdout + r.stderr);
   assert.match(r.stdout, /沒有產生/u);
@@ -622,6 +632,7 @@ function commentRepo() {
   const dir = tmp('review-launch-lane-');
   sh(dir, 'init', '-q', '-b', 'main');
   sh(dir, 'config', 'maintenance.auto', 'false');
+  sh(dir, 'config', 'gc.auto', '0');
   fs.mkdirSync(path.join(dir, 'tools'));
   fs.writeFileSync(path.join(dir, 'tools', 'x.js'), "'use strict';\n// 說明\nmodule.exports = 1;\n");
   sh(dir, 'add', '-A'); sh(dir, 'commit', '-q', '-m', 'base');
@@ -1468,6 +1479,25 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.ok(!fs.existsSync(ok.record.tree), '掃描樹已收掉');
     assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8')).closedAt, 'scan.json 已記 closedAt');
 
+    // 同版本已貼過且已收樹 → 重跑 --scan 仍拒絕「已經在了」
+    const sameHeadRescan = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass), cwd: r.dir });
+    assert.equal(sameHeadRescan.code, 2);
+    assert.match(sameHeadRescan.lines.join('\n'), /已經在了/u);
+
+    // 推了新提交（head2）並有新通過結論 → --scan 自動替換前版已收樹的舊 scan 資料夾，無需手刪；再跑 --scan-close --purge 一併刪容器
+    fs.writeFileSync(path.join(r.dir, 'a.txt'), 'head2\n');
+    sh(r.dir, 'add', '-A'); sh(r.dir, 'commit', '-q', '-m', 'head2');
+    const head2 = sh(r.dir, 'rev-parse', 'HEAD');
+    const pass2 = verdict('Beta', 2, head2, '通過', { id: 'pass100', createdAt: '2026-10-19T12:10:00Z' });
+    const withPass2 = { ...baseAns, change: { ...baseAns.change, headSha: head2 }, comments: [passComment, pass2] };
+    const rescan2 = main(['--scan', '7', '--dir', dir], { settings: s, platform: fakePlatform(withPass2), cwd: r.dir });
+    assert.equal(rescan2.code, 0, `換新提交後重掃應自動替換前版已收樹的舊容器：${rescan2.lines.join('\n')}`);
+    assert.equal(rescan2.record.head, head2);
+    const purgeClose = main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s });
+    assert.equal(purgeClose.code, 0, purgeClose.lines.join('\n'));
+    assert.ok(!fs.existsSync(folder), '--scan-close --purge 應一併清除掃描容器資料夾');
+    sh(r.dir, 'reset', '--hard', '-q', r.head);
+
     // (h) --scanner <識別值>：4 家 AI 隨時切換掃描者（deriveScanCommand 與 resolveScannerSpec）
     assert.equal(
       deriveScanCommand("cd {reviewTree} && claude -p \"$(cat {promptFile})\" --model {model} --effort {effort} --permission-mode dontAsk --setting-sources user,project --add-dir {mutationCopy} --verbose --output-format json --allowedTools 'Read,Grep,Glob,Bash(node --test *),Bash(npm --prefix {mutationCopy} test *),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git rev-parse HEAD),Bash(git -C {mutationCopy} rev-parse HEAD),Bash(git -C {mutationCopy} status --porcelain),Bash(git -C {mutationCopy} diff),Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh run view *),Bash(gh run list *),Bash(gh pr comment {change} *),Edit(/{mutationCopy}/**),Workflow' --disallowedTools 'Write,Edit(/{reviewTree}/**)' < /dev/null > {outFile}"),
@@ -1903,3 +1933,136 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與掃描一鍵開樹→執行→驗樹代貼→收樹（含 --purge），任一步失敗即停並保留現場供查', () => {
+  const r = repo();
+  const dir = tmp('review-launch-run-');
+  const scannerCfg = {
+    participant: 'Gamma',
+    launch: '由掃描發射者執行 tools/review-launch.js --scan',
+    assignedBy: '專案設定',
+    tieBreaker: '由實作者發起',
+    fallback: '未執行：<原因>',
+    strongest: 'grok-strong',
+    maxEffort: 'xhigh',
+    source: 'Grok CLI',
+    command: 'grok --cwd {scanTree} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} > {outFile}',
+  };
+  const s = settingsFor({
+    participants: [
+      ...settingsFor().participants,
+      { role: 'AI 丙', id: 'Gamma', account: 'ai-acct' },
+    ],
+    owner: 'Boss',
+    scanner: scannerCfg,
+  });
+  const baseAns = answersFor(r);
+
+  // (a) defaultRunExec：清 GIT_* 與 clearEnv、以 record.root 為工作目錄執行 shell 指令，非零退出丟 LaunchError
+  const envOut = path.join(dir, 'exec-env.json');
+  const savedGit = process.env.GIT_DIR;
+  const savedCustom = process.env.SECRET_EXEC_TOKEN;
+  try {
+    process.env.GIT_DIR = '/decoy/git';
+    process.env.SECRET_EXEC_TOKEN = 'secret';
+    defaultRunExec(
+      `${JSON.stringify(process.execPath)} -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ cwd: process.cwd(), git: Object.keys(process.env).filter((k) => k.startsWith("GIT_")), token: process.env.SECRET_EXEC_TOKEN || null }))' ${JSON.stringify(envOut)}`,
+      { record: { root: r.dir }, clearEnv: ['SECRET_EXEC_TOKEN'] },
+    );
+    const gotEnv = JSON.parse(fs.readFileSync(envOut, 'utf8'));
+    assert.equal(fs.realpathSync(gotEnv.cwd), fs.realpathSync(r.dir));
+    assert.deepEqual(gotEnv.git, []);
+    assert.equal(gotEnv.token, null);
+    assert.throws(
+      () => defaultRunExec(`${JSON.stringify(process.execPath)} -e 'console.error("exec boom"); process.exit(5)'`, { record: { root: r.dir } }),
+      /啟動指令退 5：exec boom/u,
+    );
+  } finally {
+    if (savedGit === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGit;
+    if (savedCustom === undefined) delete process.env.SECRET_EXEC_TOKEN; else process.env.SECRET_EXEC_TOKEN = savedCustom;
+    fs.rmSync(envOut, { force: true });
+  }
+
+  try {
+    // (b) 複審 --run：啟動指令失敗 → 退 1、不呼叫 runPost、保留審查樹與容器供查
+    let postCalls = 0;
+    const failExecRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec() { throw new (require('../tools/review-launch.js').LaunchError)('啟動指令退 7：模擬失敗'); },
+      runPost() { postCalls += 1; },
+    });
+    assert.equal(failExecRes.code, 1);
+    assert.match(failExecRes.lines.join('\n'), /執行複審啟動指令失敗.*未代貼、未收樹/u);
+    assert.equal(postCalls, 0);
+    const reviewFolder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
+    assert.ok(fs.existsSync(path.join(reviewFolder, 'tree')), '啟動失敗時審查樹應留著供查');
+
+    // 先收樹（不帶 --purge），再補跑 --close 7 --purge 驗證已收樹的容器也能一併清除
+    assert.equal(main(['--close', '7', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    assert.ok(fs.existsSync(reviewFolder), '未帶 --purge 時容器仍留著');
+    const latePurge = main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] });
+    assert.equal(latePurge.code, 0, latePurge.lines.join('\n'));
+    assert.match(latePurge.lines.join('\n'), /已清除變更 7 已收樹的審查資料夾：review-acme-kit-7-r1/u);
+    assert.ok(!fs.existsSync(reviewFolder), '補跑 --close --purge 後容器已清除');
+
+    // (c) 複審 --run --purge 正常完成：一鍵開樹→執行→代貼→收樹並清除容器
+    let postedReviewBody = null;
+    const okReviewRun = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        fs.writeFileSync(
+          record.outFile,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+        );
+      },
+      runPost(_cmd, args) {
+        postCalls += 1;
+        postedReviewBody = fs.readFileSync(args.at(-1), 'utf8');
+      },
+    });
+    assert.equal(okReviewRun.code, 0, okReviewRun.lines.join('\n'));
+    assert.equal(postCalls, 1);
+    assert.match(postedReviewBody, /^🤖 Beta｜來源：beta CLI｜審 `/u);
+    assert.ok(!fs.existsSync(reviewFolder), '複審 --run --purge 成功後審查容器已自動清除');
+
+    // (d) 掃描 --scan --run --purge 正常完成：一鍵開掃描樹→執行→代貼 🔍 留言→收樹並清除容器
+    const passComment = verdict('Beta', 1, r.head, '通過', { id: 'pass-run', createdAt: '2026-10-19T12:00:00Z' });
+    const withPass = { ...baseAns, comments: [passComment] };
+    let scanPostCalls = 0;
+    let postedScanBody = null;
+    const okScanRun = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      cwd: r.dir,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        fs.writeFileSync(
+          record.outFile,
+          `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+        );
+      },
+      runPost(_cmd, args) {
+        scanPostCalls += 1;
+        postedScanBody = fs.readFileSync(args.at(-1), 'utf8');
+      },
+    });
+    assert.equal(okScanRun.code, 0, okScanRun.lines.join('\n'));
+    assert.equal(scanPostCalls, 1);
+    assert.match(postedScanBody, /^🔍 Gamma｜來源：Grok CLI｜掃 `/u);
+    assert.match(postedScanBody, /\n> 掃描時序：依據複審留言 /u);
+    const scanFolder = path.join(fs.realpathSync(dir), 'scan-acme-kit-7');
+    assert.ok(!fs.existsSync(scanFolder), '掃描 --scan --run --purge 成功後掃描容器已自動清除');
+  } finally {
+    spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
+    for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
