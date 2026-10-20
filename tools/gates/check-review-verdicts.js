@@ -19,12 +19,13 @@
 // 作廢不了合規的留言、也作廢不了比自己晚出現的留言。壞留言原地保留，稽核軌跡不動。
 //
 // 誠實劃界：它讀的是留言裡的自我宣告，不是身分證明。要繞過它，改標頭裡的來源就好——
-// 那要靠獨立帳號才擋得住。它防的是混淆與遺漏，不是惡意。
+// 那要靠獨立帳號才防得了。它防的是混淆與遺漏，不是惡意。
 //
-// ## 「通過」要帶兩個固定小標（規矩 F7；裁示者 2026-10-03 選「A」）
+// ## 「通過」要帶兩個固定小標與合格設定（規矩 F7、F11；裁示者 2026-10-03 選「A」）
 // 原專案 PFW #655 第三輪的送審提示自訂了回報格式，結論裡沒有清單、也沒寫實際用了什麼設定，而這道閘只看第一行，
-// 沒人發現。所以「通過」那一則還要有兩行固定小標，缺一個那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
-// 要重貼一則合格的。只看小標那一行在不在，不驗底下寫了什麼——擋得住「整段沒寫」，擋不住「寫了不適用卻沒查」。
+// 沒人發現。所以「通過」那一則還要有兩行固定小標，且專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，
+// 「### 本輪實際用的設定」段落須以獨立詞邊界寫明合格模型與最高推理；缺小標或設定不合規，那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
+// 要重貼一則合格的。清單逐項結果只看小標在不在——擋不住「寫了不適用卻沒查」。
 // 「快速通道（擁有者）」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定登記的擁有者（owner 那一欄）的，就不要求。
 // 認的是擁有者、不是裁示者（#32 r1）：裁示者可以由擁有者指定給別人（A1），認裁示者的話，裁示者若指定給某個 AI，
 // 那個 AI 的通過就跳過小標，擁有者的原話反而被擋。擁有者沒登記（或登記的不是參與者）時不豁免＝那一則不算數、看得見地擋下，
@@ -56,7 +57,7 @@
 // 誠實劃界：proofSha256 只驗格式，閘不讀私證據、不證明當時 HEAD 或 exit0 真實；F7 收件者須核原證據。
 // 這沿用共用帳號自我宣告的限制，不是簽章、強身分驗證或平台原生歷史。
 //
-// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標，擁有者除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
+// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標且設定合規，擁有者除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
 'use strict';
 const { createHash } = require('node:crypto');
 const { ask, PlatformError } = require('../platform.js');
@@ -84,6 +85,38 @@ const PASS_HEADINGS = ['### 本輪實際用的設定', '### 清單逐項結果']
 function missingHeadings(body) {
   const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
   return PASS_HEADINGS.filter((h) => !lines.includes(h));
+}
+
+const hasSettingToken = (text, token) =>
+  new RegExp(`(?<![0-9A-Za-z._-])${String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9A-Za-z._-])`, 'iu').test(text);
+
+/**
+ * 核「### 本輪實際用的設定」段落有沒有寫出該複審者登記在 settings.reviewers 的合格模型（strongest／second）與最高推理（maxEffort）（F11）。
+ * 呼叫端未傳 reviewers 或該角色未登記模型／推理時回空陣列（相容只驗小標的合成夾具）。
+ */
+function settingProblems(body, role, reviewers) {
+  if (!Array.isArray(reviewers)) return [];
+  const cfg = reviewers.find((r) => r && typeof r.participant === 'string' && r.participant.trim() === role);
+  if (!cfg) return [];
+  const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
+  const start = lines.indexOf('### 本輪實際用的設定');
+  if (start < 0) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => /^###\s/u.test(l));
+  const section = (end < 0 ? rest : rest.slice(0, end)).join('\n');
+  const models = [cfg.strongest, cfg.second]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter((s) => s && s !== '未設定');
+  const effort = typeof cfg.maxEffort === 'string' && cfg.maxEffort.trim() && cfg.maxEffort.trim() !== '未設定'
+    ? cfg.maxEffort.trim() : '';
+  const out = [];
+  if (models.length && !models.some((m) => hasSettingToken(section, m))) {
+    out.push(`未寫明合格模型（需為 ${models.join(' 或 ')}）`);
+  }
+  if (effort && !hasSettingToken(section, effort)) {
+    out.push(`未寫明最高推理強度（需為 ${effort}）`);
+  }
+  return out;
 }
 
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
@@ -219,9 +252,9 @@ function receiptPass(comment, comments, records, roles) {
  * @param {string} head 目前版本
  * @param {string|null} reviewerRole PR說明指定的複審者；null＝讀不出來
  * @param {string[]} roles 專案設定的參與者識別值
- * @param {{ownerRole?: string|null}} [opts] ownerRole＝專案設定登記的擁有者識別值，他的「通過」不要求固定小標（F12）；null＝沒登記（不豁免）
+ * @param {{ownerRole?: string|null, reviewerConfigs?: Array<{participant?: string, strongest?: string, second?: string, maxEffort?: string}>}} [opts] ownerRole＝專案設定登記的擁有者識別值，他的「通過」不要求固定小標（F12）；null＝沒登記（不豁免）；reviewerConfigs＝settings.reviewers，有給時核通過的實際設定段落（F11）
  */
-function evaluate(comments, head, reviewerRole, roles, { ownerRole = null } = {}) {
+function evaluate(comments, head, reviewerRole, roles, { ownerRole = null, reviewerConfigs = [] } = {}) {
   const problems = [];
   const warnings = [];
   const incomplete = [];
@@ -254,10 +287,12 @@ function evaluate(comments, head, reviewerRole, roles, { ownerRole = null } = {}
     }
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
-    // 缺固定小標的「通過」整則不採計（F7）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
+    // 缺固定小標或設定不合規的「通過」整則不採計（F7、F11）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
     if (!h.blocking && h.role !== ownerRole) {
       const missing = missingHeadings(c.body);
       if (missing.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, at: at(c), missing }); return; }
+      const badSettings = settingProblems(c.body, h.role, reviewerConfigs);
+      if (badSettings.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, at: at(c), missing: [], badSettings }); return; }
     }
     const record = { ...h, who, id: String(c.id), at: at(c) };
     const sameRound = records.filter((r) => r.who === who && r.round === h.round);
@@ -336,7 +371,10 @@ function evaluate(comments, head, reviewerRole, roles, { ownerRole = null } = {}
     const fix = ownerRole
       ? '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。'
       : '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）；如果這一則是擁有者走快速通道（擁有者）（F12）的原話：專案設定還沒登記擁有者，所以沒有豁免，先登記擁有者，不要替他的原話補小標。';
-    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：${fix}`;
+    const detail = x.missing && x.missing.length
+      ? `缺固定小標「${x.missing.join('」「')}」`
+      : `本輪實際用的設定不合規（${(x.badSettings || []).join('；')}）`;
+    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）${detail}：${fix}`;
     // 它算數的話結果會不會不一樣：①會撤掉同一位較低輪次的阻擋，或②會是指定那一位對目前版本的通過、而沒有別則補上。
     // 撤銷看未解事件而非 latest：更高輪錯版通過可能遮住低輪阻擋。過期缺小標仍只提醒。
     const cur = latest[x.who];
@@ -389,9 +427,10 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   const ownerId = typeof settings.owner === 'string' ? settings.owner.trim() : '';
   const { problems, warnings, reviewers, unsure, incomplete } = evaluate(comments, change.headSha, reviewerRole, usable, {
     ownerRole: usable.includes(ownerId) ? ownerId : null,
+    reviewerConfigs: settings.reviewers,
   });
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
-  const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，缺小標、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';
+  const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，${x.missing && x.missing.length ? '缺小標' : '設定不合規'}、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);
   if (!problems.length) {
     lines.push(`結論聯集閘｜變更 ${changeId}：指定的複審者對目前版本說通過、沒有未撤銷的阻擋。現況：${who}`);
@@ -429,4 +468,4 @@ if (require.main === module) {
 // 代價照實說：作廢比原專案寬——任何一位審查者都能作廢任何一則壞留言，不需要裁示者特准。
 // 換來的是裁示者少一種要他親自特准的事，這正是他要的方向。
 
-module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, missingHeadings, VERDICTS, PASS_HEADINGS };
+module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, missingHeadings, settingProblems, VERDICTS, PASS_HEADINGS };

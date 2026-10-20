@@ -1,7 +1,7 @@
 // 守結論聯集閘（規矩 F4、F5、F7、F12）。原專案實測：同一支變更上兩則都自稱同一角色的複審、結論相反，
 // 平台上顯示同一個帳號、無法分辨——「最後一則說通過」變成事實上的放行。
 //
-// 守得到的：
+// 邊界與原因：
 //   ①取聯集：任一位的阻擋在同一位用更高輪次撤銷前都有效，別人說通過解不掉；
 //   ②同一位同輪次相反結論＝fail-closed（結果不可以取決於留言順序）；
 //   ③版本一變舊通過失效；放行只認PR說明指定的那一位；讀不出指定誰＝不放行；沒有任何結論＝不放行；
@@ -23,13 +23,14 @@
 //     對目前版本的通過）才列成擋下的原因，否則只提醒；缺小標的通過裡的作廢行照樣生效；現況那一行照實列出不算數的那則。
 //   ⑭快速通道（擁有者）（F12）：專案設定登記的擁有者（owner 那一欄，要是參與者，去前後空白比）的通過不要求小標；認擁有者不認裁示者
 //     （裁示者指定給 AI 時，那個 AI 的通過照樣要小標、擁有者的原話照樣接受）；沒登記＝不豁免，訊息提醒先登記、不要替他的原話補小標；AI 的通過不跟著豁免。
+//   ⑮本輪實際用的設定（F11）：專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，「通過」的「### 本輪實際用的設定」段落須以獨立詞邊界出現合格模型與最高推理，缺漏或寫成別的模型／推理則該則「通過」不算數（擁有者豁免同 ⑭）。
 // ⚠️ 更正一句錯的自陳：上一版這裡寫「拿掉排序是等價突變」。複審者用反例推翻（舊版本 01:00、目前版本 02:00、
 //    反序餵入：有排序退 1、沒排序退 0）——當時同輪同結論異版本是「先遇到哪一則就用哪一則」，排序決定了誰先。
 //    現在同輪異版本一律判不明，**判決**跟順序無關（⑨那題把每一種排列都跑一遍、比對整份 problems）。
 //    排序仍然不是等價突變：它決定訊息裡兩個版本的先後（照時間），拿掉會讓 ⑨ 的訊息比對紅——
 //    所以它是「訊息確定性」的零件，不是判決的依據。兩句都照實寫，不再宣稱「等價」。
 //
-// ⚠️ 守不到的：小標底下寫了什麼（只核那兩行在不在）；圍欄或 HTML 註解裡的小標行也算；這支PR是不是真的只改了文字（擁有者的通過在任何PR都豁免，
+// ⚠️ 守不到的：清單逐項結果小標底下寫了什麼（只核小標在不在）；模型與推理是文字自報而非平台硬性證明；圍欄或 HTML 註解裡的小標行也算；這支PR是不是真的只改了文字（擁有者的通過在任何PR都豁免，
 //    要靠協作欄位寫的複審者）；標頭是自我宣告不是身分證明（改來源就能冒充另一位）；留言清單有沒有少給
 //    （分頁是那條登記指令的責任）；作廢比原專案寬——任何一位都能作廢任何壞留言（裁示者裁的方向）。
 'use strict';
@@ -37,7 +38,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
+const { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, settingProblems, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { PlatformError } = require('../tools/platform.js');
 const { runInCopy } = require('./helpers/kit-copy.js');
 
@@ -705,3 +706,54 @@ test('F7 收據前綴：有效歷史收據仍解除，無記號壞收據只提�
   const marked = { ...valid, body: valid.body + '\n🤖' };
   assert.equal(run([block, pass, marked, current]).code, 1, F5_HINT);
 });
+
+test('⑮「通過」小節「### 本輪實際用的設定」核對登記的最強／次強模型與最高推理強度（F7、F11）', () => {
+  const reviewerConfigs = [
+    { participant: 'Beta', strongest: 'gpt-6-astra', second: 'gpt-5.4', maxEffort: 'max' },
+  ];
+  const mkBody = (settingSection) => [
+    `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
+    '',
+    '### 本輪實際用的設定',
+    settingSection,
+    '',
+    '### 清單逐項結果',
+    '- ok',
+  ].join('\n');
+
+  // 最強模型＋最高推理＝通過
+  assert.deepEqual(settingProblems(mkBody('- 模型：`gpt-6-astra`\n- 推理強度：`max`'), 'Beta', reviewerConfigs), []);
+  // 次強模型＋最高推理＝通過
+  assert.deepEqual(settingProblems(mkBody('- 模型：gpt-5.4，推理：max'), 'Beta', reviewerConfigs), []);
+  // 大小寫相容、不可為別的識別字串子字串
+  assert.deepEqual(settingProblems(mkBody('- 模型：GPT-6-ASTRA / MAX'), 'Beta', reviewerConfigs), []);
+  assert.ok(settingProblems(mkBody('- 模型：gpt-6-astra-mini / max'), 'Beta', reviewerConfigs).some((x) => x.includes('模型')));
+  assert.ok(settingProblems(mkBody('- 模型：gpt-6-astra / maximum'), 'Beta', reviewerConfigs).some((x) => x.includes('最高推理強度')));
+  // 模型與推理寫在「### 清單逐項結果」底下不算數
+  const wrongSection = [
+    `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
+    '### 本輪實際用的設定',
+    '- 略',
+    '### 清單逐項結果',
+    '- gpt-6-astra max',
+  ].join('\n');
+  assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
+
+  // evaluate 與 gateRun 整合：不合規的通過不算數、不能解除阻擋；合規放行
+  const badComment = c(mkBody('- 模型：unknown-model\n- 推理強度：low'), 'bad-set');
+  const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
+  const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
+  assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
+  assert.ok(rBad.problems.some((x) => x.includes('沒有「Beta」對目前版本')));
+  const rGood = evaluate([badComment, goodComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
+  assert.deepEqual(rGood.problems, []);
+  assert.ok(rGood.warnings.some((x) => x.includes('本輪實際用的設定不合規')));
+
+  const gateSettings = {
+    participants: ROLES.map((id) => ({ id })),
+    reviewers: reviewerConfigs,
+  };
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [badComment] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [goodComment] }) }).code, 0);
+});
+

@@ -1,6 +1,6 @@
 // 守送審產生器（規矩 F1、F3、F11）：送審提示的格子照範本的位置填事實、兩棵樹開在受審版本、啟動指令照設定帶模型與推理；收樹前先核。
 //
-// 守得到的：
+// 邊界與原因：
 //   ①範本的格子跟產生器的表一一對上（範本加、刪、換一格就紅）；同一個字樣在不同位置填不同的值（複審者與實作者）；只留 <三選一>；
 //     「規矩讀基底那一版」那一格填的是基底版本碼（不是受審版本）；
 //   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；問平台基底那一顆時，分支名照平台回的
@@ -35,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -968,7 +968,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
           wfs.writeFileSync(wpath.join(o.ext, 'stale-a-read-pid'), '1');
           const bInPost = wpath.join(o.ext, 'stale-b-in-runpost');
           const until = Date.now() + 10000;
-          while (!origRead && false || !wfs.existsSync(bInPost)) {
+          while (!wfs.existsSync(bInPost)) {
             if (Date.now() > until) throw new Error('timeout waiting for B to acquire new lock');
             sleep(10);
           }
@@ -984,7 +984,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
       }
       try { wfs.unlinkSync(o.lockFile); } catch { /* removed */ }
     }
-    const { main: runMain } = require(o.modulePath);
+    const { main: runMain } = require('review-launch.js');
     const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
       settings: o.settings,
       platform: {
@@ -1016,9 +1016,10 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
 
   const staleWorkerFile = path.join(ext, 'stale-worker.js');
   fs.writeFileSync(staleWorkerFile, `(${staleWorkerMain.toString()})();\n`);
+  const workerEnv = { ...gitEnv(), NODE_PATH: path.join(__dirname, '..', 'tools') };
   const runStaleWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
-    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: gitEnv() });
+    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file };
+    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: workerEnv });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });
@@ -1032,7 +1033,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
     const wfs = require('node:fs');
     const wpath = require('node:path');
     const o = JSON.parse(process.argv[2]);
-    const { main: runMain } = require(o.modulePath);
+    const { main: runMain } = require('review-launch.js');
     const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     if (o.tag === 'B') {
       const aEntered = wpath.join(o.ext, 'a-entered-runpost');
@@ -1074,8 +1075,8 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
   const workerFile = path.join(ext, 'worker.js');
   fs.writeFileSync(workerFile, `(${workerMain.toString()})();\n`);
   const runWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
-    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: gitEnv() });
+    const payload = { tag, ext, dir, settings: s, change: answers.change, file };
+    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: workerEnv });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });

@@ -1,10 +1,10 @@
 // 守待裁清單（規矩 D1、I1〜I3）。它不是閘；它讓裁示者與 AI 都不必翻留言串就知道還欠哪些答案。
 //
-// 守得到的：
+// 邊界與原因：
 //   ①問裁示者的三種留痕只認範本的形狀：問／裁示／撤回；日期要是真的日子（驗收留痕見⑭）；
 //   ②裁示要由裁示者的帳號貼、要有原話那一行；別人貼的、缺原話的＝疑似，不關題；
 //   ③撤回要有三選一的理由（附依據）與自報句；缺一＝疑似；
-//   ④配對：裁示或撤回要引到原 ❓ 的留言編號、在引用區塊以外、而且比 ❓ 晚；引在引用區塊裡不算；先貼的不算；
+//   ④配對：裁示或撤回要引到原 ❓ 的留言編號、在引用區塊以外、而且比 ❓ 晚；開頭那一段若有帶錨點的網址只認第一個網址錨點（忽略後續網址與裸編號），純數字編號不認裸寫；引在引用區塊裡不算；先貼的不算；
 //   ⑤已裁與已撤回一定印出來、附配對；長得像但形狀不合＝疑似；
 //   ⑥裁示者沒填、平台問不到＝退 2；不擋任何事（沒有退 1）；掃**整個專案**的留言（allComments），題目所屬的PR關了照樣列、
 //     裁示貼在別支PR上照樣配得起來（搬家驗屋 09-13：原本只掃開著的PR，真語料 12 題裡 4 題會從清單消失）；
@@ -80,7 +80,7 @@ test('③撤回：理由三選一附依據、自報句，缺一＝疑似；齊�
   assert.equal(evaluate([q, noSelf], D).open.length, 1);
 });
 
-test('④配對：引在引用區塊裡不算；先貼的不算；編號要整個對上不是子字串', () => {
+test('④配對：引在引用區塊裡不算；先貼的不算；編號要整個對上不是子字串；只認第一個網址錨點、不認裸數字編號（#51）', () => {
   const q = ask();
   const quoted = ruling('x'); quoted.body = `## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n> 見 ${q.id}`;
   assert.equal(evaluate([q, quoted], D).open.length, 1, '引用區塊裡的編號不算在回答它');
@@ -90,6 +90,17 @@ test('④配對：引在引用區塊裡不算；先貼的不算；編號要整�
   assert.equal(cites('see 9c1 here', 'c1'), false, '子字串不算（前面接字）——只釘後面那格的話，前面那道邊界拿掉也不會紅');
   assert.equal(cites('see c1 here', 'c1'), true);
   assert.equal(cites('https://x/pull/7#issuecomment-5560311732', '5560311732'), true, '網址尾碼算');
+  assert.equal(cites('另外三則 5560311732 他還沒回', '5560311732'), false, '純數字編號不認裸寫（#51）');
+  const multi = '原題：https://x/pull/7#issuecomment-5560311732\n操作化：另外 https://x/pull/7#issuecomment-5560311733 與 c99 他還沒回';
+  assert.equal(cites(multi, '5560311732'), true, '第一個網址錨點算');
+  assert.equal(cites(multi, '5560311733'), false, '第二個網址錨點不算（#51）');
+  assert.equal(cites(multi, 'c99'), false, '有網址錨點時忽略後續裸編號（#51）');
+  const q2 = ask('第二題');
+  const q3 = ask('第三題');
+  const r1Only = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n原 ❓：https://x/pull/7#issuecomment-${q.id}\n操作化：另外 https://x/pull/7#issuecomment-${q2.id} 與 ${q3.id} 他還沒回`, { author: 'boss-acct' });
+  const res = evaluate([q, q2, q3, r1Only], D);
+  assert.deepEqual(res.ruled.map((x) => x.ask.id), [q.id]);
+  assert.deepEqual(res.open.map((x) => x.id), [q2.id, q3.id]);
 });
 
 test('⑤長得像但不合形狀＝疑似，並說原因', () => {
