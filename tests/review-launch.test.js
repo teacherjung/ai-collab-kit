@@ -20,10 +20,10 @@
 //   ⑪通用插座（SAFE 字元集與 --post 外殼代貼結論）：非 ASCII 模型／推理名放行、殼解讀字元與空白照擋；--post 每輪排他鎖（post.lock）與獨立結論暫存檔、
 //     先核兩棵樹未收、已登記、乾淨、HEAD 沒變、沒上鎖（不符退 1、不貼），再核結論檔與標頭、剝除文末單獨一行的「未貼」、核固定小標（擁有者豁免）、
 //     保留 postComment 引號與空白參數語意、核平台版本／複審者與同輪未重複，通過才代貼並逐字核對送出全文與記下 postedAt；同輪並發雙程序只送出一次；
-//   ⑫複審後掃生命週期（G1、G2；--scan、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
-//     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；通過後開唯讀掃描樹、印啟動指令與紀錄骨架；
+//   ⑫複審後掃生命週期（G1、G2；--scan、--scanner、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
+//     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；支援 --scanner <識別值> 切換為 reviewers 裡其他第三位 AI（自動從複審指令轉換唯讀掃描指令）；通過後開唯讀掃描樹、印啟動指令與紀錄骨架；
 //     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹；
-//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行與 DLP。
+//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行、DLP 與同行進度前言剝除（stripGrokPreamble）。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
 'use strict';
@@ -34,7 +34,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -1461,6 +1461,79 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.equal(okClose.code, 0, okClose.lines.join('\n'));
     assert.ok(!fs.existsSync(ok.record.tree), '掃描樹已收掉');
     assert.ok(JSON.parse(fs.readFileSync(path.join(folder, 'scan.json'), 'utf8')).closedAt, 'scan.json 已記 closedAt');
+
+    // (h) --scanner <識別值>：4 家 AI 隨時切換掃描者（deriveScanCommand 與 resolveScannerSpec）
+    assert.equal(
+      deriveScanCommand('claude -p --model {model} --effort {effort} --permission-mode plan --add-dir {reviewTree} --add-dir {mutationCopy} < {promptFile} > {outFile}'),
+      'claude -p --model {model} --effort {effort} --permission-mode plan --add-dir {scanTree} < {promptFile} > {outFile}',
+    );
+    assert.equal(
+      deriveScanCommand('codex exec -C {reviewTree} --add-dir {mutationCopy} -s read-only -m {model} -c model_reasoning_effort={effort} -o {outFile} - < {promptFile}'),
+      'codex exec -C {scanTree} -s read-only -m {model} -c model_reasoning_effort={effort} -o {outFile} - < {promptFile}',
+    );
+    assert.equal(
+      deriveScanCommand('node tools/review-launch.js --grok-exec --mode review --cwd {reviewTree} --mutation-copy {mutationCopy} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}'),
+      'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}',
+    );
+    assert.equal(
+      deriveScanCommand('(cd {reviewTree} && gemini -m {model} --approval-mode plan --include-directories {reviewTree},{mutationCopy} -p "請執行複審（推理強度：{effort}）" < {promptFile}) > {outFile}'),
+      '(cd {scanTree} && gemini -m {model} --approval-mode plan --include-directories {scanTree} -p "請執行掃描（推理強度：{effort}）" < {promptFile}) > {outFile}',
+    );
+
+    const sWithDelta = {
+      ...s,
+      participants: [
+        ...s.participants,
+        { role: 'AI 丁', id: 'Delta', account: 'ai-acct' },
+      ],
+      reviewers: [
+        ...s.reviewers,
+        {
+          participant: 'Delta',
+          strongest: 'delta-pro',
+          maxEffort: 'high',
+          source: 'Delta CLI',
+          command: 'codex exec -C {reviewTree} --add-dir {mutationCopy} -s read-only -m {model} -c model_reasoning_effort={effort} -o {outFile} - < {promptFile}',
+        },
+      ],
+    };
+    const usableDelta = sWithDelta.participants.map((p) => p.id);
+    assert.throws(() => resolveScannerSpec(sWithDelta, 'NoSuchAI', usableDelta), /--scanner 給的「NoSuchAI」不是登記過的參與者/u);
+    assert.throws(() => resolveScannerSpec(sWithDelta, 'Boss', usableDelta), /--scanner 給的「Boss」既不是專案設定的預設掃描者，也不在 reviewers 清單裡/u);
+
+    const switchOverlap = main(['--scan', '7', '--scanner', 'Beta', '--dir', dir], {
+      settings: sWithDelta,
+      platform: fakePlatform(withPass),
+      cwd: r.dir,
+    });
+    assert.equal(switchOverlap.code, 2);
+    assert.match(switchOverlap.lines.join('\n'), /掃描者 Beta 與本支實作者（Alpha）或複審者（Beta）重疊/u);
+
+    const switchDir = tmp('scan-switch-out-');
+    const switched = main(['--scan', '7', '--scanner', 'Delta', '--dir', switchDir], {
+      settings: sWithDelta,
+      platform: fakePlatform(withPass),
+      cwd: r.dir,
+    });
+    assert.equal(switched.code, 0, switched.lines.join('\n'));
+    assert.equal(switched.record.scanner, 'Delta');
+    assert.equal(switched.record.source, 'Delta CLI');
+    assert.match(switched.command, /^codex exec -C .* -s read-only -m delta-pro -c model_reasoning_effort=high/u);
+    assert.ok(!switched.command.includes('mutation'), '切換後的掃描指令不可殘留突變副本參數');
+    fs.writeFileSync(
+      switched.record.outFile,
+      `🔍 Delta｜來源：Delta CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- 模型：delta-pro\n\n### 掃描結果\n- 零發現\n未貼\n`,
+    );
+    let switchedPosted = null;
+    const switchedPostRes = main(['--scan-post', '7', '--dir', switchDir], {
+      settings: sWithDelta,
+      platform: fakePlatform(withPass),
+      runPost(_cmd, args) { switchedPosted = fs.readFileSync(args.at(-1), 'utf8'); },
+    });
+    assert.equal(switchedPostRes.code, 0, switchedPostRes.lines.join('\n'));
+    assert.match(switchedPosted, /^🔍 Delta｜來源：Delta CLI｜掃 /u);
+    assert.equal(main(['--scan-close', '7', '--dir', switchDir], { settings: sWithDelta }).code, 0);
+    fs.rmSync(switchDir, { recursive: true, force: true });
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
@@ -1588,6 +1661,22 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     });
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
     assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
+
+    // 同行緊貼進度前言（沒有換行符直接接 🔍 或 🤖 標頭）亦自動剝除；但 scan 模式若前言含 🤖 則不剝除，交由 --scan-post 拒收
+    assert.equal(
+      stripGrokPreamble('我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
+      '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
+    );
+    assert.equal(
+      stripGrokPreamble('我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n', 'review'),
+      '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n',
+    );
+    const leakyRobotPrefix = '誤帶 🤖 記號的前言🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
+    assert.equal(
+      stripGrokPreamble(leakyRobotPrefix, 'scan'),
+      leakyRobotPrefix,
+      'scan 模式若標頭前含有 🤖 不可偷剝掉，必須保留讓 --scan-post 攔截',
+    );
 
     // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 在剝除前言前即攔截並退 2
     const dlpOut = path.join(tmp, 'dlp-out.md');
