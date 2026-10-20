@@ -64,6 +64,32 @@ test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子
   const partialFail = run(['--skip-seats'], { runners: fakeRunners('pending') });
   assert.equal(partialFail.code, 2);
   assert.deepEqual(called, ['pending', 'backlog:', 'downstream']);
+
+  // (d) 中途有子工具拋錯時，該節記為退 2、總退出碼為 2，且後面子工具仍照跑（r4 Finding 1）
+  called.length = 0;
+  const thrownRun = run(['--skip-seats'], {
+    runners: {
+      ...fakeRunners(),
+      pendingRulings: () => { called.push('pending-throw'); throw new Error('子工具炸了'); },
+    },
+  });
+  assert.equal(thrownRun.code, 2);
+  assert.equal(thrownRun.sections[0].code, 2);
+  assert.match(thrownRun.lines.join('\n'), /未預期錯誤（子工具炸了）——算不出來/u);
+  assert.deepEqual(called, ['pending-throw', 'backlog:', 'downstream']);
+
+  // (e) 中途有子工具回傳壞形狀時，該節記為退 2、總退出碼為 2，且後面子工具仍照跑
+  called.length = 0;
+  const badShapeRun = run(['--skip-seats'], {
+    runners: {
+      ...fakeRunners(),
+      pendingRulings: () => { called.push('pending-null'); return null; },
+    },
+  });
+  assert.equal(badShapeRun.code, 2);
+  assert.equal(badShapeRun.sections[0].code, 2);
+  assert.match(badShapeRun.lines.join('\n'), /回傳格式不對——算不出來/u);
+  assert.deepEqual(called, ['pending-null', 'backlog:', 'downstream']);
 });
 
 test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路徑、同人雙角色命令聯集，且盒外憑證只 lstatSync 絕不讀取或輸出內容', () => {
