@@ -149,7 +149,7 @@ test('⑦鉤子與雲端範本都呼叫這一支、不抄三關；鉤子先清 G
   // 只看生效的行：範本的註解本來就會提到「不可以接 || true」，不剝註解會誤紅
   const effective = (text) => text.split('\n').filter((l) => !/^\s*#/u.test(l)).join('\n');
   const ciFiles = [path.join(ROOT, 'templates', 'ci-github.yml')];
-  if (fs.existsSync(path.join(ROOT, 'tests', 'kit-only', 'settings-pin.test.js')) && fs.existsSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'))) {
+  if (fs.existsSync(path.join(ROOT, 'kit-only', 'settings-pin.test.js')) && fs.existsSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'))) {
     ciFiles.push(path.join(ROOT, '.github', 'workflows', 'ci.yml'));
   }
   for (const ciPath of ciFiles) {

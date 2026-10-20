@@ -121,6 +121,9 @@ function extractCommandSpec(command) {
 function checkSeats(settings = {}, {
   which,
   authFile = path.join(os.homedir(), '.grok', 'auth.json'),
+  grokBin = path.basename(path.dirname(authFile)) === '.grok'
+    ? path.join(path.dirname(authFile), 'bin', 'grok')
+    : path.join(os.homedir(), '.grok', 'bin', 'grok'),
   fsImpl = fs,
 } = {}) {
   const resolveBin = typeof which === 'function' ? which : (b) => defaultWhich(b, { fsImpl });
@@ -176,12 +179,22 @@ function checkSeats(settings = {}, {
       results.push({ participant: seat.participant, bin: null, binPath: null, usesGrokExec, authReady: null, ok: false });
       continue;
     }
-    const uniqueBins = [...new Set(specs.map((s) => s.bin))];
-    const resolved = uniqueBins.map((b) => ({ bin: b, path: resolveBin(b) }));
-    const missingBins = resolved.filter((r) => !r.path).map((r) => r.bin);
+    const checkTargets = [];
+    const seenTargetKeys = new Set();
+    for (const s of specs) {
+      const key = s.usesGrokExec ? `grokExec:${grokBin}` : `std:${s.bin}`;
+      if (seenTargetKeys.has(key)) continue;
+      seenTargetKeys.add(key);
+      checkTargets.push({
+        label: s.usesGrokExec ? grokBin : s.bin,
+        displayBin: s.bin,
+        path: s.usesGrokExec ? defaultWhich(grokBin, { fsImpl }) : resolveBin(s.bin),
+      });
+    }
+    const missingBins = checkTargets.filter((r) => !r.path).map((r) => r.label);
     const allBinsOk = missingBins.length === 0;
-    const bin = allBinsOk ? uniqueBins.join('、') : missingBins.join('、');
-    const binPath = allBinsOk ? resolved.map((r) => r.path).join('、') : null;
+    const bin = allBinsOk ? [...new Set(checkTargets.map((r) => r.displayBin))].join('、') : missingBins.join('、');
+    const binPath = allBinsOk ? [...new Set(checkTargets.map((r) => r.path))].join('、') : null;
     let authReady = null;
     let authNote = '';
     if (usesGrokExec) {

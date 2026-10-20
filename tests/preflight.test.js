@@ -80,7 +80,12 @@ test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路�
     assert.equal(defaultWhich(path.join(tmp, 'no-such-dir', 'gemini'), { env: { PATH: binDir }, homedir: tmp }), null, '帶明確路徑時只查該路徑，不拿 PATH 同名檔冒充');
 
     const secretMarker = 'SUPER-SECRET-GROK-BEARER-DO-NOT-READ';
-    const authFile = path.join(tmp, 'auth.json');
+    const grokDir = path.join(tmp, '.grok');
+    const grokBinDir = path.join(grokDir, 'bin');
+    fs.mkdirSync(grokBinDir, { recursive: true });
+    const grokFixedBin = path.join(grokBinDir, 'grok');
+    fs.writeFileSync(grokFixedBin, '#!/bin/sh\n', { mode: 0o755 });
+    const authFile = path.join(grokDir, 'auth.json');
     fs.writeFileSync(authFile, JSON.stringify({ key: secretMarker }), { mode: 0o600 });
 
     let lstatCalls = 0;
@@ -128,9 +133,20 @@ test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路�
     assert.equal(okRes.code, 0);
     assert.equal(okRes.seats.length, 4);
     assert.ok(okRes.seats.every((s) => s.ok), '4 家 CLI 與 Grok auth.json 皆就緒');
+    assert.equal(okRes.seats.find((s) => s.participant === 'Grok').binPath, grokFixedBin, '--grok-exec 座位對應 ~/.grok/bin/grok 固定執行檔');
     assert.ok(lstatCalls > 0, '有執行 lstatSync 檢查狀態');
     assert.equal(readCalls, 0, '絕不呼叫任何檔案讀取 API 讀取 auth.json 內容');
     assert.equal(okRes.lines.join('\n').includes(secretMarker), false, '絕不可讀取或印出 auth.json 內的憑證內容');
+
+    // --grok-exec 座位固定走 ~/.grok/bin/grok：即使 PATH 有同名 grok，固定執行檔缺席仍必須報未就緒（r2 Finding 1）
+    const missingFixedGrokBinRes = checkSeats(settings, {
+      which: (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp }),
+      authFile,
+      grokBin: path.join(tmp, 'missing-grok-home', '.grok', 'bin', 'grok'),
+    });
+    const missingFixedGrokSeat = missingFixedGrokBinRes.seats.find((s) => s.participant === 'Grok');
+    assert.equal(missingFixedGrokSeat.binPath, null, '~/.grok/bin/grok 不存在時不可被 PATH 同名 grok 假綠');
+    assert.equal(missingFixedGrokSeat.ok, false);
 
     // 指定了不存在的絕對路徑時，即使 PATH 有同名 gemini 也必須報未就緒（Finding 2）
     const badPathRes = checkSeats({
