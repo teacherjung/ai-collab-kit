@@ -3377,15 +3377,110 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       assert.equal(nestedNmPosts, 0, 'R2：巢狀 node_modules 拒啟時代貼次數必須為 0');
       assert.ok(!fs.existsSync(reviewFolder), 'R2：巢狀 node_modules 拒啟回滾後不應留下複審容器');
 
-      // R2 控制組（五）：安全的樹內目錄連結（含循環連結防呆）應正常放行，且寫入突變副本不會影響審查樹或主目錄
+      // R2 外部連結防呆（五）：工作樹內 symlink + .. 誘餌逃逸（packages/shared/src -> ../bridge/../leak，其中 packages/bridge -> deep/shared、packages/deep/leak -> 樹外，另設樹內 packages/leak 誘餌）
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      fs.mkdirSync(path.join(implWt, 'packages', 'deep', 'shared'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'deep', 'shared', '.keep'), '\n');
+      fs.mkdirSync(path.join(implWt, 'packages', 'leak'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'leak', 'index.js'), 'export const wsValue = "IN_TREE_DECOY";\n');
+      fs.symlinkSync('deep/shared', path.join(implWt, 'packages', 'bridge'), 'dir');
+      fs.symlinkSync(extSharedTarget, path.join(implWt, 'packages', 'deep', 'leak'), 'dir');
+      fs.symlinkSync('../bridge/../leak', path.join(implWt, 'packages', 'shared', 'src'), 'dir');
+      fs.writeFileSync(path.join(implWt, 'packages', 'shared', 'index.js'), 'export { wsValue } from "./src/index.js";\n');
+      sh(
+        implWt,
+        'add',
+        'packages/deep/shared/.keep',
+        'packages/leak/index.js',
+        'packages/bridge',
+        'packages/deep/leak',
+        'packages/shared/src',
+        'packages/shared/index.js',
+      );
+      sh(implWt, 'commit', '-q', '-m', 'symlink plus dotdot escape with in-tree decoy');
+      const dotdotExtHead = sh(implWt, 'rev-parse', 'HEAD');
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      let dotdotExtPosts = 0;
+      const dotdotExtRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: dotdotExtHead } }),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runPost() { dotdotExtPosts += 1; },
+      });
+      assert.equal(dotdotExtRes.code, 2, 'R2：工作樹內 symlink + .. 穿越指向樹外時應退 2 拒絕啟動');
+      assert.match(dotdotExtRes.lines.join('\n'), /本機套件內含指向工作樹外的連結/u);
+      assert.equal(dotdotExtPosts, 0, 'R2：symlink + .. 拒啟時代貼次數必須為 0');
+      assert.ok(!fs.existsSync(reviewFolder), 'R2：symlink + .. 拒啟回滾後不應留下複審容器');
+      assert.equal(
+        fs.readFileSync(path.join(extSharedTarget, 'index.js'), 'utf8'),
+        'export const wsValue = "EXTERNAL_UNREVIEWED";\n',
+        'R2：樹外目錄內容不得被動到',
+      );
+
+      // R2 外部連結防呆（六）：node_modules 內相對連結含 symlink + .. 穿過工作區連結指向樹外（node_modules/fake-dep/alias.js -> ../ws-shared/../payload.js，且設 node_modules/payload.js 誘餌）
+      const nmDecoyPayload = path.join(r.dir, 'node_modules', 'payload.js');
+      const nmAliasLink = path.join(depDir, 'alias.js');
+      const wsPayloadInMain = path.join(r.dir, 'packages', 'payload.js');
+      fs.writeFileSync(nmDecoyPayload, 'export const payload = "NM_DECOY";\n');
+      fs.writeFileSync(wsPayloadInMain, 'export const payload = "MAIN_SAFE_PAYLOAD";\n');
+      fs.symlinkSync('../ws-shared/../payload.js', nmAliasLink);
+      try {
+        sh(implWt, 'checkout', '--detach', '-q', wsHead);
+        fs.symlinkSync(path.join(extSharedTarget, 'index.js'), path.join(implWt, 'packages', 'payload.js'));
+        sh(implWt, 'add', 'packages/payload.js');
+        sh(implWt, 'commit', '-q', '-m', 'workspace payload symlink to outside via nm bridge dotdot');
+        const nmDotdotExtHead = sh(implWt, 'rev-parse', 'HEAD');
+        sh(implWt, 'checkout', '--detach', '-q', wsHead);
+        let nmDotdotPosts = 0;
+        const nmDotdotRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: nmDotdotExtHead } }),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+          runPost() { nmDotdotPosts += 1; },
+        });
+        assert.equal(nmDotdotRes.code, 2, 'R2：node_modules 內相對連結經 symlink + .. 穿過工作區連結指向樹外時應退 2 拒絕啟動');
+        assert.match(nmDotdotRes.lines.join('\n'), /指向工作樹外/u);
+        assert.equal(nmDotdotPosts, 0, 'R2：node_modules symlink + .. 拒啟時代貼次數必須為 0');
+        assert.ok(!fs.existsSync(reviewFolder), 'R2：node_modules symlink + .. 拒啟回滾後不應留下複審容器');
+      } finally {
+        fs.rmSync(nmAliasLink, { force: true });
+        fs.rmSync(nmDecoyPayload, { force: true });
+        fs.rmSync(wsPayloadInMain, { force: true });
+      }
+
+      // R2 控制組（七）：安全的樹內目錄連結（含 symlink + .. 樹內路徑與循環連結防呆）應正常放行，且寫入突變副本不會影響審查樹或主目錄
       sh(implWt, 'checkout', '--detach', '-q', wsHead);
       fs.mkdirSync(path.join(implWt, 'safe-internal-src'), { recursive: true });
       fs.writeFileSync(path.join(implWt, 'safe-internal-src', 'real.js'), 'export const wsValue = "COMMITTED_SAFE";\n');
       fs.symlinkSync('../packages/shared', path.join(implWt, 'safe-internal-src', 'back-loop'), 'dir');
+      fs.mkdirSync(path.join(implWt, 'packages', 'deep', 'shared'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'deep', 'shared', '.keep'), '\n');
+      fs.mkdirSync(path.join(implWt, 'packages', 'deep', 'safe-dotdot'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'deep', 'safe-dotdot', 'real.txt'), 'COMMITTED_SAFE_DOTDOT\n');
+      fs.mkdirSync(path.join(implWt, 'packages', 'safe-dotdot'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'safe-dotdot', 'real.txt'), 'LEXICAL_DECOY_WRONG\n');
+      fs.symlinkSync('deep/shared', path.join(implWt, 'packages', 'bridge'), 'dir');
       fs.symlinkSync('../../safe-internal-src', path.join(implWt, 'packages', 'shared', 'src'), 'dir');
+      fs.symlinkSync('../bridge/../safe-dotdot', path.join(implWt, 'packages', 'shared', 'dotdot-src'), 'dir');
       fs.writeFileSync(path.join(implWt, 'packages', 'shared', 'index.js'), 'export { wsValue } from "./src/real.js";\n');
-      sh(implWt, 'add', 'safe-internal-src/real.js', 'safe-internal-src/back-loop', 'packages/shared/src', 'packages/shared/index.js');
-      sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with cycle');
+      sh(
+        implWt,
+        'add',
+        'safe-internal-src/real.js',
+        'safe-internal-src/back-loop',
+        'packages/deep/shared/.keep',
+        'packages/deep/safe-dotdot/real.txt',
+        'packages/safe-dotdot/real.txt',
+        'packages/bridge',
+        'packages/shared/src',
+        'packages/shared/dotdot-src',
+        'packages/shared/index.js',
+      );
+      sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with dotdot and cycle');
       const safeInternalHead = sh(implWt, 'rev-parse', 'HEAD');
       sh(implWt, 'checkout', '--detach', '-q', wsHead);
       let safeInternalPosts = 0;
@@ -3403,18 +3498,32 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
               { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
             );
             assert.equal(probe.status, 0, 'R2 控制組：安全內部連結應載入 COMMITTED_SAFE');
+            assert.equal(
+              fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt'), 'utf8'),
+              'COMMITTED_SAFE_DOTDOT\n',
+              'R2 控制組：安全樹內 symlink + .. 應讀到核心展開後的 COMMITTED_SAFE_DOTDOT',
+            );
           }
           // 寫入突變副本的內部連結目標，確認審查樹仍讀到 COMMITTED_SAFE，再還原突變副本以通過乾淨檢查
           const mutRealFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'src', 'real.js');
           const origMutReal = fs.readFileSync(mutRealFile, 'utf8');
           fs.writeFileSync(mutRealFile, 'export const wsValue = "MUTATED_INTERNAL";\n');
+          const mutDotdotFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt');
+          const origMutDotdot = fs.readFileSync(mutDotdotFile, 'utf8');
+          fs.writeFileSync(mutDotdotFile, 'MUTATED_DOTDOT\n');
           const treeCheck = spawnSync(
             process.execPath,
             ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
             { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
           );
           assert.equal(treeCheck.status, 0, 'R2 控制組：改寫突變副本內部連結目標不得影響唯讀審查樹');
+          assert.equal(
+            fs.readFileSync(path.join(record.tree, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt'), 'utf8'),
+            'COMMITTED_SAFE_DOTDOT\n',
+            'R2 控制組：改寫突變副本 symlink + .. 目標不得影響唯讀審查樹',
+          );
           fs.writeFileSync(mutRealFile, origMutReal);
+          fs.writeFileSync(mutDotdotFile, origMutDotdot);
           fs.writeFileSync(
             record.outFile,
             `🤖 Beta｜來源：beta CLI｜審 \`${safeInternalHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
