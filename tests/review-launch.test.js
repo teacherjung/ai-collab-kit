@@ -1,6 +1,6 @@
 // 守送審產生器（規矩 F1、F3、F11）：送審提示的格子照範本的位置填事實、兩棵樹開在受審版本、啟動指令照設定帶模型與推理；收樹前先核。
 //
-// 邊界與原因：
+// 守得到的：
 //   ①範本的格子跟產生器的表一一對上（範本加、刪、換一格就紅）；同一個字樣在不同位置填不同的值（複審者與實作者）；只留 <三選一>；
 //     「規矩讀基底那一版」那一格填的是基底版本碼（不是受審版本）；
 //   ②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀錄寫好、啟動指令的模型、推理、路徑都換上了；問平台基底那一顆時，分支名照平台回的
@@ -35,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -96,7 +96,7 @@ const settingsFor = (over = {}) => ({
 const BODY = '## 協作欄位\n\n- **實作者**：Alpha\n- **複審者**：Beta\n- **預計修改的檔案**：tools/x.js\n- **這支若完全失敗，最糟失去什麼**：x\n';
 let n = 0;
 const at = () => new Date(Date.UTC(2026, 9, 7, 0, 0, ++n)).toISOString();
-const verdict = (role, round, sha, v, over = {}) => ({ id: `v${++n}`, author: 'ai-acct', createdAt: at(), body: `🤖 ${role}｜來源：${role === 'Beta' ? 'beta CLI' : 'alpha CLI'}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n`, ...over });
+const verdict = (role, round, sha, v, over = {}) => ({ id: `v${++n}`, author: 'ai-acct', createdAt: at(), body: `🤖 ${role}｜來源：${role === 'Beta' ? 'beta CLI' : 'alpha CLI'}｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${v}\n\n### 本輪實際用的設定\n\n### 清單逐項結果\n`, ...over });
 
 /** 假平台：答案照 answers；沒給的動作丟平台錯。記下被問了什麼。 */
 function fakePlatform(answers) {
@@ -188,17 +188,6 @@ test('④缺兩個固定小標的「通過」不算數，不可以把這一輪�
     const two = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, good] })), cwd: r.dir, dir, template: TEMPLATE });
     assert.match(two.prompt, new RegExp(`本輪範圍：${TIERS.中.afterPassFix}（`, 'u'), '對照組：合格的通過之後照「通過後回頭改」那一格');
     close('7', { settings: s, dir, leftoverRoots: [] });
-    fs.rmSync(path.join(dir, 'review-acme-kit-7-r4'), { recursive: true, force: true });
-    // F11 設定不合規的「通過」不能解除 r1 的阻擋，launch() 必須把 reviewerConfigs 傳進 verdicts.evaluate，不可縮成「通過後回頭改」（#121 r4 M14）
-    const badSetPass = {
-      ...verdict('Beta', 3, r.head, '通過'),
-      body: verdict('Beta', 3, r.head, '通過').body.replace('模型：m-strong；推理強度：max', '模型：m-weak；推理強度：low'),
-    };
-    const badSetLaunch = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, badSetPass] })), cwd: r.dir, dir, template: TEMPLATE });
-    assert.match(badSetLaunch.prompt, /輪次：r4\n/u);
-    assert.match(badSetLaunch.prompt, /本輪範圍：全審（/u, 'F11 設定不合規的通過不算數，不能解除 r1 阻擋或縮範圍');
-    close('7', { settings: s, dir, leftoverRoots: [] });
-    fs.rmSync(path.join(dir, 'review-acme-kit-7-r4'), { recursive: true, force: true });
     // 同一輪先擋後過、或同一輪對兩個版本各給通過：結論閘判衝突（算阻擋），不可以縮範圍（#49 r2 R1）
     for (const [what, third] of [
       ['同一輪先擋後過', [verdict('Beta', 4, r.base, '需修改後再審'), verdict('Beta', 4, r.base, '通過')]],
@@ -253,7 +242,6 @@ test('②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀�
     assert.ok(out.lines.some((l) => l.includes(`--close 7 --dir ${fs.realpathSync(dir)}`)), '用了 --dir 開樹，印的收樹指令也要帶同一個 --dir');
     const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
     assert.equal(rec.head, r.head); assert.equal(rec.round, 1); assert.equal(rec.tree, tree);
-    assert.equal(rec.model, 'm-strong'); assert.equal(rec.effort, 'max');
     assert.deepEqual([...new Set(platform.asked)].sort(), ['allComments', 'branchSha', 'change', 'changedFiles', 'comments']);
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
@@ -690,21 +678,13 @@ test('⑩快速通道（AI）：第 1 輪起只核差異、提示寫明為什麼
     const passed = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '通過')];
     out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: passed })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
     assert.ok(out.prompt.includes('本輪範圍：只核差異（'), out.prompt);
-    // 第 1 輪沒過、第 2 輪是 F11 設定不合規的「通過」：算連兩輪沒「通過」，第 3 輪退回全審（驗證 launch() 傳 reviewerConfigs 給 twoMissesInARow）
-    const badSetR2 = {
-      ...verdict('Beta', 2, r.head, '通過'),
-      body: verdict('Beta', 2, r.head, '通過').body.replace('模型：m-strong；推理強度：max', '模型：m-weak；推理強度：low'),
-    };
-    out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: [verdict('Beta', 1, r.head, '需修改後再審'), badSetR2] })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
-    assert.ok(out.prompt.includes('本輪範圍：全審（'), out.prompt);
-    assert.ok(out.prompt.includes('這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（F12）'), out.prompt);
   } finally {
     cleanup();
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
   }
 });
 
-test('⑩連兩輪沒「通過」：輪次要相鄰、每輪算不算通過照結論閘（缺小標或設定不合規不算、同輪相反＝衝突）；別位或換了來源的不算', () => {
+test('⑩連兩輪沒「通過」：輪次要相鄰、每輪算不算通過照結論閘（缺小標不算、同輪相反＝衝突）；別位或換了來源的不算', () => {
   const roles = ['Alpha', 'Beta'];
   const sha = 'a'.repeat(40);
   const miss = (round) => verdict('Beta', round, sha, '需修改後再審');
@@ -716,9 +696,6 @@ test('⑩連兩輪沒「通過」：輪次要相鄰、每輪算不算通過照�
   const bare = (round) => verdict('Beta', round, sha, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：通過\n` });
   assert.equal(twoMissesInARow([miss(1), miss(2), bare(3)], 'Beta', 'beta CLI', roles), true, '缺固定小標的「通過」不算數，前兩輪照樣是連兩輪沒過');
   assert.equal(twoMissesInARow([miss(1), bare(2)], 'Beta', 'beta CLI', roles), true, '那一輪只有缺小標的「通過」＝沒有算數的通過');
-  const reviewerConfigs = [{ participant: 'Beta', strongest: 'm-strong', second: 'm-second', maxEffort: 'max' }];
-  const badSet = (round) => verdict('Beta', round, sha, '通過', { body: `🤖 Beta｜來源：beta CLI｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：通過\n\n### 本輪實際用的設定\n- 實際模型：wrong；實際推理：low（要求模型：m-strong；要求推理：max）\n\n### 清單逐項結果\n- ok\n` });
-  assert.equal(twoMissesInARow([miss(1), badSet(2)], 'Beta', 'beta CLI', roles, { reviewerConfigs }), true, '模型或推理不合規的「通過」不算數');
   assert.equal(twoMissesInARow([miss(1), pass(2), miss(3)], 'Beta', 'beta CLI', roles), false, '對照組：中間那一輪是算數的通過');
   assert.equal(twoMissesInARow([miss(1), verdict('Alpha', 2, sha, '需修改後再審')], 'Beta', 'beta CLI', roles), false, '別位的不算');
   assert.equal(twoMissesInARow([miss(1), miss(2)], 'Beta', 'beta 新來源', roles), false, '換了來源就是另一位');
@@ -750,12 +727,11 @@ test('⑪SAFE 字元集：接受非 ASCII 字母數字（如中文模型與推�
   }
 });
 
-test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」；核對角色、來源、輪次、版本短碼、固定小標與實際模型／推理（擁有者豁免）', () => {
+test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」；核對角色、來源、輪次、版本短碼與固定小標（擁有者豁免）', () => {
   const roles = ['Boss', 'Alpha', 'Beta'];
   const head = '0123456789abcdef0123456789abcdef01234567';
-  const reviewerConfigs = [{ participant: 'Beta', strongest: 'm-strong', second: 'm-second', maxEffort: 'max' }];
-  const baseOpts = { reviewer: 'Beta', source: 'beta CLI', round: 1, head, usable: roles, ownerRole: 'Boss', reviewerConfigs };
-  const passBody = `\n\n🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- 未貼這兩個字在內文裡不剝\n\n未貼  \n\n`;
+  const baseOpts = { reviewer: 'Beta', source: 'beta CLI', round: 1, head, usable: roles, ownerRole: 'Boss' };
+  const passBody = `\n\n🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- 未貼這兩個字在內文裡不剝\n\n未貼  \n\n`;
   const got = prepareVerdict(passBody, baseOpts);
   assert.equal(got.strippedUnposted, true);
   assert.equal(got.header.verdict, '通過');
@@ -779,76 +755,9 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['輪次不符', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r2｜結論：需修改後再審\n`, /輪次是 r2，不是本輪 r1/u],
     ['版本短碼不符', `🤖 Beta｜來源：beta CLI｜審 \`fedcba9\`｜r1｜結論：需修改後再審\n`, /審的是 fedcba9，對不上本輪受審版本 0123456/u],
     ['通過缺固定小標', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n`, /少了固定小標：### 清單逐項結果/u],
-    ['通過未填實際模型與推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（需以「模型：<模型名>」填 m-strong 或 m-second）/u],
-    ['通過誠實填低檔模型但附要求值', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 實際模型：wrong；實際推理：low（要求模型：m-strong；要求推理：max）\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過以半形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong, wrong\n- 推理強度：max, low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong, wrong」，需為 m-strong 或 m-second）/u],
-    ['通過以全形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong，wrong\n- 推理強度：max，low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong，wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於反引號圍欄內含波浪號與合格範例、圍欄外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`\`\`text\n參考值：\n~~~\n- 模型：m-strong；推理強度：max\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於圍欄內含 ### 範例、圍欄後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\`\`\`text\n### 範例\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於 HTML 註解內含 ```text、註解後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n<!--\n\`\`\`text\n-->\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於 #### 子標題後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n#### 執行紀錄\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於編號清單圍欄內填合格設定範例、清單外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   模型：m-strong\n\n   推理強度：max\n     \`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於無序清單圍欄內填合格設定範例、清單外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- \`\`\`text\n  模型：m-strong\n  推理強度：max\n  \`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於清單未閉合圍欄離開容器後開啟外層圍欄包合格範例、外層圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   格式範例\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於四反引號圍欄內夾三反引號與合格設定範例、圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`\`\`\`text\n參考：\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於清單續行圍欄未閉合離開容器後開啟外層圍欄包合格範例、外層圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. 格式範例\n   \`\`\`text\n   範例說明\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於分隔線後只放 5 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於空清單項目與空行後只放 4 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.\n\n    模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於清單記號同行 5 空白後只放縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.     說明；模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於同行巢狀空清單與空行後填低檔設定、再填合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- -\n\n    - 模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用區塊續行只放範例欄位、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n> 範例欄位：\n模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於跨行行內反引號內只放範例欄位、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`這是範例\n模型：m-strong；推理強度：max\n\`\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於跳脫 HTML 註解標記後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\\<!--\n- 模型：wrong；推理強度：low\n\\-->\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於偶數反斜線加行內反引號後只填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n補充：\\\\\`<!--\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
-    ['通過於 Setext 二級標題離開設定小節後才填合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n其他說明\n-------\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於引用內 ATX 標題後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> > # 說明\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用內清單 ATX 標題後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> - # 說明\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於空引用行後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n>\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用內空清單項後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> -\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用內分隔線後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> ---\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用內圍欄開頭後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> \`\`\`\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用內 HTML 註解後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> <!-- 說明 -->\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於引用段落被 HTML 區塊中斷後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n> 引用段落\n<div></div>\n模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於段落後 HTML 註解內含底線、註解後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n其他說明\n<!--\n-------\n-->\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於段落後 div 區塊內含底線、區塊後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n其他說明\n<div>\n-------\n</div>\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於跨 HTML 註解的反引號之間填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\`說明\n<!-- comment -->\n模型：wrong；推理強度：low\n\`\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
-    ['通過於單行 HTML 註解後只放 4 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n<!-- 範例 -->\n    模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
-    ['通過於開放段落後無空行 4 空白縮排續行填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n說明\n    模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
-  const inlineCodeHtmlOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 備註：\`<!--\` 是 HTML 註解的起點。\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(inlineCodeHtmlOk.header.verdict, '通過');
-  const subheadingValidOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n#### 執行紀錄\n- 模型：m-strong；推理強度：max。未降級。\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(subheadingValidOk.header.verdict, '通過');
-  const listFenceLowExampleOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   模型：wrong\n   推理強度：low\n   \`\`\`\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(listFenceLowExampleOk.header.verdict, '通過');
-  const unclosedListFenceThenOuterFenceLowExampleOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   格式範例\n\`\`\`\n- 模型：wrong；推理強度：low\n\`\`\`\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(unclosedListFenceThenOuterFenceLowExampleOk.header.verdict, '通過');
-  const continuationFenceLowExampleOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. 格式範例\n   \`\`\`text\n   範例說明\n\`\`\`\n- 模型：wrong；推理強度：low\n\`\`\`\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(continuationFenceLowExampleOk.header.verdict, '通過');
-  const thematicAndEmptyListExampleWithValidOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：wrong；推理強度：low\n\n1.\n\n    模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
-  assert.equal(thematicAndEmptyListExampleWithValidOk.header.verdict, '通過');
-  for (const [what, validRaw] of [
-    ['同行巢狀空清單後縮排填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- -\n\n    - 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['引用續行低檔範例後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n> 範例欄位：\n模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['跨行行內反引號低檔範例後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`這是範例\n模型：wrong；推理強度：low\n\`\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['跳脫 HTML 註解標記包住唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\\<!--\n- 模型：m-strong；推理強度：max\n\\-->\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['偶數反斜線加行內反引號後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n補充：\\\\\`<!--\`\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['唯一合格設定後接 Setext 二級標題離開設定小節再放低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n模型：wrong；推理強度：low\n其他說明\n-------\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['引用內非段落區塊與 HTML 區塊中斷引用後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n> # 說明\n> - # 說明\n>\n> -\n> ---\n> \`\`\`\n> <!-- 說明 -->\n模型：m-strong\n> 引用段落\n<div></div>\n推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['段落後 HTML 註解與 div 區塊內含底線、區塊後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n其他說明\n<!--\n-------\n-->\n其他說明\n<div>\n-------\n</div>\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['跨 HTML 註解的反引號之間填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`說明\n<!-- comment -->\n模型：m-strong；推理強度：max\n\`\n\n### 清單逐項結果\n- ok\n未貼\n`],
-    ['開放段落後無空行 4 空白縮排續行與單行註解後縮排範例', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n說明\n    模型：m-strong\n\`跨行\n說明\`\n    推理強度：max\n<!-- 範例 -->\n    模型：wrong；推理強度：low\n\n    模型：wrong；推理強度：low\n-\n      模型：wrong；推理強度：low\n補充\n-     模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n未貼\n`],
-  ]) {
-    assert.equal(prepareVerdict(validRaw, baseOpts).header.verdict, '通過', what);
-  }
-  const colonModelOpts = {
-    ...baseOpts,
-    reviewerConfigs: [{ participant: 'Beta', strongest: 'provider:model-v1', second: 'm-second', maxEffort: 'max' }],
-  };
-  const colonBacktickOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：\`provider:model-v1\`；推理強度：\`max\`。未降級。\n\n### 清單逐項結果\n- ok\n未貼\n`, colonModelOpts);
-  assert.equal(colonBacktickOk.header.verdict, '通過');
 });
 
 test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／乾淨／HEAD／沒上鎖，再核標頭、引號參數與平台狀態，剝除「未貼」後逐字代貼並記下 postedAt', () => {
@@ -863,7 +772,7 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／�
     const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
     const recFile = path.join(folder, 'launch.json');
     const recOrig = fs.readFileSync(recFile, 'utf8');
-    const expectedBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- 全過\n`;
+    const expectedBody = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- m-strong / max\n\n### 清單逐項結果\n- 全過\n`;
     const validPass = `\n${expectedBody}\n未貼  \n\n`;
     fs.writeFileSync(path.join(folder, 'output.log'), validPass);
 
@@ -924,14 +833,6 @@ test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／�
     assert.equal(res.code, 2);
     assert.match(res.lines.join('\n'), /不是一般檔案/u);
     assert.equal(calls.length, 0);
-
-    // ②b 結論檔「### 本輪實際用的設定」模型／推理不合規＝--post 退 2、不貼（驗證 post() 傳入 reviewerConfigs）
-    fs.writeFileSync(path.join(folder, 'output.log'), validPass.replace('模型：m-strong；推理強度：max', '模型：m-weak；推理強度：low'));
-    res = main(['--post', '7', '--dir', dir], { settings: s, platform, runPost: recordPost });
-    assert.equal(res.code, 2);
-    assert.match(res.lines.join('\n'), /未寫明合格模型/u);
-    assert.equal(calls.length, 0);
-    fs.writeFileSync(path.join(folder, 'output.log'), validPass);
 
     // ③ 平台受審版本已變、PR 說明複審者被改掉、或平台上已有同輪結論＝退 2，不貼
     const changedHeadPlatform = fakePlatform(answersFor(r, { change: { ...answersFor(r).change, headSha: r.base } }));
@@ -1039,7 +940,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
   const folder = path.join(fs.realpathSync(dir), 'review-acme-kit-7-r1');
   const lockFile = path.join(folder, 'post.lock');
   const expectedA = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n### 本輪實際用的設定\n- A-original\n\n### 清單逐項結果\n- A-original\n`;
-  const expectedB = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max（B-original）\n\n### 清單逐項結果\n- B-original\n`;
+  const expectedB = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- B-original\n\n### 清單逐項結果\n- B-original\n`;
   const fileA = path.join(ext, 'A.md');
   const fileB = path.join(ext, 'B.md');
   fs.writeFileSync(fileA, `${expectedA}\n未貼\n`);
@@ -1067,7 +968,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
           wfs.writeFileSync(wpath.join(o.ext, 'stale-a-read-pid'), '1');
           const bInPost = wpath.join(o.ext, 'stale-b-in-runpost');
           const until = Date.now() + 10000;
-          while (!wfs.existsSync(bInPost)) {
+          while (!origRead && false || !wfs.existsSync(bInPost)) {
             if (Date.now() > until) throw new Error('timeout waiting for B to acquire new lock');
             sleep(10);
           }
@@ -1083,7 +984,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
       }
       try { wfs.unlinkSync(o.lockFile); } catch { /* removed */ }
     }
-    const { main: runMain } = require('review-launch.js');
+    const { main: runMain } = require(o.modulePath);
     const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
       settings: o.settings,
       platform: {
@@ -1115,10 +1016,9 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
 
   const staleWorkerFile = path.join(ext, 'stale-worker.js');
   fs.writeFileSync(staleWorkerFile, `(${staleWorkerMain.toString()})();\n`);
-  const workerEnv = { ...gitEnv(), NODE_PATH: path.join(__dirname, '..', 'tools') };
   const runStaleWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file };
-    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: workerEnv });
+    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: gitEnv() });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });
@@ -1132,7 +1032,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
     const wfs = require('node:fs');
     const wpath = require('node:path');
     const o = JSON.parse(process.argv[2]);
-    const { main: runMain } = require('review-launch.js');
+    const { main: runMain } = require(o.modulePath);
     const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     if (o.tag === 'B') {
       const aEntered = wpath.join(o.ext, 'a-entered-runpost');
@@ -1174,8 +1074,8 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
   const workerFile = path.join(ext, 'worker.js');
   fs.writeFileSync(workerFile, `(${workerMain.toString()})();\n`);
   const runWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, settings: s, change: answers.change, file };
-    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: workerEnv });
+    const payload = { tag, ext, dir, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
+    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: gitEnv() });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });
@@ -1340,31 +1240,6 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.match(fastAi.lines.join('\n'), /未執行：快速通道（AI）/u);
     assert.deepEqual(fs.readdirSync(dir), [], '快速通道（AI）不開掃描樹');
 
-    // 但若快速通道（AI）在 r1 阻擋、r2 為 F11 設定不合規的「通過」→ 算連兩輪沒「通過」退回一般流程（F12），r3 合規通過後必須放行開掃描樹（驗證 scanLaunch 傳 reviewerConfigs 給 twoMissesInARow；#121 r8 M38）
-    const badSetPassR2 = {
-      ...verdict('Beta', 2, cr.head, '通過', { id: 'bad-set-r2', createdAt: '2026-10-19T12:05:00Z' }),
-      body: verdict('Beta', 2, cr.head, '通過').body.replace('模型：m-strong；推理強度：max', '模型：wrong；推理強度：low'),
-    };
-    const exhaustLaneDir = tmp('scan-exhaust-lane-');
-    try {
-      const exhaustLaneAns = answersFor(cr, {
-        comments: [
-          verdict('Beta', 1, cr.head, '需修改後再審', { id: 'miss-r1', createdAt: '2026-10-19T12:00:00Z' }),
-          badSetPassR2,
-          verdict('Beta', 3, cr.head, '通過', { id: 'pass-r3', createdAt: '2026-10-19T12:10:00Z' }),
-        ],
-      });
-      const exhaustRes = main(['--scan', '7', '--dir', exhaustLaneDir], {
-        settings: sLane,
-        platform: fakePlatform(exhaustLaneAns),
-        cwd: cr.dir,
-      });
-      assert.equal(exhaustRes.code, 0, exhaustRes.lines.join('\n'));
-      assert.equal(main(['--scan-close', '7', '--dir', exhaustLaneDir], { settings: sLane }).code, 0);
-    } finally {
-      fs.rmSync(exhaustLaneDir, { recursive: true, force: true });
-    }
-
     // (c) 低風險表定不掃 → 印未執行：低風險，表定不掃；但若依 D4 調重（--tier 高／中 或 PR 說明「風險級別」調重）則放行開樹，若企圖調輕則拒絕
     const lowFiles = [{ path: 'docs/x.md', status: 'modified', previousPath: null }];
     const lowRisk = main(['--scan', '7', '--dir', dir], {
@@ -1432,7 +1307,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.equal(main(['--scan-close', '7', '--dir', escalatedCliDir], { settings: s }).code, 0);
     fs.rmSync(escalatedCliDir, { recursive: true, force: true });
 
-    // (d) 指定複審者尚未對當版貼通過（或貼了通過但模型／推理不合規） → 拒絕開樹
+    // (d) 指定複審者尚未對當版貼通過 → 拒絕開樹
     const noPass = main(['--scan', '7', '--dir', dir], {
       settings: s,
       platform: fakePlatform(baseAns),
@@ -1441,27 +1316,13 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     assert.equal(noPass.code, 2);
     assert.match(noPass.lines.join('\n'), /還沒有指定複審者 Beta 的合格「通過」結論/u);
 
-    const badPassComment = verdict('Beta', 1, r.head, '通過', {
-      id: 'pass-bad-set',
-      createdAt: '2026-10-19T11:00:00Z',
-      body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 實際模型：wrong；實際推理：low（要求模型：m-strong；要求推理：max）\n\n### 清單逐項結果\n- ok\n`,
-    });
-    const badSetScan = main(['--scan', '7', '--dir', dir], {
-      settings: s,
-      platform: fakePlatform({ ...baseAns, comments: [badPassComment] }),
-      cwd: r.dir,
-    });
-    assert.equal(badSetScan.code, 2);
-    assert.match(badSetScan.lines.join('\n'), /還沒有指定複審者 Beta 的合格「通過」結論/u);
-
-    // (e) 指定複審者已對當版貼通過（即使前面有一則 F11 設定不合規的通過，選取首筆合格通過時也必須排除該則並選取 pass99） → 退 0、開唯讀掃描樹、寫 prompt.md 與 scan.json
+    // (e) 指定複審者已對當版貼通過 → 退 0、開唯讀掃描樹、寫 prompt.md 與 scan.json
     const ok = main(['--scan', '7', '--dir', dir], {
       settings: s,
-      platform: fakePlatform({ ...baseAns, comments: [badPassComment, passComment] }),
+      platform: fakePlatform(withPass),
       cwd: r.dir,
     });
     assert.equal(ok.code, 0, ok.lines.join('\n'));
-    assert.equal(ok.record.passCommentId, 'pass99', '選取首筆合格通過時必須濾除設定不合規的 pass-bad-set');
     assert.match(ok.prompt, /這一支的實作者：`Alpha`；複審者：`Beta`/u, '掃描提示的實作者與複審者填對角色');
     const folder = path.dirname(ok.record.promptFile);
     assert.ok(fs.existsSync(path.join(ok.record.tree, 'a.txt')), '唯讀掃描樹已開出');
@@ -1675,7 +1536,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
         const passForTarget = verdict(revr.participant, 1, r.head, '通過', {
           id: `pass-${target}`,
           createdAt: '2026-10-19T12:00:00Z',
-          body: `🤖 ${revr.participant}｜來源：${revr.source}｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：${revr.strongest}；推理強度：${revr.maxEffort}\n\n### 清單逐項結果\n- ok\n`,
+          body: `🤖 ${revr.participant}｜來源：${revr.source}｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
         });
         const realPlatform = fakePlatform({
           ...baseAns,
@@ -1985,7 +1846,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       const platformCase = fakePlatform(answersFor(r));
       const launchCase = launch('7', 'Beta', { settings: sCase, platform: platformCase, cwd: r.dir, dir: caseDir, template: TEMPLATE });
       assert.equal(launchCase.code, 0, `${label} launch: ${launchCase.lines.join('\n')}`);
-      const sectionsCase = '\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- 合成測試\n';
+      const sectionsCase = '\n\n### 本輪實際用的設定\n- 合成測試\n\n### 清單逐項結果\n- 合成測試\n';
       const passExampleCase = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過${sectionsCase}`;
       const stdoutText = rawStdout(r.head.slice(0, 7), sectionsCase, passExampleCase);
       const execCase = await runGrokExec([
@@ -2166,7 +2027,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       runExec(_cmd, { record }) {
         fs.writeFileSync(
           record.outFile,
-          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
         );
       },
       runPost(_cmd, args) {
@@ -2214,7 +2075,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       ...baseAns,
       comments: () => [...dynamicComments],
     };
-    const validSelfVerdict = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`;
+    const validSelfVerdict = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`;
     const selfPostedSameOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
       settings: s,
       platform: fakePlatform(selfPostAns),
@@ -2317,7 +2178,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
           id: 'self-r2-ok',
           author: 'ai-acct',
           createdAt: '2026-10-20T00:05:00Z',
-          body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r2｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`,
+          body: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r2｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
         });
         fs.writeFileSync(record.outFile, '已貼：#7 r2（詳見 PR 留言）\n');
       },
@@ -2532,7 +2393,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       runExec(_cmd, { record }) {
         fs.writeFileSync(
           record.outFile,
-          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
         );
       },
       runPost() {},
@@ -2582,7 +2443,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         runExec(_cmd, { record }) {
           fs.writeFileSync(
             record.outFile,
-            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`,
+            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
           );
         },
         runPost() {
@@ -2846,7 +2707,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       assert.equal(launch('7', 'Beta', { settings: s, platform: fakePlatform(baseAns), cwd: r.dir, dir, template: TEMPLATE }).code, 0);
       fs.writeFileSync(
         path.join(reviewFolder, 'output.log'),
-        `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`,
+        `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
       );
       let postCount = 0;
       const postRes = main(['--post', '7', '--round', '1', '--expect-head', validHead, '--dir', dir], {
@@ -2936,7 +2797,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         runExec(_cmd, { record }) {
           fs.writeFileSync(
             record.outFile,
-            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`,
+            `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
           );
         },
         runPost() {

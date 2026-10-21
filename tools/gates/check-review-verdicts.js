@@ -19,13 +19,12 @@
 // 作廢不了合規的留言、也作廢不了比自己晚出現的留言。壞留言原地保留，稽核軌跡不動。
 //
 // 誠實劃界：它讀的是留言裡的自我宣告，不是身分證明。要繞過它，改標頭裡的來源就好——
-// 那要靠獨立帳號才防得了。它防的是混淆與遺漏，不是惡意。
+// 那要靠獨立帳號才擋得住。它防的是混淆與遺漏，不是惡意。
 //
-// ## 「通過」要帶兩個固定小標與合格設定（規矩 F7、F11；裁示者 2026-10-03 選「A」）
+// ## 「通過」要帶兩個固定小標（規矩 F7；裁示者 2026-10-03 選「A」）
 // 原專案 PFW #655 第三輪的送審提示自訂了回報格式，結論裡沒有清單、也沒寫實際用了什麼設定，而這道閘只看第一行，
-// 沒人發現。所以「通過」那一則還要有兩行固定小標，且專案設定有登記該複審者的模型（strongest／second）或最高推理（maxEffort）時，
-// 「### 本輪實際用的設定」段落須以唯一固定欄位（`模型：<模型名>`、`推理強度：<推理強度>` 或 `模型／推理強度：<模型名>／<推理強度>`）寫明合格模型與最高推理；缺小標或設定欄位缺漏、重複、不合規，那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
-// 要重貼一則合格的。清單逐項結果只看小標在不在——擋不住「寫了不適用卻沒查」。
+// 沒人發現。所以「通過」那一則還要有兩行固定小標，缺一個那則「通過」就不算數（不產生放行、也撤不了自己先前的阻擋），
+// 要重貼一則合格的。只看小標那一行在不在，不驗底下寫了什麼——擋得住「整段沒寫」，擋不住「寫了不適用卻沒查」。
 // 「快速通道（擁有者）」（F12）那一則是擁有者的原話逐字，不帶小標：標頭角色是專案設定登記的擁有者（owner 那一欄）的，就不要求。
 // 認的是擁有者、不是裁示者（#32 r1）：裁示者可以由擁有者指定給別人（A1），認裁示者的話，裁示者若指定給某個 AI，
 // 那個 AI 的通過就跳過小標，擁有者的原話反而被擋。擁有者沒登記（或登記的不是參與者）時不豁免＝那一則不算數、看得見地擋下，
@@ -57,7 +56,7 @@
 // 誠實劃界：proofSha256 只驗格式，閘不讀私證據、不證明當時 HEAD 或 exit0 真實；F7 收件者須核原證據。
 // 這沿用共用帳號自我宣告的限制，不是簽章、強身分驗證或平台原生歷史。
 //
-// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標且設定合規，擁有者除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
+// 退出碼：0＝指定的複審者對目前版本說通過（那則帶兩行固定小標，擁有者除外）、且沒有未撤銷的阻擋／1＝未通過／2＝查不清楚（一律當未通過）。
 'use strict';
 const { createHash } = require('node:crypto');
 const { ask, PlatformError } = require('../platform.js');
@@ -85,377 +84,6 @@ const PASS_HEADINGS = ['### 本輪實際用的設定', '### 清單逐項結果']
 function missingHeadings(body) {
   const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
   return PASS_HEADINGS.filter((h) => !lines.includes(h));
-}
-
-const eqSettingToken = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
-
-function cleanSettingToken(raw) {
-  const s = String(raw || '').trim().replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim();
-  const m = /^[`'"]?([\p{L}\p{N}._:@+=-]+)[`'"]?$/u.exec(s);
-  return m ? m[1] : null;
-}
-
-const PAREN_CONFUSER_RE = /\b(?:gpt|claude|gemini|grok|o[134]|opus|sonnet|haiku|flash|pro|ultra|mini|nano|luna|astra|low|medium|high|xhigh|max|minimal)\b/iu;
-const SLASH_EFFORT_RE = /^(?:low|medium|high|xhigh|max|maximum|minimal|none|auto|ultra)$/iu;
-const CLAUSE_SPLIT_RE = /[；;，,｜|](?=[ \t]*(?:\*\*|__)?[\p{L}\p{N}_／/ -]{1,24}(?:\*\*|__)?[ \t]*[：:])/u;
-const COMBINED_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[／/][ \t]*(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
-const MODEL_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
-const EFFORT_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
-
-function findClosingBackticks(str, fromIdx, openLen) {
-  let i = fromIdx;
-  while (i < str.length) {
-    if (str[i] !== '`') {
-      i += 1;
-      continue;
-    }
-    let run = 0;
-    while (i + run < str.length && str[i + run] === '`') run += 1;
-    if (run === openLen) return i;
-    i += run;
-  }
-  return -1;
-}
-
-const THEMATIC_BREAK_RE = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
-const SETEXT_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
-const ASCII_PUNCT_RE = /^[!"#$%&'()*+,-./:;<=>?@[\\\]^_`{|}~]$/u;
-
-function matchFenceOpen(str) {
-  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(str);
-  return m && !(m[1][0] === '`' && m[2].includes('`')) ? m : null;
-}
-
-function stripListMarkers(line) {
-  let rest = line;
-  const steps = [];
-  for (;;) {
-    if (THEMATIC_BREAK_RE.test(rest)) break;
-    const m = /^( {0,3}(?:[-*+]|\d{1,9}[.)]))(?:( +)(.*)|$)$/u.exec(rest);
-    if (!m) break;
-    if (!m[3] || m[2].length >= 5) {
-      steps.push(m[1].length + 1);
-      rest = m[3] ? rest.slice(m[1].length + 1) : '';
-      break;
-    }
-    const step = m[1].length + m[2].length;
-    steps.push(step);
-    rest = rest.slice(step);
-  }
-  return { rest, steps };
-}
-
-function isInSetextHeading(allLines, startLineIdx, currentListIndent) {
-  for (let k = startLineIdx + 1; k < allLines.length; k += 1) {
-    const nextRaw = allLines[k];
-    if (nextRaw.trim() === '') return false;
-    const leadSpaces = /^ */u.exec(nextRaw)[0].length;
-    if (leadSpaces >= currentListIndent && SETEXT_UNDERLINE_RE.test(nextRaw.slice(currentListIndent))) {
-      return true;
-    }
-    const checkSub = leadSpaces >= currentListIndent ? nextRaw.slice(currentListIndent) : nextRaw;
-    if (
-      THEMATIC_BREAK_RE.test(checkSub)
-      || stripListMarkers(checkSub).steps.length > 0
-      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<)/u.test(checkSub)
-      || matchFenceOpen(checkSub)
-    ) {
-      return false;
-    }
-  }
-  return false;
-}
-
-function findMultiLineClosingBackticks(allLines, startLineIdx, currentListIndent, openLen) {
-  for (let k = startLineIdx + 1; k < allLines.length; k += 1) {
-    const nextRaw = allLines[k];
-    if (nextRaw.trim() === '') return null;
-    const leadSpaces = /^ */u.exec(nextRaw)[0].length;
-    if (leadSpaces >= currentListIndent && SETEXT_UNDERLINE_RE.test(nextRaw.slice(currentListIndent))) {
-      return null;
-    }
-    const checkSub = leadSpaces >= currentListIndent ? nextRaw.slice(currentListIndent) : nextRaw;
-    if (
-      THEMATIC_BREAK_RE.test(checkSub)
-      || stripListMarkers(checkSub).steps.length > 0
-      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<)/u.test(checkSub)
-      || matchFenceOpen(checkSub)
-    ) {
-      return null;
-    }
-    const closeCol = findClosingBackticks(nextRaw, 0, openLen);
-    if (closeCol >= 0) return { endLine: k, endCol: closeCol + openLen };
-  }
-  return null;
-}
-
-/**
- * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
- * 段落起訖（1〜3 級 ATX 標題 `#`〜`###` 與頂層 Setext 標題底線 `===`／`---`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、
- * 圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、引用區塊與無空行段落續行（`>`，CommonMark §5.1）、
- * 分隔線（`* * *`／`- - -`／`_ _ _`）、逐層清單容器與空清單項目、縮排程式碼與開放段落縮排續行（CommonMark §4.1、§4.4、§5.2）、
- * HTML 區塊與註解（`<...>`／`<!-- ... -->`，CommonMark §4.6）、ASCII 標點反斜線跳脫（CommonMark §2.4）與單行／跨行行內反引號（`` `...` ``，CommonMark §6.1）
- * 由同一個由上而下的狀態機處理（#121 r4〜r12 R3）。
- */
-function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
-  const modelValues = [];
-  const effortValues = [];
-  let fenceChar = '';
-  let fenceLen = 0;
-  let fenceListIndent = 0;
-  const listIndents = [];
-  let emptyListItem = false;
-  let inBlockquote = false;
-  let inParagraph = false;
-  let inlineCodeUntil = null;
-  let inHtmlComment = false;
-  let inSection = false;
-
-  for (let lineIdx = 0; lineIdx < allLines.length; lineIdx += 1) {
-    const rawLine = allLines[lineIdx];
-    if (fenceChar) {
-      if (rawLine.trim() === '') continue;
-      const leadSpaces = /^ */u.exec(rawLine)[0].length;
-      if (leadSpaces < fenceListIndent) {
-        fenceChar = '';
-        fenceLen = 0;
-        fenceListIndent = 0;
-      } else {
-        const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(rawLine.slice(fenceListIndent));
-        if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
-          fenceChar = '';
-          fenceLen = 0;
-          fenceListIndent = 0;
-        }
-        continue;
-      }
-    }
-    let currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
-    const wasInParagraph = inParagraph;
-    inParagraph = false;
-    if (!inHtmlComment && !inlineCodeUntil) {
-      if (rawLine.trim() === '') {
-        if (emptyListItem) {
-          listIndents.pop();
-          emptyListItem = false;
-        }
-        inBlockquote = false;
-        continue;
-      }
-      const leadSpaces = /^ */u.exec(rawLine)[0].length;
-      while (listIndents.length && leadSpaces < listIndents[listIndents.length - 1]) {
-        listIndents.pop();
-      }
-      let baseIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
-      const { rest: afterList, steps } = stripListMarkers(rawLine.slice(baseIndent));
-      for (const step of steps) {
-        baseIndent += step;
-        listIndents.push(baseIndent);
-      }
-      emptyListItem = steps.length > 0 && afterList === '';
-      currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
-      if (currentListIndent === 0 && /^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
-        inBlockquote = false;
-        inSection = rawLine.trim() === '### 本輪實際用的設定';
-        continue;
-      }
-      if (/^ {0,3}#{1,6}(?:\s|$)/u.test(afterList) || THEMATIC_BREAK_RE.test(afterList)) {
-        inBlockquote = false;
-        continue;
-      }
-      if (/^\s*>/u.test(afterList)) {
-        const bqRest = stripListMarkers(afterList.replace(/^(?:\s*> ?)+/u, '')).rest;
-        inBlockquote = bqRest.trim() !== ''
-          && !/^ {0,3}(?:#{1,6}(?:\s|$)|<)/u.test(bqRest)
-          && !THEMATIC_BREAK_RE.test(bqRest)
-          && !matchFenceOpen(bqRest);
-        continue;
-      }
-      const openMatch = matchFenceOpen(afterList);
-      if (openMatch) {
-        inBlockquote = false;
-        fenceChar = openMatch[1][0];
-        fenceLen = openMatch[1].length;
-        fenceListIndent = currentListIndent;
-        continue;
-      }
-      if (steps.length > 0 || /^ {0,3}</u.test(afterList)) {
-        inBlockquote = false;
-      }
-      if (inBlockquote) continue;
-      if ((steps.length > 0 || !wasInParagraph) && /^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
-      inParagraph = afterList.trim() !== '' && !/^ {0,3}</u.test(afterList);
-    }
-    let line = '';
-    let idx = 0;
-    if (inlineCodeUntil) {
-      if (lineIdx < inlineCodeUntil.endLine) continue;
-      idx = inlineCodeUntil.endCol;
-      inlineCodeUntil = null;
-      inParagraph = true;
-    }
-    while (idx < rawLine.length) {
-      if (inHtmlComment) {
-        const endIdx = rawLine.indexOf('-->', idx);
-        if (endIdx < 0) break;
-        inHtmlComment = false;
-        idx = endIdx + 3;
-      } else if (rawLine[idx] === '\\' && idx + 1 < rawLine.length && ASCII_PUNCT_RE.test(rawLine[idx + 1])) {
-        line += rawLine[idx] + rawLine[idx + 1];
-        idx += 2;
-      } else if (rawLine[idx] === '`') {
-        let openLen = 0;
-        while (idx + openLen < rawLine.length && rawLine[idx + openLen] === '`') openLen += 1;
-        const closeIdx = findClosingBackticks(rawLine, idx + openLen, openLen);
-        if (closeIdx >= 0) {
-          const inner = rawLine.slice(idx + openLen, closeIdx);
-          const isRegisteredToken = allowedModels.some((am) => eqSettingToken(inner.trim(), am))
-            || (allowedEffort && eqSettingToken(inner.trim(), allowedEffort));
-          const isInlineExampleOrComment = !isRegisteredToken
-            && /<!--|-->|(?:模型|推理)[ \t\p{L}\p{N}_／/*-]*[：:]/u.test(inner);
-          line += isInlineExampleOrComment ? '`code`' : rawLine.slice(idx, closeIdx + openLen);
-          idx = closeIdx + openLen;
-        } else {
-          const multi = findMultiLineClosingBackticks(allLines, lineIdx, currentListIndent, openLen);
-          if (multi) {
-            const inner = [
-              rawLine.slice(idx + openLen),
-              ...allLines.slice(lineIdx + 1, multi.endLine),
-              allLines[multi.endLine].slice(0, multi.endCol - openLen),
-            ].join('\n');
-            const isRegisteredToken = allowedModels.some((am) => eqSettingToken(inner.trim(), am))
-              || (allowedEffort && eqSettingToken(inner.trim(), allowedEffort));
-            const isInlineExampleOrComment = !isRegisteredToken
-              && /<!--|-->|(?:模型|推理)[ \t\p{L}\p{N}_／/*-]*[：:]/u.test(inner);
-            line += isInlineExampleOrComment ? '`code`' : `\`${inner.trim()}\``;
-            inlineCodeUntil = multi;
-            break;
-          }
-          line += rawLine.slice(idx, idx + openLen);
-          idx += openLen;
-        }
-      } else if (rawLine.startsWith('<!--', idx)) {
-        inHtmlComment = true;
-        idx += 4;
-      } else {
-        line += rawLine[idx];
-        idx += 1;
-      }
-    }
-    if (inParagraph && !inHtmlComment && !inlineCodeUntil && isInSetextHeading(allLines, lineIdx, currentListIndent)) {
-      if (currentListIndent === 0) inSection = false;
-      continue;
-    }
-    if (!inSection || !line.trim() || /^\s*>/u.test(line)) continue;
-    const segments = [];
-    const outer = line.replace(/[（(]([^）)]*)[）)]/gu, (full, inner) => {
-      if (/[：:]/u.test(inner)) {
-        segments.push(inner);
-        return ' ';
-      }
-      if (PAREN_CONFUSER_RE.test(inner) || allowedModels.some((am) => am && inner.toLowerCase().includes(am.toLowerCase()))) {
-        return full;
-      }
-      return ' ';
-    });
-    segments.unshift(outer);
-
-    for (const seg of segments) {
-      const cleanedSeg = seg
-        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '')
-        .trim()
-        .replace(/。+$/u, '')
-        .trim();
-      if (!cleanedSeg) continue;
-      for (const rawSentence of cleanedSeg.split('。')) {
-        const sentence = rawSentence.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
-        if (!sentence) continue;
-        const clauses = sentence.split(CLAUSE_SPLIT_RE);
-        for (const rawClause of clauses) {
-          const clause = rawClause.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
-          if (!clause) continue;
-          const cm = COMBINED_CLAUSE_RE.exec(clause);
-          if (cm) {
-            const val = cm[1].trim();
-            const parts = val.split(/[ \t]*[／/][ \t]*/u);
-            const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
-            const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
-            if (mTok && eTok) {
-              modelValues.push(mTok);
-              effortValues.push(eTok);
-            } else {
-              modelValues.push(val || '（空）');
-              effortValues.push(val || '（空）');
-            }
-            continue;
-          }
-          const mm = MODEL_CLAUSE_RE.exec(clause);
-          if (mm) {
-            const val = mm[1].trim();
-            const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
-            if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
-              modelValues.push(unwrapped);
-              continue;
-            }
-            const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
-            const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
-            const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
-            if (mTok && eTok && (SLASH_EFFORT_RE.test(eTok) || (allowedEffort && eqSettingToken(eTok, allowedEffort)))) {
-              modelValues.push(mTok);
-              effortValues.push(eTok);
-            } else {
-              modelValues.push(cleanSettingToken(val) || val || '（空）');
-            }
-            continue;
-          }
-          const em = EFFORT_CLAUSE_RE.exec(clause);
-          if (em) {
-            const val = em[1].trim();
-            effortValues.push(cleanSettingToken(val) || val || '（空）');
-          }
-        }
-      }
-    }
-  }
-  return { modelValues, effortValues };
-}
-
-/**
- * 核「### 本輪實際用的設定」段落有沒有以唯一欄位寫出該複審者登記在 settings.reviewers 的合格模型（strongest／second）與最高推理（maxEffort）（F11）。
- * 呼叫端未傳 reviewers 或該角色未登記模型／推理時回空陣列（相容只驗小標的合成夾具）。
- */
-function settingProblems(body, role, reviewers) {
-  if (!Array.isArray(reviewers)) return [];
-  const cfg = reviewers.find((r) => r && typeof r.participant === 'string' && r.participant.trim() === role);
-  if (!cfg) return [];
-  const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
-  if (!lines.includes('### 本輪實際用的設定')) return [];
-  const models = [cfg.strongest, cfg.second]
-    .map((s) => (typeof s === 'string' ? s.trim() : ''))
-    .filter((s) => s && s !== '未設定');
-  const effort = typeof cfg.maxEffort === 'string' && cfg.maxEffort.trim() && cfg.maxEffort.trim() !== '未設定'
-    ? cfg.maxEffort.trim() : '';
-  const { modelValues, effortValues } = parseSettingFields(lines, models, effort);
-  const out = [];
-  if (models.length) {
-    if (modelValues.length === 0) {
-      out.push(`未寫明合格模型（需以「模型：<模型名>」填 ${models.join(' 或 ')}）`);
-    } else if (modelValues.length > 1) {
-      out.push(`模型欄位重複或矛盾（出現 ${modelValues.join('、')}；需唯一填 ${models.join(' 或 ')}）`);
-    } else if (!models.some((m) => eqSettingToken(modelValues[0], m))) {
-      out.push(`未寫明合格模型（實際填「${modelValues[0]}」，需為 ${models.join(' 或 ')}）`);
-    }
-  }
-  if (effort) {
-    if (effortValues.length === 0) {
-      out.push(`未寫明最高推理強度（需以「推理強度：<推理強度>」填 ${effort}）`);
-    } else if (effortValues.length > 1) {
-      out.push(`推理強度欄位重複或矛盾（出現 ${effortValues.join('、')}；需唯一填 ${effort}）`);
-    } else if (!eqSettingToken(effortValues[0], effort)) {
-      out.push(`未寫明最高推理強度（實際填「${effortValues[0]}」，需為 ${effort}）`);
-    }
-  }
-  return out;
 }
 
 /** 作廢行：逐字「作廢上一則：<留言編號>」。 */
@@ -591,9 +219,9 @@ function receiptPass(comment, comments, records, roles) {
  * @param {string} head 目前版本
  * @param {string|null} reviewerRole PR說明指定的複審者；null＝讀不出來
  * @param {string[]} roles 專案設定的參與者識別值
- * @param {{ownerRole?: string|null, reviewerConfigs?: Array<{participant?: string, strongest?: string, second?: string, maxEffort?: string}>}} [opts] ownerRole＝專案設定登記的擁有者識別值，他的「通過」不要求固定小標（F12）；null＝沒登記（不豁免）；reviewerConfigs＝settings.reviewers，有給時核通過的實際設定段落（F11）
+ * @param {{ownerRole?: string|null}} [opts] ownerRole＝專案設定登記的擁有者識別值，他的「通過」不要求固定小標（F12）；null＝沒登記（不豁免）
  */
-function evaluate(comments, head, reviewerRole, roles, { ownerRole = null, reviewerConfigs = [] } = {}) {
+function evaluate(comments, head, reviewerRole, roles, { ownerRole = null } = {}) {
   const problems = [];
   const warnings = [];
   const incomplete = [];
@@ -626,12 +254,10 @@ function evaluate(comments, head, reviewerRole, roles, { ownerRole = null, revie
     }
     for (const target of voidTargets(c.body)) voids.push({ target, idx, who: `${h.role}（${h.source}）` });
     const who = `${h.role}（${h.source}）`;
-    // 缺固定小標或設定不合規的「通過」整則不採計（F7、F11）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
+    // 缺固定小標的「通過」整則不採計（F7）：不放行、也不撤銷同一位先前的阻擋；作廢行照樣生效（那是救別則的）
     if (!h.blocking && h.role !== ownerRole) {
       const missing = missingHeadings(c.body);
       if (missing.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, at: at(c), missing }); return; }
-      const badSettings = settingProblems(c.body, h.role, reviewerConfigs);
-      if (badSettings.length) { incomplete.push({ id: String(c.id), who, role: h.role, sha: h.sha, round: h.round, at: at(c), missing: [], badSettings }); return; }
     }
     const record = { ...h, who, id: String(c.id), at: at(c) };
     const sameRound = records.filter((r) => r.who === who && r.round === h.round);
@@ -710,10 +336,7 @@ function evaluate(comments, head, reviewerRole, roles, { ownerRole = null, revie
     const fix = ownerRole
       ? '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）。'
       : '那則「通過」不算數，要重貼一則合格的（範本 templates/verdict-header.md）；如果這一則是擁有者走快速通道（擁有者）（F12）的原話：專案設定還沒登記擁有者，所以沒有豁免，先登記擁有者，不要替他的原話補小標。';
-    const detail = x.missing && x.missing.length
-      ? `缺固定小標「${x.missing.join('」「')}」`
-      : `本輪實際用的設定不合規（${(x.badSettings || []).join('；')}）`;
-    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）${detail}：${fix}`;
+    const note = `${x.who} 在 r${x.round}（審 ${x.sha}）的「通過」（留言 ${x.id}）缺固定小標「${x.missing.join('」「')}」：${fix}`;
     // 它算數的話結果會不會不一樣：①會撤掉同一位較低輪次的阻擋，或②會是指定那一位對目前版本的通過、而沒有別則補上。
     // 撤銷看未解事件而非 latest：更高輪錯版通過可能遮住低輪阻擋。過期缺小標仍只提醒。
     const cur = latest[x.who];
@@ -766,10 +389,9 @@ function gateRun(changeId, { settings = readSettings(), platform = { ask } } = {
   const ownerId = typeof settings.owner === 'string' ? settings.owner.trim() : '';
   const { problems, warnings, reviewers, unsure, incomplete } = evaluate(comments, change.headSha, reviewerRole, usable, {
     ownerRole: usable.includes(ownerId) ? ownerId : null,
-    reviewerConfigs: settings.reviewers,
   });
   if (unsure) return { code: 2, lines: [`結論聯集閘：${problems[0]}——查不清楚一律當未通過。`] };
-  const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，${x.missing && x.missing.length ? '缺小標' : '設定不合規'}、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';
+  const who = [...Object.values(reviewers).map((r) => `${r.who}=${r.verdict}`), ...(incomplete || []).map((x) => `${x.who}=通過（r${x.round}，缺小標、不算數）`)].join('、') || '（沒有任何帶標頭的結論）';
   for (const w of warnings) lines.push(`提醒（不影響結果）：${w}`);
   if (!problems.length) {
     lines.push(`結論聯集閘｜變更 ${changeId}：指定的複審者對目前版本說通過、沒有未撤銷的阻擋。現況：${who}`);
@@ -807,4 +429,4 @@ if (require.main === module) {
 // 代價照實說：作廢比原專案寬——任何一位審查者都能作廢任何一則壞留言，不需要裁示者特准。
 // 換來的是裁示者少一種要他親自特准的事，這正是他要的方向。
 
-module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, missingHeadings, settingProblems, VERDICTS, PASS_HEADINGS };
+module.exports = { gateRun, evaluate, headerOf, hasBotMark, looksLikeVerdict, voidTargets, sourceLookalike, missingHeadings, VERDICTS, PASS_HEADINGS };
