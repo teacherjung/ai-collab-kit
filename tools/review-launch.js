@@ -410,31 +410,114 @@ function isInsideDir(childPath, parentDir) {
 }
 
 function getGitManagementDirs(worktreeReal) {
+  const concatRaw = (baseDir, rawTarget) => (
+    rawTarget.startsWith(path.sep)
+      ? rawTarget
+      : `${baseDir.replace(/\/+$/u, '')}${path.sep}${rawTarget}`
+  );
   const dotGitPath = path.join(worktreeReal, '.git');
   const dirs = [dotGitPath];
+  const addDir = (d) => {
+    if (d && !dirs.includes(d)) dirs.push(d);
+  };
+  let realDotGit;
+  let st;
   try {
-    const realDotGit = nativeRealpath(dotGitPath);
-    if (!dirs.includes(realDotGit)) dirs.push(realDotGit);
-    const st = fs.statSync(realDotGit);
-    if (st.isFile()) {
-      const m = fs.readFileSync(realDotGit, 'utf8').match(/^gitdir:\s*(.+)$/mu);
-      if (m) {
-        const rawGitDir = path.resolve(worktreeReal, m[1].trim());
-        if (!dirs.includes(rawGitDir)) dirs.push(rawGitDir);
-        try {
-          const realGitDir = nativeRealpath(rawGitDir);
-          if (!dirs.includes(realGitDir)) dirs.push(realGitDir);
-          const commonFile = path.join(realGitDir, 'commondir');
-          if (fs.existsSync(commonFile)) {
-            const rawCommon = path.resolve(realGitDir, fs.readFileSync(commonFile, 'utf8').trim());
-            if (!dirs.includes(rawCommon)) dirs.push(rawCommon);
-            const realCommon = nativeRealpath(rawCommon);
-            if (!dirs.includes(realCommon)) dirs.push(realCommon);
-          }
-        } catch { /* ignore */ }
-      }
+    realDotGit = nativeRealpath(dotGitPath);
+    st = fs.statSync(realDotGit);
+  } catch (e) {
+    throw new LaunchError(`無法辨識工作樹的 .git 管理目錄（${dotGitPath}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
+  }
+  addDir(realDotGit);
+
+  let realGitDir;
+  if (st.isFile()) {
+    let content;
+    try {
+      content = fs.readFileSync(realDotGit, 'utf8');
+    } catch (e) {
+      throw new LaunchError(`無法讀取工作樹的 .git 檔案（${realDotGit}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
     }
-  } catch { /* ignore */ }
+    const m = content.match(/^gitdir:\s*(.+)$/mu);
+    if (!m || !m[1].trim()) {
+      throw new LaunchError(`工作樹 .git 檔案缺少有效的 gitdir 設定（${realDotGit}），拒絕啟動`);
+    }
+    const gitDirSpec = m[1].trim();
+    const rawGitDir = concatRaw(worktreeReal, gitDirSpec);
+    try {
+      realGitDir = nativeRealpath(rawGitDir);
+      if (!fs.statSync(realGitDir).isDirectory()) {
+        throw new Error('gitdir 不是資料夾');
+      }
+    } catch (e) {
+      throw new LaunchError(`無法解析工作樹的 gitdir（${rawGitDir}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
+    }
+    addDir(realGitDir);
+    addDir(path.resolve(worktreeReal, gitDirSpec));
+    try { addDir(fs.realpathSync(path.resolve(worktreeReal, gitDirSpec))); } catch { /* ignore */ }
+  } else if (st.isDirectory()) {
+    realGitDir = realDotGit;
+  } else {
+    throw new LaunchError(`工作樹的 .git 型別無效（${dotGitPath}），拒絕啟動`);
+  }
+
+  const commonFile = path.join(realGitDir, 'commondir');
+  let commonLst = null;
+  try {
+    commonLst = fs.lstatSync(commonFile);
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') {
+      throw new LaunchError(`無法檢查工作樹的 commondir（${commonFile}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
+    }
+  }
+  if (commonLst) {
+    let commonSpec;
+    try {
+      commonSpec = fs.readFileSync(commonFile, 'utf8').trim();
+    } catch (e) {
+      throw new LaunchError(`無法讀取工作樹的 commondir（${commonFile}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
+    }
+    if (!commonSpec) {
+      throw new LaunchError(`工作樹的 commondir 內容為空（${commonFile}），拒絕啟動`);
+    }
+    const rawCommon = concatRaw(realGitDir, commonSpec);
+    let realCommon;
+    try {
+      realCommon = nativeRealpath(rawCommon);
+      if (!fs.statSync(realCommon).isDirectory()) {
+        throw new Error('commondir 不是資料夾');
+      }
+    } catch (e) {
+      throw new LaunchError(`無法解析工作樹的 commondir（${rawCommon}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
+    }
+    addDir(realCommon);
+    addDir(path.resolve(realGitDir, commonSpec));
+    try { addDir(fs.realpathSync(path.resolve(realGitDir, commonSpec))); } catch { /* ignore */ }
+  }
+
+  if (!gitOk(worktreeReal, ['rev-parse', '--git-dir', '--git-common-dir'])) {
+    throw new LaunchError(`Git 無法辨識工作樹的 git-dir／git-common-dir（${worktreeReal}），拒絕啟動`);
+  }
+  const revLines = git(worktreeReal, ['rev-parse', '--git-dir', '--git-common-dir'])
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (revLines.length < 2) {
+    throw new LaunchError(`Git 回傳的 git-dir／git-common-dir 不完整（${worktreeReal}），拒絕啟動`);
+  }
+  for (const line of revLines) {
+    const rawRev = concatRaw(worktreeReal, line);
+    let realRev;
+    try {
+      realRev = nativeRealpath(rawRev);
+      if (!fs.statSync(realRev).isDirectory()) {
+        throw new Error('不是資料夾');
+      }
+    } catch (e) {
+      throw new LaunchError(`無法解析 Git 回報的管理目錄（${rawRev}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
+    }
+    addDir(realRev);
+  }
   return dirs;
 }
 

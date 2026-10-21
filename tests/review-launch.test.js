@@ -3629,26 +3629,26 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         fs.rmSync(mainDecoyDotdot, { recursive: true, force: true });
       }
 
-      // (八) 來源 node_modules 指向 .git 或工作樹根目錄本身時，複審、掃描與隔離複製皆須退 2 拒啟且不得複製 .git/config
+      // (八) 來源 node_modules 指向 .git、工作樹根目錄、或含 symlink + .. 之 gitdir／commondir 及目錄型 .git/commondir 時，複審、掃描與隔離複製皆須退 2 拒啟且不得複製 config
       const mainNm = path.join(r.dir, 'node_modules');
-      const mainGitConfigPath = path.join(r.dir, '.git', 'config');
+      const mainDotGit = path.join(r.dir, '.git');
+      const mainGitConfigPath = path.join(mainDotGit, 'config');
       const origGitConfig = fs.readFileSync(mainGitConfigPath, 'utf8');
       const backupMainNm = path.join(altTargetDir, 'backup-main-node-modules');
+      const backupDotGit = path.join(altTargetDir, 'backup-main-dotgit');
       fs.renameSync(mainNm, backupMainNm);
       fs.writeFileSync(mainGitConfigPath, `${origGitConfig}\n# SYNTHETIC_GIT_CONFIG_SECRET_9999\n`);
+      fs.cpSync(mainDotGit, backupDotGit, { recursive: true });
       try {
-        for (const [badTarget, label] of [
-          ['.git', '來源 node_modules -> .git'],
-          ['.', '來源 node_modules -> 工作樹根目錄'],
-        ]) {
-          fs.symlinkSync(badTarget, mainNm, 'dir');
+        const assertRejectedGitSource = (label, targetRel) => {
+          fs.symlinkSync(targetRel, mainNm, 'dir');
           try {
             let badExecCalled = false;
             let badPosts = 0;
             const badRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
               settings: s,
               platform: fakePlatform(wsAns),
-              cwd: implWt,
+              cwd: r.dir,
               template: TEMPLATE,
               leftoverRoots: [],
               runExec() { badExecCalled = true; },
@@ -3662,7 +3662,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
             const badScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
               settings: s,
               platform: fakePlatform(wsWithPass),
-              cwd: implWt,
+              cwd: r.dir,
               leftoverRoots: [],
               runExec() { badExecCalled = true; },
               runPost() { badPosts += 1; },
@@ -3670,7 +3670,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
             assert.equal(badScanRes.code, 2, `R2（${label}）：掃描應退 2 拒絕啟動`);
             assert.equal(badExecCalled, false, `R2（${label}）：掃描拒絕啟動時不得呼叫模型`);
 
-            const badIsoDest = path.join(altTargetDir, `iso-bad-${Buffer.from(badTarget).toString('hex')}`);
+            const badIsoDest = path.join(altTargetDir, `iso-bad-${Buffer.from(label).toString('hex').slice(0, 24)}`);
             assert.throws(
               () => materializeIsolatedGitRepo(r.dir, badIsoDest, {
                 rootRepo: r.dir,
@@ -3687,8 +3687,61 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
           } finally {
             fs.rmSync(mainNm, { force: true });
           }
+        };
+
+        assertRejectedGitSource('來源 node_modules -> .git', '.git');
+        assertRejectedGitSource('來源 node_modules -> 工作樹根目錄', '.');
+
+        // 配置 1：.git 檔案寫 gitdir: bridge/../admin，其中 bridge -> deep/leaf（實際 gitdir 為 deep/admin）
+        const deepLeaf = path.join(r.dir, 'deep', 'leaf');
+        const deepAdmin = path.join(r.dir, 'deep', 'admin');
+        const topBridge = path.join(r.dir, 'bridge');
+        fs.mkdirSync(deepLeaf, { recursive: true });
+        fs.symlinkSync('deep/leaf', topBridge, 'dir');
+        fs.renameSync(mainDotGit, deepAdmin);
+        fs.writeFileSync(mainDotGit, 'gitdir: bridge/../admin\n');
+        try {
+          assertRejectedGitSource('gitfile 含 symlink + ..（bridge/../admin）', 'deep/admin');
+        } finally {
+          fs.rmSync(mainDotGit, { force: true });
+          fs.renameSync(deepAdmin, mainDotGit);
+          fs.rmSync(topBridge, { force: true });
+          fs.rmSync(path.join(r.dir, 'deep'), { recursive: true, force: true });
+        }
+
+        // 配置 2：.git 檔案指 per-tree，其中 commondir 寫 bridge/../common，bridge -> ../deep/leaf（實際 commondir 為 deep/common）
+        const perTreeDir = path.join(r.dir, 'per-tree');
+        const deepCommon = path.join(r.dir, 'deep', 'common');
+        fs.mkdirSync(path.join(r.dir, 'deep', 'leaf'), { recursive: true });
+        fs.renameSync(mainDotGit, deepCommon);
+        fs.mkdirSync(perTreeDir, { recursive: true });
+        fs.copyFileSync(path.join(deepCommon, 'HEAD'), path.join(perTreeDir, 'HEAD'));
+        fs.symlinkSync('../deep/leaf', path.join(perTreeDir, 'bridge'), 'dir');
+        fs.writeFileSync(path.join(perTreeDir, 'commondir'), 'bridge/../common\n');
+        fs.writeFileSync(mainDotGit, 'gitdir: per-tree\n');
+        try {
+          assertRejectedGitSource('gitfile + commondir 含 symlink + ..（bridge/../common）', 'deep/common');
+        } finally {
+          fs.rmSync(mainDotGit, { force: true });
+          fs.renameSync(deepCommon, mainDotGit);
+          fs.rmSync(perTreeDir, { recursive: true, force: true });
+          fs.rmSync(path.join(r.dir, 'deep'), { recursive: true, force: true });
+        }
+
+        // 配置 3：.git 是目錄，其中 commondir 寫 ../deep/common（實際共享管理目錄為 deep/common）
+        const dirCommon = path.join(r.dir, 'deep', 'common');
+        fs.mkdirSync(path.join(r.dir, 'deep'), { recursive: true });
+        fs.cpSync(mainDotGit, dirCommon, { recursive: true });
+        fs.writeFileSync(path.join(mainDotGit, 'commondir'), '../deep/common\n');
+        try {
+          assertRejectedGitSource('目錄型 .git 含 commondir（../deep/common）', 'deep/common');
+        } finally {
+          fs.rmSync(path.join(mainDotGit, 'commondir'), { force: true });
+          fs.rmSync(path.join(r.dir, 'deep'), { recursive: true, force: true });
         }
       } finally {
+        fs.rmSync(mainDotGit, { recursive: true, force: true });
+        fs.cpSync(backupDotGit, mainDotGit, { recursive: true });
         fs.writeFileSync(mainGitConfigPath, origGitConfig);
         fs.renameSync(backupMainNm, mainNm);
       }
