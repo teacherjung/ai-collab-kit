@@ -406,7 +406,7 @@ function nativeRealpath(p) {
 
 function isInsideDir(childPath, parentDir) {
   const rel = path.relative(parentDir, childPath);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotGitPath = null, topNodeModules = null } = {}) {

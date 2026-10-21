@@ -3463,6 +3463,8 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       fs.writeFileSync(path.join(implWt, 'packages', 'deep', 'safe-dotdot', 'real.txt'), 'COMMITTED_SAFE_DOTDOT\n');
       fs.mkdirSync(path.join(implWt, 'packages', 'safe-dotdot'), { recursive: true });
       fs.writeFileSync(path.join(implWt, 'packages', 'safe-dotdot', 'real.txt'), 'LEXICAL_DECOY_WRONG\n');
+      fs.mkdirSync(path.join(implWt, '..pkg'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, '..pkg', 'data.txt'), 'DOTS_SAFE_VALUE\n');
       fs.symlinkSync('deep/shared', path.join(implWt, 'packages', 'bridge'), 'dir');
       fs.symlinkSync('../../safe-internal-src', path.join(implWt, 'packages', 'shared', 'src'), 'dir');
       fs.symlinkSync('../bridge/../safe-dotdot', path.join(implWt, 'packages', 'shared', 'dotdot-src'), 'dir');
@@ -3475,28 +3477,34 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         'packages/deep/shared/.keep',
         'packages/deep/safe-dotdot/real.txt',
         'packages/safe-dotdot/real.txt',
+        '..pkg/data.txt',
         'packages/bridge',
         'packages/shared/src',
         'packages/shared/dotdot-src',
         'packages/shared/index.js',
       );
-      sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with dotdot and cycle');
+      sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with dotdot, dotprefix, and cycle');
       const safeInternalHead = sh(implWt, 'rev-parse', 'HEAD');
       sh(implWt, 'checkout', '--detach', '-q', wsHead);
 
-      // 在主工作樹也準備對應的 packages/bridge -> deep/shared 與 node_modules/ws-dotdot-entry -> ../packages/bridge/../safe-dotdot（入口本身含 symlink + ..）
+      // 在主工作樹也準備對應的 packages/bridge -> deep/shared、node_modules/ws-dotdot-entry -> ../packages/bridge/../safe-dotdot 與 node_modules/ws-dotprefix -> ../..pkg
       const mainDeepShared = path.join(r.dir, 'packages', 'deep', 'shared');
       const mainDeepDotdot = path.join(r.dir, 'packages', 'deep', 'safe-dotdot');
       const mainDecoyDotdot = path.join(r.dir, 'packages', 'safe-dotdot');
+      const mainDotPrefixDir = path.join(r.dir, '..pkg');
       const mainBridgeLink = path.join(r.dir, 'packages', 'bridge');
       const mainWsDotdotEntry = path.join(r.dir, 'node_modules', 'ws-dotdot-entry');
+      const mainWsDotPrefixEntry = path.join(r.dir, 'node_modules', 'ws-dotprefix');
       fs.mkdirSync(mainDeepShared, { recursive: true });
       fs.mkdirSync(mainDeepDotdot, { recursive: true });
       fs.writeFileSync(path.join(mainDeepDotdot, 'real.txt'), 'MAIN_SAFE_DOTDOT\n');
       fs.mkdirSync(mainDecoyDotdot, { recursive: true });
       fs.writeFileSync(path.join(mainDecoyDotdot, 'real.txt'), 'MAIN_LEXICAL_DECOY\n');
+      fs.mkdirSync(mainDotPrefixDir, { recursive: true });
+      fs.writeFileSync(path.join(mainDotPrefixDir, 'data.txt'), 'MAIN_DOTS_SAFE\n');
       fs.symlinkSync('deep/shared', mainBridgeLink, 'dir');
       fs.symlinkSync('../packages/bridge/../safe-dotdot', mainWsDotdotEntry, 'dir');
+      fs.symlinkSync('../..pkg', mainWsDotPrefixEntry, 'dir');
       try {
         let safeInternalPosts = 0;
         const safeInternalRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
@@ -3522,6 +3530,11 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
                 fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
                 'COMMITTED_SAFE_DOTDOT\n',
                 'R2 控制組：工作區入口本身含 symlink + .. 時應重綁並讀到受審版 COMMITTED_SAFE_DOTDOT',
+              );
+              assert.equal(
+                fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-dotprefix', 'data.txt'), 'utf8'),
+                'DOTS_SAFE_VALUE\n',
+                'R2 控制組：合法雙點前綴目錄 ..pkg 應重綁並讀到受審版 DOTS_SAFE_VALUE',
               );
             }
             // 寫入突變副本的內部連結目標，確認審查樹仍讀到 COMMITTED_SAFE，再還原突變副本以通過乾淨檢查
@@ -3555,7 +3568,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         assert.equal(safeInternalPosts, 1, 'R2 控制組：代貼次數應為 1');
         assert.ok(!fs.existsSync(reviewFolder), 'R2 控制組：完成後容器應已清除');
 
-        // 驗證工作區入口本身含 symlink + .. 時，掃描（--scan）、直接 materializeIsolatedGitRepo 與 runGrokExec 皆可正常完成
+        // 驗證工作區入口本身含 symlink + .. 與雙點前綴目錄 ..pkg 時，掃描（--scan）、直接 materializeIsolatedGitRepo 皆可正常完成
         const safeScanWithPass = {
           ...wsAns,
           change: { ...wsAns.change, headSha: safeInternalHead },
@@ -3573,7 +3586,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
           cwd: implWt,
           leftoverRoots: [],
         });
-        assert.equal(safeDotdotScanLaunch.code, 0, `R2 控制組：含 symlink + .. 入口之 --scan 應退 0：${safeDotdotScanLaunch.lines.join('\n')}`);
+        assert.equal(safeDotdotScanLaunch.code, 0, `R2 控制組：含 symlink + .. 與 ..pkg 入口之 --scan 應退 0：${safeDotdotScanLaunch.lines.join('\n')}`);
         const isoDotdotDest = path.join(altTargetDir, 'iso-dotdot-ok');
         materializeIsolatedGitRepo(safeDotdotScanLaunch.record.tree, isoDotdotDest, {
           rootRepo: r.dir,
@@ -3584,6 +3597,11 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
           fs.readFileSync(path.join(isoDotdotDest, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
           'COMMITTED_SAFE_DOTDOT\n',
           'R2 控制組：materializeIsolatedGitRepo 複製含 symlink + .. 入口後應讀到 COMMITTED_SAFE_DOTDOT',
+        );
+        assert.equal(
+          fs.readFileSync(path.join(isoDotdotDest, 'node_modules', 'ws-dotprefix', 'data.txt'), 'utf8'),
+          'DOTS_SAFE_VALUE\n',
+          'R2 控制組：materializeIsolatedGitRepo 複製含 ..pkg 雙點前綴入口後應讀到 DOTS_SAFE_VALUE',
         );
         const isoDotdotDirect = path.join(altTargetDir, 'iso-dotdot-direct-ok');
         materializeIsolatedGitRepo(r.dir, isoDotdotDirect, {
@@ -3596,10 +3614,17 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
           'COMMITTED_SAFE_DOTDOT\n',
           'R2 控制組：直接對含原始 ../packages/bridge/../safe-dotdot 之來源樹執行 materializeIsolatedGitRepo 亦應讀到 COMMITTED_SAFE_DOTDOT',
         );
+        assert.equal(
+          fs.readFileSync(path.join(isoDotdotDirect, 'node_modules', 'ws-dotprefix', 'data.txt'), 'utf8'),
+          'DOTS_SAFE_VALUE\n',
+          'R2 控制組：直接對含原始 ../..pkg 之來源樹執行 materializeIsolatedGitRepo 亦應讀到 DOTS_SAFE_VALUE',
+        );
         assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
       } finally {
+        fs.rmSync(mainWsDotPrefixEntry, { force: true });
         fs.rmSync(mainWsDotdotEntry, { force: true });
         fs.rmSync(mainBridgeLink, { force: true });
+        fs.rmSync(mainDotPrefixDir, { recursive: true, force: true });
         fs.rmSync(path.join(r.dir, 'packages', 'deep'), { recursive: true, force: true });
         fs.rmSync(mainDecoyDotdot, { recursive: true, force: true });
       }
