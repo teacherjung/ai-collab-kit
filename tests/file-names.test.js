@@ -17,7 +17,7 @@ const settingsData = require('../tools/settings-data.js');
 const { customBinaryExtensions } = require('../tools/build-settings.js');
 
 const ROOT = path.join(__dirname, '..');
-const IN_BINEXT_PROBE = process.env.KIT_BINARY_EXT_PROBE === '1';
+const BINEXT_DEPTH = Number(process.env.KIT_BINARY_EXT_DEPTH || '0');
 /** 既有的路徑例外，只出不進（本倉庫沒有）。 */
 const FROZEN_EXCEPTIONS = [];
 /** 預設二進位副檔名允許清單（規矩 E6、E7；若 settings.json 另設 binaryExtensions 陣列則聯集併入）。 */
@@ -116,22 +116,24 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
   }
 });
 
-test('在副本實際寫入 settings.json 的 binaryExtensions，同時執行檔名與設定考題皆通過（含預設 PNG、自訂 BMP、文字 NUL 拒絕與壞形狀攔截對照）', { skip: IN_BINEXT_PROBE ? '子探針內不再遞迴' : false }, () => {
+test('在副本實際寫入 settings.json 的 binaryExtensions，同時執行檔名與設定考題皆通過（含預設 PNG、自訂 BMP、文字 NUL 拒絕與壞形狀攔截對照）', () => {
+  if (BINEXT_DEPTH >= 2) return;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-binext-'));
   try {
     const copy = path.join(scratch, 'repo');
     fs.mkdirSync(copy, { recursive: true });
     for (const rel of trackedFiles()) {
+      if (rel === 'assets/probe.png' || rel === 'assets/custom.bmp' || rel.toLowerCase().endsWith('.bmp')) continue;
       const src = path.join(ROOT, rel);
       if (!fs.existsSync(src)) continue;
       const dst = path.join(copy, rel);
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
     }
-    const env = { ...gitEnv(), KIT_BINARY_EXT_PROBE: '1' };
-    delete env.NODE_TEST_CONTEXT;
+    const baseEnv = gitEnv();
+    delete baseEnv.NODE_TEST_CONTEXT;
     const git = (...args) => {
-      const r = spawnSync('git', args, { cwd: copy, encoding: 'utf8', env });
+      const r = spawnSync('git', args, { cwd: copy, encoding: 'utf8', env: baseEnv });
       assert.equal(r.status, 0, `git ${args.join(' ')} 失敗：${r.stderr}`);
     };
     git('init', '-q');
@@ -140,26 +142,37 @@ test('在副本實際寫入 settings.json 的 binaryExtensions，同時執行檔
     fs.writeFileSync(path.join(copy, 'assets', 'custom.bmp'), 'BM\u0000\u0000', 'utf8');
     git('add', '-A');
 
-    const runBoth = (...testFiles) => spawnSync(process.execPath, ['--test', ...testFiles], { cwd: copy, encoding: 'utf8', env });
+    const settingsPath = path.join(copy, 'settings.json');
+    const origSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const existingExts = customBinaryExtensions(origSettings).filter((ext) => ext !== '.bmp');
+    const settingsWithoutBmp = { ...origSettings };
+    if (existingExts.length > 0) settingsWithoutBmp.binaryExtensions = existingExts;
+    else delete settingsWithoutBmp.binaryExtensions;
 
-    // 1. 未設定 binaryExtensions 時：預設排除 .png，但 .bmp 被當文字檔抓出 NUL
-    const withoutSetting = runBoth('tests/file-names.test.js');
-    assert.notEqual(withoutSetting.status, 0, '未設定 binaryExtensions 時，含 NUL 的 .bmp 必須被攔截');
+    const runInCopy = (depth, ...testFiles) => spawnSync(
+      process.execPath,
+      ['--test', ...testFiles],
+      { cwd: copy, encoding: 'utf8', env: { ...baseEnv, KIT_BINARY_EXT_DEPTH: String(depth) } },
+    );
+
+    // 1. 明確建立未設定 .bmp 的狀態：預設排除 .png，但 .bmp 被當文字檔抓出 NUL
+    fs.writeFileSync(settingsPath, `${JSON.stringify(settingsWithoutBmp, null, 2)}\n`, 'utf8');
+    const withoutSetting = runInCopy(2, 'tests/file-names.test.js');
+    assert.notEqual(withoutSetting.status, 0, '未設定 .bmp 時，含 NUL 的 .bmp 必須被攔截');
     assert.match(`${withoutSetting.stdout}\n${withoutSetting.stderr}`, /assets\/custom\.bmp（位置 2，U\+0000）/u);
     assert.doesNotMatch(`${withoutSetting.stdout}\n${withoutSetting.stderr}`, /assets\/probe\.png/u);
 
-    // 2. 實際寫入 settings.json 加入 "binaryExtensions": [".bmp"]：同時跑掃檔與設定考題皆全過
-    const settingsPath = path.join(copy, 'settings.json');
-    const origSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    fs.writeFileSync(settingsPath, `${JSON.stringify({ ...origSettings, binaryExtensions: ['.bmp'] }, null, 2)}\n`, 'utf8');
-    const withCustom = runBoth('tests/file-names.test.js', 'tests/settings.test.js');
-    assert.equal(withCustom.status, 0, `設定 binaryExtensions: [".bmp"] 後兩支考題應同時通過：\n${withCustom.stdout}\n${withCustom.stderr}`);
+    // 2. 實際寫入 settings.json 加入 ".bmp"：以 depth=1 同時跑掃檔與設定考題（含在外層已登記 .bmp 下實跑本整合題本身）皆全過
+    const settingsWithBmp = { ...origSettings, binaryExtensions: [...existingExts, '.bmp'] };
+    fs.writeFileSync(settingsPath, `${JSON.stringify(settingsWithBmp, null, 2)}\n`, 'utf8');
+    const withCustom = runInCopy(BINEXT_DEPTH + 1, 'tests/file-names.test.js', 'tests/settings.test.js');
+    assert.equal(withCustom.status, 0, `設定 binaryExtensions 含 .bmp 後兩支考題（含本整合題自身）應同時通過：\n${withCustom.stdout}\n${withCustom.stderr}`);
 
-    // 3. 文字檔含 NUL 對照：即使設定了 binaryExtensions: [".bmp"]，一般文字檔含 NUL 仍被攔截
+    // 3. 文字檔含 NUL 對照：即使設定了 binaryExtensions 含 .bmp，一般文字檔含 NUL 仍被攔截
     fs.mkdirSync(path.join(copy, 'docs'), { recursive: true });
     fs.writeFileSync(path.join(copy, 'docs', 'bad.txt'), 'clean\u0000bad\n', 'utf8');
     git('add', 'docs/bad.txt');
-    const withBadText = runBoth('tests/file-names.test.js');
+    const withBadText = runInCopy(2, 'tests/file-names.test.js');
     assert.notEqual(withBadText.status, 0, '文字檔含 NUL 必須被攔截');
     assert.match(`${withBadText.stdout}\n${withBadText.stderr}`, /docs\/bad\.txt（位置 5，U\+0000）/u);
     assert.doesNotMatch(`${withBadText.stdout}\n${withBadText.stderr}`, /assets\/(?:probe\.png|custom\.bmp)/u);
@@ -168,7 +181,7 @@ test('在副本實際寫入 settings.json 的 binaryExtensions，同時執行檔
     // 4. 壞形狀對照：未以 . 開頭的 binaryExtensions 在掃檔與設定考題皆被拒絕
     fs.writeFileSync(settingsPath, `${JSON.stringify({ ...origSettings, binaryExtensions: ['bmp'] }, null, 2)}\n`, 'utf8');
     for (const tf of ['tests/file-names.test.js', 'tests/settings.test.js']) {
-      const badShape = runBoth(tf);
+      const badShape = runInCopy(2, tf);
       assert.notEqual(badShape.status, 0, `${tf} 應拒絕壞形狀的 binaryExtensions`);
       assert.match(`${badShape.stdout}\n${badShape.stderr}`, /二進位副檔名設定（binaryExtensions\[0\]）/u);
     }
