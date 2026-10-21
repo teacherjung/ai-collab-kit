@@ -119,9 +119,10 @@ function findClosingBackticks(str, fromIdx, openLen) {
 
 /**
  * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
- * 段落起訖（`### ...`）、圍欄程式碼區塊（```／~~~）、HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）
- * 由同一個由上而下的狀態機處理：圍欄或 HTML 註解內的 `### ` 不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
- * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解（#121 r4 R3）。
+ * 段落起訖（1〜3 級標題 `#`〜`###`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、圍欄程式碼區塊（```／~~~）、
+ * HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）由同一個由上而下的狀態機處理：
+ * 圍欄或 HTML 註解內的標題不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
+ * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r5 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
@@ -141,10 +142,11 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       continue;
     }
     if (!inHtmlComment) {
-      if (/^ {0,3}#{1,6}(?:\s|$)/u.test(rawLine)) {
+      if (/^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
         inSection = rawLine.trim() === '### 本輪實際用的設定';
         continue;
       }
+      if (/^ {0,3}#{4,6}(?:\s|$)/u.test(rawLine)) continue;
       if (/^\s*>/u.test(rawLine) || /^(?:\t| {0,3}\t| {4,})/u.test(rawLine)) continue;
       const openMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(rawLine);
       if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
@@ -167,7 +169,11 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         const closeIdx = findClosingBackticks(rawLine, idx + openLen, openLen);
         if (closeIdx >= 0) {
           const inner = rawLine.slice(idx + openLen, closeIdx);
-          line += /[:：<>]/u.test(inner) ? '`code`' : rawLine.slice(idx, closeIdx + openLen);
+          const isRegisteredToken = allowedModels.some((am) => eqSettingToken(inner.trim(), am))
+            || (allowedEffort && eqSettingToken(inner.trim(), allowedEffort));
+          const isInlineExampleOrComment = !isRegisteredToken
+            && /<!--|-->|(?:模型|推理)[ \t\p{L}\p{N}_／/*-]*[：:]/u.test(inner);
+          line += isInlineExampleOrComment ? '`code`' : rawLine.slice(idx, closeIdx + openLen);
           idx = closeIdx + openLen;
         } else {
           line += rawLine.slice(idx, idx + openLen);
@@ -202,48 +208,52 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         .replace(/。+$/u, '')
         .trim();
       if (!cleanedSeg) continue;
-      const clauses = cleanedSeg.split(CLAUSE_SPLIT_RE);
-      for (const rawClause of clauses) {
-        const clause = rawClause.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
-        if (!clause) continue;
-        const cm = COMBINED_CLAUSE_RE.exec(clause);
-        if (cm) {
-          const val = cm[1].trim();
-          const parts = val.split(/[ \t]*[／/][ \t]*/u);
-          const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
-          const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
-          if (mTok && eTok) {
-            modelValues.push(mTok);
-            effortValues.push(eTok);
-          } else {
-            modelValues.push(val || '（空）');
-            effortValues.push(val || '（空）');
-          }
-          continue;
-        }
-        const mm = MODEL_CLAUSE_RE.exec(clause);
-        if (mm) {
-          const val = mm[1].trim();
-          const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
-          if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
-            modelValues.push(unwrapped);
+      for (const rawSentence of cleanedSeg.split('。')) {
+        const sentence = rawSentence.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
+        if (!sentence) continue;
+        const clauses = sentence.split(CLAUSE_SPLIT_RE);
+        for (const rawClause of clauses) {
+          const clause = rawClause.replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, '').trim();
+          if (!clause) continue;
+          const cm = COMBINED_CLAUSE_RE.exec(clause);
+          if (cm) {
+            const val = cm[1].trim();
+            const parts = val.split(/[ \t]*[／/][ \t]*/u);
+            const mTok = parts.length === 2 ? cleanSettingToken(parts[0]) : null;
+            const eTok = parts.length === 2 ? cleanSettingToken(parts[1]) : null;
+            if (mTok && eTok) {
+              modelValues.push(mTok);
+              effortValues.push(eTok);
+            } else {
+              modelValues.push(val || '（空）');
+              effortValues.push(val || '（空）');
+            }
             continue;
           }
-          const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
-          const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
-          const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
-          if (mTok && eTok && (SLASH_EFFORT_RE.test(eTok) || (allowedEffort && eqSettingToken(eTok, allowedEffort)))) {
-            modelValues.push(mTok);
-            effortValues.push(eTok);
-          } else {
-            modelValues.push(cleanSettingToken(val) || val || '（空）');
+          const mm = MODEL_CLAUSE_RE.exec(clause);
+          if (mm) {
+            const val = mm[1].trim();
+            const unwrapped = val.replace(/^(?:\*\*|__)+|(?:\*\*|__)+$/gu, '').trim().replace(/^[`'"]|[`'"]$/gu, '');
+            if (allowedModels.some((am) => eqSettingToken(unwrapped, am))) {
+              modelValues.push(unwrapped);
+              continue;
+            }
+            const slashParts = val.split(/[ \t]*[／/][ \t]*/u);
+            const mTok = slashParts.length === 2 ? cleanSettingToken(slashParts[0]) : null;
+            const eTok = slashParts.length === 2 ? cleanSettingToken(slashParts[1]) : null;
+            if (mTok && eTok && (SLASH_EFFORT_RE.test(eTok) || (allowedEffort && eqSettingToken(eTok, allowedEffort)))) {
+              modelValues.push(mTok);
+              effortValues.push(eTok);
+            } else {
+              modelValues.push(cleanSettingToken(val) || val || '（空）');
+            }
+            continue;
           }
-          continue;
-        }
-        const em = EFFORT_CLAUSE_RE.exec(clause);
-        if (em) {
-          const val = em[1].trim();
-          effortValues.push(cleanSettingToken(val) || val || '（空）');
+          const em = EFFORT_CLAUSE_RE.exec(clause);
+          if (em) {
+            const val = em[1].trim();
+            effortValues.push(cleanSettingToken(val) || val || '（空）');
+          }
         }
       }
     }

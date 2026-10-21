@@ -111,6 +111,22 @@ test('④配對：引在引用區塊裡不算；先貼的不算；編號要整�
     assert.deepEqual(crossEval.ruled.map((x) => x.ask.id), [q.id], `跨 PR 以「${sep}」緊接時只關第一題`);
     assert.deepEqual(crossEval.open.map((x) => x.id), [q2.id], `跨 PR 以「${sep}」緊接時第二題維持待裁`);
   }
+  // r5 R10：自訂平台網址錨點前綴（如 #comment-<編號>、#note_<編號>）同樣只認第一個網址錨點、並在該錨點內依完整編號邊界配對
+  for (const prefix of ['comment-', 'note_', 'issuecomment-', 'c-', '']) {
+    const customSingle = `原 ❓：https://platform.example/pr/7#${prefix}5560311732`;
+    assert.equal(cites(customSingle, '5560311732'), true, `#${prefix}5560311732 單一網址應命中`);
+    assert.equal(cites(customSingle, '556031173'), false, `#${prefix}5560311732 不得命中前綴子字串`);
+    const customMulti = `原 ❓：https://platform.example/pr/7#${prefix}5560311732\n操作化：另外 https://platform.example/pr/7#${prefix}5588918432 與 5599999999 他還沒回`;
+    assert.equal(cites(customMulti, '5560311732'), true, `#${prefix} 第一個網址錨點應命中`);
+    assert.equal(cites(customMulti, '5588918432'), false, `#${prefix} 第二個網址錨點不可誤中`);
+    assert.equal(cites(customMulti, '5599999999'), false, `#${prefix} 後方裸數字不可誤中`);
+    const qNum1 = { ...ask('自訂錨點第一題'), id: '5560311732', change: '7' };
+    const qNum2 = { ...ask('自訂錨點第二題'), id: '5588918432', change: '7' };
+    const customRuling = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${customMulti}`, { author: 'boss-acct', change: '7' });
+    const customEval = evaluate([qNum1, qNum2, customRuling], D);
+    assert.deepEqual(customEval.ruled.map((x) => x.ask.id), ['5560311732'], `#${prefix} evaluate 應只關第一題`);
+    assert.deepEqual(customEval.open.map((x) => x.id), ['5588918432'], `#${prefix} evaluate 第二題維持待裁`);
+  }
 });
 
 test('⑤長得像但不合形狀＝疑似，並說原因', () => {
