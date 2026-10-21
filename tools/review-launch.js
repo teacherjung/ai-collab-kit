@@ -480,7 +480,7 @@ function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotG
       checkStep(curDir);
     }
   }
-  const fullPath = rawPath.startsWith(path.sep) ? rawPath : path.join(startDirReal, rawPath);
+  const fullPath = rawPath.startsWith(path.sep) ? rawPath : `${startDirReal.replace(/\/+$/u, '')}${path.sep}${rawPath}`;
   const kernelFinal = nativeRealpath(fullPath);
   if (!enteredBoundary || curDir !== kernelFinal || !isInsideDir(kernelFinal, boundaryReal)) {
     const err = new Error(`ESCAPED_BOUNDARY:${kernelFinal}`);
@@ -597,7 +597,7 @@ function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree
       recordStep(curDir);
     }
   }
-  const fullPath = path.join(startDirReal, entryName);
+  const fullPath = `${startDirReal.replace(/\/+$/u, '')}${path.sep}${entryName}`;
   const realTarget = nativeRealpath(fullPath);
   if (!enteredAllowed || curDir !== realTarget || !isAllowed(realTarget) || realTarget === dotGitPath || isInsideDir(realTarget, dotGitPath)) {
     const err = new Error(`OUTSIDE_WORKTREE:${realTarget}`);

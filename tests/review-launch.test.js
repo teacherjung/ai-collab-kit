@@ -3452,7 +3452,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         fs.rmSync(wsPayloadInMain, { force: true });
       }
 
-      // R2 控制組（七）：安全的樹內目錄連結（含 symlink + .. 樹內路徑與循環連結防呆）應正常放行，且寫入突變副本不會影響審查樹或主目錄
+      // R2 控制組（七）：安全的樹內目錄連結（含工作區入口本身帶 symlink + ..、內部 symlink + .. 樹內路徑與循環連結防呆）應正常放行，且寫入突變副本不會影響審查樹或主目錄
       sh(implWt, 'checkout', '--detach', '-q', wsHead);
       fs.mkdirSync(path.join(implWt, 'safe-internal-src'), { recursive: true });
       fs.writeFileSync(path.join(implWt, 'safe-internal-src', 'real.js'), 'export const wsValue = "COMMITTED_SAFE";\n');
@@ -3483,57 +3483,126 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with dotdot and cycle');
       const safeInternalHead = sh(implWt, 'rev-parse', 'HEAD');
       sh(implWt, 'checkout', '--detach', '-q', wsHead);
-      let safeInternalPosts = 0;
-      const safeInternalRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
-        settings: s,
-        platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: safeInternalHead } }),
-        cwd: implWt,
-        template: TEMPLATE,
-        leftoverRoots: [],
-        runExec(_cmd, { record }) {
-          for (const targetCwd of [record.tree, record.mutation]) {
-            const probe = spawnSync(
+
+      // 在主工作樹也準備對應的 packages/bridge -> deep/shared 與 node_modules/ws-dotdot-entry -> ../packages/bridge/../safe-dotdot（入口本身含 symlink + ..）
+      const mainDeepShared = path.join(r.dir, 'packages', 'deep', 'shared');
+      const mainDeepDotdot = path.join(r.dir, 'packages', 'deep', 'safe-dotdot');
+      const mainDecoyDotdot = path.join(r.dir, 'packages', 'safe-dotdot');
+      const mainBridgeLink = path.join(r.dir, 'packages', 'bridge');
+      const mainWsDotdotEntry = path.join(r.dir, 'node_modules', 'ws-dotdot-entry');
+      fs.mkdirSync(mainDeepShared, { recursive: true });
+      fs.mkdirSync(mainDeepDotdot, { recursive: true });
+      fs.writeFileSync(path.join(mainDeepDotdot, 'real.txt'), 'MAIN_SAFE_DOTDOT\n');
+      fs.mkdirSync(mainDecoyDotdot, { recursive: true });
+      fs.writeFileSync(path.join(mainDecoyDotdot, 'real.txt'), 'MAIN_LEXICAL_DECOY\n');
+      fs.symlinkSync('deep/shared', mainBridgeLink, 'dir');
+      fs.symlinkSync('../packages/bridge/../safe-dotdot', mainWsDotdotEntry, 'dir');
+      try {
+        let safeInternalPosts = 0;
+        const safeInternalRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: safeInternalHead } }),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+          runExec(_cmd, { record }) {
+            for (const targetCwd of [record.tree, record.mutation]) {
+              const probe = spawnSync(
+                process.execPath,
+                ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
+                { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
+              );
+              assert.equal(probe.status, 0, 'R2 控制組：安全內部連結應載入 COMMITTED_SAFE');
+              assert.equal(
+                fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt'), 'utf8'),
+                'COMMITTED_SAFE_DOTDOT\n',
+                'R2 控制組：安全樹內 symlink + .. 應讀到核心展開後的 COMMITTED_SAFE_DOTDOT',
+              );
+              assert.equal(
+                fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
+                'COMMITTED_SAFE_DOTDOT\n',
+                'R2 控制組：工作區入口本身含 symlink + .. 時應重綁並讀到受審版 COMMITTED_SAFE_DOTDOT',
+              );
+            }
+            // 寫入突變副本的內部連結目標，確認審查樹仍讀到 COMMITTED_SAFE，再還原突變副本以通過乾淨檢查
+            const mutRealFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'src', 'real.js');
+            const origMutReal = fs.readFileSync(mutRealFile, 'utf8');
+            fs.writeFileSync(mutRealFile, 'export const wsValue = "MUTATED_INTERNAL";\n');
+            const mutDotdotFile = path.join(record.mutation, 'node_modules', 'ws-dotdot-entry', 'real.txt');
+            const origMutDotdot = fs.readFileSync(mutDotdotFile, 'utf8');
+            fs.writeFileSync(mutDotdotFile, 'MUTATED_DOTDOT\n');
+            const treeCheck = spawnSync(
               process.execPath,
               ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
-              { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
+              { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
             );
-            assert.equal(probe.status, 0, 'R2 控制組：安全內部連結應載入 COMMITTED_SAFE');
+            assert.equal(treeCheck.status, 0, 'R2 控制組：改寫突變副本內部連結目標不得影響唯讀審查樹');
             assert.equal(
-              fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt'), 'utf8'),
+              fs.readFileSync(path.join(record.tree, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
               'COMMITTED_SAFE_DOTDOT\n',
-              'R2 控制組：安全樹內 symlink + .. 應讀到核心展開後的 COMMITTED_SAFE_DOTDOT',
+              'R2 控制組：改寫突變副本入口 symlink + .. 目標不得影響唯讀審查樹',
             );
-          }
-          // 寫入突變副本的內部連結目標，確認審查樹仍讀到 COMMITTED_SAFE，再還原突變副本以通過乾淨檢查
-          const mutRealFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'src', 'real.js');
-          const origMutReal = fs.readFileSync(mutRealFile, 'utf8');
-          fs.writeFileSync(mutRealFile, 'export const wsValue = "MUTATED_INTERNAL";\n');
-          const mutDotdotFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt');
-          const origMutDotdot = fs.readFileSync(mutDotdotFile, 'utf8');
-          fs.writeFileSync(mutDotdotFile, 'MUTATED_DOTDOT\n');
-          const treeCheck = spawnSync(
-            process.execPath,
-            ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
-            { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
-          );
-          assert.equal(treeCheck.status, 0, 'R2 控制組：改寫突變副本內部連結目標不得影響唯讀審查樹');
-          assert.equal(
-            fs.readFileSync(path.join(record.tree, 'node_modules', 'ws-shared', 'dotdot-src', 'real.txt'), 'utf8'),
-            'COMMITTED_SAFE_DOTDOT\n',
-            'R2 控制組：改寫突變副本 symlink + .. 目標不得影響唯讀審查樹',
-          );
-          fs.writeFileSync(mutRealFile, origMutReal);
-          fs.writeFileSync(mutDotdotFile, origMutDotdot);
-          fs.writeFileSync(
-            record.outFile,
-            `🤖 Beta｜來源：beta CLI｜審 \`${safeInternalHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
-          );
-        },
-        runPost() { safeInternalPosts += 1; },
-      });
-      assert.equal(safeInternalRes.code, 0, `R2 控制組：安全樹內目錄連結應成功執行並收樹：${safeInternalRes.lines.join('\n')}`);
-      assert.equal(safeInternalPosts, 1, 'R2 控制組：代貼次數應為 1');
-      assert.ok(!fs.existsSync(reviewFolder), 'R2 控制組：完成後容器應已清除');
+            fs.writeFileSync(mutRealFile, origMutReal);
+            fs.writeFileSync(mutDotdotFile, origMutDotdot);
+            fs.writeFileSync(
+              record.outFile,
+              `🤖 Beta｜來源：beta CLI｜審 \`${safeInternalHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+            );
+          },
+          runPost() { safeInternalPosts += 1; },
+        });
+        assert.equal(safeInternalRes.code, 0, `R2 控制組：安全樹內目錄連結應成功執行並收樹：${safeInternalRes.lines.join('\n')}`);
+        assert.equal(safeInternalPosts, 1, 'R2 控制組：代貼次數應為 1');
+        assert.ok(!fs.existsSync(reviewFolder), 'R2 控制組：完成後容器應已清除');
+
+        // 驗證工作區入口本身含 symlink + .. 時，掃描（--scan）、直接 materializeIsolatedGitRepo 與 runGrokExec 皆可正常完成
+        const safeScanWithPass = {
+          ...wsAns,
+          change: { ...wsAns.change, headSha: safeInternalHead },
+          comments: [
+            {
+              id: '502',
+              createdAt: '2026-10-20T00:00:00Z',
+              body: `🤖 Beta｜來源：beta CLI｜審 \`${safeInternalHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
+            },
+          ],
+        };
+        const safeDotdotScanLaunch = main(['--scan', '7', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(safeScanWithPass),
+          cwd: implWt,
+          leftoverRoots: [],
+        });
+        assert.equal(safeDotdotScanLaunch.code, 0, `R2 控制組：含 symlink + .. 入口之 --scan 應退 0：${safeDotdotScanLaunch.lines.join('\n')}`);
+        const isoDotdotDest = path.join(altTargetDir, 'iso-dotdot-ok');
+        materializeIsolatedGitRepo(safeDotdotScanLaunch.record.tree, isoDotdotDest, {
+          rootRepo: r.dir,
+          baseSha: r.base,
+          headSha: safeInternalHead,
+        });
+        assert.equal(
+          fs.readFileSync(path.join(isoDotdotDest, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
+          'COMMITTED_SAFE_DOTDOT\n',
+          'R2 控制組：materializeIsolatedGitRepo 複製含 symlink + .. 入口後應讀到 COMMITTED_SAFE_DOTDOT',
+        );
+        const isoDotdotDirect = path.join(altTargetDir, 'iso-dotdot-direct-ok');
+        materializeIsolatedGitRepo(r.dir, isoDotdotDirect, {
+          rootRepo: r.dir,
+          baseSha: r.base,
+          headSha: safeInternalHead,
+        });
+        assert.equal(
+          fs.readFileSync(path.join(isoDotdotDirect, 'node_modules', 'ws-dotdot-entry', 'real.txt'), 'utf8'),
+          'COMMITTED_SAFE_DOTDOT\n',
+          'R2 控制組：直接對含原始 ../packages/bridge/../safe-dotdot 之來源樹執行 materializeIsolatedGitRepo 亦應讀到 COMMITTED_SAFE_DOTDOT',
+        );
+        assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+      } finally {
+        fs.rmSync(mainWsDotdotEntry, { force: true });
+        fs.rmSync(mainBridgeLink, { force: true });
+        fs.rmSync(path.join(r.dir, 'packages', 'deep'), { recursive: true, force: true });
+        fs.rmSync(mainDecoyDotdot, { recursive: true, force: true });
+      }
 
       // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
