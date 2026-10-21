@@ -3332,6 +3332,100 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         'R2：樹外目錄內容不得被動到',
       );
 
+      // R2 外部連結防呆（三）：間接外部連結（packages/shared/src -> ../../internal-bridge，而 internal-bridge/index.js 指向樹外）
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      fs.mkdirSync(path.join(implWt, 'internal-bridge'), { recursive: true });
+      fs.symlinkSync(path.join(extSharedTarget, 'index.js'), path.join(implWt, 'internal-bridge', 'index.js'));
+      fs.symlinkSync('../../internal-bridge', path.join(implWt, 'packages', 'shared', 'src'), 'dir');
+      fs.writeFileSync(path.join(implWt, 'packages', 'shared', 'index.js'), 'export { wsValue } from "./src/index.js";\n');
+      sh(implWt, 'add', 'internal-bridge/index.js', 'packages/shared/src', 'packages/shared/index.js');
+      sh(implWt, 'commit', '-q', '-m', 'indirect external symlink via internal directory link');
+      const indirectExtHead = sh(implWt, 'rev-parse', 'HEAD');
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      let indirectPosts = 0;
+      const indirectExtRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: indirectExtHead } }),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runPost() { indirectPosts += 1; },
+      });
+      assert.equal(indirectExtRes.code, 2, 'R2：經樹內目錄連結二階指向樹外時應退 2 拒絕啟動');
+      assert.match(indirectExtRes.lines.join('\n'), /本機套件內含指向工作樹外的連結/u);
+      assert.equal(indirectPosts, 0, 'R2：間接外部連結拒啟時代貼次數必須為 0');
+      assert.ok(!fs.existsSync(reviewFolder), 'R2：間接外部連結拒啟回滾後不應留下複審容器');
+
+      // R2 外部連結防呆（四）：巢狀 node_modules 指向樹外（packages/shared/node_modules -> 樹外目錄）
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      fs.symlinkSync(extSharedTarget, path.join(implWt, 'packages', 'shared', 'node_modules'), 'dir');
+      sh(implWt, 'add', '-f', 'packages/shared/node_modules');
+      sh(implWt, 'commit', '-q', '-m', 'nested node_modules symlink to outside');
+      const nestedNmExtHead = sh(implWt, 'rev-parse', 'HEAD');
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      let nestedNmPosts = 0;
+      const nestedNmExtRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: nestedNmExtHead } }),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runPost() { nestedNmPosts += 1; },
+      });
+      assert.equal(nestedNmExtRes.code, 2, 'R2：工作區套件內巢狀 node_modules 指向樹外時應退 2 拒絕啟動');
+      assert.match(nestedNmExtRes.lines.join('\n'), /本機套件內含指向工作樹外的連結/u);
+      assert.equal(nestedNmPosts, 0, 'R2：巢狀 node_modules 拒啟時代貼次數必須為 0');
+      assert.ok(!fs.existsSync(reviewFolder), 'R2：巢狀 node_modules 拒啟回滾後不應留下複審容器');
+
+      // R2 控制組（五）：安全的樹內目錄連結（含循環連結防呆）應正常放行，且寫入突變副本不會影響審查樹或主目錄
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      fs.mkdirSync(path.join(implWt, 'safe-internal-src'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'safe-internal-src', 'real.js'), 'export const wsValue = "COMMITTED_SAFE";\n');
+      fs.symlinkSync('../packages/shared', path.join(implWt, 'safe-internal-src', 'back-loop'), 'dir');
+      fs.symlinkSync('../../safe-internal-src', path.join(implWt, 'packages', 'shared', 'src'), 'dir');
+      fs.writeFileSync(path.join(implWt, 'packages', 'shared', 'index.js'), 'export { wsValue } from "./src/real.js";\n');
+      sh(implWt, 'add', 'safe-internal-src/real.js', 'safe-internal-src/back-loop', 'packages/shared/src', 'packages/shared/index.js');
+      sh(implWt, 'commit', '-q', '-m', 'safe internal directory symlink with cycle');
+      const safeInternalHead = sh(implWt, 'rev-parse', 'HEAD');
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      let safeInternalPosts = 0;
+      const safeInternalRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: safeInternalHead } }),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          for (const targetCwd of [record.tree, record.mutation]) {
+            const probe = spawnSync(
+              process.execPath,
+              ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
+              { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
+            );
+            assert.equal(probe.status, 0, 'R2 控制組：安全內部連結應載入 COMMITTED_SAFE');
+          }
+          // 寫入突變副本的內部連結目標，確認審查樹仍讀到 COMMITTED_SAFE，再還原突變副本以通過乾淨檢查
+          const mutRealFile = path.join(record.mutation, 'node_modules', 'ws-shared', 'src', 'real.js');
+          const origMutReal = fs.readFileSync(mutRealFile, 'utf8');
+          fs.writeFileSync(mutRealFile, 'export const wsValue = "MUTATED_INTERNAL";\n');
+          const treeCheck = spawnSync(
+            process.execPath,
+            ['--input-type=module', '-e', 'const w = await import("ws-shared"); if (w.wsValue !== "COMMITTED_SAFE") process.exit(1);'],
+            { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
+          );
+          assert.equal(treeCheck.status, 0, 'R2 控制組：改寫突變副本內部連結目標不得影響唯讀審查樹');
+          fs.writeFileSync(mutRealFile, origMutReal);
+          fs.writeFileSync(
+            record.outFile,
+            `🤖 Beta｜來源：beta CLI｜審 \`${safeInternalHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          );
+        },
+        runPost() { safeInternalPosts += 1; },
+      });
+      assert.equal(safeInternalRes.code, 0, `R2 控制組：安全樹內目錄連結應成功執行並收樹：${safeInternalRes.lines.join('\n')}`);
+      assert.equal(safeInternalPosts, 1, 'R2 控制組：代貼次數應為 1');
+      assert.ok(!fs.existsSync(reviewFolder), 'R2 控制組：完成後容器應已清除');
+
       // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
         settings: s,

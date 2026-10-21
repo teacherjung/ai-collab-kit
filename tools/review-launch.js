@@ -491,46 +491,56 @@ function inspectNodeModulesTree(sourceDir, sourceWorktree) {
 }
 
 function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
+  const dotGitPath = path.join(targetTreeReal, '.git');
+  const topNodeModules = path.join(targetTreeReal, 'node_modules');
+  const relParts = link.relTarget.split(path.sep).filter(Boolean);
+  let curPrefix = targetTreeReal;
+  for (const part of relParts) {
+    curPrefix = path.join(curPrefix, part);
+    if (!fs.existsSync(curPrefix)) {
+      throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
+    }
+    let realPrefix;
+    try {
+      realPrefix = fs.realpathSync(curPrefix);
+    } catch (e) {
+      throw new LaunchError(`受審工作樹的本機套件連結目標無法解析（${link.relPath} -> ${link.relTarget}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
+    }
+    if (!isInsideDir(realPrefix, targetTreeReal) || realPrefix === dotGitPath || isInsideDir(realPrefix, dotGitPath)) {
+      throw new LaunchError(`受審工作樹的本機套件連結目標指向工作樹外（${link.relPath} -> ${link.relTarget} -> ${realPrefix}），為保受審版本隔離拒絕啟動`);
+    }
+  }
   const targetInTree = path.join(targetTreeReal, link.relTarget);
-  if (!fs.existsSync(targetInTree)) {
-    throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
-  }
-  let realTargetInTree;
-  try {
-    realTargetInTree = fs.realpathSync(targetInTree);
-  } catch (e) {
-    throw new LaunchError(`受審工作樹的本機套件連結目標無法解析（${link.relPath} -> ${link.relTarget}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
-  }
-  if (!isInsideDir(realTargetInTree, targetTreeReal)) {
-    throw new LaunchError(`受審工作樹的本機套件連結目標指向工作樹外（${link.relPath} -> ${link.relTarget} -> ${realTargetInTree}），為保受審版本隔離拒絕啟動`);
-  }
-  const verifyEntriesInsideTree = (curDir) => {
+  const realTargetInTree = fs.realpathSync(targetInTree);
+  const visitedDirs = new Set();
+  const verifyReachableInsideTree = (realDir) => {
+    if (visitedDirs.has(realDir)) return;
+    visitedDirs.add(realDir);
     let entries;
     try {
-      entries = fs.readdirSync(curDir, { withFileTypes: true });
-    } catch {
-      return;
+      entries = fs.readdirSync(realDir, { withFileTypes: true });
+    } catch (e) {
+      throw new LaunchError(`受審工作樹的本機套件目錄無法讀取（${link.relPath} -> ${path.relative(targetTreeReal, realDir)}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
     }
     for (const ent of entries) {
-      if (ent.name === '.git' || ent.name === 'node_modules') continue;
-      const ep = path.join(curDir, ent.name);
+      const ep = path.join(realDir, ent.name);
+      if (ep === dotGitPath || ep === topNodeModules) continue;
       let realEp;
       try {
         realEp = fs.realpathSync(ep);
       } catch {
         throw new LaunchError(`受審工作樹的本機套件內含失效連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)}），拒絕啟動`);
       }
-      if (!isInsideDir(realEp, targetTreeReal)) {
+      if (!isInsideDir(realEp, targetTreeReal) || realEp === dotGitPath || isInsideDir(realEp, dotGitPath)) {
         throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)} -> ${realEp}），為保受審版本隔離拒絕啟動`);
       }
-      const lst = fs.lstatSync(ep);
-      if (lst.isDirectory() && !lst.isSymbolicLink()) {
-        verifyEntriesInsideTree(ep);
+      if (fs.statSync(realEp).isDirectory()) {
+        verifyReachableInsideTree(realEp);
       }
     }
   };
   if (fs.statSync(realTargetInTree).isDirectory()) {
-    verifyEntriesInsideTree(realTargetInTree);
+    verifyReachableInsideTree(realTargetInTree);
   }
   return realTargetInTree;
 }
