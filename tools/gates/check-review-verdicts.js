@@ -117,14 +117,23 @@ function findClosingBackticks(str, fromIdx, openLen) {
   return -1;
 }
 
+const THEMATIC_BREAK_RE = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
+
 function stripListMarkers(line) {
   let rest = line;
   let listIndent = 0;
   for (;;) {
-    const m = /^( {0,3}(?:[-*+]|\d{1,9}[.)])(?: {1,4}|$))/u.exec(rest);
+    if (THEMATIC_BREAK_RE.test(rest)) break;
+    const m = /^( {0,3}(?:[-*+]|\d{1,9}[.)]))(?:( +)(.*)|$)$/u.exec(rest);
     if (!m) break;
-    listIndent += m[1].length;
-    rest = rest.slice(m[1].length);
+    if (!m[3] || m[2].length >= 5) {
+      listIndent += m[1].length + 1;
+      rest = m[3] ? rest.slice(m[1].length + 1) : '';
+      break;
+    }
+    const step = m[1].length + m[2].length;
+    listIndent += step;
+    rest = rest.slice(step);
   }
   return { rest, listIndent };
 }
@@ -132,9 +141,10 @@ function stripListMarkers(line) {
 /**
  * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
  * 段落起訖（1〜3 級標題 `#`〜`###`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、
+ * 分隔線（`* * *`／`- - -`／`_ _ _`）、空清單項目與同行縮排程式碼（CommonMark §4.1、§5.2）、
  * HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）由同一個由上而下的狀態機處理：
  * 圍欄或 HTML 註解內的標題不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
- * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r8 R3）。
+ * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r9 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
@@ -143,6 +153,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   let fenceLen = 0;
   let fenceListIndent = 0;
   const listIndents = [];
+  let emptyListItem = false;
   let inHtmlComment = false;
   let inSection = false;
 
@@ -165,7 +176,13 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       }
     }
     if (!inHtmlComment) {
-      if (rawLine.trim() === '') continue;
+      if (rawLine.trim() === '') {
+        if (emptyListItem) {
+          listIndents.pop();
+          emptyListItem = false;
+        }
+        continue;
+      }
       const leadSpaces = /^ */u.exec(rawLine)[0].length;
       while (listIndents.length && leadSpaces < listIndents[listIndents.length - 1]) {
         listIndents.pop();
@@ -175,6 +192,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       if (listIndent > 0) {
         listIndents.push(baseIndent + listIndent);
       }
+      emptyListItem = afterList === '';
       const currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
       if (currentListIndent === 0 && /^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
         inSection = rawLine.trim() === '### 本輪實際用的設定';

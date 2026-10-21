@@ -796,9 +796,9 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.ok(htmlFenceProbs.some((x) => x.includes('模型欄位重複或矛盾')));
   assert.ok(htmlFenceProbs.some((x) => x.includes('推理強度欄位重複或矛盾')));
 
-  // 行內反引號內含 `<!--` 不應開啟假 HTML 註解吞掉後方合格設定（#121 r4 R3）
+  // 行內反引號內含 `<!--`（含單反引號跨過三反引號 `` `範例 ``` <!-- ` ``）不應開啟假 HTML 註解吞掉後方合格設定（#121 r4 R3、r9 M25）
   const inlineCodeHtmlArrowGood = mkBody([
-    '- 備註：`<!--` 是 HTML 註解的起點，`` `<!--` `` 也是行內程式碼，舊範例（`模型：gpt-6-luna`）不應採計。',
+    '- 備註：`<!--` 是 HTML 註解的起點，`` `<!--` `` 與 `範例 ``` <!-- ` 也是行內程式碼，舊範例（`模型：gpt-6-luna`）不應採計。',
     '- 模型：gpt-6-astra；推理強度：max',
   ].join('\n'));
   assert.deepEqual(settingProblems(inlineCodeHtmlArrowGood, 'Beta', reviewerConfigs), []);
@@ -952,6 +952,72 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.ok(nestedContinuationProbs.some((x) => x.includes('模型欄位重複或矛盾')));
   assert.ok(nestedContinuationProbs.some((x) => x.includes('推理強度欄位重複或矛盾')));
 
+  // 分隔線（`* * *`、`- - -`、`_ _ _`）、空清單項目（`1.`＋空白行）及清單記號同行 `>= 5` 空白後的縮排程式碼範例：純範例不可放行、範例搭唯一合格設定不可誤拒（#121 r9 R3）
+  const thematicBreakExampleOnly = mkBody([
+    '* * *',
+    '      模型：gpt-6-astra；推理強度：max',
+    '',
+    '     模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.equal(settingProblems(thematicBreakExampleOnly, 'Beta', reviewerConfigs).length, 2);
+
+  const thematicBreakLowExampleWithValid = mkBody([
+    '* * *',
+    '',
+    '     模型：gpt-6-luna；推理強度：low',
+    '- - -',
+    '     模型：gpt-6-luna；推理強度：low',
+    '_ _ _',
+    '     模型：gpt-6-luna；推理強度：low',
+    '',
+    '- 模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(thematicBreakLowExampleWithValid, 'Beta', reviewerConfigs), []);
+
+  const emptyListItemExampleOnly = mkBody([
+    '1.',
+    '',
+    '    模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.equal(settingProblems(emptyListItemExampleOnly, 'Beta', reviewerConfigs).length, 2);
+
+  const emptyListItemLowExampleWithValid = mkBody([
+    '1.',
+    '',
+    '    模型：gpt-6-luna；推理強度：low',
+    '',
+    '-   ',
+    '',
+    '    模型：gpt-6-luna；推理強度：low',
+    '',
+    '- 模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(emptyListItemLowExampleWithValid, 'Beta', reviewerConfigs), []);
+
+  const emptyInnerListItemDoubleBlankThenOuterFenceLow = mkBody([
+    '1. 外層說明',
+    '   -',
+    '',
+    '',
+    '   ```text',
+    '   - 模型：gpt-6-astra；推理強度：max',
+    '     ```',
+    '- 模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  const emptyInnerListProbs = settingProblems(emptyInnerListItemDoubleBlankThenOuterFenceLow, 'Beta', reviewerConfigs);
+  assert.equal(emptyInnerListProbs.length, 2, emptyInnerListProbs.join(' / '));
+  assert.ok(emptyInnerListProbs.some((x) => x.includes('實際填「gpt-6-luna」')));
+  assert.ok(emptyInnerListProbs.some((x) => x.includes('實際填「low」')));
+
+  const inlineFiveSpaceListCodeExampleOnly = mkBody('1.     說明；模型：gpt-6-astra；推理強度：max');
+  assert.equal(settingProblems(inlineFiveSpaceListCodeExampleOnly, 'Beta', reviewerConfigs).length, 2);
+
+  const inlineFiveSpaceListCodeLowWithValid = mkBody([
+    '1.     說明；模型：gpt-6-luna；推理強度：low',
+    '- 模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(inlineFiveSpaceListCodeLowWithValid, 'Beta', reviewerConfigs), []);
+
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
     `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
@@ -962,7 +1028,7 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
-  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例、四反引號夾三反引號、圍欄內 ###、註解內 ```、子標題 ####、清單項目同行／續行圍欄及未閉合清單圍欄離開容器夾帶低檔設定）不算數、不能解除阻擋；合規放行
+  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例、四反引號夾三反引號、圍欄內 ###、註解內 ```、子標題 ####、清單項目同行／續行圍欄、未閉合清單圍欄離開容器、分隔線與空清單縮排程式碼範例）不算數、不能解除阻擋；合規放行
   const priorBlock = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：需修改後再審`, 'r1-block');
   const badComment = c(honestLowWithReq, 'bad-set');
   const commaBadComment = c(mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'), 'comma-bad');
@@ -977,20 +1043,27 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   const unclosedListFenceBadR2 = c(unclosedListFenceThenOuterFenceLow.replace('｜r1｜', '｜r2｜'), 'unclosed-list-fence-bad-r2');
   const continuationFenceBadR2 = c(continuationFenceLow.replace('｜r1｜', '｜r2｜'), 'continuation-fence-bad-r2');
   const nestedContinuationFenceBadR2 = c(nestedContinuationFenceLow.replace('｜r1｜', '｜r2｜'), 'nested-continuation-fence-bad-r2');
+  const thematicBreakBadR2 = c(thematicBreakExampleOnly.replace('｜r1｜', '｜r2｜'), 'thematic-break-bad-r2');
+  const emptyListItemBadR2 = c(emptyListItemExampleOnly.replace('｜r1｜', '｜r2｜'), 'empty-list-item-bad-r2');
+  const emptyInnerListBadR2 = c(emptyInnerListItemDoubleBlankThenOuterFenceLow.replace('｜r1｜', '｜r2｜'), 'empty-inner-list-bad-r2');
+  const inlineFiveSpaceBadR2 = c(inlineFiveSpaceListCodeExampleOnly.replace('｜r1｜', '｜r2｜'), 'inline-five-space-bad-r2');
   const subheadingGoodComment = c(subheadingOnlyValid, 'subheading-good');
   const listFenceGoodComment = c(listFencedLowExampleWithValidActual, 'list-fence-good');
   const unclosedListFenceGoodComment = c(unclosedListFenceThenOuterFenceValid, 'unclosed-list-fence-good');
   const continuationFenceGoodComment = c(continuationFenceValid, 'continuation-fence-good');
   const continuationClosedFenceGoodComment = c(continuationClosedFenceValid, 'continuation-closed-fence-good');
+  const thematicBreakGoodComment = c(thematicBreakLowExampleWithValid, 'thematic-break-good');
+  const emptyListItemGoodComment = c(emptyListItemLowExampleWithValid, 'empty-list-item-good');
+  const inlineFiveSpaceGoodComment = c(inlineFiveSpaceListCodeLowWithValid, 'inline-five-space-good');
   const inlineCodeGoodComment = c(inlineCodeHtmlArrowGood, 'inline-code-good');
   const colonGoodComment = c(colonBacktickGood, 'colon-good');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
   assert.ok(rBad.problems.some((x) => x.includes('沒有「Beta」對目前版本')));
-  for (const probeComment of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2]) {
+  for (const probeComment of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2, thematicBreakBadR2, emptyListItemBadR2, emptyInnerListBadR2, inlineFiveSpaceBadR2]) {
     const rAfterBlock = evaluate([priorBlock, probeComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
-    assert.ok(rAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `夾帶低檔設定的通過不可解除既有阻擋：${rAfterBlock.problems.join(' / ')}`);
+    assert.ok(rAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `夾帶低檔設定或純範例的通過不可解除既有阻擋：${rAfterBlock.problems.join(' / ')}`);
   }
   assert.deepEqual(evaluate([inlineCodeGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   assert.deepEqual(evaluate([subheadingGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
@@ -998,6 +1071,9 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.deepEqual(evaluate([unclosedListFenceGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   assert.deepEqual(evaluate([continuationFenceGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   assert.deepEqual(evaluate([continuationClosedFenceGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
+  assert.deepEqual(evaluate([thematicBreakGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
+  assert.deepEqual(evaluate([emptyListItemGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
+  assert.deepEqual(evaluate([inlineFiveSpaceGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   assert.deepEqual(evaluate([colonGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs: colonReviewerConfigs }).problems, []);
   const rGood = evaluate([badComment, goodComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.deepEqual(rGood.problems, []);
@@ -1020,12 +1096,19 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, unclosedListFenceBadR2] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, continuationFenceBadR2] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, nestedContinuationFenceBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, thematicBreakBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, emptyListItemBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, emptyInnerListBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, inlineFiveSpaceBadR2] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [inlineCodeGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [subheadingGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [listFenceGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [unclosedListFenceGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [continuationFenceGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [continuationClosedFenceGoodComment] }) }).code, 0);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [thematicBreakGoodComment] }) }).code, 0);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [emptyListItemGoodComment] }) }).code, 0);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [inlineFiveSpaceGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: { ...gateSettings, reviewers: colonReviewerConfigs }, platform: fakePlatform({ change: change(), comments: [colonGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [goodComment] }) }).code, 0);
 });

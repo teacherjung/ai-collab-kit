@@ -127,6 +127,45 @@ test('④配對：引在引用區塊裡不算；先貼的不算；編號要整�
     assert.deepEqual(customEval.ruled.map((x) => x.ask.id), ['5560311732'], `#${prefix} evaluate 應只關第一題`);
     assert.deepEqual(customEval.open.map((x) => x.id), ['5588918432'], `#${prefix} evaluate 第二題維持待裁`);
   }
+  // r9 R10：大寫網址 scheme（HTTPS://、Http://）與大小寫混合雙網址同樣只認第一個網址錨點，且無空白串接大寫第二網址不跨過（清單 run 與待裁閘 gateRun 整合）
+  const { gateRun: pendingGateRun } = require('../tools/gates/check-pending-rulings.js');
+  const gateSettings = { participants: [{ role: '裁示者（人）', id: 'Boss', account: 'boss-acct' }, { role: 'AI 甲', id: 'Alpha', account: 'ai-acct' }] };
+  const mkGatePlatform = (all) => ({
+    ask(op, args) {
+      if (op === 'change') return { id: String(args.change), headSha: 'abc' };
+      if (op === 'allComments') return all;
+      throw new Error(`unexpected ${op}`);
+    },
+  });
+  const qUp1 = { ...ask('大寫首網址第一題'), id: '5560311732', change: '7' };
+  const qUp2 = { ...ask('小寫次網址第二題'), id: '5560311733', change: '8' };
+  const upperSingleBody = '原題：HTTPS://github.com/teacherjung/ai-collab-kit/pull/7#issuecomment-5560311732';
+  assert.equal(cites(upperSingleBody, '5560311732'), true, '大寫 HTTPS:// 單一首網址應命中');
+  const upperSingleRuling = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${upperSingleBody}`, { author: 'boss-acct', change: '7' });
+  const upperSingleEval = evaluate([qUp1, upperSingleRuling], D);
+  assert.deepEqual(upperSingleEval.ruled.map((x) => x.ask.id), ['5560311732'], '單一大寫首網址應將第一題列已裁');
+  assert.deepEqual(upperSingleEval.open, []);
+  const upperSingleList = run({ settings: gateSettings, platform: mkGatePlatform([qUp1, upperSingleRuling]) });
+  assert.equal(upperSingleList.code, 0);
+  assert.match(upperSingleList.lines.join('\n'), /還沒回：0 則[\s\S]*已裁：1 則/u);
+  assert.equal(pendingGateRun('7', { settings: gateSettings, platform: mkGatePlatform([qUp1, upperSingleRuling]) }).code, 0, '單一大寫首網址待裁閘應放行');
+
+  const upperMixedBody = '原題：HTTPS://github.com/teacherjung/ai-collab-kit/pull/7#issuecomment-5560311732\n其他題未答：https://github.com/teacherjung/ai-collab-kit/pull/8#issuecomment-5560311733';
+  assert.equal(cites(upperMixedBody, '5560311732'), true, '大寫首網址＋小寫次網址時，第一題應命中');
+  assert.equal(cites(upperMixedBody, '5560311733'), false, '大寫首網址＋小寫次網址時，第二題不可誤中');
+  const upperMixedRuling = c(`## ⚖️ Boss 裁示（2026-09-13）：選甲\n原話（對話中，Alpha 轉述）：**「甲」**\n${upperMixedBody}`, { author: 'boss-acct', change: '7' });
+  const upperMixedEval = evaluate([qUp1, qUp2, upperMixedRuling], D);
+  assert.deepEqual(upperMixedEval.ruled.map((x) => x.ask.id), ['5560311732'], '混合大小寫雙網址只關第一題');
+  assert.deepEqual(upperMixedEval.open.map((x) => x.id), ['5560311733'], '混合大小寫雙網址第二題維持待裁');
+  const upperMixedList = run({ settings: gateSettings, platform: mkGatePlatform([qUp1, qUp2, upperMixedRuling]) });
+  assert.equal(upperMixedList.code, 0);
+  assert.match(upperMixedList.lines.join('\n'), /還沒回：1 則[\s\S]*留言 5560311733[\s\S]*已裁：1 則[\s\S]*留言 5560311732/u);
+  assert.equal(pendingGateRun('7', { settings: gateSettings, platform: mkGatePlatform([qUp1, qUp2, upperMixedRuling]) }).code, 0, '混合大小寫雙網址：首網址所屬 PR #7 待裁閘應放行');
+  assert.equal(pendingGateRun('8', { settings: gateSettings, platform: mkGatePlatform([qUp1, qUp2, upperMixedRuling]) }).code, 1, '混合大小寫雙網址：次網址所屬 PR #8 待裁閘必須擋下');
+
+  const gluedUpperSecond = '原題：https://x/pull/7#issuecomment-5560311732HTTPS://x/pull/8#issuecomment-5560311733';
+  assert.equal(cites(gluedUpperSecond, '5560311732'), true, '無空白緊接大寫 HTTPS:// 次網址時，第一題應命中');
+  assert.equal(cites(gluedUpperSecond, '5560311733'), false, '無空白緊接大寫 HTTPS:// 次網址時，第二題不可誤中');
 });
 
 test('⑤長得像但不合形狀＝疑似，並說原因', () => {

@@ -792,6 +792,9 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過於清單未閉合圍欄離開容器後開啟外層圍欄包合格範例、外層圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   格式範例\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
     ['通過於四反引號圍欄內夾三反引號與合格設定範例、圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`\`\`\`text\n參考：\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
     ['通過於清單續行圍欄未閉合離開容器後開啟外層圍欄包合格範例、外層圍欄後填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. 格式範例\n   \`\`\`text\n   範例說明\n\`\`\`\n- 模型：m-strong；推理強度：max\n\`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
+    ['通過於分隔線後只放 5 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
+    ['通過於空清單項目與空行後只放 4 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.\n\n    模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
+    ['通過於清單記號同行 5 空白後只放縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.     說明；模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
@@ -805,6 +808,8 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
   assert.equal(unclosedListFenceThenOuterFenceLowExampleOk.header.verdict, '通過');
   const continuationFenceLowExampleOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. 格式範例\n   \`\`\`text\n   範例說明\n\`\`\`\n- 模型：wrong；推理強度：low\n\`\`\`\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
   assert.equal(continuationFenceLowExampleOk.header.verdict, '通過');
+  const thematicAndEmptyListExampleWithValidOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：wrong；推理強度：low\n\n1.\n\n    模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
+  assert.equal(thematicAndEmptyListExampleWithValidOk.header.verdict, '通過');
   const colonModelOpts = {
     ...baseOpts,
     reviewerConfigs: [{ participant: 'Beta', strongest: 'provider:model-v1', second: 'm-second', maxEffort: 'max' }],
