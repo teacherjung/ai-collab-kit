@@ -763,6 +763,7 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過誠實填低檔模型但附要求值', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 實際模型：wrong；實際推理：low（要求模型：m-strong；要求推理：max）\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
     ['通過以半形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong, wrong\n- 推理強度：max, low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong, wrong」，需為 m-strong 或 m-second）/u],
     ['通過以全形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong，wrong\n- 推理強度：max，low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong，wrong」，需為 m-strong 或 m-second）/u],
+    ['通過於反引號圍欄內含波浪號與合格範例、圍欄外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`\`\`text\n參考值：\n~~~\n- 模型：m-strong；推理強度：max\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }

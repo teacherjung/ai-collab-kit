@@ -111,14 +111,45 @@ const EFFORT_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:�
 function parseSettingFields(sectionLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
   const effortValues = [];
-  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let inHtmlComment = false;
 
-  for (const line of sectionLines) {
-    if (/^\s*(?:```|~~~)/u.test(line)) {
-      inFence = !inFence;
+  for (const rawLine of sectionLines) {
+    if (fenceChar) {
+      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(rawLine);
+      if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
+        fenceChar = '';
+        fenceLen = 0;
+      }
       continue;
     }
-    if (inFence || /^\s*>/u.test(line)) continue;
+    const openMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(rawLine);
+    if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
+      fenceChar = openMatch[1][0];
+      fenceLen = openMatch[1].length;
+      continue;
+    }
+    let line = '';
+    let idx = 0;
+    while (idx < rawLine.length) {
+      if (inHtmlComment) {
+        const endIdx = rawLine.indexOf('-->', idx);
+        if (endIdx < 0) break;
+        inHtmlComment = false;
+        idx = endIdx + 3;
+      } else {
+        const startIdx = rawLine.indexOf('<!--', idx);
+        if (startIdx < 0) {
+          line += rawLine.slice(idx);
+          break;
+        }
+        line += rawLine.slice(idx, startIdx);
+        inHtmlComment = true;
+        idx = startIdx + 4;
+      }
+    }
+    if (!line.trim() || /^\s*>/u.test(line) || /^(?:\t| {0,3}\t| {4,})/u.test(line)) continue;
     const segments = [];
     const outer = line.replace(/[（(]([^）)]*)[）)]/gu, (full, inner) => {
       if (/[：:]/u.test(inner)) {

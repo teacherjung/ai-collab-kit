@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
 const settingsData = require('../tools/settings-data.js');
@@ -18,19 +19,18 @@ const settingsData = require('../tools/settings-data.js');
 const ROOT = path.join(__dirname, '..');
 /** 既有的路徑例外，只出不進（本倉庫沒有）。 */
 const FROZEN_EXCEPTIONS = [];
-/** 預設二進位副檔名允許清單（規矩 E6、E7；若 settings.json 另設 binaryExtensions 陣列則優先採用）。 */
+/** 預設二進位副檔名允許清單（規矩 E6、E7；若 settings.json 另設 binaryExtensions 陣列則聯集併入）。 */
 const DEFAULT_BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.eot', '.pdf', '.zip', '.gz'];
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/u;
 const CONTROL_ESCAPE_AT = /^\\(?:x[01][0-9a-fA-F]|u00[01][0-9a-fA-F]|u\{0*(?:[0-9a-fA-F]|1[0-9a-fA-F])\})/u;
-const REGEX_START_KEYWORDS = new Set(['return', 'throw', 'case', 'typeof', 'delete', 'void', 'in', 'of', 'instanceof', 'new', 'yield', 'await', 'else', 'do']);
-const BLOCK_START_KEYWORDS = new Set(['else', 'do', 'try', 'finally']);
-const DECL_PREFIX_KEYWORDS = new Set(['async', 'export', 'default']);
-const CTRL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'with', 'switch']);
+const UNAMBIGUOUS_REGEX_PREV = new Set(['', '(', '[', '{', ',', ';', '=', ':', '?', '!', '&', '|', '^', '~', '*', '%', '<', '>', '+', '-']);
 
 function binaryExtensions(readFn = settingsData.read) {
   const s = readFn();
-  if (s && Array.isArray(s.binaryExtensions)) return s.binaryExtensions;
-  return DEFAULT_BINARY_EXTENSIONS;
+  const custom = s && Array.isArray(s.binaryExtensions)
+    ? s.binaryExtensions.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().toLowerCase())
+    : [];
+  return [...new Set([...DEFAULT_BINARY_EXTENSIONS, ...custom])];
 }
 
 function trackedFiles() {
@@ -50,9 +50,12 @@ function findControlChar(text) {
   return null;
 }
 
-function scanControlChars({ extraFiles = [], readFn = settingsData.read, binaryExts = binaryExtensions(readFn), transform = (_f, text) => text } = {}) {
+function scanControlChars({ files, extraFiles = [], readFn = settingsData.read, binaryExts = binaryExtensions(readFn), transform = (_f, text) => text } = {}) {
+  const baseFiles = Array.isArray(files)
+    ? files.map((item) => ({ name: item.name, read: item.read || (() => item.content) }))
+    : trackedFiles().map((f) => ({ name: f, read: () => fs.readFileSync(path.join(ROOT, f), 'utf8') }));
   const all = [
-    ...trackedFiles().map((f) => ({ name: f, read: () => fs.readFileSync(path.join(ROOT, f), 'utf8') })),
+    ...baseFiles,
     ...extraFiles.map((item) => ({ name: item.name, read: () => item.content })),
   ];
   const textFiles = all.filter((item) => !binaryExts.some((ext) => item.name.toLowerCase().endsWith(ext)));
@@ -65,36 +68,47 @@ function scanControlChars({ extraFiles = [], readFn = settingsData.read, binaryE
   return { count: textFiles.length, bad };
 }
 
-/** 取出 JS 原始碼裡所有正規式字面量的 { pattern, flags }（跳過註解與字串，掃描模板字串 ${...} 內嵌表達式）。 */
+function isSyntaxOk(code) {
+  try {
+    return Boolean(new vm.Script(code));
+  } catch {
+    return false;
+  }
+}
+
+function isValidRegexLiteralAt(src, start, end, pattern, flags) {
+  try {
+    if (typeof new RegExp(pattern, flags).source !== 'string') return false;
+  } catch {
+    return false;
+  }
+  const prefix = src.slice(0, start);
+  const suffix = src.slice(end);
+  return isSyntaxOk(`${prefix} true ${suffix}`) && isSyntaxOk(`${prefix}(/a/)${suffix}`);
+}
+
+/**
+ * 取出 JS 原始碼裡所有正規式字面量的 { pattern, flags, start, end }。
+ * F10 換做法（#121 r3 R2）：不再靠關鍵字清單猜識別字或括號後是否為除法，改以 V8 內建 vm.Script 語法核對候選區間是否為合法 PrimaryExpression 正規式字面量。
+ */
 function extractRegexLiterals(src) {
   const out = [];
   let i = 0;
-  let canStartRegex = true;
-  let stmtStart = true;
-  let pendingDeclBody = false;
-  let lastWord = '';
-  let afterDot = false;
-  const parenStack = [];
-  const braceStack = [];
+  let prevToken = '';
+  const templateBraceStack = [];
 
   function readTemplateText() {
     while (i < src.length) {
       if (src[i] === '\\') { i += 2; continue; }
       if (src[i] === '`') {
         i++;
-        canStartRegex = false;
-        stmtStart = false;
-        lastWord = '';
-        afterDot = false;
+        prevToken = '`';
         return;
       }
       if (src[i] === '$' && src[i + 1] === '{') {
         i += 2;
-        braceStack.push({ afterCanStartRegex: false, isTemplate: true });
-        canStartRegex = true;
-        stmtStart = false;
-        lastWord = '';
-        afterDot = false;
+        templateBraceStack.push(0);
+        prevToken = '{';
         return;
       }
       i++;
@@ -123,10 +137,7 @@ function extractRegexLiterals(src) {
         else i++;
       }
       i++;
-      canStartRegex = false;
-      stmtStart = false;
-      lastWord = '';
-      afterDot = false;
+      prevToken = 'str';
       continue;
     }
     if (ch === '`') {
@@ -134,7 +145,25 @@ function extractRegexLiterals(src) {
       readTemplateText();
       continue;
     }
-    if (ch === '/' && canStartRegex) {
+    if (ch === '{' && templateBraceStack.length > 0) {
+      templateBraceStack[templateBraceStack.length - 1] += 1;
+      prevToken = '{';
+      i++;
+      continue;
+    }
+    if (ch === '}' && templateBraceStack.length > 0) {
+      if (templateBraceStack[templateBraceStack.length - 1] === 0) {
+        templateBraceStack.pop();
+        i++;
+        readTemplateText();
+        continue;
+      }
+      templateBraceStack[templateBraceStack.length - 1] -= 1;
+      prevToken = '}';
+      i++;
+      continue;
+    }
+    if (ch === '/') {
       let j = i + 1;
       let inClass = false;
       let valid = true;
@@ -147,132 +176,46 @@ function extractRegexLiterals(src) {
         else if (c === '/' && !inClass) break;
         j++;
       }
-      if (valid && j < src.length && src[j] === '/') {
+      if (valid && j > i + 1 && j < src.length && src[j] === '/') {
         const pattern = src.slice(i + 1, j);
         j++;
         const flagStart = j;
         while (j < src.length && /[dgimsuvy]/u.test(src[j])) j++;
-        out.push({ pattern, flags: src.slice(flagStart, j) });
-        i = j;
-        canStartRegex = false;
-        stmtStart = false;
-        lastWord = '';
-        afterDot = false;
-        continue;
-      }
-    }
-    if (/[A-Za-z_$]/u.test(ch)) {
-      let j = i + 1;
-      while (j < src.length && /[0-9A-Za-z_$]/u.test(src[j])) j++;
-      const word = src.slice(i, j);
-      if (!afterDot) {
-        if ((word === 'function' || word === 'class') && stmtStart) {
-          pendingDeclBody = true;
+        const flags = src.slice(flagStart, j);
+        let isRegex;
+        if (UNAMBIGUOUS_REGEX_PREV.has(prevToken)) {
+          try {
+            isRegex = Boolean(new RegExp(pattern, flags));
+          } catch {
+            isRegex = false;
+          }
+        } else {
+          isRegex = isValidRegexLiteralAt(src, i, j, pattern, flags);
         }
-        canStartRegex = REGEX_START_KEYWORDS.has(word);
-        stmtStart = BLOCK_START_KEYWORDS.has(word) || (stmtStart && DECL_PREFIX_KEYWORDS.has(word));
-        lastWord = word;
-      } else {
-        canStartRegex = false;
-        stmtStart = false;
-        lastWord = '';
+        if (isRegex) {
+          out.push({ pattern, flags, start: i, end: j });
+          i = j;
+          prevToken = 'regex';
+          continue;
+        }
       }
-      afterDot = false;
-      i = j;
-      continue;
-    }
-    if (/[0-9]/u.test(ch)) {
-      let j = i + 1;
-      while (j < src.length && /[0-9A-Za-z_.]/u.test(src[j])) j++;
-      canStartRegex = false;
-      stmtStart = false;
-      lastWord = '';
-      afterDot = false;
-      i = j;
-      continue;
-    }
-    if (ch === '(') {
-      parenStack.push({ isCtrl: CTRL_PAREN_KEYWORDS.has(lastWord) });
-      canStartRegex = true;
-      stmtStart = false;
-      lastWord = '';
-      afterDot = false;
-      i++;
-      continue;
-    }
-    if (ch === ')') {
-      const top = parenStack.pop();
-      const isCtrl = Boolean(top && top.isCtrl);
-      canStartRegex = isCtrl;
-      stmtStart = isCtrl;
-      lastWord = '';
-      afterDot = false;
-      i++;
-      continue;
-    }
-    if (ch === '{') {
-      const afterCanStartRegex = stmtStart || pendingDeclBody;
-      pendingDeclBody = false;
-      braceStack.push({ afterCanStartRegex, isTemplate: false });
-      canStartRegex = true;
-      stmtStart = true;
-      lastWord = '';
-      afterDot = false;
-      i++;
-      continue;
-    }
-    if (ch === '}') {
-      const top = braceStack.pop();
-      if (top && top.isTemplate) {
-        i++;
-        readTemplateText();
-        continue;
-      }
-      const afterOk = top ? top.afterCanStartRegex : true;
-      canStartRegex = afterOk;
-      stmtStart = afterOk;
-      lastWord = '';
-      afterDot = false;
-      i++;
-      continue;
-    }
-    if (ch === ';') {
-      canStartRegex = true;
-      stmtStart = true;
-      pendingDeclBody = false;
-      lastWord = '';
-      afterDot = false;
-      i++;
-      continue;
-    }
-    if (ch === '.') {
-      canStartRegex = false;
-      stmtStart = false;
-      lastWord = '';
-      afterDot = true;
+      prevToken = '/';
       i++;
       continue;
     }
     if ((ch === '+' && src[i + 1] === '+') || (ch === '-' && src[i + 1] === '-')) {
-      canStartRegex = false;
-      stmtStart = false;
-      lastWord = '';
-      afterDot = false;
+      prevToken = ch + ch;
       i += 2;
       continue;
     }
-    if (ch === ']' || ch === ')') {
-      canStartRegex = false;
-      stmtStart = false;
-    } else if (/[,:[!&|?~+*%^<>=-]/u.test(ch)) {
-      canStartRegex = true;
-      stmtStart = false;
-    } else {
-      canStartRegex = false;
-      stmtStart = false;
+    if (/[0-9A-Za-z_$]/u.test(ch)) {
+      let j = i + 1;
+      while (j < src.length && /[0-9A-Za-z_$.]/u.test(src[j])) j++;
+      prevToken = 'id';
+      i = j;
+      continue;
     }
-    lastWord = '';
-    afterDot = false;
+    prevToken = ch;
     i++;
   }
   return out;
@@ -308,10 +251,12 @@ function analyzeRegexPattern(pattern, flags = '') {
 
 function regexLintProblems(src, file) {
   const problems = [];
-  for (const { pattern, flags } of extractRegexLiterals(src)) {
+  for (const { pattern, flags, start, end } of extractRegexLiterals(src)) {
     const { hasDoubleSpace, hasControlEscape } = analyzeRegexPattern(pattern, flags);
-    if (hasDoubleSpace) problems.push(`${file}：正規式 /${pattern}/${flags} 含連續空白（no-regex-spaces，請改寫成 {2} 或 \\s）`);
-    if (hasControlEscape) problems.push(`${file}：正規式 /${pattern}/${flags} 含控制字元跳脫（no-control-regex）`);
+    if ((hasDoubleSpace || hasControlEscape) && isValidRegexLiteralAt(src, start, end, pattern, flags)) {
+      if (hasDoubleSpace) problems.push(`${file}：正規式 /${pattern}/${flags} 含連續空白（no-regex-spaces，請改寫成 {2} 或 \\s）`);
+      if (hasControlEscape) problems.push(`${file}：正規式 /${pattern}/${flags} 含控制字元跳脫（no-control-regex）`);
+    }
   }
   return problems;
 }
@@ -335,17 +280,23 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
   assert.ok(clean.count >= 40, `只掃到 ${clean.count} 個文字檔：前提變了`);
   assert.deepEqual(clean.bad, [], `這些文字檔含控制字元：\n${clean.bad.join('\n')}`);
 
-  // 二進位副檔名允許清單（如 .png 含 \x1a）依副檔名排除，且支援經 settings-data.read() 讀取自訂 binaryExtensions（#121 r1 R1、r2 R1）
-  const withPng = scanControlChars({
-    extraFiles: [{ name: 'assets/review-probe.png', content: '\x89PNG\r\n\x1a\n' }],
+  // 隔離檔案集合核對二進位副檔名允許清單：預設排除 .png、未設定時擋 .bmp、設定 binaryExtensions: ['.bmp'] 時同時排除 .png 與 .bmp（#121 r1〜r3 R1）
+  const isolatedBoth = [
+    { name: 'assets/review-probe.png', content: '\x89PNG\r\n\x1a\n' },
+    { name: 'assets/custom.bmp', content: 'BM\u0000\u0000' },
+    { name: 'docs/clean.txt', content: 'clean text\n' },
+  ];
+  const defaultOnly = scanControlChars({
+    files: isolatedBoth,
+    readFn: () => ({}),
   });
-  assert.deepEqual(withPng.bad, [], '二進位副檔名（.png）應由預設副檔名允許清單排除');
+  assert.deepEqual(defaultOnly.bad, ['assets/custom.bmp（位置 2，U+0000）'], '預設清單排除 .png，但未登記的 .bmp 應被攔截');
 
   const withCustomReadFn = scanControlChars({
+    files: isolatedBoth,
     readFn: () => ({ binaryExtensions: ['.bmp'] }),
-    extraFiles: [{ name: 'assets/custom.bmp', content: 'BM\u0000\u0000' }],
   });
-  assert.deepEqual(withCustomReadFn.bad, [], '自訂 binaryExtensions（.bmp）應生效並排除');
+  assert.deepEqual(withCustomReadFn.bad, [], '自訂 binaryExtensions（.bmp）與預設 .png 聯集後兩者皆應排除');
 
   const desc = Object.getOwnPropertyDescriptor(settingsData, 'read');
   if (desc && desc.writable) {
@@ -357,10 +308,10 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
         return { ...origRead(), binaryExtensions: ['.bmp'] };
       };
       const withCustomBmp = scanControlChars({
-        extraFiles: [{ name: 'assets/custom.bmp', content: 'BM\u0000\u0000' }],
+        files: isolatedBoth,
       });
       assert.ok(readCalls >= 1, '預設必須實際呼叫 settingsData.read() 讀取專案設定');
-      assert.deepEqual(withCustomBmp.bad, [], 'settings.binaryExtensions 登記的自訂二進位副檔名（.bmp）應生效並排除');
+      assert.deepEqual(withCustomBmp.bad, [], 'settings.binaryExtensions 登記的自訂二進位副檔名（.bmp）應生效且保留預設 .png 排除');
     } finally {
       settingsData.read = origRead;
     }
@@ -382,7 +333,7 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
   }
 });
 
-test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控制字元跳脫（#71、#77、#121 r1 R2、r2 R2）', () => {
+test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控制字元跳脫（#71、#77、#121 r1〜r3 R2）', () => {
   const clean = scanRepoRegexLint();
   assert.ok(clean.count >= 70, `只掃到 ${clean.count} 支 JS 檔：前提變了`);
   assert.deepEqual(clean.problems, []);
@@ -391,7 +342,11 @@ test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控
   const decoy = scanRepoRegexLint((f, raw) => (f === 'tests/file-names.test.js' && raw.includes('extractRegexLiterals') ? `${raw}\nconst _decoy = /a  b/u;\n` : raw));
   assert.equal(decoy.problems.length, 1);
 
-  // 判準本身：抓得到連續空白、控制字元跳脫、奇數反斜線後接控制跳脫、跳脫方括號、if (...) 與 async 宣告後的正規式，且不誤傷跳脫反斜線、字元集內空白或一般／非同步函式表達式後的除法（#121 r1 R2、r2 R2）
+  // 經整份掃描路徑核對合法 `of` 變數除法與非同步函式表達式除法不誤報
+  const ofDivClean = scanRepoRegexLint((f, raw) => (f === 'tests/file-names.test.js' ? `${raw}\nconst of = 4; const n = of /  2; const m = 6 / 3;\n` : raw));
+  assert.deepEqual(ofDivClean.problems, []);
+
+  // 判準本身：抓得到連續空白、控制字元跳脫、奇數反斜線後接控制跳脫、跳脫方括號、if (...) 與 async 宣告後的正規式，且不誤傷跳脫反斜線、字元集內空白、上下文關鍵字變數（of／yield／await）或函式表達式後的除法（#121 r1〜r3 R2）
   assert.equal(regexLintProblems('const r = /a  b/u;', 'x.js').length, 1);
   assert.equal(regexLintProblems('const r = /[\\x00-\\x1f]/u;', 'x.js').length, 1);
   assert.equal(regexLintProblems('const r = /\\u0007/u;', 'x.js').length, 1);
@@ -406,5 +361,7 @@ test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控
   assert.deepEqual(regexLintProblems('const r = function(){} /  2; const next = 4 / 3;', 'x.js'), [], '函式表達式大括號後的除法不可誤判為正規式');
   assert.deepEqual(regexLintProblems('const f = async function(){} /  2; const next = 4 / 3;', 'x.js'), [], '非同步函式表達式大括號後的除法不可誤判為正規式');
   assert.deepEqual(regexLintProblems('const o = { a: function(){} /  2, b: 4 / 3 };', 'x.js'), [], '物件屬性冒號後的函式表達式除法不可誤判為正規式');
+  assert.deepEqual(regexLintProblems('const of = 4; const n = of /  2; const m = 6 / 3;', 'x.js'), [], '合法識別字 of 後的除法不可誤判為正規式');
+  assert.deepEqual(regexLintProblems('const yield = 4; const n = yield /  2; const m = 6 / 3;', 'x.js'), [], '合法識別字 yield 後的除法不可誤判為正規式');
   assert.deepEqual(regexLintProblems('// /a  b/ in comment\nconst s = "/a  b/ \\\\x00";\nconst ok = /a {2}b/u;', 'x.js'), []);
 });

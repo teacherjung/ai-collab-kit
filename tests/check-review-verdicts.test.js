@@ -757,6 +757,20 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
     assert.equal(commaProbs.length, 2, `並列多值應拒收：${commaBody} -> ${commaProbs.join(' / ')}`);
   }
 
+  // 反引號圍欄內含 ~~~ 與合格範例、圍欄外填低檔設定：不可因異種圍欄反轉而採計圍欄內範例或略過圍欄外低檔設定（#121 r3 R3）
+  const fencedExampleWithLowActual = mkBody([
+    '```text',
+    '參考值：',
+    '~~~',
+    '- 模型：gpt-6-astra；推理強度：max',
+    '```',
+    '- 模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  const fencedProbs = settingProblems(fencedExampleWithLowActual, 'Beta', reviewerConfigs);
+  assert.equal(fencedProbs.length, 2, fencedProbs.join(' / '));
+  assert.ok(fencedProbs.some((x) => x.includes('實際填「gpt-6-luna」')));
+  assert.ok(fencedProbs.some((x) => x.includes('實際填「low」')));
+
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
     `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
@@ -767,14 +781,18 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
-  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值）不算數、不能解除阻擋；合規放行
+  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例夾帶低檔設定）不算數、不能解除阻擋；合規放行
+  const priorBlock = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：需修改後再審`, 'r1-block');
   const badComment = c(honestLowWithReq, 'bad-set');
   const commaBadComment = c(mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'), 'comma-bad');
   const fullCommaBadComment = c(mkBody('- 模型：gpt-6-astra，gpt-6-luna\n- 推理強度：max，low'), 'full-comma-bad');
+  const fencedBadPassR2 = c(fencedExampleWithLowActual.replace('｜r1｜', '｜r2｜'), 'fenced-bad-r2');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
   assert.ok(rBad.problems.some((x) => x.includes('沒有「Beta」對目前版本')));
+  const rFencedAfterBlock = evaluate([priorBlock, fencedBadPassR2], HEAD, 'Beta', ROLES, { reviewerConfigs });
+  assert.ok(rFencedAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `圍欄範例夾帶低檔設定的通過不可解除既有阻擋：${rFencedAfterBlock.problems.join(' / ')}`);
   const rGood = evaluate([badComment, goodComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.deepEqual(rGood.problems, []);
   assert.ok(rGood.warnings.some((x) => x.includes('本輪實際用的設定不合規')));
@@ -786,6 +804,7 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [badComment] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [commaBadComment] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [fullCommaBadComment] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, fencedBadPassR2] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [goodComment] }) }).code, 0);
 });
 
