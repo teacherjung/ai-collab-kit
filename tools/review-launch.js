@@ -2436,7 +2436,7 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
     }
     const inspected = inspectNodeModulesTree(realNodeModulesSrc, realSrcTree);
     const dstNm = path.join(destTree, 'node_modules');
-    const cpArgs = process.platform === 'darwin' ? ['-cR', realNodeModulesSrc, dstNm] : ['-R', realNodeModulesSrc, dstNm];
+    const cpArgs = process.platform === 'darwin' ? ['-cRP', realNodeModulesSrc, dstNm] : ['-RP', realNodeModulesSrc, dstNm];
     const cpRes = copySpawn('cp', cpArgs, { encoding: 'utf8' });
     if (!cpRes || cpRes.error || cpRes.status !== 0 || cpRes.signal) {
       const detail = !cpRes

@@ -2949,9 +2949,9 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     fs.writeFileSync(path.join(sharedPkgDir, 'package.json'), '{"name":"ws-shared","type":"module","main":"index.js"}\n');
     fs.writeFileSync(path.join(sharedPkgDir, 'index.js'), 'export const wsValue = "HEAD_VALUE";\n');
     fs.writeFileSync(path.join(r.dir, '.gitignore'), 'node_modules\n');
-    spawnSync('git', ['add', 'packages/shared/package.json', 'packages/shared/index.js', '.gitignore'], { cwd: r.dir, env: gitEnv() });
-    spawnSync('git', ['commit', '-q', '-m', 'add workspace package and gitignore node_modules'], { cwd: r.dir, env: gitEnv() });
-    const wsHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: r.dir, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+    sh(r.dir, 'add', 'packages/shared/package.json', 'packages/shared/index.js', '.gitignore');
+    sh(r.dir, 'commit', '-q', '-m', 'add workspace package and gitignore node_modules');
+    const wsHead = sh(r.dir, 'rev-parse', 'HEAD');
     // 主工作樹把 packages/shared/index.js 改成未提交的 BASE_VALUE，驗證審查樹與突變副本載入 ws-shared 時讀到受審 HEAD_VALUE 而非主目錄 BASE_VALUE
     fs.writeFileSync(path.join(sharedPkgDir, 'index.js'), 'export const wsValue = "BASE_VALUE";\n');
 
@@ -2965,7 +2965,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     fs.symlinkSync('../packages/shared', wsLinkInMain, 'dir');
 
     const implWt = path.join(tmp('review-launch-impl-wt-'), 'wt');
-    spawnSync('git', ['worktree', 'add', '--detach', '-q', implWt, wsHead], { cwd: r.dir, env: gitEnv() });
+    sh(r.dir, 'worktree', 'add', '--detach', '-q', implWt, wsHead);
     const wsAns = {
       ...baseAns,
       change: { id: '7', headSha: wsHead, baseBranch: 'main', changedFileCount: '2', body: '實作者：Alpha\n複審者：Beta\n' },
@@ -3162,8 +3162,8 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       fs.unlinkSync(path.join(scanFolder, 'tree', 'node_modules'));
       fs.symlinkSync(path.join(scanFolder, 'deps', 'tree', 'node_modules'), path.join(scanFolder, 'tree', 'node_modules'), 'dir');
       const unregScanTree = path.join(altTargetDir, 'unregistered-scan-tree');
-      spawnSync('git', ['clone', '-q', r.dir, unregScanTree], { env: gitEnv() });
-      spawnSync('git', ['checkout', '--detach', '-q', wsHead], { cwd: unregScanTree, env: gitEnv() });
+      sh(altTargetDir, 'clone', '-q', r.dir, unregScanTree);
+      sh(unregScanTree, 'checkout', '--detach', '-q', wsHead);
       const scanRecPath = path.join(scanFolder, 'scan.json');
       const origScanRecText = fs.readFileSync(scanRecPath, 'utf8');
       const mutatedScanRec = JSON.parse(origScanRecText);
