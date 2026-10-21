@@ -157,7 +157,7 @@ function isInSetextHeading(allLines, startLineIdx, currentListIndent) {
     if (
       THEMATIC_BREAK_RE.test(checkSub)
       || stripListMarkers(checkSub).steps.length > 0
-      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<!--)/u.test(checkSub)
+      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<)/u.test(checkSub)
       || matchFenceOpen(checkSub)
     ) {
       return false;
@@ -178,7 +178,7 @@ function findMultiLineClosingBackticks(allLines, startLineIdx, currentListIndent
     if (
       THEMATIC_BREAK_RE.test(checkSub)
       || stripListMarkers(checkSub).steps.length > 0
-      || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/u.test(checkSub)
+      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<)/u.test(checkSub)
       || matchFenceOpen(checkSub)
     ) {
       return null;
@@ -194,7 +194,7 @@ function findMultiLineClosingBackticks(allLines, startLineIdx, currentListIndent
  * 段落起訖（1〜3 級 ATX 標題 `#`〜`###` 與頂層 Setext 標題底線 `===`／`---`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、
  * 圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、引用區塊與無空行段落續行（`>`，CommonMark §5.1）、
  * 分隔線（`* * *`／`- - -`／`_ _ _`）、逐層清單容器與空清單項目、縮排程式碼與開放段落縮排續行（CommonMark §4.1、§4.4、§5.2）、
- * HTML 註解（`<!-- ... -->`）、ASCII 標點反斜線跳脫（CommonMark §2.4）與單行／跨行行內反引號（`` `...` ``，CommonMark §6.1）
+ * HTML 區塊與註解（`<...>`／`<!-- ... -->`，CommonMark §4.6）、ASCII 標點反斜線跳脫（CommonMark §2.4）與單行／跨行行內反引號（`` `...` ``，CommonMark §6.1）
  * 由同一個由上而下的狀態機處理（#121 r4〜r12 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
@@ -264,8 +264,11 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         continue;
       }
       if (/^\s*>/u.test(afterList)) {
-        const bqRest = afterList.replace(/^(?:\s*> ?)+/u, '');
-        inBlockquote = bqRest.trim() !== '' && !/^ {0,3}#{1,6}(?:\s|$)/u.test(bqRest);
+        const bqRest = stripListMarkers(afterList.replace(/^(?:\s*> ?)+/u, '')).rest;
+        inBlockquote = bqRest.trim() !== ''
+          && !/^ {0,3}(?:#{1,6}(?:\s|$)|<)/u.test(bqRest)
+          && !THEMATIC_BREAK_RE.test(bqRest)
+          && !matchFenceOpen(bqRest);
         continue;
       }
       const openMatch = matchFenceOpen(afterList);
@@ -276,12 +279,12 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         fenceListIndent = currentListIndent;
         continue;
       }
-      if (steps.length > 0) {
+      if (steps.length > 0 || /^ {0,3}</u.test(afterList)) {
         inBlockquote = false;
       }
       if (inBlockquote) continue;
       if ((steps.length > 0 || !wasInParagraph) && /^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
-      inParagraph = afterList.trim() !== '';
+      inParagraph = afterList.trim() !== '' && !/^ {0,3}</u.test(afterList);
     }
     let line = '';
     let idx = 0;
