@@ -147,20 +147,19 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
 
   for (const rawLine of allLines) {
     if (fenceChar) {
+      if (rawLine.trim() === '') continue;
       const leadSpaces = /^ */u.exec(rawLine)[0].length;
-      const afterIndent = rawLine.slice(Math.min(leadSpaces, fenceListIndent));
-      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(afterIndent);
-      if (leadSpaces <= fenceListIndent + 3 && closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
-        fenceChar = '';
-        fenceLen = 0;
-        fenceListIndent = 0;
-        continue;
-      }
-      if (fenceListIndent > 0 && rawLine.trim() !== '' && leadSpaces < fenceListIndent) {
+      if (leadSpaces < fenceListIndent) {
         fenceChar = '';
         fenceLen = 0;
         fenceListIndent = 0;
       } else {
+        const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(rawLine.slice(fenceListIndent));
+        if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
+          fenceChar = '';
+          fenceLen = 0;
+          fenceListIndent = 0;
+        }
         continue;
       }
     }
