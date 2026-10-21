@@ -157,7 +157,7 @@ function isInSetextHeading(allLines, startLineIdx, currentListIndent) {
     if (
       THEMATIC_BREAK_RE.test(checkSub)
       || stripListMarkers(checkSub).steps.length > 0
-      || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/u.test(checkSub)
+      || /^ {0,3}(?:#{1,6}(?:\s|$)|>|<!--)/u.test(checkSub)
       || matchFenceOpen(checkSub)
     ) {
       return false;
@@ -193,9 +193,9 @@ function findMultiLineClosingBackticks(allLines, startLineIdx, currentListIndent
  * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
  * 段落起訖（1〜3 級 ATX 標題 `#`〜`###` 與頂層 Setext 標題底線 `===`／`---`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、
  * 圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、引用區塊與無空行段落續行（`>`，CommonMark §5.1）、
- * 分隔線（`* * *`／`- - -`／`_ _ _`）、逐層清單容器與空清單項目、同行縮排程式碼（CommonMark §4.1、§5.2）、
+ * 分隔線（`* * *`／`- - -`／`_ _ _`）、逐層清單容器與空清單項目、縮排程式碼與開放段落縮排續行（CommonMark §4.1、§4.4、§5.2）、
  * HTML 註解（`<!-- ... -->`）、ASCII 標點反斜線跳脫（CommonMark §2.4）與單行／跨行行內反引號（`` `...` ``，CommonMark §6.1）
- * 由同一個由上而下的狀態機處理（#121 r4〜r11 R3）。
+ * 由同一個由上而下的狀態機處理（#121 r4〜r12 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
@@ -206,6 +206,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const listIndents = [];
   let emptyListItem = false;
   let inBlockquote = false;
+  let inParagraph = false;
   let inlineCodeUntil = null;
   let inHtmlComment = false;
   let inSection = false;
@@ -230,7 +231,8 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       }
     }
     let currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
-    let isParagraphCandidate = false;
+    const wasInParagraph = inParagraph;
+    inParagraph = false;
     if (!inHtmlComment && !inlineCodeUntil) {
       if (rawLine.trim() === '') {
         if (emptyListItem) {
@@ -262,7 +264,8 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         continue;
       }
       if (/^\s*>/u.test(afterList)) {
-        inBlockquote = true;
+        const bqRest = afterList.replace(/^(?:\s*> ?)+/u, '');
+        inBlockquote = bqRest.trim() !== '' && !/^ {0,3}#{1,6}(?:\s|$)/u.test(bqRest);
         continue;
       }
       const openMatch = matchFenceOpen(afterList);
@@ -277,8 +280,8 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         inBlockquote = false;
       }
       if (inBlockquote) continue;
-      if (/^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
-      isParagraphCandidate = afterList.trim() !== '';
+      if ((steps.length > 0 || !wasInParagraph) && /^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
+      inParagraph = afterList.trim() !== '';
     }
     let line = '';
     let idx = 0;
@@ -286,7 +289,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       if (lineIdx < inlineCodeUntil.endLine) continue;
       idx = inlineCodeUntil.endCol;
       inlineCodeUntil = null;
-      isParagraphCandidate = true;
+      inParagraph = true;
     }
     while (idx < rawLine.length) {
       if (inHtmlComment) {
@@ -336,7 +339,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         idx += 1;
       }
     }
-    if (isParagraphCandidate && !inHtmlComment && !inlineCodeUntil && isInSetextHeading(allLines, lineIdx, currentListIndent)) {
+    if (inParagraph && !inHtmlComment && !inlineCodeUntil && isInSetextHeading(allLines, lineIdx, currentListIndent)) {
       if (currentListIndent === 0) inSection = false;
       continue;
     }

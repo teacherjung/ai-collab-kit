@@ -1110,11 +1110,76 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   const setextHeadingExitsBeforeLow = mkBody([
     '- 模型：gpt-6-astra；推理強度：max',
     '',
+    '模型：gpt-6-luna；推理強度：low',
     '其他說明',
     '-------',
     '- 模型：gpt-6-luna；推理強度：low',
   ].join('\n'));
   assert.deepEqual(settingProblems(setextHeadingExitsBeforeLow, 'Beta', reviewerConfigs), []);
+
+  // 引用內 ATX 標題或空引用行（`> # 說明`、`>`）、段落後 HTML 註解內含 `-------`、以及開放段落後無空行 4 空白縮排續行（#121 r11 R3）
+  const blockquoteHeadingContradiction = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '> > # 說明',
+    '模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  assert.ok(settingProblems(blockquoteHeadingContradiction, 'Beta', reviewerConfigs).some((p) => p.includes('模型欄位重複或矛盾')));
+
+  const emptyBlockquoteContradiction = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '>',
+    '模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  assert.ok(settingProblems(emptyBlockquoteContradiction, 'Beta', reviewerConfigs).some((p) => p.includes('模型欄位重複或矛盾')));
+
+  const blockquoteHeadingAndEmptyValid = mkBody([
+    '> # 說明',
+    '模型：gpt-6-astra',
+    '>',
+    '推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(blockquoteHeadingAndEmptyValid, 'Beta', reviewerConfigs), []);
+
+  const htmlCommentDashContradiction = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '其他說明',
+    '<!--',
+    '-------',
+    '-->',
+    '- 模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  assert.ok(settingProblems(htmlCommentDashContradiction, 'Beta', reviewerConfigs).some((p) => p.includes('模型欄位重複或矛盾')));
+
+  const htmlCommentDashValid = mkBody([
+    '其他說明',
+    '<!--',
+    '-------',
+    '-->',
+    '- 模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(htmlCommentDashValid, 'Beta', reviewerConfigs), []);
+
+  const indentedParagraphContinuationContradiction = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '說明',
+    '    模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  assert.ok(settingProblems(indentedParagraphContinuationContradiction, 'Beta', reviewerConfigs).some((p) => p.includes('模型欄位重複或矛盾')));
+
+  const indentedParagraphContinuationValid = mkBody([
+    '說明',
+    '    模型：gpt-6-astra',
+    '`跨行',
+    '說明`',
+    '    推理強度：max',
+    '',
+    '    模型：gpt-6-luna；推理強度：low',
+    '-',
+    '      模型：gpt-6-luna；推理強度：low',
+    '補充',
+    '-     模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(indentedParagraphContinuationValid, 'Beta', reviewerConfigs), []);
 
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
@@ -1126,7 +1191,7 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
-  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例、四反引號夾三反引號、圍欄內 ###、註解內 ```、子標題 ####、清單項目同行／續行圍欄、未閉合清單圍欄離開容器、分隔線與空清單縮排程式碼範例、同行巢狀空清單矛盾、引用續行、跨行反引號範例、跳脫註解矛盾、偶數反斜線低階設定、Setext 標題截斷）不算數、不能解除阻擋；合規放行
+  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例、四反引號夾三反引號、圍欄內 ###、註解內 ```、子標題 ####、清單項目同行／續行圍欄、未閉合清單圍欄離開容器、分隔線與空清單縮排程式碼範例、同行巢狀空清單矛盾、引用續行、跨行反引號範例、跳脫註解矛盾、偶數反斜線低階設定、Setext 標題截斷、引用標題與空引用、註解內底線、開放段落縮排續行）不算數、不能解除阻擋；合規放行
   const priorBlock = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：需修改後再審`, 'r1-block');
   const badComment = c(honestLowWithReq, 'bad-set');
   const commaBadComment = c(mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'), 'comma-bad');
@@ -1151,6 +1216,10 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   const escapedHtmlBadR2 = c(escapedHtmlCommentContradiction.replace('｜r1｜', '｜r2｜'), 'escaped-html-bad-r2');
   const doubleBsBadR2 = c(doubleBackslashBacktickLowOnly.replace('｜r1｜', '｜r2｜'), 'double-bs-bad-r2');
   const setextBadR2 = c(setextHeadingExitsBeforeValid.replace('｜r1｜', '｜r2｜'), 'setext-bad-r2');
+  const bqHeadingBadR2 = c(blockquoteHeadingContradiction.replace('｜r1｜', '｜r2｜'), 'bq-heading-bad-r2');
+  const emptyBqBadR2 = c(emptyBlockquoteContradiction.replace('｜r1｜', '｜r2｜'), 'empty-bq-bad-r2');
+  const htmlDashBadR2 = c(htmlCommentDashContradiction.replace('｜r1｜', '｜r2｜'), 'html-dash-bad-r2');
+  const indentedParaBadR2 = c(indentedParagraphContinuationContradiction.replace('｜r1｜', '｜r2｜'), 'indented-para-bad-r2');
   const subheadingGoodComment = c(subheadingOnlyValid, 'subheading-good');
   const listFenceGoodComment = c(listFencedLowExampleWithValidActual, 'list-fence-good');
   const unclosedListFenceGoodComment = c(unclosedListFenceThenOuterFenceValid, 'unclosed-list-fence-good');
@@ -1165,17 +1234,20 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   const escapedHtmlGoodComment = c(escapedHtmlCommentValid, 'escaped-html-good');
   const doubleBsGoodComment = c(doubleBackslashBacktickValid, 'double-bs-good');
   const setextGoodComment = c(setextHeadingExitsBeforeLow, 'setext-good');
+  const bqHeadingEmptyGoodComment = c(blockquoteHeadingAndEmptyValid, 'bq-heading-empty-good');
+  const htmlDashGoodComment = c(htmlCommentDashValid, 'html-dash-good');
+  const indentedParaGoodComment = c(indentedParagraphContinuationValid, 'indented-para-good');
   const inlineCodeGoodComment = c(inlineCodeHtmlArrowGood, 'inline-code-good');
   const colonGoodComment = c(colonBacktickGood, 'colon-good');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
   assert.ok(rBad.problems.some((x) => x.includes('沒有「Beta」對目前版本')));
-  for (const probeComment of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2, thematicBreakBadR2, emptyListItemBadR2, emptyInnerListBadR2, inlineFiveSpaceBadR2, nestedEmptyListBadR2, blockquoteLazyBadR2, multiLineInlineCodeBadR2, escapedHtmlBadR2, doubleBsBadR2, setextBadR2]) {
+  for (const probeComment of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2, thematicBreakBadR2, emptyListItemBadR2, emptyInnerListBadR2, inlineFiveSpaceBadR2, nestedEmptyListBadR2, blockquoteLazyBadR2, multiLineInlineCodeBadR2, escapedHtmlBadR2, doubleBsBadR2, setextBadR2, bqHeadingBadR2, emptyBqBadR2, htmlDashBadR2, indentedParaBadR2]) {
     const rAfterBlock = evaluate([priorBlock, probeComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
     assert.ok(rAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `夾帶低檔設定或純範例的通過不可解除既有阻擋：${rAfterBlock.problems.join(' / ')}`);
   }
-  for (const okComment of [inlineCodeGoodComment, subheadingGoodComment, listFenceGoodComment, unclosedListFenceGoodComment, continuationFenceGoodComment, continuationClosedFenceGoodComment, thematicBreakGoodComment, emptyListItemGoodComment, inlineFiveSpaceGoodComment, nestedEmptyListGoodComment, blockquoteLazyGoodComment, multiLineInlineCodeGoodComment, escapedHtmlGoodComment, doubleBsGoodComment, setextGoodComment]) {
+  for (const okComment of [inlineCodeGoodComment, subheadingGoodComment, listFenceGoodComment, unclosedListFenceGoodComment, continuationFenceGoodComment, continuationClosedFenceGoodComment, thematicBreakGoodComment, emptyListItemGoodComment, inlineFiveSpaceGoodComment, nestedEmptyListGoodComment, blockquoteLazyGoodComment, multiLineInlineCodeGoodComment, escapedHtmlGoodComment, doubleBsGoodComment, setextGoodComment, bqHeadingEmptyGoodComment, htmlDashGoodComment, indentedParaGoodComment]) {
     assert.deepEqual(evaluate([okComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   }
   assert.deepEqual(evaluate([colonGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs: colonReviewerConfigs }).problems, []);
@@ -1190,10 +1262,10 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   for (const badProbe of [badComment, commaBadComment, fullCommaBadComment]) {
     assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [badProbe] }) }).code, 1);
   }
-  for (const badR2 of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2, thematicBreakBadR2, emptyListItemBadR2, emptyInnerListBadR2, inlineFiveSpaceBadR2, nestedEmptyListBadR2, blockquoteLazyBadR2, multiLineInlineCodeBadR2, escapedHtmlBadR2, doubleBsBadR2, setextBadR2]) {
+  for (const badR2 of [fencedBadPassR2, fourBacktickBadR2, fencedHeadingBadR2, htmlFenceBadR2, subheadingBadR2, orderedListFenceBadR2, unorderedListFenceBadR2, unclosedListFenceBadR2, continuationFenceBadR2, nestedContinuationFenceBadR2, thematicBreakBadR2, emptyListItemBadR2, emptyInnerListBadR2, inlineFiveSpaceBadR2, nestedEmptyListBadR2, blockquoteLazyBadR2, multiLineInlineCodeBadR2, escapedHtmlBadR2, doubleBsBadR2, setextBadR2, bqHeadingBadR2, emptyBqBadR2, htmlDashBadR2, indentedParaBadR2]) {
     assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, badR2] }) }).code, 1);
   }
-  for (const okComment of [inlineCodeGoodComment, subheadingGoodComment, listFenceGoodComment, unclosedListFenceGoodComment, continuationFenceGoodComment, continuationClosedFenceGoodComment, thematicBreakGoodComment, emptyListItemGoodComment, inlineFiveSpaceGoodComment, nestedEmptyListGoodComment, blockquoteLazyGoodComment, multiLineInlineCodeGoodComment, escapedHtmlGoodComment, doubleBsGoodComment, setextGoodComment, goodComment]) {
+  for (const okComment of [inlineCodeGoodComment, subheadingGoodComment, listFenceGoodComment, unclosedListFenceGoodComment, continuationFenceGoodComment, continuationClosedFenceGoodComment, thematicBreakGoodComment, emptyListItemGoodComment, inlineFiveSpaceGoodComment, nestedEmptyListGoodComment, blockquoteLazyGoodComment, multiLineInlineCodeGoodComment, escapedHtmlGoodComment, doubleBsGoodComment, setextGoodComment, bqHeadingEmptyGoodComment, htmlDashGoodComment, indentedParaGoodComment, goodComment]) {
     assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [okComment] }) }).code, 0);
   }
   assert.equal(gateRun('7', { settings: { ...gateSettings, reviewers: colonReviewerConfigs }, platform: fakePlatform({ change: change(), comments: [colonGoodComment] }) }).code, 0);
