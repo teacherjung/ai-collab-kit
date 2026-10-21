@@ -35,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE, LaunchError } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, materializeIsolatedGitRepo, runGrokExec, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE, LaunchError } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -2039,7 +2039,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
   }
 });
 
-test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與掃描一鍵開樹→執行→驗樹代貼→收樹（含 --purge），任一步失敗即停並保留現場供查', () => {
+test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與掃描一鍵開樹→執行→驗樹代貼→收樹（含 --purge），任一步失敗即停並保留現場供查', async () => {
   const r = repo();
   const dir = tmp('review-launch-run-');
   const scannerCfg = {
@@ -2943,18 +2943,51 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.equal(aliasScanRetry.code, 0, `含空白別名掃描恢復指令重跑應成功：${aliasScanRetry.lines.join('\n')}`);
     assert.ok(!fs.existsSync(scanFolder), '掃描容器已收樹並清除');
 
-    // (l) 專案相依套件（node_modules）自動掛載與安全卸載：主工作樹有 node_modules 時，就算從副工作樹啟動 --run，
-    //     審查樹、突變副本與掃描樹皆可直接 import 套件，且代貼與收樹（含未設 .gitignore 的倉庫）不會因連結判髒或誤刪主目錄依賴
+    // (l) 專案相依套件（node_modules）自動準備、工作區連結重綁、防掉包驗樹、收樹內容保存與隔離複製驗退碼（R1〜R4）
+    const sharedPkgDir = path.join(r.dir, 'packages', 'shared');
+    fs.mkdirSync(sharedPkgDir, { recursive: true });
+    fs.writeFileSync(path.join(sharedPkgDir, 'package.json'), '{"name":"ws-shared","type":"module","main":"index.js"}\n');
+    fs.writeFileSync(path.join(sharedPkgDir, 'index.js'), 'export const wsValue = "HEAD_VALUE";\n');
+    fs.writeFileSync(path.join(r.dir, '.gitignore'), 'node_modules\n');
+    spawnSync('git', ['add', 'packages/shared/package.json', 'packages/shared/index.js', '.gitignore'], { cwd: r.dir, env: gitEnv() });
+    spawnSync('git', ['commit', '-q', '-m', 'add workspace package and gitignore node_modules'], { cwd: r.dir, env: gitEnv() });
+    const wsHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: r.dir, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+    // 主工作樹把 packages/shared/index.js 改成未提交的 BASE_VALUE，驗證審查樹與突變副本載入 ws-shared 時讀到受審 HEAD_VALUE 而非主目錄 BASE_VALUE
+    fs.writeFileSync(path.join(sharedPkgDir, 'index.js'), 'export const wsValue = "BASE_VALUE";\n');
+
     const depDir = path.join(r.dir, 'node_modules', 'fake-dep');
     fs.mkdirSync(depDir, { recursive: true });
-    fs.writeFileSync(path.join(depDir, 'package.json'), '{"name":"fake-dep","type":"module","main":"index.js"}\n');
-    fs.writeFileSync(path.join(depDir, 'index.js'), 'export const depValue = "loaded-from-main-worktree";\n');
-    const implWt = path.join(tmp('review-launch-impl-wt-'), 'wt');
-    spawnSync('git', ['worktree', 'add', '--detach', '-q', implWt, r.head], { cwd: r.dir, env: gitEnv() });
+    const pkgJsonContent = '{"name":"fake-dep","type":"module","main":"index.js"}\n';
+    const revSeedContent = 'export const depValue = "REV_SEED_CONTENT_KEEP_EXACT";\n';
+    fs.writeFileSync(path.join(depDir, 'package.json'), pkgJsonContent);
+    fs.writeFileSync(path.join(depDir, 'index.js'), revSeedContent);
+    const wsLinkInMain = path.join(r.dir, 'node_modules', 'ws-shared');
+    fs.symlinkSync('../packages/shared', wsLinkInMain, 'dir');
 
+    const implWt = path.join(tmp('review-launch-impl-wt-'), 'wt');
+    spawnSync('git', ['worktree', 'add', '--detach', '-q', implWt, wsHead], { cwd: r.dir, env: gitEnv() });
+    const wsAns = {
+      ...baseAns,
+      change: { id: '7', headSha: wsHead, baseBranch: 'main', changedFileCount: '2', body: '實作者：Alpha\n複審者：Beta\n' },
+      branchSha: { sha: r.base },
+      changedFiles: [{ path: 'a.txt', additions: 1, deletions: 0 }, { path: 'packages/shared/index.js', additions: 1, deletions: 0 }],
+      comments: [],
+    };
+    const wsWithPass = {
+      ...wsAns,
+      comments: [
+        {
+          id: '501',
+          createdAt: '2026-10-20T00:00:00Z',
+          body: `🤖 Beta｜來源：beta CLI｜審 \`${wsHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n`,
+        },
+      ],
+    };
+
+    let revPostCount = 0;
     const depRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
       settings: s,
-      platform: fakePlatform(baseAns),
+      platform: fakePlatform(wsAns),
       cwd: implWt,
       template: TEMPLATE,
       leftoverRoots: [],
@@ -2962,33 +2995,69 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         for (const [label, targetCwd] of [['tree', record.tree], ['mutation', record.mutation]]) {
           const probe = spawnSync(
             process.execPath,
-            ['--input-type=module', '-e', 'const m = await import("fake-dep"); if (m.depValue !== "loaded-from-main-worktree") process.exit(1);'],
+            [
+              '--input-type=module',
+              '-e',
+              'const m = await import("fake-dep"); const w = await import("ws-shared"); if (m.depValue !== "REV_SEED_CONTENT_KEEP_EXACT" || w.wsValue !== "HEAD_VALUE") process.exit(1);',
+            ],
             { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
           );
           if (probe.status !== 0) {
             throw new LaunchError(`${label} 載入相依套件失敗（退 ${probe.status}）：${(probe.stderr || '').trim()}`);
           }
         }
+        // R2：只改突變副本的 node_modules 內容，不得影響主目錄與唯讀審查樹
+        fs.writeFileSync(
+          path.join(record.mutation, 'node_modules', 'fake-dep', 'index.js'),
+          'export const depValue = "MUTATED_ONLY_IN_MUTATION";\n',
+        );
+        assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), revSeedContent, '寫入突變副本 node_modules 不得汙染主目錄來源');
+        assert.equal(
+          fs.readFileSync(path.join(record.tree, 'node_modules', 'fake-dep', 'index.js'), 'utf8'),
+          revSeedContent,
+          '寫入突變副本 node_modules 不得汙染唯讀審查樹',
+        );
         fs.writeFileSync(
           record.outFile,
-          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          `🤖 Beta｜來源：beta CLI｜審 \`${wsHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
         );
       },
-      runPost() {},
+      runPost() { revPostCount += 1; },
     });
-    assert.equal(depRevRes.code, 0, `複審 --run 應自動掛載 node_modules 並完成代貼與收樹：${depRevRes.lines.join('\n')}`);
+    assert.equal(depRevRes.code, 0, `複審 --run 應自動準備獨立 node_modules、重綁工作區連結並完成代貼與收樹：${depRevRes.lines.join('\n')}`);
+    assert.equal(revPostCount, 1);
     assert.ok(!fs.existsSync(reviewFolder), '複審容器應已收樹並清除');
-    assert.ok(fs.existsSync(path.join(depDir, 'index.js')), '收樹與 --purge 後主目錄 node_modules 內容必須完好');
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), revSeedContent, 'R3：收樹與 --purge 後主目錄 node_modules 檔案內容必須逐字完好');
 
+    // R3：開樹中途失敗回滾時，主目錄 node_modules 內容同樣必須逐字完好
+    const rollbackSeedContent = 'export const depValue = "ROLLBACK_SEED_CONTENT_KEEP_EXACT";\n';
+    fs.writeFileSync(path.join(depDir, 'index.js'), rollbackSeedContent);
+    const badTplRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(wsAns),
+      cwd: implWt,
+      template: '缺少必填佔位的壞範本',
+      leftoverRoots: [],
+    });
+    assert.equal(badTplRes.code, 2);
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), rollbackSeedContent, 'R3：開樹異常回滾後主目錄 node_modules 檔案內容必須逐字完好');
+
+    const scanSeedContent = 'export const depValue = "SCAN_SEED_CONTENT_KEEP_EXACT";\n';
+    fs.writeFileSync(path.join(depDir, 'index.js'), scanSeedContent);
+    let scanPostCount = 0;
     const depScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
       settings: s,
-      platform: fakePlatform(withPass),
+      platform: fakePlatform(wsWithPass),
       cwd: implWt,
       leftoverRoots: [],
       runExec(_cmd, { record }) {
         const probe = spawnSync(
           process.execPath,
-          ['--input-type=module', '-e', 'const m = await import("fake-dep"); if (m.depValue !== "loaded-from-main-worktree") process.exit(1);'],
+          [
+            '--input-type=module',
+            '-e',
+            'const m = await import("fake-dep"); const w = await import("ws-shared"); if (m.depValue !== "SCAN_SEED_CONTENT_KEEP_EXACT" || w.wsValue !== "HEAD_VALUE") process.exit(1);',
+          ],
           { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
         );
         if (probe.status !== 0) {
@@ -2996,38 +3065,249 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         }
         fs.writeFileSync(
           record.outFile,
-          `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+          `🔍 Gamma｜來源：Grok CLI｜掃 \`${wsHead.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
         );
       },
-      runPost() {},
+      runPost() { scanPostCount += 1; },
     });
-    assert.equal(depScanRes.code, 0, `掃描 --run 應自動掛載 node_modules 並完成代貼與收樹：${depScanRes.lines.join('\n')}`);
+    assert.equal(depScanRes.code, 0, `掃描 --run 應自動準備 node_modules 並完成代貼與收樹：${depScanRes.lines.join('\n')}`);
+    assert.equal(scanPostCount, 1);
     assert.ok(!fs.existsSync(scanFolder), '掃描容器應已收樹並清除');
-    assert.ok(fs.existsSync(path.join(depDir, 'index.js')), '掃描收樹與 --purge 後主目錄 node_modules 內容必須完好');
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), scanSeedContent, 'R3：掃描收樹與 --purge 後主目錄 node_modules 檔案內容必須逐字完好');
 
-    // 若審查樹內的 node_modules 連結被掉包成一般資料夾或改指別處，treeStatus 不得豁免，應判不乾淨並拒貼
-    const tamperRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
-      settings: s,
-      platform: fakePlatform(baseAns),
-      cwd: implWt,
-      template: TEMPLATE,
-      leftoverRoots: [],
-      runExec(_cmd, { record }) {
-        const nm = path.join(record.tree, 'node_modules');
-        fs.unlinkSync(nm);
-        fs.mkdirSync(nm);
-        fs.writeFileSync(path.join(nm, 'rogue.js'), '1\n');
-        fs.writeFileSync(
-          record.outFile,
-          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+    // R1：專案 .gitignore 含 node_modules 時，把掛好的連結換成普通目錄（內含唯一現場證據）或改指其他目錄，
+    //     複審與掃描的代貼與收樹皆須退 1、代貼 0 次、保留容器與唯一證據
+    const altTargetDir = tmp('review-launch-alt-nm-');
+    try {
+      let r1RevPosts = 0;
+      const tamperDirRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsAns),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          const nm = path.join(record.tree, 'node_modules');
+          fs.unlinkSync(nm);
+          fs.mkdirSync(nm);
+          fs.writeFileSync(path.join(nm, 'evidence.txt'), 'UNIQUE_REVIEW_EVIDENCE=KEEP_ME\n');
+          fs.writeFileSync(
+            record.outFile,
+            `🤖 Beta｜來源：beta CLI｜審 \`${wsHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+          );
+        },
+        runPost() { r1RevPosts += 1; },
+      });
+      assert.equal(tamperDirRevRes.code, 1, 'R1：.gitignore 忽略 node_modules 時掉包為普通目錄應退 1 拒貼');
+      assert.equal(r1RevPosts, 0, 'R1：掉包後代貼次數必須為 0');
+      assert.equal(
+        fs.readFileSync(path.join(reviewFolder, 'tree', 'node_modules', 'evidence.txt'), 'utf8'),
+        'UNIQUE_REVIEW_EVIDENCE=KEEP_ME\n',
+        'R1：--run --purge 失敗時不得刪掉掉包目錄內的現場證據',
+      );
+      const tamperCloseRevRes = main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] });
+      assert.equal(tamperCloseRevRes.code, 1, 'R1：--close --purge 遇掉包目錄應退 1 拒收');
+      assert.equal(
+        fs.readFileSync(path.join(reviewFolder, 'tree', 'node_modules', 'evidence.txt'), 'utf8'),
+        'UNIQUE_REVIEW_EVIDENCE=KEEP_ME\n',
+        'R1：--close --purge 拒收後現場證據仍須保留',
+      );
+      // 測試改指其他目錄同樣拒貼拒收
+      fs.rmSync(path.join(reviewFolder, 'tree', 'node_modules'), { recursive: true, force: true });
+      fs.symlinkSync(altTargetDir, path.join(reviewFolder, 'tree', 'node_modules'), 'dir');
+      assert.equal(main(['--post', '7', '--dir', dir], { settings: s, platform: fakePlatform(wsAns), runPost() { r1RevPosts += 1; } }).code, 1);
+      assert.equal(r1RevPosts, 0);
+      assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 1);
+      // 還原正確連結後收樹清除
+      fs.unlinkSync(path.join(reviewFolder, 'tree', 'node_modules'));
+      fs.symlinkSync(path.join(reviewFolder, 'deps', 'tree', 'node_modules'), path.join(reviewFolder, 'tree', 'node_modules'), 'dir');
+      assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+      let r1ScanPosts = 0;
+      const tamperScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsWithPass),
+        cwd: implWt,
+        leftoverRoots: [],
+        runExec(_cmd, { record }) {
+          const nm = path.join(record.tree, 'node_modules');
+          fs.unlinkSync(nm);
+          fs.mkdirSync(nm);
+          fs.writeFileSync(path.join(nm, 'scan-evidence.txt'), 'UNIQUE_SCAN_EVIDENCE=KEEP_ME\n');
+          fs.writeFileSync(
+            record.outFile,
+            `🔍 Gamma｜來源：Grok CLI｜掃 \`${wsHead.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+          );
+        },
+        runPost() { r1ScanPosts += 1; },
+      });
+      assert.equal(tamperScanRes.code, 1, 'R1：掃描樹 .gitignore 忽略 node_modules 時掉包為普通目錄應退 1 拒貼');
+      assert.equal(r1ScanPosts, 0);
+      assert.equal(
+        fs.readFileSync(path.join(scanFolder, 'tree', 'node_modules', 'scan-evidence.txt'), 'utf8'),
+        'UNIQUE_SCAN_EVIDENCE=KEEP_ME\n',
+      );
+      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 1);
+      assert.equal(
+        fs.readFileSync(path.join(scanFolder, 'tree', 'node_modules', 'scan-evidence.txt'), 'utf8'),
+        'UNIQUE_SCAN_EVIDENCE=KEEP_ME\n',
+      );
+      fs.rmSync(path.join(scanFolder, 'tree', 'node_modules'), { recursive: true, force: true });
+      fs.symlinkSync(altTargetDir, path.join(scanFolder, 'tree', 'node_modules'), 'dir');
+      assert.equal(main(['--scan-post', '7', '--dir', dir], { settings: s, platform: fakePlatform(wsWithPass), runPost() { r1ScanPosts += 1; } }).code, 1);
+      assert.equal(r1ScanPosts, 0);
+      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 1);
+
+      // BACKLOG.md 第 91 行負例：掃描樹就算連結已還原、同 HEAD 且乾淨，若不在原倉庫 git worktree 登記中，scanPost 仍須拒貼
+      fs.unlinkSync(path.join(scanFolder, 'tree', 'node_modules'));
+      fs.symlinkSync(path.join(scanFolder, 'deps', 'tree', 'node_modules'), path.join(scanFolder, 'tree', 'node_modules'), 'dir');
+      const unregScanTree = path.join(altTargetDir, 'unregistered-scan-tree');
+      spawnSync('git', ['clone', '-q', r.dir, unregScanTree], { env: gitEnv() });
+      spawnSync('git', ['checkout', '--detach', '-q', wsHead], { cwd: unregScanTree, env: gitEnv() });
+      const scanRecPath = path.join(scanFolder, 'scan.json');
+      const origScanRecText = fs.readFileSync(scanRecPath, 'utf8');
+      const mutatedScanRec = JSON.parse(origScanRecText);
+      mutatedScanRec.tree = unregScanTree;
+      delete mutatedScanRec.linkedNodeModulesByTree;
+      delete mutatedScanRec.linkedNodeModules;
+      fs.writeFileSync(scanRecPath, `${JSON.stringify(mutatedScanRec, null, 1)}\n`);
+      const unregPostRes = main(['--scan-post', '7', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsWithPass),
+        runPost() { r1ScanPosts += 1; },
+      });
+      assert.equal(unregPostRes.code, 1, '未登記於原倉庫 git worktree 的乾淨同 HEAD 掃描樹應拒貼');
+      assert.match(unregPostRes.lines.join('\n'), /不在 git worktree 登記裡/u);
+      assert.equal(r1ScanPosts, 0);
+      fs.writeFileSync(scanRecPath, origScanRecText);
+      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+      // R2 外部連結防呆：若 node_modules 內含指向工作樹外的連結，應明確拒絕啟動
+      const extLinkPath = path.join(r.dir, 'node_modules', 'ext-escape');
+      fs.symlinkSync(altTargetDir, extLinkPath, 'dir');
+      try {
+        const extRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(wsAns),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+        });
+        assert.equal(extRes.code, 2, '指向工作樹外的依賴連結應退 2 拒絕啟動');
+        assert.match(extRes.lines.join('\n'), /指向工作樹外的連結/u);
+      } finally {
+        fs.unlinkSync(extLinkPath);
+      }
+
+      // R4 與 BACKLOG.md 第 89、93 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼；
+      // 且清理後盒內不留 refs/keep/wanted-* 額外引用
+      const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsWithPass),
+        cwd: implWt,
+        leftoverRoots: [],
+      });
+      assert.equal(isoScanLaunch.code, 0);
+      const isoDestOk = path.join(altTargetDir, 'iso-ok');
+      materializeIsolatedGitRepo(isoScanLaunch.record.tree, isoDestOk, {
+        rootRepo: r.dir,
+        baseSha: r.base,
+        headSha: wsHead,
+        extraShas: [r.head],
+      });
+      const keepRefs = spawnSync('git', ['for-each-ref', 'refs/keep'], { cwd: isoDestOk, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+      assert.equal(keepRefs, '', '盒內清理後不應殘留 refs/keep/* 引用');
+      assert.equal(
+        spawnSync('git', ['cat-file', '-e', `${r.head}^{commit}`], { cwd: isoDestOk, env: gitEnv() }).status,
+        0,
+        '非祖先 extraShas 提交仍須保留在盒內物件庫',
+      );
+      const isoProbe = spawnSync(
+        process.execPath,
+        ['--input-type=module', '-e', 'const m = await import("fake-dep"); const w = await import("ws-shared"); if (m.depValue !== "SCAN_SEED_CONTENT_KEEP_EXACT" || w.wsValue !== "HEAD_VALUE") process.exit(1);'],
+        { cwd: isoDestOk, env: gitEnv(), encoding: 'utf8' },
+      );
+      assert.equal(isoProbe.status, 0, '盒內隔離工作樹應可正常載入一般依賴與工作區依賴');
+
+      // 驗證 cp 退 42、啟動失敗（ENOENT）、部分複製（退 0 但漏拷檔案）時 materializeIsolatedGitRepo 與 runGrokExec 皆拒絕啟動模型且不代貼
+      const r4AuthFile = path.join(altTargetDir, 'r4-auth.json');
+      const r4EntryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
+      fs.writeFileSync(
+        r4AuthFile,
+        JSON.stringify({
+          [r4EntryKey]: {
+            auth_mode: 'oidc',
+            user_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+            create_time: '2026-10-19T00:00:00.000Z',
+            expires_at: '2026-10-19T02:00:00.000Z',
+            oidc_issuer: GROK_PINNED_ISSUER,
+            oidc_client_id: GROK_PINNED_CLIENT_ID,
+            key: 'R4-KEY-SECRET-9999',
+            refresh_token: 'R4-REFRESH-SECRET-9999',
+          },
+        }),
+        { mode: 0o600 },
+      );
+      const r4GrokBin = path.join(altTargetDir, 'fake-grok');
+      fs.writeFileSync(r4GrokBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      for (const [caseLabel, fakeCopySpawn] of [
+        ['cp 退 42', () => ({ status: 42, signal: null, error: null, stdout: '', stderr: 'simulated cp failure' })],
+        ['cp 起不來', () => ({ status: null, signal: null, error: Object.assign(new Error('spawn cp ENOENT'), { code: 'ENOENT' }), stdout: '', stderr: '' })],
+        [
+          'cp 部分複製（退 0 但漏檔）',
+          (_cmd, args) => {
+            const dst = args[args.length - 1];
+            fs.mkdirSync(path.join(dst, 'fake-dep'), { recursive: true });
+            fs.writeFileSync(path.join(dst, 'fake-dep', 'package.json'), pkgJsonContent);
+            // 故意漏拷 fake-dep/index.js 與 ws-shared
+            return { status: 0, signal: null, error: null, stdout: '', stderr: '' };
+          },
+        ],
+      ]) {
+        assert.throws(
+          () => materializeIsolatedGitRepo(isoScanLaunch.record.tree, path.join(altTargetDir, `iso-fail-${ Buffer.from(caseLabel).toString('hex') }`), {
+            rootRepo: r.dir,
+            baseSha: r.base,
+            headSha: wsHead,
+            copySpawn: fakeCopySpawn,
+          }),
+          /node_modules/u,
+          `R4（${caseLabel}）：materializeIsolatedGitRepo 應拋出 LaunchError`,
         );
-      },
-      runPost() {},
-    });
-    assert.equal(tamperRes.code, 1, '掉包 node_modules 連結為實體資料夾時應判髒拒貼');
-    assert.match(tamperRes.lines.join('\n'), /不乾淨.*node_modules/u);
-    fs.rmSync(path.join(reviewFolder, 'tree', 'node_modules'), { recursive: true, force: true });
-    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+        let childCalled = false;
+        let r4Posts = 0;
+        const grokFailRes = await runGrokExec([
+          '--mode', 'scan',
+          '--cwd', isoScanLaunch.record.tree,
+          '--model', 'grok-4.7',
+          '--reasoning-effort', 'xhigh',
+          '--prompt-file', isoScanLaunch.record.promptFile,
+          '--out', isoScanLaunch.record.outFile,
+        ], {
+          authFile: r4AuthFile,
+          authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+          grokBin: r4GrokBin,
+          probeFn: () => ({ ok: true }),
+          copySpawn: fakeCopySpawn,
+          spawnGrok: async () => {
+            childCalled = true;
+            return { status: 0, stdout: `🔍 Gamma｜來源：Grok CLI｜掃 \`${wsHead.slice(0, 7)}\`\n\n- 零發現\n`, stderr: '' };
+          },
+        });
+        assert.equal(grokFailRes.code, 2, `R4（${caseLabel}）：runGrokExec 應退 2 拒絕啟動`);
+        assert.equal(childCalled, false, `R4（${caseLabel}）：不可啟動模型子程序`);
+        const postAfterFail = main(['--scan-post', '7', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(wsWithPass),
+          runPost() { r4Posts += 1; },
+        });
+        assert.notEqual(postAfterFail.code, 0, `R4（${caseLabel}）：未完成隔離準備時 --scan-post 不可代貼`);
+        assert.equal(r4Posts, 0, `R4（${caseLabel}）：代貼次數必須為 0`);
+      }
+      assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+    } finally {
+      fs.rmSync(altTargetDir, { recursive: true, force: true });
+    }
 
     spawnSync('git', ['worktree', 'remove', '--force', implWt], { cwd: r.dir, env: gitEnv() });
   } finally {

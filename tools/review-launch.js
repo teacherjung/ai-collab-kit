@@ -351,8 +351,11 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
       const got = git(t, ['rev-parse', 'HEAD']);
       if (got !== head) throw new LaunchError(`${t} 開出來是 ${got}，不是受審版本 ${head}`);
     }
-    const linkedNodeModules = linkNodeModules(root, [tree, mutation]);
-    if (linkedNodeModules) record.linkedNodeModules = linkedNodeModules;
+    const linkedNm = linkNodeModules(root, folder, [tree, mutation]);
+    if (linkedNm) {
+      record.linkedNodeModules = linkedNm.sourceDir;
+      record.linkedNodeModulesByTree = linkedNm.byTree;
+    }
     fs.writeFileSync(promptFile, prompt);
     fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
   } catch (e) {
@@ -397,26 +400,191 @@ function lockedTrees(root) {
   return out;
 }
 
+function isInsideDir(childPath, parentDir) {
+  const rel = path.relative(parentDir, childPath);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function findNodeModulesSource(root) {
-  const candidates = [path.join(root, 'node_modules')];
+  const worktrees = [root];
   try {
     const firstLine = git(root, ['worktree', 'list', '--porcelain']).split('\n').find((l) => l.startsWith('worktree '));
-    if (firstLine) candidates.push(path.join(firstLine.slice(9), 'node_modules'));
+    if (firstLine) {
+      const mainWt = firstLine.slice(9);
+      if (!worktrees.includes(mainWt)) worktrees.push(mainWt);
+    }
   } catch { /* ignore */ }
-  for (const c of candidates) {
+  for (const wt of worktrees) {
+    const c = path.join(wt, 'node_modules');
+    let lst;
     try {
-      if (fs.existsSync(c) && fs.statSync(c).isDirectory()) {
-        return fs.realpathSync(c);
-      }
-    } catch { /* ignore */ }
+      lst = fs.lstatSync(c);
+    } catch (e) {
+      if (!e || e.code === 'ENOENT') continue;
+      throw e;
+    }
+    if (!lst) continue;
+    let realWt;
+    let realNm;
+    try {
+      realWt = fs.realpathSync(wt);
+      realNm = fs.realpathSync(c);
+    } catch (e) {
+      throw new LaunchError(`來源相依套件目錄連結無效（${c}）：${(e && e.message) || '讀不到目標'}`);
+    }
+    if (!fs.statSync(realNm).isDirectory()) continue;
+    if (!isInsideDir(realNm, realWt)) {
+      throw new LaunchError(`來源相依套件目錄連結指向工作樹外（${c} -> ${realNm}），為保受審版本隔離拒絕啟動`);
+    }
+    return { sourceDir: realNm, worktreeDir: realWt };
   }
   return null;
 }
 
-function linkNodeModules(root, trees) {
-  const src = findNodeModulesSource(root);
-  if (!src) return null;
-  let linked = false;
+function inspectNodeModulesTree(sourceDir, sourceWorktree) {
+  const dirs = [];
+  const files = [];
+  const links = [];
+  const walk = (curDir) => {
+    const entries = fs.readdirSync(curDir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const ent of entries) {
+      const sp = path.join(curDir, ent.name);
+      const relPath = path.relative(sourceDir, sp);
+      const lst = fs.lstatSync(sp);
+      if (lst.isSymbolicLink()) {
+        const rawTarget = fs.readlinkSync(sp);
+        const absTarget = path.resolve(path.dirname(sp), rawTarget);
+        if (!fs.existsSync(absTarget)) {
+          throw new LaunchError(`相依套件內含失效連結（${relPath} -> ${rawTarget}），拒絕啟動`);
+        }
+        const realTarget = fs.realpathSync(absTarget);
+        if (isInsideDir(realTarget, sourceDir)) {
+          links.push({
+            relPath,
+            rawTarget,
+            kind: 'internal',
+            relTarget: path.relative(sourceDir, realTarget),
+          });
+        } else if (isInsideDir(realTarget, sourceWorktree)) {
+          links.push({
+            relPath,
+            rawTarget,
+            kind: 'workspace',
+            relTarget: path.relative(sourceWorktree, realTarget),
+          });
+        } else {
+          throw new LaunchError(`相依套件內含指向工作樹外的連結（${relPath} -> ${rawTarget}），為保受審版本隔離拒絕啟動`);
+        }
+      } else if (lst.isDirectory()) {
+        dirs.push(relPath);
+        walk(sp);
+      } else if (lst.isFile()) {
+        const sha256 = lst.size <= 65536
+          ? crypto.createHash('sha256').update(fs.readFileSync(sp)).digest('hex')
+          : null;
+        files.push({ relPath, size: lst.size, sha256 });
+      }
+    }
+  };
+  walk(sourceDir);
+  return { dirs, files, links };
+}
+
+function rewriteCopiedNodeModulesLinks(dstNm, targetTreeReal, links) {
+  for (const link of links) {
+    const dp = path.join(dstNm, link.relPath);
+    if (link.kind === 'workspace') {
+      const targetInTree = path.join(targetTreeReal, link.relTarget);
+      if (!fs.existsSync(targetInTree)) {
+        throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
+      }
+      try { fs.unlinkSync(dp); } catch { /* ignore */ }
+      fs.mkdirSync(path.dirname(dp), { recursive: true });
+      fs.symlinkSync(targetInTree, dp);
+    } else if (path.isAbsolute(link.rawTarget)) {
+      const targetInStore = path.join(dstNm, link.relTarget);
+      try { fs.unlinkSync(dp); } catch { /* ignore */ }
+      fs.mkdirSync(path.dirname(dp), { recursive: true });
+      fs.symlinkSync(targetInStore, dp);
+    }
+  }
+}
+
+function verifyCopiedNodeModulesTree(dstNm, inspected) {
+  let rootSt;
+  try { rootSt = fs.statSync(dstNm); } catch { rootSt = null; }
+  if (!rootSt || !rootSt.isDirectory()) {
+    throw new LaunchError(`複製相依套件（node_modules）失敗：目標目錄不存在（${dstNm}）`);
+  }
+  for (const d of inspected.dirs) {
+    const dp = path.join(dstNm, d);
+    let st;
+    try { st = fs.lstatSync(dp); } catch { st = null; }
+    if (!st || !st.isDirectory()) {
+      throw new LaunchError(`複製相依套件（node_modules）不完整：缺少子目錄 ${d}`);
+    }
+  }
+  for (const f of inspected.files) {
+    const dp = path.join(dstNm, f.relPath);
+    let st;
+    try { st = fs.lstatSync(dp); } catch { st = null; }
+    if (!st || !st.isFile() || st.size !== f.size) {
+      throw new LaunchError(`複製相依套件（node_modules）不完整：缺少或大小不符 ${f.relPath}`);
+    }
+    if (f.sha256 !== null) {
+      const gotHash = crypto.createHash('sha256').update(fs.readFileSync(dp)).digest('hex');
+      if (gotHash !== f.sha256) {
+        throw new LaunchError(`複製相依套件（node_modules）不完整：內容雜湊不符 ${f.relPath}`);
+      }
+    }
+  }
+  for (const l of inspected.links) {
+    const dp = path.join(dstNm, l.relPath);
+    let st;
+    try { st = fs.lstatSync(dp); } catch { st = null; }
+    if (!st || !st.isSymbolicLink() || !fs.existsSync(dp)) {
+      throw new LaunchError(`複製相依套件（node_modules）不完整：缺少或連結失效 ${l.relPath}`);
+    }
+  }
+}
+
+function cloneNodeModulesForTree(source, targetTree, storeDir, inspected) {
+  const realTree = fs.realpathSync(targetTree);
+  for (const link of inspected.links) {
+    if (link.kind === 'workspace') {
+      const targetInTree = path.join(realTree, link.relTarget);
+      if (!fs.existsSync(targetInTree)) {
+        throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
+      }
+    }
+  }
+  fs.mkdirSync(storeDir, { recursive: true });
+  for (const d of inspected.dirs) {
+    fs.mkdirSync(path.join(storeDir, d), { recursive: true });
+  }
+  for (const f of inspected.files) {
+    const sp = path.join(source.sourceDir, f.relPath);
+    const dp = path.join(storeDir, f.relPath);
+    fs.copyFileSync(sp, dp, fs.constants.COPYFILE_FICLONE);
+  }
+  for (const link of inspected.links) {
+    const dp = path.join(storeDir, link.relPath);
+    if (link.kind === 'workspace') {
+      fs.symlinkSync(path.join(realTree, link.relTarget), dp);
+    } else if (path.isAbsolute(link.rawTarget)) {
+      fs.symlinkSync(path.join(storeDir, link.relTarget), dp);
+    } else {
+      fs.symlinkSync(link.rawTarget, dp);
+    }
+  }
+  verifyCopiedNodeModulesTree(storeDir, inspected);
+}
+
+function linkNodeModules(root, folder, trees) {
+  const source = findNodeModulesSource(root);
+  if (!source) return null;
+  const inspected = inspectNodeModulesTree(source.sourceDir, source.worktreeDir);
+  const byTree = {};
   for (const t of trees) {
     const dst = path.join(t, 'node_modules');
     try {
@@ -425,17 +593,33 @@ function linkNodeModules(root, trees) {
     } catch (e) {
       if (!e || e.code !== 'ENOENT') throw e;
     }
-    fs.symlinkSync(src, dst, 'dir');
-    linked = true;
+    const storeDir = path.join(folder, 'deps', path.basename(t), 'node_modules');
+    cloneNodeModulesForTree(source, t, storeDir, inspected);
+    fs.symlinkSync(storeDir, dst, 'dir');
+    byTree[t] = fs.realpathSync(storeDir);
   }
-  return linked ? src : null;
+  return Object.keys(byTree).length ? { sourceDir: source.sourceDir, byTree } : null;
+}
+
+function getExpectedNodeModulesTarget(t, rec) {
+  if (!rec) return null;
+  if (rec.linkedNodeModulesByTree && typeof rec.linkedNodeModulesByTree === 'object') {
+    if (Object.prototype.hasOwnProperty.call(rec.linkedNodeModulesByTree, t)) {
+      return rec.linkedNodeModulesByTree[t];
+    }
+    return null;
+  }
+  return rec.linkedNodeModules || null;
 }
 
 function hasIntactLinkedNodeModules(t, rec) {
-  if (!rec || !rec.linkedNodeModules) return false;
+  const expected = getExpectedNodeModulesTarget(t, rec);
+  if (!expected) return false;
   const dst = path.join(t, 'node_modules');
   try {
-    return fs.lstatSync(dst).isSymbolicLink() && fs.realpathSync(dst) === rec.linkedNodeModules;
+    const st = fs.lstatSync(dst);
+    if (!st.isSymbolicLink()) return false;
+    return fs.realpathSync(dst) === expected && fs.statSync(expected).isDirectory();
   } catch {
     return false;
   }
@@ -444,7 +628,16 @@ function hasIntactLinkedNodeModules(t, rec) {
 function treeStatus(t, rec = null) {
   if (!gitOk(t, ['status', '--porcelain'])) return null;
   const raw = git(t, ['status', '--porcelain']);
-  if (!raw || !hasIntactLinkedNodeModules(t, rec)) return raw;
+  const expected = getExpectedNodeModulesTarget(t, rec);
+  if (!expected) return raw;
+  if (!hasIntactLinkedNodeModules(t, rec)) {
+    const lines = raw ? raw.split('\n') : [];
+    if (!lines.some((l) => l.endsWith(' node_modules') || l.endsWith(' node_modules/'))) {
+      lines.push('!! node_modules（掛載連結已遭移除、替換或改指他處）');
+    }
+    return lines.join('\n');
+  }
+  if (!raw) return '';
   return raw
     .split('\n')
     .filter((line) => line !== '?? node_modules' && line !== '?? node_modules/')
@@ -456,9 +649,22 @@ function unlinkNodeModules(t, rec = null) {
   try {
     const st = fs.lstatSync(dst);
     if (!st.isSymbolicLink()) return;
-    if (rec && rec.linkedNodeModules && fs.realpathSync(dst) !== rec.linkedNodeModules) return;
-    if (!rec?.linkedNodeModules && gitOk(t, ['ls-files', '--error-unmatch', 'node_modules'])) return;
+    const expected = getExpectedNodeModulesTarget(t, rec);
+    if (expected && fs.realpathSync(dst) !== expected) return;
+    if (!expected && gitOk(t, ['ls-files', '--error-unmatch', 'node_modules'])) return;
     fs.unlinkSync(dst);
+    if (expected && path.basename(expected) === 'node_modules') {
+      const treeDepsDir = path.dirname(expected);
+      const depsRoot = path.dirname(treeDepsDir);
+      if (path.basename(depsRoot) === 'deps') {
+        fs.rmSync(treeDepsDir, { recursive: true, force: true });
+        try {
+          if (fs.readdirSync(depsRoot).length === 0) {
+            fs.rmSync(depsRoot, { recursive: true, force: true });
+          }
+        } catch { /* ignore */ }
+      }
+    }
   } catch { /* ignore */ }
 }
 
@@ -1372,8 +1578,11 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
         created.push(tree);
         const got = git(tree, ['rev-parse', 'HEAD']);
         if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
-        const linkedNodeModules = linkNodeModules(root, [tree]);
-        if (linkedNodeModules) record.linkedNodeModules = linkedNodeModules;
+        const linkedNm = linkNodeModules(root, folder, [tree]);
+        if (linkedNm) {
+          record.linkedNodeModules = linkedNm.sourceDir;
+          record.linkedNodeModulesByTree = linkedNm.byTree;
+        }
         fs.writeFileSync(promptFile, prompt);
         fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
       } catch (e) {
@@ -2134,7 +2343,7 @@ function snapshotTreeState(rootDir) {
   }
 }
 
-function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null, extraShas = [] } = {}) {
+function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null, extraShas = [], copySpawn = spawnSync } = {}) {
   const resolveCommit = (repoDir, rev) => (repoDir && rev && gitOk(repoDir, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
     ? git(repoDir, ['rev-parse', '--verify', `${rev}^{commit}`])
     : null);
@@ -2193,6 +2402,10 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   git(destTree, ['reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all']);
   git(destTree, ['repack', '-a', '-d', '--quiet']);
   git(destTree, ['prune', '--expire=now']);
+  for (let i = 0; i < wantedShas.length; i += 1) {
+    gitOk(destTree, ['update-ref', '-d', `refs/keep/wanted-${i}`]);
+  }
+  try { fs.rmSync(path.join(destTree, '.git', 'refs', 'keep'), { recursive: true, force: true }); } catch { /* ignore */ }
   try { fs.rmSync(path.join(destTree, '.git', 'FETCH_HEAD'), { force: true }); } catch { /* ignore */ }
   try { fs.rmSync(path.join(destTree, '.git', 'logs'), { recursive: true, force: true }); } catch { /* ignore */ }
   for (const sha of wantedShas) {
@@ -2202,11 +2415,46 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   }
 
   const nodeModulesSrc = path.join(srcTree, 'node_modules');
-  if (fs.existsSync(nodeModulesSrc)) {
-    let realNodeModulesSrc = nodeModulesSrc;
-    try { realNodeModulesSrc = fs.realpathSync(nodeModulesSrc); } catch { /* ignore */ }
-    const cpArgs = process.platform === 'darwin' ? ['-cR', realNodeModulesSrc, path.join(destTree, 'node_modules')] : ['-R', realNodeModulesSrc, path.join(destTree, 'node_modules')];
-    spawnSync('cp', cpArgs, { encoding: 'utf8' });
+  let srcNmStat = null;
+  try {
+    srcNmStat = fs.lstatSync(nodeModulesSrc);
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') throw e;
+  }
+  if (srcNmStat) {
+    let realNodeModulesSrc;
+    try {
+      realNodeModulesSrc = fs.realpathSync(nodeModulesSrc);
+      if (!fs.statSync(realNodeModulesSrc).isDirectory()) {
+        throw new LaunchError(`隔離工作樹的 node_modules 不是資料夾：${nodeModulesSrc}`);
+      }
+    } catch (e) {
+      if (e instanceof LaunchError) throw e;
+      throw new LaunchError(`隔離工作樹的 node_modules 無法解析（${nodeModulesSrc}）：${(e && e.message) || '不明錯誤'}`);
+    }
+    const realSrcTree = fs.realpathSync(srcTree);
+    const realDestTree = fs.realpathSync(destTree);
+    const allowedContainerDeps = path.join(path.dirname(realSrcTree), 'deps');
+    if (!isInsideDir(realNodeModulesSrc, realSrcTree) && !isInsideDir(realNodeModulesSrc, allowedContainerDeps)) {
+      throw new LaunchError(`隔離工作樹的 node_modules 指向工作樹外（${realNodeModulesSrc}），拒絕複製`);
+    }
+    const inspected = inspectNodeModulesTree(realNodeModulesSrc, realSrcTree);
+    const dstNm = path.join(destTree, 'node_modules');
+    const cpArgs = process.platform === 'darwin' ? ['-cR', realNodeModulesSrc, dstNm] : ['-R', realNodeModulesSrc, dstNm];
+    const cpRes = copySpawn('cp', cpArgs, { encoding: 'utf8' });
+    if (!cpRes || cpRes.error || cpRes.status !== 0 || cpRes.signal) {
+      const detail = !cpRes
+        ? '無回傳結果'
+        : cpRes.error
+          ? (cpRes.error.code || cpRes.error.message || '啟動失敗')
+          : cpRes.signal
+            ? `訊號 ${cpRes.signal}`
+            : `退 ${cpRes.status}`;
+      const stderrMsg = cpRes && typeof cpRes.stderr === 'string' && cpRes.stderr.trim() ? `：${cpRes.stderr.trim()}` : '';
+      throw new LaunchError(`隔離工作樹複製 node_modules 失敗（${detail}${stderrMsg}）`);
+    }
+    rewriteCopiedNodeModulesLinks(dstNm, realDestTree, inspected.links);
+    verifyCopiedNodeModulesTree(dstNm, inspected);
   }
   return targetHead;
 }
@@ -2289,12 +2537,14 @@ async function runGrokExec(argv, deps = {}) {
 
     const boxWorktree = path.join(boxDir, 'worktree');
     const boxMutation = mutationPath ? path.join(boxDir, 'mutation') : null;
+    const copySpawn = deps.copySpawn || spawnSync;
     try {
       materializeIsolatedGitRepo(cwdPath, boxWorktree, {
         rootRepo: recMeta && recMeta.root,
         baseSha: recMeta && recMeta.base,
         headSha: recMeta && recMeta.head,
         extraShas: promptShas,
+        copySpawn,
       });
       if (mutationPath && boxMutation) {
         materializeIsolatedGitRepo(mutationPath, boxMutation, {
@@ -2302,6 +2552,7 @@ async function runGrokExec(argv, deps = {}) {
           baseSha: recMeta && recMeta.base,
           headSha: recMeta && recMeta.head,
           extraShas: promptShas,
+          copySpawn,
         });
       }
     } catch (e) {
