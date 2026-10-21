@@ -3029,18 +3029,118 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.ok(!fs.existsSync(reviewFolder), '複審容器應已收樹並清除');
     assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), revSeedContent, 'R3：收樹與 --purge 後主目錄 node_modules 檔案內容必須逐字完好');
 
-    // R3：開樹中途失敗回滾時，主目錄 node_modules 內容同樣必須逐字完好
+    // R3：開樹且依賴掛載完成後，寫入提示檔失敗觸發回滾時，必須確認掛載已發生、回滾已清乾淨，且主目錄 node_modules 內容逐字完好
     const rollbackSeedContent = 'export const depValue = "ROLLBACK_SEED_CONTENT_KEEP_EXACT";\n';
     fs.writeFileSync(path.join(depDir, 'index.js'), rollbackSeedContent);
-    const badTplRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+    let revRollbackAfterLinkCount = 0;
+    const origWriteFileSync = fs.writeFileSync;
+    try {
+      fs.writeFileSync = function patchedWriteFileSync(filePath, data, options) {
+        if (typeof filePath === 'string' && filePath === path.join(reviewFolder, 'prompt.md')) {
+          assert.ok(fs.lstatSync(path.join(reviewFolder, 'tree', 'node_modules')).isSymbolicLink(), 'R3：回滾前 tree/node_modules 應已掛載');
+          assert.ok(fs.lstatSync(path.join(reviewFolder, 'mutation', 'node_modules')).isSymbolicLink(), 'R3：回滾前 mutation/node_modules 應已掛載');
+          assert.ok(fs.existsSync(path.join(reviewFolder, 'deps', 'tree', 'node_modules', 'fake-dep', 'index.js')), 'R3：回滾前獨立依賴複本應已建立');
+          revRollbackAfterLinkCount += 1;
+          throw new Error('simulated prompt write failure after linkNodeModules');
+        }
+        return origWriteFileSync.call(this, filePath, data, options);
+      };
+      const rollbackRevRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsAns),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+      });
+      assert.equal(rollbackRevRes.code, 2, 'R3：寫入提示檔失敗應退 2');
+    } finally {
+      fs.writeFileSync = origWriteFileSync;
+    }
+    assert.equal(revRollbackAfterLinkCount, 1, 'R3：必須在依賴掛載完成後才觸發回滾');
+    assert.ok(!fs.existsSync(reviewFolder), 'R3：回滾後複審容器應已移除');
+    assert.ok(!sh(r.dir, 'worktree', 'list', '--porcelain').includes(reviewFolder), 'R3：回滾後不應殘留工作樹登記');
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), rollbackSeedContent, 'R3：開樹異常回滾後主目錄 node_modules 檔案內容必須逐字完好');
+
+    let scanRollbackAfterLinkCount = 0;
+    try {
+      fs.writeFileSync = function patchedScanWriteFileSync(filePath, data, options) {
+        if (typeof filePath === 'string' && filePath === path.join(scanFolder, 'prompt.md')) {
+          assert.ok(fs.lstatSync(path.join(scanFolder, 'tree', 'node_modules')).isSymbolicLink(), 'R3：掃描回滾前 tree/node_modules 應已掛載');
+          assert.ok(fs.existsSync(path.join(scanFolder, 'deps', 'tree', 'node_modules', 'fake-dep', 'index.js')), 'R3：掃描回滾前獨立依賴複本應已建立');
+          scanRollbackAfterLinkCount += 1;
+          throw new Error('simulated scan prompt write failure after linkNodeModules');
+        }
+        return origWriteFileSync.call(this, filePath, data, options);
+      };
+      const rollbackScanRes = main(['--scan', '7', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(wsWithPass),
+        cwd: implWt,
+        leftoverRoots: [],
+      });
+      assert.equal(rollbackScanRes.code, 2, 'R3：掃描寫入提示檔失敗應退 2');
+    } finally {
+      fs.writeFileSync = origWriteFileSync;
+    }
+    assert.equal(scanRollbackAfterLinkCount, 1, 'R3：掃描必須在依賴掛載完成後才觸發回滾');
+    assert.ok(!fs.existsSync(scanFolder), 'R3：回滾後掃描容器應已移除');
+    assert.ok(!sh(r.dir, 'worktree', 'list', '--porcelain').includes(scanFolder), 'R3：掃描回滾後不應殘留工作樹登記');
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), rollbackSeedContent, 'R3：掃描開樹異常回滾後主目錄 node_modules 檔案內容必須逐字完好');
+
+    // R5：收樹（close / scanClose）中途 git worktree remove 失敗時，應還原掛載連結並保留未收工作樹的獨立依賴，排除原因後重試可正常收完（退 0）
+    const retryRevLaunch = main(['7', '--reviewer', 'Beta', '--dir', dir], {
       settings: s,
       platform: fakePlatform(wsAns),
       cwd: implWt,
-      template: '缺少必填佔位的壞範本',
+      template: TEMPLATE,
       leftoverRoots: [],
     });
-    assert.equal(badTplRes.code, 2);
-    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), rollbackSeedContent, 'R3：開樹異常回滾後主目錄 node_modules 檔案內容必須逐字完好');
+    assert.equal(retryRevLaunch.code, 0);
+    const retryRevClose1 = close('7', {
+      settings: s,
+      dir,
+      leftoverRoots: [],
+      remove(rootDir, t) {
+        if (t === retryRevLaunch.record.mutation) {
+          sh(rootDir, 'worktree', 'lock', t);
+        }
+        const rm = spawnSync('git', ['worktree', 'remove', t], { cwd: rootDir, env: gitEnv(), encoding: 'utf8' });
+        return rm.status === 0 ? null : (rm.stderr || 'remove failed').trim();
+      },
+    });
+    assert.equal(retryRevClose1.code, 1, 'R5：突變副本移除失敗時 close 應退 1');
+    assert.ok(fs.lstatSync(path.join(reviewFolder, 'mutation', 'node_modules')).isSymbolicLink(), 'R5：移除失敗時應還原 mutation/node_modules 連結');
+    assert.ok(fs.existsSync(path.join(reviewFolder, 'deps', 'mutation', 'node_modules', 'fake-dep', 'index.js')), 'R5：移除失敗時不得預先刪掉未收工作樹的獨立依賴');
+    sh(r.dir, 'worktree', 'unlock', retryRevLaunch.record.mutation);
+    const retryRevClose2 = main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] });
+    assert.equal(retryRevClose2.code, 0, `R5：解除鎖定後重試 --close --purge 應退 0：${retryRevClose2.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(reviewFolder), 'R5：重試成功後複審容器應已清除');
+
+    const retryScanLaunch = main(['--scan', '7', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(wsWithPass),
+      cwd: implWt,
+      leftoverRoots: [],
+    });
+    assert.equal(retryScanLaunch.code, 0);
+    const retryScanClose1 = scanClose('7', {
+      settings: s,
+      dir,
+      leftoverRoots: [],
+      remove(rootDir, t) {
+        sh(rootDir, 'worktree', 'lock', t);
+        const rm = spawnSync('git', ['worktree', 'remove', t], { cwd: rootDir, env: gitEnv(), encoding: 'utf8' });
+        return rm.status === 0 ? null : (rm.stderr || 'remove failed').trim();
+      },
+    });
+    assert.equal(retryScanClose1.code, 1, 'R5：掃描樹移除失敗時 scanClose 應退 1');
+    assert.ok(fs.lstatSync(path.join(scanFolder, 'tree', 'node_modules')).isSymbolicLink(), 'R5：掃描樹移除失敗時應還原 tree/node_modules 連結');
+    assert.ok(fs.existsSync(path.join(scanFolder, 'deps', 'tree', 'node_modules', 'fake-dep', 'index.js')), 'R5：掃描樹移除失敗時不得預先刪掉獨立依賴');
+    sh(r.dir, 'worktree', 'unlock', retryScanLaunch.record.tree);
+    const retryScanClose2 = main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] });
+    assert.equal(retryScanClose2.code, 0, `R5：解除鎖定後重試 --scan-close --purge 應退 0：${retryScanClose2.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(scanFolder), 'R5：重試成功後掃描容器應已清除');
+    assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), rollbackSeedContent, 'R5：收樹失敗重試後主目錄 node_modules 內容必須逐字完好');
 
     const scanSeedContent = 'export const depValue = "SCAN_SEED_CONTENT_KEEP_EXACT";\n';
     fs.writeFileSync(path.join(depDir, 'index.js'), scanSeedContent);
@@ -3182,7 +3282,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       fs.writeFileSync(scanRecPath, origScanRecText);
       assert.equal(main(['--scan-close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
 
-      // R2 外部連結防呆：若 node_modules 內含指向工作樹外的連結，應明確拒絕啟動
+      // R2 外部連結防呆（一）：若來源 node_modules 內含指向工作樹外的連結，應明確拒絕啟動
       const extLinkPath = path.join(r.dir, 'node_modules', 'ext-escape');
       fs.symlinkSync(altTargetDir, extLinkPath, 'dir');
       try {
@@ -3198,6 +3298,39 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       } finally {
         fs.unlinkSync(extLinkPath);
       }
+
+      // R2 外部連結防呆（二）：來源工作樹的 packages/shared 是普通目錄，但受審提交把 packages/shared（或其內部檔案）改成指向樹外的符號連結時，
+      //     必須在重綁與核驗時識破並退 2 拒絕啟動，防止審查樹與突變副本透過工作區連結共用或覆寫樹外檔案
+      const extSharedTarget = path.join(altTargetDir, 'ext-shared-pkg');
+      fs.mkdirSync(extSharedTarget, { recursive: true });
+      fs.writeFileSync(path.join(extSharedTarget, 'package.json'), '{"name":"ws-shared","type":"module","main":"index.js"}\n');
+      fs.writeFileSync(path.join(extSharedTarget, 'index.js'), 'export const wsValue = "EXTERNAL_UNREVIEWED";\n');
+      sh(implWt, 'rm', '-rf', 'packages/shared');
+      fs.mkdirSync(path.join(implWt, 'packages'), { recursive: true });
+      fs.symlinkSync(extSharedTarget, path.join(implWt, 'packages', 'shared'), 'dir');
+      sh(implWt, 'add', 'packages/shared');
+      sh(implWt, 'commit', '-q', '-m', 'replace workspace package with external symlink');
+      const badWsHead = sh(implWt, 'rev-parse', 'HEAD');
+      sh(implWt, 'checkout', '--detach', '-q', wsHead);
+      const badWsAns = {
+        ...wsAns,
+        change: { ...wsAns.change, headSha: badWsHead },
+      };
+      const badWsRevRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+        settings: s,
+        platform: fakePlatform(badWsAns),
+        cwd: implWt,
+        template: TEMPLATE,
+        leftoverRoots: [],
+      });
+      assert.equal(badWsRevRes.code, 2, 'R2：受審提交將工作區套件改為樹外連結時應退 2 拒絕啟動');
+      assert.match(badWsRevRes.lines.join('\n'), /本機套件連結目標指向工作樹外/u);
+      assert.ok(!fs.existsSync(reviewFolder), 'R2：拒啟回滾後不應留下複審容器');
+      assert.equal(
+        fs.readFileSync(path.join(extSharedTarget, 'index.js'), 'utf8'),
+        'export const wsValue = "EXTERNAL_UNREVIEWED";\n',
+        'R2：樹外目錄內容不得被動到',
+      );
 
       // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {

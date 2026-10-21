@@ -351,13 +351,13 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
       const got = git(t, ['rev-parse', 'HEAD']);
       if (got !== head) throw new LaunchError(`${t} 開出來是 ${got}，不是受審版本 ${head}`);
     }
-    const linkedNm = linkNodeModules(root, folder, [tree, mutation]);
-    if (linkedNm) {
-      record.linkedNodeModules = linkedNm.sourceDir;
-      record.linkedNodeModulesByTree = linkedNm.byTree;
+    linkNodeModules(root, folder, [tree, mutation], record);
+    try {
+      fs.writeFileSync(promptFile, prompt);
+      fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
+    } catch (writeErr) {
+      throw new LaunchError(`寫入送審提示或紀錄失敗：${(writeErr && writeErr.message) || '不明錯誤'}`);
     }
-    fs.writeFileSync(promptFile, prompt);
-    fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
   } catch (e) {
     // 開到一半失敗：只收這一次自己開的樹與資料夾，不留半套（下一次才不會被「已經在了」或「已登記但不見了」擋住）。
     // 「這一次開的」＝開樹前沒有、現在登記在這個資料夾底下的每一棵：也收得到 git worktree add 已經建好樹、
@@ -366,7 +366,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
     let registered = created;
     try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* 讀不到登記就只收確定開成的那幾棵 */ }
     for (const t of new Set([...created, ...registered])) {
-      unlinkNodeModules(t);
+      unlinkNodeModules(t, record);
       gitOk(root, ['worktree', 'remove', '--force', t]);
     }
     fs.rmSync(folder, { recursive: true, force: true });
@@ -490,17 +490,59 @@ function inspectNodeModulesTree(sourceDir, sourceWorktree) {
   return { dirs, files, links };
 }
 
+function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
+  const targetInTree = path.join(targetTreeReal, link.relTarget);
+  if (!fs.existsSync(targetInTree)) {
+    throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
+  }
+  let realTargetInTree;
+  try {
+    realTargetInTree = fs.realpathSync(targetInTree);
+  } catch (e) {
+    throw new LaunchError(`受審工作樹的本機套件連結目標無法解析（${link.relPath} -> ${link.relTarget}）：${(e && e.message) || '不明錯誤'}，拒絕啟動`);
+  }
+  if (!isInsideDir(realTargetInTree, targetTreeReal)) {
+    throw new LaunchError(`受審工作樹的本機套件連結目標指向工作樹外（${link.relPath} -> ${link.relTarget} -> ${realTargetInTree}），為保受審版本隔離拒絕啟動`);
+  }
+  const verifyEntriesInsideTree = (curDir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(curDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name === '.git' || ent.name === 'node_modules') continue;
+      const ep = path.join(curDir, ent.name);
+      let realEp;
+      try {
+        realEp = fs.realpathSync(ep);
+      } catch {
+        throw new LaunchError(`受審工作樹的本機套件內含失效連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)}），拒絕啟動`);
+      }
+      if (!isInsideDir(realEp, targetTreeReal)) {
+        throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)} -> ${realEp}），為保受審版本隔離拒絕啟動`);
+      }
+      const lst = fs.lstatSync(ep);
+      if (lst.isDirectory() && !lst.isSymbolicLink()) {
+        verifyEntriesInsideTree(ep);
+      }
+    }
+  };
+  if (fs.statSync(realTargetInTree).isDirectory()) {
+    verifyEntriesInsideTree(realTargetInTree);
+  }
+  return realTargetInTree;
+}
+
 function rewriteCopiedNodeModulesLinks(dstNm, targetTreeReal, links) {
   for (const link of links) {
     const dp = path.join(dstNm, link.relPath);
     if (link.kind === 'workspace') {
-      const targetInTree = path.join(targetTreeReal, link.relTarget);
-      if (!fs.existsSync(targetInTree)) {
-        throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
-      }
+      const realTargetInTree = resolveWorkspaceLinkTargetInTree(targetTreeReal, link);
       try { fs.unlinkSync(dp); } catch { /* ignore */ }
       fs.mkdirSync(path.dirname(dp), { recursive: true });
-      fs.symlinkSync(targetInTree, dp);
+      fs.symlinkSync(realTargetInTree, dp);
     } else if (path.isAbsolute(link.rawTarget)) {
       const targetInStore = path.join(dstNm, link.relTarget);
       try { fs.unlinkSync(dp); } catch { /* ignore */ }
@@ -510,12 +552,13 @@ function rewriteCopiedNodeModulesLinks(dstNm, targetTreeReal, links) {
   }
 }
 
-function verifyCopiedNodeModulesTree(dstNm, inspected) {
+function verifyCopiedNodeModulesTree(dstNm, inspected, targetTreeReal = null) {
   let rootSt;
   try { rootSt = fs.statSync(dstNm); } catch { rootSt = null; }
   if (!rootSt || !rootSt.isDirectory()) {
     throw new LaunchError(`複製相依套件（node_modules）失敗：目標目錄不存在（${dstNm}）`);
   }
+  const realDstNm = fs.realpathSync(dstNm);
   for (const d of inspected.dirs) {
     const dp = path.join(dstNm, d);
     let st;
@@ -545,17 +588,26 @@ function verifyCopiedNodeModulesTree(dstNm, inspected) {
     if (!st || !st.isSymbolicLink() || !fs.existsSync(dp)) {
       throw new LaunchError(`複製相依套件（node_modules）不完整：缺少或連結失效 ${l.relPath}`);
     }
+    const realLinkTarget = fs.realpathSync(dp);
+    if (l.kind === 'workspace') {
+      if (targetTreeReal) {
+        const expectedWsTarget = resolveWorkspaceLinkTargetInTree(targetTreeReal, l);
+        if (realLinkTarget !== expectedWsTarget || !isInsideDir(realLinkTarget, targetTreeReal)) {
+          throw new LaunchError(`複製相依套件（node_modules）工作區連結目標越界或不符：${l.relPath}`);
+        }
+      }
+    } else if (!isInsideDir(realLinkTarget, realDstNm)) {
+      throw new LaunchError(`複製相依套件（node_modules）內部連結越界：${l.relPath}`);
+    }
   }
 }
 
 function cloneNodeModulesForTree(source, targetTree, storeDir, inspected) {
   const realTree = fs.realpathSync(targetTree);
+  const wsTargets = new Map();
   for (const link of inspected.links) {
     if (link.kind === 'workspace') {
-      const targetInTree = path.join(realTree, link.relTarget);
-      if (!fs.existsSync(targetInTree)) {
-        throw new LaunchError(`受審工作樹缺少本機套件連結目標（${link.relPath} -> ${link.relTarget}），拒絕啟動`);
-      }
+      wsTargets.set(link.relPath, resolveWorkspaceLinkTargetInTree(realTree, link));
     }
   }
   fs.mkdirSync(storeDir, { recursive: true });
@@ -570,21 +622,27 @@ function cloneNodeModulesForTree(source, targetTree, storeDir, inspected) {
   for (const link of inspected.links) {
     const dp = path.join(storeDir, link.relPath);
     if (link.kind === 'workspace') {
-      fs.symlinkSync(path.join(realTree, link.relTarget), dp);
+      fs.symlinkSync(wsTargets.get(link.relPath), dp);
     } else if (path.isAbsolute(link.rawTarget)) {
       fs.symlinkSync(path.join(storeDir, link.relTarget), dp);
     } else {
       fs.symlinkSync(link.rawTarget, dp);
     }
   }
-  verifyCopiedNodeModulesTree(storeDir, inspected);
+  verifyCopiedNodeModulesTree(storeDir, inspected, realTree);
 }
 
-function linkNodeModules(root, folder, trees) {
+function linkNodeModules(root, folder, trees, rec = null) {
   const source = findNodeModulesSource(root);
   if (!source) return null;
   const inspected = inspectNodeModulesTree(source.sourceDir, source.worktreeDir);
   const byTree = {};
+  if (rec) {
+    rec.linkedNodeModules = source.sourceDir;
+    if (!rec.linkedNodeModulesByTree || typeof rec.linkedNodeModulesByTree !== 'object') {
+      rec.linkedNodeModulesByTree = {};
+    }
+  }
   for (const t of trees) {
     const dst = path.join(t, 'node_modules');
     try {
@@ -596,7 +654,13 @@ function linkNodeModules(root, folder, trees) {
     const storeDir = path.join(folder, 'deps', path.basename(t), 'node_modules');
     cloneNodeModulesForTree(source, t, storeDir, inspected);
     fs.symlinkSync(storeDir, dst, 'dir');
-    byTree[t] = fs.realpathSync(storeDir);
+    const resolvedStore = fs.realpathSync(storeDir);
+    byTree[t] = resolvedStore;
+    if (rec) rec.linkedNodeModulesByTree[t] = resolvedStore;
+  }
+  if (rec && Object.keys(rec.linkedNodeModulesByTree).length === 0) {
+    delete rec.linkedNodeModules;
+    delete rec.linkedNodeModulesByTree;
   }
   return Object.keys(byTree).length ? { sourceDir: source.sourceDir, byTree } : null;
 }
@@ -644,28 +708,53 @@ function treeStatus(t, rec = null) {
     .join('\n');
 }
 
-function unlinkNodeModules(t, rec = null) {
+function unlinkNodeModulesSymlinkOnly(t, rec = null) {
   const dst = path.join(t, 'node_modules');
   try {
     const st = fs.lstatSync(dst);
-    if (!st.isSymbolicLink()) return;
+    if (!st.isSymbolicLink()) return false;
     const expected = getExpectedNodeModulesTarget(t, rec);
-    if (expected && fs.realpathSync(dst) !== expected) return;
-    if (!expected && gitOk(t, ['ls-files', '--error-unmatch', 'node_modules'])) return;
+    if (expected && fs.realpathSync(dst) !== expected) return false;
+    if (!expected && gitOk(t, ['ls-files', '--error-unmatch', 'node_modules'])) return false;
     fs.unlinkSync(dst);
-    if (expected && path.basename(expected) === 'node_modules') {
-      const treeDepsDir = path.dirname(expected);
-      const depsRoot = path.dirname(treeDepsDir);
-      if (path.basename(depsRoot) === 'deps') {
-        fs.rmSync(treeDepsDir, { recursive: true, force: true });
-        try {
-          if (fs.readdirSync(depsRoot).length === 0) {
-            fs.rmSync(depsRoot, { recursive: true, force: true });
-          }
-        } catch { /* ignore */ }
-      }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restoreNodeModulesSymlink(t, rec = null) {
+  const expected = getExpectedNodeModulesTarget(t, rec);
+  if (!expected) return;
+  const dst = path.join(t, 'node_modules');
+  try {
+    if (fs.existsSync(t) && !fs.existsSync(dst) && fs.existsSync(expected)) {
+      fs.symlinkSync(expected, dst, 'dir');
     }
   } catch { /* ignore */ }
+}
+
+function removeNodeModulesStore(t, rec = null) {
+  const expected = getExpectedNodeModulesTarget(t, rec);
+  if (!expected || path.basename(expected) !== 'node_modules') return;
+  try {
+    const treeDepsDir = path.dirname(expected);
+    const depsRoot = path.dirname(treeDepsDir);
+    if (path.basename(depsRoot) === 'deps') {
+      fs.rmSync(treeDepsDir, { recursive: true, force: true });
+      try {
+        if (fs.readdirSync(depsRoot).length === 0) {
+          fs.rmSync(depsRoot, { recursive: true, force: true });
+        }
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+
+function unlinkNodeModules(t, rec = null) {
+  if (unlinkNodeModulesSymlinkOnly(t, rec)) {
+    removeNodeModulesStore(t, rec);
+  }
 }
 
 /**
@@ -1291,9 +1380,20 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
       }
       let failed = null;
       for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
-        unlinkNodeModules(t, rec);
-        const why = remove(rec.root, t);
-        if (why) { failed = `${what}移除失敗：${why}`; break; }
+        const unlinked = unlinkNodeModulesSymlinkOnly(t, rec);
+        let why;
+        try {
+          why = remove(rec.root, t);
+        } catch (e) {
+          if (unlinked) restoreNodeModulesSymlink(t, rec);
+          throw e;
+        }
+        if (why) {
+          if (unlinked) restoreNodeModulesSymlink(t, rec);
+          failed = `${what}移除失敗：${why}`;
+          break;
+        }
+        if (unlinked) removeNodeModulesStore(t, rec);
         rec.removed.push(t);
         save();
       }
@@ -1578,18 +1678,18 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
         created.push(tree);
         const got = git(tree, ['rev-parse', 'HEAD']);
         if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
-        const linkedNm = linkNodeModules(root, folder, [tree]);
-        if (linkedNm) {
-          record.linkedNodeModules = linkedNm.sourceDir;
-          record.linkedNodeModulesByTree = linkedNm.byTree;
+        linkNodeModules(root, folder, [tree], record);
+        try {
+          fs.writeFileSync(promptFile, prompt);
+          fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
+        } catch (writeErr) {
+          throw new LaunchError(`寫入掃描提示或紀錄失敗：${(writeErr && writeErr.message) || '不明錯誤'}`);
         }
-        fs.writeFileSync(promptFile, prompt);
-        fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
       } catch (e) {
         let registered = created;
         try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
         for (const t of new Set([...created, ...registered])) {
-          unlinkNodeModules(t);
+          unlinkNodeModules(t, record);
           gitOk(root, ['worktree', 'remove', '--force', t]);
         }
         fs.rmSync(folder, { recursive: true, force: true });
@@ -1833,12 +1933,20 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
         return { code: 1, lines };
       }
       if (!rec.removed.includes(t)) {
-        unlinkNodeModules(t, rec);
-        const why = remove(rec.root, t);
+        const unlinked = unlinkNodeModulesSymlinkOnly(t, rec);
+        let why;
+        try {
+          why = remove(rec.root, t);
+        } catch (e) {
+          if (unlinked) restoreNodeModulesSymlink(t, rec);
+          throw e;
+        }
         if (why) {
+          if (unlinked) restoreNodeModulesSymlink(t, rec);
           lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
           return { code: 1, lines };
         }
+        if (unlinked) removeNodeModulesStore(t, rec);
         rec.removed.push(t);
         save();
       }
@@ -2450,7 +2558,7 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
       throw new LaunchError(`隔離工作樹複製 node_modules 失敗（${detail}${stderrMsg}）`);
     }
     rewriteCopiedNodeModulesLinks(dstNm, realDestTree, inspected.links);
-    verifyCopiedNodeModulesTree(dstNm, inspected);
+    verifyCopiedNodeModulesTree(dstNm, inspected, realDestTree);
   }
   return targetHead;
 }
