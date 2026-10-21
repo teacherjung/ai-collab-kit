@@ -60,13 +60,16 @@ const firstLine = (body) => String(body || '').replace(/\r\n?/g, '\n').split('\n
 const readPart = clean;
 const TRACE_HEAD = /^## (?:❓|⚖|🚫|✅ 驗收)/mu;
 const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// 配對：開頭那一段若有帶錨點的網址（例如 https://…#issuecomment-<編號>、#comment-<編號>、#note_<編號>、#c-<編號>），只認第一個網址錨點並在該錨點內依完整字元邊界配對，忽略後續網址或裸編號（套件 #51、#121 r5 R10）；純數字留言編號一律須經網址錨點引用（不認裸數字編號）。
+// 配對：開頭那一段若有帶錨點的網址（例如 https://…#issuecomment-<編號>、#comment-<編號>、#comment:<編號>、#comment.<編號>、#comment/<編號>、#note_<編號>、#c-<編號>），只認第一個網址錨點並在該錨點內依完整字元邊界配對，忽略後續網址或裸編號（套件 #51、#121 r5〜r6 R10）；純數字留言編號一律須經網址錨點引用（不認裸數字編號）。
 function cites(body, id) {
   const part = readPart(body);
   const s = String(id);
   const idBoundaryRe = new RegExp(`(?<![0-9A-Za-z])${esc(s)}(?![0-9A-Za-z])`, 'u');
-  const firstUrl = /https?:\/\/[^\s)>#，,、；;。｜|）\]`'"]+#([A-Za-z0-9_-]+)(?![0-9A-Za-z])/u.exec(part);
-  if (firstUrl) return idBoundaryRe.test(firstUrl[1]);
+  const firstUrl = /https?:\/\/(?:(?!https?:\/\/)[^\s)>#，,、；;。｜|）\]`'"])+#((?:(?!https?:\/\/)[^\s)>#，,、；;。｜|）\]`'"])+)/u.exec(part);
+  if (firstUrl) {
+    const frag = firstUrl[1].replace(/[:./]+$/u, '');
+    return idBoundaryRe.test(frag);
+  }
   if (/^\d+$/u.test(s)) return false;
   return idBoundaryRe.test(part);
 }

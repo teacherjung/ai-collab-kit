@@ -111,8 +111,8 @@ test('④配對：引在引用區塊裡不算；先貼的不算；編號要整�
     assert.deepEqual(crossEval.ruled.map((x) => x.ask.id), [q.id], `跨 PR 以「${sep}」緊接時只關第一題`);
     assert.deepEqual(crossEval.open.map((x) => x.id), [q2.id], `跨 PR 以「${sep}」緊接時第二題維持待裁`);
   }
-  // r5 R10：自訂平台網址錨點前綴（如 #comment-<編號>、#note_<編號>）同樣只認第一個網址錨點、並在該錨點內依完整編號邊界配對
-  for (const prefix of ['comment-', 'note_', 'issuecomment-', 'c-', '']) {
+  // r5〜r6 R10：自訂平台網址錨點前綴（如 #comment-<編號>、#comment:<編號>、#comment.<編號>、#comment/<編號>、#note_<編號>）同樣只認第一個網址錨點、並在該錨點內依完整編號邊界配對
+  for (const prefix of ['comment-', 'comment:', 'comment.', 'comment/', 'note_', 'issuecomment-', 'c-', '']) {
     const customSingle = `原 ❓：https://platform.example/pr/7#${prefix}5560311732`;
     assert.equal(cites(customSingle, '5560311732'), true, `#${prefix}5560311732 單一網址應命中`);
     assert.equal(cites(customSingle, '556031173'), false, `#${prefix}5560311732 不得命中前綴子字串`);

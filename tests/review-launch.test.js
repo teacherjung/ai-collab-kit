@@ -253,6 +253,7 @@ test('②真的倉庫裡跑一遍：兩棵樹都在受審版本、提示與紀�
     assert.ok(out.lines.some((l) => l.includes(`--close 7 --dir ${fs.realpathSync(dir)}`)), '用了 --dir 開樹，印的收樹指令也要帶同一個 --dir');
     const rec = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
     assert.equal(rec.head, r.head); assert.equal(rec.round, 1); assert.equal(rec.tree, tree);
+    assert.equal(rec.model, 'm-strong'); assert.equal(rec.effort, 'max');
     assert.deepEqual([...new Set(platform.asked)].sort(), ['allComments', 'branchSha', 'change', 'changedFiles', 'comments']);
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
@@ -786,6 +787,8 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過於圍欄內含 ### 範例、圍欄後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\`\`\`text\n### 範例\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
     ['通過於 HTML 註解內含 ```text、註解後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n<!--\n\`\`\`text\n-->\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
     ['通過於 #### 子標題後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n#### 執行紀錄\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
+    ['通過於編號清單圍欄內填合格設定範例、清單外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   模型：m-strong\n   推理強度：max\n   \`\`\`\n\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
+    ['通過於無序清單圍欄內填合格設定範例、清單外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- \`\`\`text\n  模型：m-strong\n  推理強度：max\n  \`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
@@ -793,6 +796,8 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
   assert.equal(inlineCodeHtmlOk.header.verdict, '通過');
   const subheadingValidOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n#### 執行紀錄\n- 模型：m-strong；推理強度：max。未降級。\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
   assert.equal(subheadingValidOk.header.verdict, '通過');
+  const listFenceLowExampleOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1. \`\`\`text\n   模型：wrong\n   推理強度：low\n   \`\`\`\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
+  assert.equal(listFenceLowExampleOk.header.verdict, '通過');
   const colonModelOpts = {
     ...baseOpts,
     reviewerConfigs: [{ participant: 'Beta', strongest: 'provider:model-v1', second: 'm-second', maxEffort: 'max' }],
