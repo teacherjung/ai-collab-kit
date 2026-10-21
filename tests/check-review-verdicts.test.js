@@ -771,6 +771,38 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.ok(fencedProbs.some((x) => x.includes('實際填「gpt-6-luna」')));
   assert.ok(fencedProbs.some((x) => x.includes('實際填「low」')));
 
+  // 圍欄內含 `### 範例` 標題、或 HTML 註解內含 ```text，後面緊接矛盾低檔設定：不可提前截斷段落或開啟假圍欄吞掉後方低檔設定（#121 r4 R3）
+  const fencedHeadingThenLow = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '```text',
+    '### 範例',
+    '```',
+    '- 模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  const fencedHeadingProbs = settingProblems(fencedHeadingThenLow, 'Beta', reviewerConfigs);
+  assert.equal(fencedHeadingProbs.length, 2, fencedHeadingProbs.join(' / '));
+  assert.ok(fencedHeadingProbs.some((x) => x.includes('模型欄位重複或矛盾')));
+  assert.ok(fencedHeadingProbs.some((x) => x.includes('推理強度欄位重複或矛盾')));
+
+  const htmlCommentFenceThenLow = mkBody([
+    '- 模型：gpt-6-astra；推理強度：max',
+    '<!--',
+    '```text',
+    '-->',
+    '- 模型：gpt-6-luna；推理強度：low',
+  ].join('\n'));
+  const htmlFenceProbs = settingProblems(htmlCommentFenceThenLow, 'Beta', reviewerConfigs);
+  assert.equal(htmlFenceProbs.length, 2, htmlFenceProbs.join(' / '));
+  assert.ok(htmlFenceProbs.some((x) => x.includes('模型欄位重複或矛盾')));
+  assert.ok(htmlFenceProbs.some((x) => x.includes('推理強度欄位重複或矛盾')));
+
+  // 行內反引號內含 `<!--` 不應開啟假 HTML 註解吞掉後方合格設定（#121 r4 R3）
+  const inlineCodeHtmlArrowGood = mkBody([
+    '- 備註：`<!--` 是 HTML 註解的起點，`` `<!--` `` 也是行內程式碼。',
+    '- 模型：gpt-6-astra；推理強度：max',
+  ].join('\n'));
+  assert.deepEqual(settingProblems(inlineCodeHtmlArrowGood, 'Beta', reviewerConfigs), []);
+
   // 模型與推理寫在「### 清單逐項結果」底下不算數
   const wrongSection = [
     `🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：通過`,
@@ -781,18 +813,24 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   ].join('\n');
   assert.equal(settingProblems(wrongSection, 'Beta', reviewerConfigs).length, 2);
 
-  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例夾帶低檔設定）不算數、不能解除阻擋；合規放行
+  // evaluate 與 gateRun 整合：不合規的通過（含逗號並列多值、異種圍欄範例、圍欄內 ###、註解內 ``` 夾帶低檔設定）不算數、不能解除阻擋；合規放行
   const priorBlock = c(`🤖 Beta｜來源：CLI｜審 \`${HEAD.slice(0, 7)}\`｜r1｜結論：需修改後再審`, 'r1-block');
   const badComment = c(honestLowWithReq, 'bad-set');
   const commaBadComment = c(mkBody('- 模型：gpt-6-astra, gpt-6-luna\n- 推理強度：max, low'), 'comma-bad');
   const fullCommaBadComment = c(mkBody('- 模型：gpt-6-astra，gpt-6-luna\n- 推理強度：max，low'), 'full-comma-bad');
   const fencedBadPassR2 = c(fencedExampleWithLowActual.replace('｜r1｜', '｜r2｜'), 'fenced-bad-r2');
+  const fencedHeadingBadR2 = c(fencedHeadingThenLow.replace('｜r1｜', '｜r2｜'), 'fenced-heading-bad-r2');
+  const htmlFenceBadR2 = c(htmlCommentFenceThenLow.replace('｜r1｜', '｜r2｜'), 'html-fence-bad-r2');
+  const inlineCodeGoodComment = c(inlineCodeHtmlArrowGood, 'inline-code-good');
   const goodComment = c(mkBody('- 模型：gpt-6-astra\n- 推理強度：max'), 'good-set');
   const rBad = evaluate([badComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.ok(rBad.problems.some((x) => x.includes('本輪實際用的設定不合規')));
   assert.ok(rBad.problems.some((x) => x.includes('沒有「Beta」對目前版本')));
-  const rFencedAfterBlock = evaluate([priorBlock, fencedBadPassR2], HEAD, 'Beta', ROLES, { reviewerConfigs });
-  assert.ok(rFencedAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `圍欄範例夾帶低檔設定的通過不可解除既有阻擋：${rFencedAfterBlock.problems.join(' / ')}`);
+  for (const probeComment of [fencedBadPassR2, fencedHeadingBadR2, htmlFenceBadR2]) {
+    const rAfterBlock = evaluate([priorBlock, probeComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
+    assert.ok(rAfterBlock.problems.some((x) => x.includes('還沒有被同一位撤銷') && x.includes('需修改後再審')), `夾帶低檔設定的通過不可解除既有阻擋：${rAfterBlock.problems.join(' / ')}`);
+  }
+  assert.deepEqual(evaluate([inlineCodeGoodComment], HEAD, 'Beta', ROLES, { reviewerConfigs }).problems, []);
   const rGood = evaluate([badComment, goodComment], HEAD, 'Beta', ROLES, { reviewerConfigs });
   assert.deepEqual(rGood.problems, []);
   assert.ok(rGood.warnings.some((x) => x.includes('本輪實際用的設定不合規')));
@@ -805,6 +843,9 @@ test('⑮「通過」小節「### 本輪實際用的設定」唯一欄位核對�
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [commaBadComment] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [fullCommaBadComment] }) }).code, 1);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, fencedBadPassR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, fencedHeadingBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [priorBlock, htmlFenceBadR2] }) }).code, 1);
+  assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [inlineCodeGoodComment] }) }).code, 0);
   assert.equal(gateRun('7', { settings: gateSettings, platform: fakePlatform({ change: change(), comments: [goodComment] }) }).code, 0);
 });
 

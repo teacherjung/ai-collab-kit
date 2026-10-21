@@ -102,20 +102,36 @@ const COMBINED_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:
 const MODEL_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?模型(?:名稱|名|識別值)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
 const EFFORT_CLAUSE_RE = /^(?:\*\*|__)?(?:實際(?:用的)?|本輪(?:實際(?:用的)?)?)?推理(?:強度|檔位)?(?:\*\*|__)?[ \t]*[：:][ \t]*(.*)$/u;
 
+function findClosingBackticks(str, fromIdx, openLen) {
+  let i = fromIdx;
+  while (i < str.length) {
+    if (str[i] !== '`') {
+      i += 1;
+      continue;
+    }
+    let run = 0;
+    while (i + run < str.length && str[i + run] === '`') run += 1;
+    if (run === openLen) return i;
+    i += run;
+  }
+  return -1;
+}
+
 /**
- * 從「### 本輪實際用的設定」段落解析唯一宣告的實際模型與推理強度欄位。
- * 只認欄位名「（實際／本輪）模型」與「（實際／本輪）推理（強度／檔位）」（或合併欄「模型／推理（強度）」），
- * 「要求模型」「設定模型」等其他前綴不算實際欄位；同一行若以分號／逗號／豎線隔開多欄，分隔符後必須緊接下一欄「欄位名：值」，
- * 否則整段文字視為同一欄的值（防止 `模型：gpt-6-astra, gpt-6-luna` 或 `推理強度：max, low` 被截斷成單一合格值，#121 r2 R3）。
+ * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
+ * 段落起訖（`### ...`）、圍欄程式碼區塊（```／~~~）、HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）
+ * 由同一個由上而下的狀態機處理：圍欄或 HTML 註解內的 `### ` 不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
+ * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解（#121 r4 R3）。
  */
-function parseSettingFields(sectionLines, allowedModels, allowedEffort = '') {
+function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
   const effortValues = [];
   let fenceChar = '';
   let fenceLen = 0;
   let inHtmlComment = false;
+  let inSection = false;
 
-  for (const rawLine of sectionLines) {
+  for (const rawLine of allLines) {
     if (fenceChar) {
       const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(rawLine);
       if (closeMatch && closeMatch[1][0] === fenceChar && closeMatch[1].length >= fenceLen) {
@@ -124,11 +140,18 @@ function parseSettingFields(sectionLines, allowedModels, allowedEffort = '') {
       }
       continue;
     }
-    const openMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(rawLine);
-    if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
-      fenceChar = openMatch[1][0];
-      fenceLen = openMatch[1].length;
-      continue;
+    if (!inHtmlComment) {
+      if (/^ {0,3}#{1,6}(?:\s|$)/u.test(rawLine)) {
+        inSection = rawLine.trim() === '### 本輪實際用的設定';
+        continue;
+      }
+      if (/^\s*>/u.test(rawLine) || /^(?:\t| {0,3}\t| {4,})/u.test(rawLine)) continue;
+      const openMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(rawLine);
+      if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
+        fenceChar = openMatch[1][0];
+        fenceLen = openMatch[1].length;
+        continue;
+      }
     }
     let line = '';
     let idx = 0;
@@ -138,18 +161,27 @@ function parseSettingFields(sectionLines, allowedModels, allowedEffort = '') {
         if (endIdx < 0) break;
         inHtmlComment = false;
         idx = endIdx + 3;
-      } else {
-        const startIdx = rawLine.indexOf('<!--', idx);
-        if (startIdx < 0) {
-          line += rawLine.slice(idx);
-          break;
+      } else if (rawLine[idx] === '`' && (idx === 0 || rawLine[idx - 1] !== '\\')) {
+        let openLen = 0;
+        while (idx + openLen < rawLine.length && rawLine[idx + openLen] === '`') openLen += 1;
+        const closeIdx = findClosingBackticks(rawLine, idx + openLen, openLen);
+        if (closeIdx >= 0) {
+          const inner = rawLine.slice(idx + openLen, closeIdx);
+          line += /[:：<>]/u.test(inner) ? '`code`' : rawLine.slice(idx, closeIdx + openLen);
+          idx = closeIdx + openLen;
+        } else {
+          line += rawLine.slice(idx, idx + openLen);
+          idx += openLen;
         }
-        line += rawLine.slice(idx, startIdx);
+      } else if (rawLine.startsWith('<!--', idx)) {
         inHtmlComment = true;
-        idx = startIdx + 4;
+        idx += 4;
+      } else {
+        line += rawLine[idx];
+        idx += 1;
       }
     }
-    if (!line.trim() || /^\s*>/u.test(line) || /^(?:\t| {0,3}\t| {4,})/u.test(line)) continue;
+    if (!inSection || !line.trim() || /^\s*>/u.test(line)) continue;
     const segments = [];
     const outer = line.replace(/[（(]([^）)]*)[）)]/gu, (full, inner) => {
       if (/[：:]/u.test(inner)) {
@@ -228,17 +260,13 @@ function settingProblems(body, role, reviewers) {
   const cfg = reviewers.find((r) => r && typeof r.participant === 'string' && r.participant.trim() === role);
   if (!cfg) return [];
   const lines = String(body || '').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/[^\S\n]+$/u, ''));
-  const start = lines.indexOf('### 本輪實際用的設定');
-  if (start < 0) return [];
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => /^###\s/u.test(l));
-  const sectionLines = end < 0 ? rest : rest.slice(0, end);
+  if (!lines.includes('### 本輪實際用的設定')) return [];
   const models = [cfg.strongest, cfg.second]
     .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter((s) => s && s !== '未設定');
   const effort = typeof cfg.maxEffort === 'string' && cfg.maxEffort.trim() && cfg.maxEffort.trim() !== '未設定'
     ? cfg.maxEffort.trim() : '';
-  const { modelValues, effortValues } = parseSettingFields(sectionLines, models, effort);
+  const { modelValues, effortValues } = parseSettingFields(lines, models, effort);
   const out = [];
   if (models.length) {
     if (modelValues.length === 0) {

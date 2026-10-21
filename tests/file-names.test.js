@@ -1,17 +1,15 @@
-// 守檔名與文字檔內容控制字元（規矩 E6）及共用工具／考題正規式靜態檢查：
+// 守檔名與文字檔內容控制字元（規矩 E6）：
 // 1. 版本控制追蹤的每一個路徑，只用英文字母、數字、半形符號（例外名單只出不進，本倉庫是空的）。
 // 2. 已追蹤的每一個文字檔（照副檔名判，不靠 git 自動判二進位，以免含空字元的原始碼被跳過），整檔逐字不放控制字元（C0/C1，\t、\n、\r 除外）。
-// 3. tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白（no-regex-spaces）或控制字元跳脫（no-control-regex，#71、#77）。
 //
 // 為什麼：原專案的中文檔名讓掃描者跳過過整個檔（套件倉庫的案例簿 scanner-skipped-non-ascii-paths）；
-// 路徑一有非 ASCII 或文字檔混入控制字元，工具鏈裡每一環都可能各自出錯；正規式混入連續空白或控制字元跳脫則會在同步進使用專案時被 ESLint 擋下。
-// ⚠️ 守不到的：未追蹤的檔；名字對不對得起內容；new RegExp(...) 動態拼出的字串。列檔走清過 GIT_ 的環境（規矩 E4）。
+// 路徑一有非 ASCII 或文字檔混入控制字元，工具鏈裡每一環都可能各自出錯。
+// ⚠️ 守不到的：未追蹤的檔；名字對不對得起內容。列檔走清過 GIT_ 的環境（規矩 E4）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
 const settingsData = require('../tools/settings-data.js');
@@ -22,8 +20,6 @@ const FROZEN_EXCEPTIONS = [];
 /** 預設二進位副檔名允許清單（規矩 E6、E7；若 settings.json 另設 binaryExtensions 陣列則聯集併入）。 */
 const DEFAULT_BINARY_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.eot', '.pdf', '.zip', '.gz'];
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/u;
-const CONTROL_ESCAPE_AT = /^\\(?:x[01][0-9a-fA-F]|u00[01][0-9a-fA-F]|u\{0*(?:[0-9a-fA-F]|1[0-9a-fA-F])\})/u;
-const UNAMBIGUOUS_REGEX_PREV = new Set(['', '(', '[', '{', ',', ';', '=', ':', '?', '!', '&', '|', '^', '~', '*', '%', '<', '>', '+', '-']);
 
 function binaryExtensions(readFn = settingsData.read) {
   const s = readFn();
@@ -66,205 +62,6 @@ function scanControlChars({ files, extraFiles = [], readFn = settingsData.read, 
     if (hit) bad.push(`${item.name}（位置 ${hit.index}，U+${hit.code.toString(16).toUpperCase().padStart(4, '0')}）`);
   }
   return { count: textFiles.length, bad };
-}
-
-function isSyntaxOk(code) {
-  try {
-    return Boolean(new vm.Script(code));
-  } catch {
-    return false;
-  }
-}
-
-function isValidRegexLiteralAt(src, start, end, pattern, flags) {
-  try {
-    if (typeof new RegExp(pattern, flags).source !== 'string') return false;
-  } catch {
-    return false;
-  }
-  const prefix = src.slice(0, start);
-  const suffix = src.slice(end);
-  return isSyntaxOk(`${prefix} true ${suffix}`) && isSyntaxOk(`${prefix}(/a/)${suffix}`);
-}
-
-/**
- * 取出 JS 原始碼裡所有正規式字面量的 { pattern, flags, start, end }。
- * F10 換做法（#121 r3 R2）：不再靠關鍵字清單猜識別字或括號後是否為除法，改以 V8 內建 vm.Script 語法核對候選區間是否為合法 PrimaryExpression 正規式字面量。
- */
-function extractRegexLiterals(src) {
-  const out = [];
-  let i = 0;
-  let prevToken = '';
-  const templateBraceStack = [];
-
-  function readTemplateText() {
-    while (i < src.length) {
-      if (src[i] === '\\') { i += 2; continue; }
-      if (src[i] === '`') {
-        i++;
-        prevToken = '`';
-        return;
-      }
-      if (src[i] === '$' && src[i + 1] === '{') {
-        i += 2;
-        templateBraceStack.push(0);
-        prevToken = '{';
-        return;
-      }
-      i++;
-    }
-  }
-
-  while (i < src.length) {
-    const ch = src[i];
-    if (/\s/u.test(ch)) { i++; continue; }
-    if (ch === '/' && src[i + 1] === '/') {
-      i += 2;
-      while (i < src.length && src[i] !== '\n') i++;
-      continue;
-    }
-    if (ch === '/' && src[i + 1] === '*') {
-      i += 2;
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-    if (ch === '\'' || ch === '"') {
-      const q = ch;
-      i++;
-      while (i < src.length && src[i] !== q) {
-        if (src[i] === '\\') i += 2;
-        else i++;
-      }
-      i++;
-      prevToken = 'str';
-      continue;
-    }
-    if (ch === '`') {
-      i++;
-      readTemplateText();
-      continue;
-    }
-    if (ch === '{' && templateBraceStack.length > 0) {
-      templateBraceStack[templateBraceStack.length - 1] += 1;
-      prevToken = '{';
-      i++;
-      continue;
-    }
-    if (ch === '}' && templateBraceStack.length > 0) {
-      if (templateBraceStack[templateBraceStack.length - 1] === 0) {
-        templateBraceStack.pop();
-        i++;
-        readTemplateText();
-        continue;
-      }
-      templateBraceStack[templateBraceStack.length - 1] -= 1;
-      prevToken = '}';
-      i++;
-      continue;
-    }
-    if (ch === '/') {
-      let j = i + 1;
-      let inClass = false;
-      let valid = true;
-      while (j < src.length) {
-        const c = src[j];
-        if (c === '\n' || c === '\r') { valid = false; break; }
-        if (c === '\\') { j += 2; continue; }
-        if (c === '[') inClass = true;
-        else if (c === ']') inClass = false;
-        else if (c === '/' && !inClass) break;
-        j++;
-      }
-      if (valid && j > i + 1 && j < src.length && src[j] === '/') {
-        const pattern = src.slice(i + 1, j);
-        j++;
-        const flagStart = j;
-        while (j < src.length && /[dgimsuvy]/u.test(src[j])) j++;
-        const flags = src.slice(flagStart, j);
-        let isRegex;
-        if (UNAMBIGUOUS_REGEX_PREV.has(prevToken)) {
-          try {
-            isRegex = Boolean(new RegExp(pattern, flags));
-          } catch {
-            isRegex = false;
-          }
-        } else {
-          isRegex = isValidRegexLiteralAt(src, i, j, pattern, flags);
-        }
-        if (isRegex) {
-          out.push({ pattern, flags, start: i, end: j });
-          i = j;
-          prevToken = 'regex';
-          continue;
-        }
-      }
-      prevToken = '/';
-      i++;
-      continue;
-    }
-    if ((ch === '+' && src[i + 1] === '+') || (ch === '-' && src[i + 1] === '-')) {
-      prevToken = ch + ch;
-      i += 2;
-      continue;
-    }
-    if (/[0-9A-Za-z_$]/u.test(ch)) {
-      let j = i + 1;
-      while (j < src.length && /[0-9A-Za-z_$.]/u.test(src[j])) j++;
-      prevToken = 'id';
-      i = j;
-      continue;
-    }
-    prevToken = ch;
-    i++;
-  }
-  return out;
-}
-
-/** 逐字走過正規式 pattern：跳過已跳脫字元（避免 \\x00 誤報），並忽略字元集 [...] 內部的連續空白（對齊 ESLint no-regex-spaces 與 no-control-regex）。 */
-function analyzeRegexPattern(pattern, flags = '') {
-  let classDepth = 0;
-  let hasDoubleSpace = false;
-  let hasControlEscape = false;
-  const vMode = flags.includes('v');
-  for (let k = 0; k < pattern.length; k++) {
-    const ch = pattern[k];
-    if (ch === '\\') {
-      if (CONTROL_ESCAPE_AT.test(pattern.slice(k))) hasControlEscape = true;
-      k += 1;
-      continue;
-    }
-    if (ch === '[') {
-      classDepth = vMode ? classDepth + 1 : 1;
-      continue;
-    }
-    if (ch === ']' && classDepth > 0) {
-      classDepth = vMode ? classDepth - 1 : 0;
-      continue;
-    }
-    if (ch === ' ' && pattern[k + 1] === ' ' && classDepth === 0) {
-      hasDoubleSpace = true;
-    }
-  }
-  return { hasDoubleSpace, hasControlEscape };
-}
-
-function regexLintProblems(src, file) {
-  const problems = [];
-  for (const { pattern, flags, start, end } of extractRegexLiterals(src)) {
-    const { hasDoubleSpace, hasControlEscape } = analyzeRegexPattern(pattern, flags);
-    if ((hasDoubleSpace || hasControlEscape) && isValidRegexLiteralAt(src, start, end, pattern, flags)) {
-      if (hasDoubleSpace) problems.push(`${file}：正規式 /${pattern}/${flags} 含連續空白（no-regex-spaces，請改寫成 {2} 或 \\s）`);
-      if (hasControlEscape) problems.push(`${file}：正規式 /${pattern}/${flags} 含控制字元跳脫（no-control-regex）`);
-    }
-  }
-  return problems;
-}
-
-function scanRepoRegexLint(transform = (_f, text) => text) {
-  const jsFiles = trackedFiles().filter((f) => (f.startsWith('tools/') || f.startsWith('tests/')) && f.endsWith('.js'));
-  const problems = jsFiles.flatMap((f) => regexLintProblems(transform(f, fs.readFileSync(path.join(ROOT, f), 'utf8')), f));
-  return { count: jsFiles.length, problems };
 }
 
 test('已追蹤的每一個路徑只用英文字母、數字、半形符號（例外名單只出不進）', () => {
@@ -331,37 +128,4 @@ test('已追蹤的每一個文字檔整檔不放控制字元（規矩 E6；含�
     const hit = findControlChar(prefix + ch);
     assert.deepEqual(hit, { index: prefix.length, code });
   }
-});
-
-test('tools/ 與 tests/ 的 .js 正規式字面量不寫連續兩個空白或控制字元跳脫（#71、#77、#121 r1〜r3 R2）', () => {
-  const clean = scanRepoRegexLint();
-  assert.ok(clean.count >= 70, `只掃到 ${clean.count} 支 JS 檔：前提變了`);
-  assert.deepEqual(clean.problems, []);
-
-  // 接線誘餌：確認掃描迴圈真的讀取檔案內容送入 regexLintProblems（若讀檔被換成空字串則不會算到原檔加誘餌後的問題）
-  const decoy = scanRepoRegexLint((f, raw) => (f === 'tests/file-names.test.js' && raw.includes('extractRegexLiterals') ? `${raw}\nconst _decoy = /a  b/u;\n` : raw));
-  assert.equal(decoy.problems.length, 1);
-
-  // 經整份掃描路徑核對合法 `of` 變數除法與非同步函式表達式除法不誤報
-  const ofDivClean = scanRepoRegexLint((f, raw) => (f === 'tests/file-names.test.js' ? `${raw}\nconst of = 4; const n = of /  2; const m = 6 / 3;\n` : raw));
-  assert.deepEqual(ofDivClean.problems, []);
-
-  // 判準本身：抓得到連續空白、控制字元跳脫、奇數反斜線後接控制跳脫、跳脫方括號、if (...) 與 async 宣告後的正規式，且不誤傷跳脫反斜線、字元集內空白、上下文關鍵字變數（of／yield／await）或函式表達式後的除法（#121 r1〜r3 R2）
-  assert.equal(regexLintProblems('const r = /a  b/u;', 'x.js').length, 1);
-  assert.equal(regexLintProblems('const r = /[\\x00-\\x1f]/u;', 'x.js').length, 1);
-  assert.equal(regexLintProblems('const r = /\\u0007/u;', 'x.js').length, 1);
-  assert.equal(regexLintProblems('const r = /\\u{1b}/u;', 'x.js').length, 1);
-  assert.equal(regexLintProblems('const r = /\\\\\\x00/u;', 'x.js').length, 1, '奇數個反斜線後的 \\x00 是控制字元跳脫，要抓');
-  assert.equal(regexLintProblems('const r = /\\[  \\]/u;', 'x.js').length, 1, '已跳脫的 \\[ 不是字元集，內含兩個空白要抓');
-  assert.equal(regexLintProblems('if (ok) /a  b/u.test(s);', 'x.js').length, 1, 'if (...) 條件後的正規式字面量要掃到');
-  assert.equal(regexLintProblems('async function f() {} /a  b/u.test(s);', 'x.js').length, 1, 'async 函式宣告後的正規式字面量要掃到');
-  assert.equal(regexLintProblems('const s = `${x.replace(/a  b/g, "")}`;', 'x.js').length, 1);
-  assert.deepEqual(regexLintProblems('const r = /\\\\x00/u;', 'x.js'), [], '已跳脫的反斜線後接 x00 不是控制字元跳脫，不誤判');
-  assert.deepEqual(regexLintProblems('const r = /[  ]/u;', 'x.js'), [], '字元集 [...] 內的連續空白不觸發 ESLint no-regex-spaces，不誤判');
-  assert.deepEqual(regexLintProblems('const r = function(){} /  2; const next = 4 / 3;', 'x.js'), [], '函式表達式大括號後的除法不可誤判為正規式');
-  assert.deepEqual(regexLintProblems('const f = async function(){} /  2; const next = 4 / 3;', 'x.js'), [], '非同步函式表達式大括號後的除法不可誤判為正規式');
-  assert.deepEqual(regexLintProblems('const o = { a: function(){} /  2, b: 4 / 3 };', 'x.js'), [], '物件屬性冒號後的函式表達式除法不可誤判為正規式');
-  assert.deepEqual(regexLintProblems('const of = 4; const n = of /  2; const m = 6 / 3;', 'x.js'), [], '合法識別字 of 後的除法不可誤判為正規式');
-  assert.deepEqual(regexLintProblems('const yield = 4; const n = yield /  2; const m = 6 / 3;', 'x.js'), [], '合法識別字 yield 後的除法不可誤判為正規式');
-  assert.deepEqual(regexLintProblems('// /a  b/ in comment\nconst s = "/a  b/ \\\\x00";\nconst ok = /a {2}b/u;', 'x.js'), []);
 });

@@ -188,6 +188,17 @@ test('④缺兩個固定小標的「通過」不算數，不可以把這一輪�
     const two = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, good] })), cwd: r.dir, dir, template: TEMPLATE });
     assert.match(two.prompt, new RegExp(`本輪範圍：${TIERS.中.afterPassFix}（`, 'u'), '對照組：合格的通過之後照「通過後回頭改」那一格');
     close('7', { settings: s, dir, leftoverRoots: [] });
+    fs.rmSync(path.join(dir, 'review-acme-kit-7-r4'), { recursive: true, force: true });
+    // F11 設定不合規的「通過」不能解除 r1 的阻擋，launch() 必須把 reviewerConfigs 傳進 verdicts.evaluate，不可縮成「通過後回頭改」（#121 r4 M14）
+    const badSetPass = {
+      ...verdict('Beta', 3, r.head, '通過'),
+      body: verdict('Beta', 3, r.head, '通過').body.replace('模型：m-strong；推理強度：max', '模型：m-weak；推理強度：low'),
+    };
+    const badSetLaunch = launch('7', 'Beta', { settings: s, platform: fakePlatform(answersFor(r, { changedFiles: files, comments: [r1, bare, badSetPass] })), cwd: r.dir, dir, template: TEMPLATE });
+    assert.match(badSetLaunch.prompt, /輪次：r4\n/u);
+    assert.match(badSetLaunch.prompt, /本輪範圍：全審（/u, 'F11 設定不合規的通過不算數，不能解除 r1 阻擋或縮範圍');
+    close('7', { settings: s, dir, leftoverRoots: [] });
+    fs.rmSync(path.join(dir, 'review-acme-kit-7-r4'), { recursive: true, force: true });
     // 同一輪先擋後過、或同一輪對兩個版本各給通過：結論閘判衝突（算阻擋），不可以縮範圍（#49 r2 R1）
     for (const [what, third] of [
       ['同一輪先擋後過', [verdict('Beta', 4, r.base, '需修改後再審'), verdict('Beta', 4, r.base, '通過')]],
@@ -678,6 +689,14 @@ test('⑩快速通道（AI）：第 1 輪起只核差異、提示寫明為什麼
     const passed = [verdict('Beta', 1, r.head, '需修改後再審'), verdict('Beta', 2, r.head, '通過')];
     out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: passed })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
     assert.ok(out.prompt.includes('本輪範圍：只核差異（'), out.prompt);
+    // 第 1 輪沒過、第 2 輪是 F11 設定不合規的「通過」：算連兩輪沒「通過」，第 3 輪退回全審（驗證 launch() 傳 reviewerConfigs 給 twoMissesInARow）
+    const badSetR2 = {
+      ...verdict('Beta', 2, r.head, '通過'),
+      body: verdict('Beta', 2, r.head, '通過').body.replace('模型：m-strong；推理強度：max', '模型：m-weak；推理強度：low'),
+    };
+    out = launch('7', 'Beta', { settings: settingsFor(LANE_SETTINGS), platform: fakePlatform(answersFor(r, { comments: [verdict('Beta', 1, r.head, '需修改後再審'), badSetR2] })), cwd: r.dir, dir: tmp('review-launch-out-'), template: TEMPLATE });
+    assert.ok(out.prompt.includes('本輪範圍：全審（'), out.prompt);
+    assert.ok(out.prompt.includes('這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（F12）'), out.prompt);
   } finally {
     cleanup();
     fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(r.dir, { recursive: true, force: true });
@@ -764,9 +783,13 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過以半形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong, wrong\n- 推理強度：max, low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong, wrong」，需為 m-strong 或 m-second）/u],
     ['通過以全形逗號並列合格與不合格模型／推理', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong，wrong\n- 推理強度：max，low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「m-strong，wrong」，需為 m-strong 或 m-second）/u],
     ['通過於反引號圍欄內含波浪號與合格範例、圍欄外填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`\`\`text\n參考值：\n~~~\n- 模型：m-strong；推理強度：max\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
+    ['通過於圍欄內含 ### 範例、圍欄後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\`\`\`text\n### 範例\n\`\`\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
+    ['通過於 HTML 註解內含 ```text、註解後再填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n<!--\n\`\`\`text\n-->\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
+  const inlineCodeHtmlOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 備註：\`<!--\` 是 HTML 註解的起點。\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
+  assert.equal(inlineCodeHtmlOk.header.verdict, '通過');
 });
 
 test('⑪外殼代貼結論（--post）：先核兩棵樹未收／已登記／乾淨／HEAD／沒上鎖，再核標頭、引號參數與平台狀態，剝除「未貼」後逐字代貼並記下 postedAt', () => {
