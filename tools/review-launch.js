@@ -351,6 +351,8 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
       const got = git(t, ['rev-parse', 'HEAD']);
       if (got !== head) throw new LaunchError(`${t} 開出來是 ${got}，不是受審版本 ${head}`);
     }
+    const linkedNodeModules = linkNodeModules(root, [tree, mutation]);
+    if (linkedNodeModules) record.linkedNodeModules = linkedNodeModules;
     fs.writeFileSync(promptFile, prompt);
     fs.writeFileSync(path.join(folder, 'launch.json'), `${JSON.stringify(record, null, 1)}\n`);
   } catch (e) {
@@ -360,7 +362,10 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
     // 不用整個倉庫的 git worktree prune：別棵暫時不在原位的樹（例如外接碟沒接上）會被一起清掉登記與索引（#49 r1 R1）
     let registered = created;
     try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* 讀不到登記就只收確定開成的那幾棵 */ }
-    for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
+    for (const t of new Set([...created, ...registered])) {
+      unlinkNodeModules(t);
+      gitOk(root, ['worktree', 'remove', '--force', t]);
+    }
     fs.rmSync(folder, { recursive: true, force: true });
     throw e;
   }
@@ -390,6 +395,71 @@ function lockedTrees(root) {
     if (l.startsWith('worktree ')) { cur = l.slice(9); out.set(cur, false); } else if (cur && (l === 'locked' || l.startsWith('locked '))) out.set(cur, true);
   }
   return out;
+}
+
+function findNodeModulesSource(root) {
+  const candidates = [path.join(root, 'node_modules')];
+  try {
+    const firstLine = git(root, ['worktree', 'list', '--porcelain']).split('\n').find((l) => l.startsWith('worktree '));
+    if (firstLine) candidates.push(path.join(firstLine.slice(9), 'node_modules'));
+  } catch { /* ignore */ }
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && fs.statSync(c).isDirectory()) {
+        return fs.realpathSync(c);
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+function linkNodeModules(root, trees) {
+  const src = findNodeModulesSource(root);
+  if (!src) return null;
+  let linked = false;
+  for (const t of trees) {
+    const dst = path.join(t, 'node_modules');
+    try {
+      fs.lstatSync(dst);
+      continue;
+    } catch (e) {
+      if (!e || e.code !== 'ENOENT') throw e;
+    }
+    fs.symlinkSync(src, dst, 'dir');
+    linked = true;
+  }
+  return linked ? src : null;
+}
+
+function hasIntactLinkedNodeModules(t, rec) {
+  if (!rec || !rec.linkedNodeModules) return false;
+  const dst = path.join(t, 'node_modules');
+  try {
+    return fs.lstatSync(dst).isSymbolicLink() && fs.realpathSync(dst) === rec.linkedNodeModules;
+  } catch {
+    return false;
+  }
+}
+
+function treeStatus(t, rec = null) {
+  if (!gitOk(t, ['status', '--porcelain'])) return null;
+  const raw = git(t, ['status', '--porcelain']);
+  if (!raw || !hasIntactLinkedNodeModules(t, rec)) return raw;
+  return raw
+    .split('\n')
+    .filter((line) => line !== '?? node_modules' && line !== '?? node_modules/')
+    .join('\n');
+}
+
+function unlinkNodeModules(t, rec = null) {
+  const dst = path.join(t, 'node_modules');
+  try {
+    const st = fs.lstatSync(dst);
+    if (!st.isSymbolicLink()) return;
+    if (rec && rec.linkedNodeModules && fs.realpathSync(dst) !== rec.linkedNodeModules) return;
+    if (!rec?.linkedNodeModules && gitOk(t, ['ls-files', '--error-unmatch', 'node_modules'])) return;
+    fs.unlinkSync(dst);
+  } catch { /* ignore */ }
 }
 
 /**
@@ -789,7 +859,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       else if (locks.get(t)) problems.push(`${what}上了鎖`);
       const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
       if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+      const st = treeStatus(t, rec);
       if (st === null) problems.push(`${what}的狀態讀不出`);
       else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
     }
@@ -1003,7 +1073,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
         if (locks.get(t)) problems.push(`${what}上了鎖（git worktree unlock 之後再收）`);
         const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
         if (h !== rec.head) problems.push(`${what}的 HEAD 是 ${h || '讀不出'}，不是受審版本 ${rec.head.slice(0, 7)}`);
-        const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+        const st = treeStatus(t, rec);
         if (st === null) problems.push(`${what}的狀態讀不出`);
         else if (st) problems.push(`${what}不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
       }
@@ -1015,6 +1085,7 @@ function close(changeArg, { settings = readSettings(), dir: dirArg = os.tmpdir()
       }
       let failed = null;
       for (const [what, t] of todo.filter(([, x]) => !rec.removed.includes(x))) {
+        unlinkNodeModules(t, rec);
         const why = remove(rec.root, t);
         if (why) { failed = `${what}移除失敗：${why}`; break; }
         rec.removed.push(t);
@@ -1301,12 +1372,17 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
         created.push(tree);
         const got = git(tree, ['rev-parse', 'HEAD']);
         if (got !== head) throw new LaunchError(`${tree} 開出來是 ${got}，不是要掃的版本 ${head}`);
+        const linkedNodeModules = linkNodeModules(root, [tree]);
+        if (linkedNodeModules) record.linkedNodeModules = linkedNodeModules;
         fs.writeFileSync(promptFile, prompt);
         fs.writeFileSync(path.join(folder, 'scan.json'), `${JSON.stringify(record, null, 1)}\n`);
       } catch (e) {
         let registered = created;
         try { registered = [...lockedTrees(root).keys()].filter((t) => t.startsWith(`${folder}${path.sep}`) && !before.has(t)); } catch { /* ignore */ }
-        for (const t of new Set([...created, ...registered])) gitOk(root, ['worktree', 'remove', '--force', t]);
+        for (const t of new Set([...created, ...registered])) {
+          unlinkNodeModules(t);
+          gitOk(root, ['worktree', 'remove', '--force', t]);
+        }
         fs.rmSync(folder, { recursive: true, force: true });
         throw e;
       }
@@ -1421,7 +1497,7 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
       else if (locks.get(t)) problems.push('掃描樹上了鎖');
       const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
       if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
-      const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+      const st = treeStatus(t, rec);
       if (st === null) problems.push('掃描樹的狀態讀不出');
       else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
     }
@@ -1538,7 +1614,7 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
           if (locks.get(t)) problems.push('掃描樹上了鎖（git worktree unlock 之後再收）');
           const h = gitOk(t, ['rev-parse', 'HEAD']) ? git(t, ['rev-parse', 'HEAD']) : null;
           if (h !== rec.head) problems.push(`掃描樹的 HEAD 是 ${h || '讀不出'}，不是要掃的版本 ${rec.head.slice(0, 7)}`);
-          const st = gitOk(t, ['status', '--porcelain']) ? git(t, ['status', '--porcelain']) : null;
+          const st = treeStatus(t, rec);
           if (st === null) problems.push('掃描樹的狀態讀不出');
           else if (st) problems.push(`掃描樹不乾淨：${st.split('\n').slice(0, 5).join('；')}${st.split('\n').length > 5 ? '…' : ''}`);
         }
@@ -1548,6 +1624,7 @@ function scanClose(changeArg, { settings = readSettings(), dir: dirArg = os.tmpd
         return { code: 1, lines };
       }
       if (!rec.removed.includes(t)) {
+        unlinkNodeModules(t, rec);
         const why = remove(rec.root, t);
         if (why) {
           lines.push(`沒收掃描樹（${folder}）：掃描樹移除失敗：${why}`);
@@ -2126,7 +2203,9 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
 
   const nodeModulesSrc = path.join(srcTree, 'node_modules');
   if (fs.existsSync(nodeModulesSrc)) {
-    const cpArgs = process.platform === 'darwin' ? ['-cR', nodeModulesSrc, path.join(destTree, 'node_modules')] : ['-R', nodeModulesSrc, path.join(destTree, 'node_modules')];
+    let realNodeModulesSrc = nodeModulesSrc;
+    try { realNodeModulesSrc = fs.realpathSync(nodeModulesSrc); } catch { /* ignore */ }
+    const cpArgs = process.platform === 'darwin' ? ['-cR', realNodeModulesSrc, path.join(destTree, 'node_modules')] : ['-R', realNodeModulesSrc, path.join(destTree, 'node_modules')];
     spawnSync('cp', cpArgs, { encoding: 'utf8' });
   }
   return targetHead;

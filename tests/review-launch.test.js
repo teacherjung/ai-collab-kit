@@ -35,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE, LaunchError } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -2942,6 +2942,94 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     const aliasScanRetry = main(aliasScanParsed, { settings: s, leftoverRoots: [] });
     assert.equal(aliasScanRetry.code, 0, `含空白別名掃描恢復指令重跑應成功：${aliasScanRetry.lines.join('\n')}`);
     assert.ok(!fs.existsSync(scanFolder), '掃描容器已收樹並清除');
+
+    // (l) 專案相依套件（node_modules）自動掛載與安全卸載：主工作樹有 node_modules 時，就算從副工作樹啟動 --run，
+    //     審查樹、突變副本與掃描樹皆可直接 import 套件，且代貼與收樹（含未設 .gitignore 的倉庫）不會因連結判髒或誤刪主目錄依賴
+    const depDir = path.join(r.dir, 'node_modules', 'fake-dep');
+    fs.mkdirSync(depDir, { recursive: true });
+    fs.writeFileSync(path.join(depDir, 'package.json'), '{"name":"fake-dep","type":"module","main":"index.js"}\n');
+    fs.writeFileSync(path.join(depDir, 'index.js'), 'export const depValue = "loaded-from-main-worktree";\n');
+    const implWt = path.join(tmp('review-launch-impl-wt-'), 'wt');
+    spawnSync('git', ['worktree', 'add', '--detach', '-q', implWt, r.head], { cwd: r.dir, env: gitEnv() });
+
+    const depRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: implWt,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        for (const [label, targetCwd] of [['tree', record.tree], ['mutation', record.mutation]]) {
+          const probe = spawnSync(
+            process.execPath,
+            ['--input-type=module', '-e', 'const m = await import("fake-dep"); if (m.depValue !== "loaded-from-main-worktree") process.exit(1);'],
+            { cwd: targetCwd, env: gitEnv(), encoding: 'utf8' },
+          );
+          if (probe.status !== 0) {
+            throw new LaunchError(`${label} 載入相依套件失敗（退 ${probe.status}）：${(probe.stderr || '').trim()}`);
+          }
+        }
+        fs.writeFileSync(
+          record.outFile,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+        );
+      },
+      runPost() {},
+    });
+    assert.equal(depRevRes.code, 0, `複審 --run 應自動掛載 node_modules 並完成代貼與收樹：${depRevRes.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(reviewFolder), '複審容器應已收樹並清除');
+    assert.ok(fs.existsSync(path.join(depDir, 'index.js')), '收樹與 --purge 後主目錄 node_modules 內容必須完好');
+
+    const depScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(withPass),
+      cwd: implWt,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        const probe = spawnSync(
+          process.execPath,
+          ['--input-type=module', '-e', 'const m = await import("fake-dep"); if (m.depValue !== "loaded-from-main-worktree") process.exit(1);'],
+          { cwd: record.tree, env: gitEnv(), encoding: 'utf8' },
+        );
+        if (probe.status !== 0) {
+          throw new LaunchError(`scanTree 載入相依套件失敗（退 ${probe.status}）：${(probe.stderr || '').trim()}`);
+        }
+        fs.writeFileSync(
+          record.outFile,
+          `🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+        );
+      },
+      runPost() {},
+    });
+    assert.equal(depScanRes.code, 0, `掃描 --run 應自動掛載 node_modules 並完成代貼與收樹：${depScanRes.lines.join('\n')}`);
+    assert.ok(!fs.existsSync(scanFolder), '掃描容器應已收樹並清除');
+    assert.ok(fs.existsSync(path.join(depDir, 'index.js')), '掃描收樹與 --purge 後主目錄 node_modules 內容必須完好');
+
+    // 若審查樹內的 node_modules 連結被掉包成一般資料夾或改指別處，treeStatus 不得豁免，應判不乾淨並拒貼
+    const tamperRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(baseAns),
+      cwd: implWt,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        const nm = path.join(record.tree, 'node_modules');
+        fs.unlinkSync(nm);
+        fs.mkdirSync(nm);
+        fs.writeFileSync(path.join(nm, 'rogue.js'), '1\n');
+        fs.writeFileSync(
+          record.outFile,
+          `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+        );
+      },
+      runPost() {},
+    });
+    assert.equal(tamperRes.code, 1, '掉包 node_modules 連結為實體資料夾時應判髒拒貼');
+    assert.match(tamperRes.lines.join('\n'), /不乾淨.*node_modules/u);
+    fs.rmSync(path.join(reviewFolder, 'tree', 'node_modules'), { recursive: true, force: true });
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    spawnSync('git', ['worktree', 'remove', '--force', implWt], { cwd: r.dir, env: gitEnv() });
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
