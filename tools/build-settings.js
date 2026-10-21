@@ -24,6 +24,20 @@ const hasNul = (s) => String(s).includes('\u0000');
 const STATES = ['未移植', '已安裝未啟用', '已啟用'];
 // 風險級別只有這三種、從重到輕（規矩 D4 定的，不是專案的值）
 const RISK_TIERS = ['高', '中', '低'];
+const BINARY_EXT_RE = /^\.[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
+
+function customBinaryExtensions(data) {
+  if (!data || typeof data !== 'object' || !Object.hasOwn(data, 'binaryExtensions')) return [];
+  if (!Array.isArray(data.binaryExtensions)) {
+    throw new Error('二進位副檔名設定（binaryExtensions）：必須是字串陣列（例如 [".bmp"]）');
+  }
+  return data.binaryExtensions.map((ext, i) => {
+    if (typeof ext !== 'string' || ext.trim() !== ext || !BINARY_EXT_RE.test(ext)) {
+      throw new Error(`二進位副檔名設定（binaryExtensions[${i}]）：必須是以「.」開頭的半形副檔名（例如 .bmp）`);
+    }
+    return ext.toLowerCase();
+  });
+}
 
 function plain(value, what, { allowEmpty = false } = {}) {
   if (typeof value !== 'string') throw new Error(`${what} 不是字串`);
@@ -44,6 +58,7 @@ function argvText(argv) {
 }
 
 function build(data) {
+  customBinaryExtensions(data);
   const out = [
     '# 專案設定（每個使用這套架構的專案填一份；規矩本文與機器都從這裡取值）',
     '',
@@ -249,4 +264,4 @@ if (require.main === module) {
   process.stdout.write(`寫好 PROJECT-SETTINGS.md：${data.machines.length} 支機器\n`);
 }
 
-module.exports = { build, read, dataFile, outFile, STATES, RISK_TIERS };
+module.exports = { build, read, dataFile, outFile, STATES, RISK_TIERS, customBinaryExtensions };
