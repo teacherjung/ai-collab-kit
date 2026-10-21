@@ -224,7 +224,7 @@ function templateProblems(settings) {
     for (const t of ['model', 'effort', 'scanTree']) if (!scanUsed.includes(t)) out.push(`「${r.participant}」轉換後的掃描啟動指令樣板沒帶 {${t}}`);
   }
   const sc = settings.scanner || {};
-  if (filled(sc.participant) || (filled(sc.command) && sc.tool !== '無')) {
+  if (((filled(sc.participant) && sc.participant.trim() !== '無') || filled(sc.command)) && sc.tool !== '無') {
     for (const k of ['participant', 'strongest', 'maxEffort', 'source', 'command']) {
       if (!filled(sc[k])) out.push(`scanner.${k} 還沒填`);
     }
@@ -1101,7 +1101,7 @@ function resolveScannerSpec(settings, scannerArg, usable) {
   if (sc.tool === '無') {
     throw new LaunchError('本專案沒有設定掃描者（PR說明的「### 複審後掃」下寫「未執行：本專案無掃描者」）');
   }
-  const hasConfigured = filled(sc.participant);
+  const hasConfigured = filled(sc.participant) && sc.participant.trim() !== '無';
   const configuredScanner = hasConfigured ? canonicalRole(sc.participant, usable) : null;
   if (hasConfigured && !configuredScanner) {
     throw new LaunchError(`專案設定的 scanner.participant「${sc.participant || ''}」不是登記過的參與者`);

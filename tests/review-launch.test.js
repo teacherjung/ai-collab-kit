@@ -35,7 +35,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { gitEnv } = require('../tools/git-env.js');
-const { main, launch, close, post, prepareVerdict, scanLaunch, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
+const { main, launch, close, post, prepareVerdict, scanPost, scanClose, prepareScan, resolveScannerSpec, deriveScanCommand, stripGrokPreamble, splitCommandArgs, defaultRunPost, defaultRunExec, substitute, fill, promptPart, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, FILL, SCAN_FILL, SCAN_TEMPLATE, SAFE } = require('../tools/review-launch.js');
 const { evaluate: evaluateVerdicts, VERDICTS } = require('../tools/gates/check-review-verdicts.js');
 const { read: readSettings } = require('../tools/build-settings.js');
 const { PlatformError } = require('../tools/platform.js');
@@ -471,6 +471,19 @@ test('⑨設定裡填了的樣板逐一核：記號都認得、啟動指令帶�
   const gotScan = templateProblems(badDerivedScan).join('\n');
   assert.match(gotScan, /「Beta」轉換後的掃描啟動指令樣板有認不得的記號：mutationCopy/u);
   assert.match(gotScan, /「Beta」轉換後的掃描啟動指令樣板沒帶 \{scanTree\}/u);
+  const disabledByParticipant = settingsFor({
+    scanner: { participant: '無', tool: '未設定', strongest: '未設定', maxEffort: '未設定', source: '未設定', command: '未設定' },
+  });
+  assert.deepEqual(templateProblems(disabledByParticipant), [], 'scanner.participant 填「無」時不要求填 scanner 啟動欄位');
+  assert.throws(
+    () => resolveScannerSpec(disabledByParticipant, null, [{ id: 'Alpha' }, { id: 'Beta' }]),
+    /本專案沒有設定掃描者/u,
+    'scanner.participant 填「無」時 resolveScannerSpec 視為未設定掃描者',
+  );
+  const disabledByTool = settingsFor({
+    scanner: { participant: 'Beta', tool: '無', strongest: '未設定', maxEffort: '未設定', source: '未設定', command: '未設定' },
+  });
+  assert.deepEqual(templateProblems(disabledByTool), [], 'scanner.tool 填「無」時不要求填 scanner 啟動欄位');
 });
 
 test('⑥暫存區清單：比開樹晚的列出、早的不列；自己那一層與它的上層不算；讀不了的分開回報（#49 r1 R4）', () => {
@@ -968,7 +981,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
           wfs.writeFileSync(wpath.join(o.ext, 'stale-a-read-pid'), '1');
           const bInPost = wpath.join(o.ext, 'stale-b-in-runpost');
           const until = Date.now() + 10000;
-          while (!origRead && false || !wfs.existsSync(bInPost)) {
+          while (!wfs.existsSync(bInPost)) {
             if (Date.now() > until) throw new Error('timeout waiting for B to acquire new lock');
             sleep(10);
           }
@@ -984,7 +997,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
       }
       try { wfs.unlinkSync(o.lockFile); } catch { /* removed */ }
     }
-    const { main: runMain } = require(o.modulePath);
+    const { main: runMain } = require('review-launch.js');
     const res = runMain(['--post', '7', '--dir', o.dir, '--file', o.file], {
       settings: o.settings,
       platform: {
@@ -1016,9 +1029,10 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
 
   const staleWorkerFile = path.join(ext, 'stale-worker.js');
   fs.writeFileSync(staleWorkerFile, `(${staleWorkerMain.toString()})();\n`);
+  const workerEnv = { ...gitEnv(), NODE_PATH: path.join(__dirname, '..', 'tools') };
   const runStaleWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
-    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: gitEnv() });
+    const payload = { tag, ext, dir, lockFile, settings: s, change: answers.change, file };
+    const p = spawn(process.execPath, [staleWorkerFile, JSON.stringify(payload)], { env: workerEnv });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });
@@ -1032,7 +1046,7 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
     const wfs = require('node:fs');
     const wpath = require('node:path');
     const o = JSON.parse(process.argv[2]);
-    const { main: runMain } = require(o.modulePath);
+    const { main: runMain } = require('review-launch.js');
     const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     if (o.tag === 'B') {
       const aEntered = wpath.join(o.ext, 'a-entered-runpost');
@@ -1074,8 +1088,8 @@ test('⑪同輪並行代貼（--post）：每輪排他鎖、殘留鎖拒收與�
   const workerFile = path.join(ext, 'worker.js');
   fs.writeFileSync(workerFile, `(${workerMain.toString()})();\n`);
   const runWorker = (tag, file) => new Promise((resolve, reject) => {
-    const payload = { tag, ext, dir, settings: s, change: answers.change, file, modulePath: require.resolve('../tools/review-launch.js') };
-    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: gitEnv() });
+    const payload = { tag, ext, dir, settings: s, change: answers.change, file };
+    const p = spawn(process.execPath, [workerFile, JSON.stringify(payload)], { env: workerEnv });
     let stdout = '';
     let stderr = '';
     p.stdout.on('data', (d) => { stdout += d; });
@@ -1526,7 +1540,7 @@ test('⑫複審後掃生命週期（G1、G2）：templates/scan-record.md 提示
     // 若本倉庫 settings.json 登記了 3 位以上複審者（如 Claude、Codex、Grok、Gemini），逐一以實際設定走 main --scan --scanner 並一路走到 --scan-post 與 --scan-close
     const realS = readSettings();
     const realReviewers = Array.isArray(realS.reviewers) ? realS.reviewers.filter((rev) => rev && rev.participant) : [];
-    if (realReviewers.length >= 3) {
+    if (realReviewers.length >= 3 && (!realS.scanner || realS.scanner.tool !== '無')) {
       for (const rev of realReviewers) {
         const target = rev.participant;
         const others = realReviewers.filter((x) => x.participant !== target);
