@@ -33,7 +33,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { build, read, outFile, STATES } = require('../tools/build-settings.js');
+const { build, read, outFile, STATES, customBinaryExtensions } = require('../tools/build-settings.js');
 const { read: readRules } = require('../tools/build-rules.js');
 const { unfilled, UNFILLED_FILE } = require('./helpers/kit-copy.js');
 const { spawnSync } = require('node:child_process');
@@ -242,10 +242,20 @@ test('⑨考題用的空白設定跟 settings.json 形狀一致，而且對外�
     : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, shape(v[k])])) : typeof v);
   const withoutAssignments = (data) => {
     require('../tools/ruling-assignments.js').assignmentsOf(data);
-    const required = { ...data }; delete required.rulingAssignments;
+    customBinaryExtensions(data);
+    const required = { ...data };
+    delete required.rulingAssignments;
+    delete required.binaryExtensions;
     return required;
   };
   assert.deepEqual(shape(withoutAssignments(unfilled())), shape(withoutAssignments(read())), `${path.basename(UNFILLED_FILE)} 的形狀跟 settings.json 不一樣：設定多了或少了一欄，空白設定要一起改`);
+  assert.deepEqual(
+    shape(withoutAssignments(unfilled())),
+    shape(withoutAssignments({ ...read(), binaryExtensions: ['.bmp', '.WAV'] })),
+    '合法選填 binaryExtensions 欄位不應破壞設定形狀檢查',
+  );
+  assert.throws(() => withoutAssignments({ ...read(), binaryExtensions: '.bmp' }), /二進位副檔名設定（binaryExtensions）/u);
+  assert.throws(() => withoutAssignments({ ...read(), binaryExtensions: ['bmp'] }), /二進位副檔名設定（binaryExtensions\[0\]）/u);
   assert.notDeepEqual(shape({ a: { b: 1 } }), shape({ a: { b: '1' } }), '對照組：型別變了要看得出來');
   assert.notDeepEqual(shape({ a: {} }), shape({ a: { b: [] } }), '對照組：多一欄要看得出來');
 
