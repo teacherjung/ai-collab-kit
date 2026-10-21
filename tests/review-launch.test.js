@@ -795,6 +795,12 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
     ['通過於分隔線後只放 5 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
     ['通過於空清單項目與空行後只放 4 空白縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.\n\n    模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
     ['通過於清單記號同行 5 空白後只放縮排程式碼範例、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n1.     說明；模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
+    ['通過於同行巢狀空清單與空行後填低檔設定、再填合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- -\n\n    - 模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
+    ['通過於引用區塊續行只放範例欄位、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n> 範例欄位：\n模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
+    ['通過於跨行行內反引號內只放範例欄位、未填實際設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`這是範例\n模型：m-strong；推理強度：max\n\`\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
+    ['通過於跳脫 HTML 註解標記後填矛盾低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\\<!--\n- 模型：wrong；推理強度：low\n\\-->\n\n### 清單逐項結果\n- ok\n`, /模型欄位重複或矛盾/u],
+    ['通過於偶數反斜線加行內反引號後只填低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n補充：\\\\\`<!--\`\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型（實際填「wrong」，需為 m-strong 或 m-second）/u],
+    ['通過於 Setext 二級標題離開設定小節後才填合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n其他說明\n-------\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n`, /未寫明合格模型/u],
   ]) {
     assert.throws(() => prepareVerdict(raw, baseOpts), re, what);
   }
@@ -810,6 +816,16 @@ test('⑪prepareVerdict：剝除首尾空行與文末單獨一行的「未貼」
   assert.equal(continuationFenceLowExampleOk.header.verdict, '通過');
   const thematicAndEmptyListExampleWithValidOk = prepareVerdict(`🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n* * *\n\n     模型：wrong；推理強度：low\n\n1.\n\n    模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`, baseOpts);
   assert.equal(thematicAndEmptyListExampleWithValidOk.header.verdict, '通過');
+  for (const [what, validRaw] of [
+    ['同行巢狀空清單後縮排填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- -\n\n    - 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
+    ['引用續行低檔範例後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n> 範例欄位：\n模型：wrong；推理強度：low\n\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
+    ['跨行行內反引號低檔範例後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\`這是範例\n模型：wrong；推理強度：low\n\`\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
+    ['跳脫 HTML 註解標記包住唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\\<!--\n- 模型：m-strong；推理強度：max\n\\-->\n\n### 清單逐項結果\n- ok\n未貼\n`],
+    ['偶數反斜線加行內反引號後填唯一合格設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n補充：\\\\\`<!--\`\n- 模型：m-strong；推理強度：max\n\n### 清單逐項結果\n- ok\n未貼\n`],
+    ['唯一合格設定後接 Setext 二級標題離開設定小節再放低檔設定', `🤖 Beta｜來源：beta CLI｜審 \`0123456\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 模型：m-strong；推理強度：max\n\n其他說明\n-------\n- 模型：wrong；推理強度：low\n\n### 清單逐項結果\n- ok\n未貼\n`],
+  ]) {
+    assert.equal(prepareVerdict(validRaw, baseOpts).header.verdict, '通過', what);
+  }
   const colonModelOpts = {
     ...baseOpts,
     reviewerConfigs: [{ participant: 'Beta', strongest: 'provider:model-v1', second: 'm-second', maxEffort: 'max' }],

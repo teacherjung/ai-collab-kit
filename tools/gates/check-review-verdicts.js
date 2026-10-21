@@ -118,33 +118,84 @@ function findClosingBackticks(str, fromIdx, openLen) {
 }
 
 const THEMATIC_BREAK_RE = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/u;
+const SETEXT_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
+const ASCII_PUNCT_RE = /^[!"#$%&'()*+,-./:;<=>?@[\\\]^_`{|}~]$/u;
+
+function matchFenceOpen(str) {
+  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(str);
+  return m && !(m[1][0] === '`' && m[2].includes('`')) ? m : null;
+}
 
 function stripListMarkers(line) {
   let rest = line;
-  let listIndent = 0;
+  const steps = [];
   for (;;) {
     if (THEMATIC_BREAK_RE.test(rest)) break;
     const m = /^( {0,3}(?:[-*+]|\d{1,9}[.)]))(?:( +)(.*)|$)$/u.exec(rest);
     if (!m) break;
     if (!m[3] || m[2].length >= 5) {
-      listIndent += m[1].length + 1;
+      steps.push(m[1].length + 1);
       rest = m[3] ? rest.slice(m[1].length + 1) : '';
       break;
     }
     const step = m[1].length + m[2].length;
-    listIndent += step;
+    steps.push(step);
     rest = rest.slice(step);
   }
-  return { rest, listIndent };
+  return { rest, steps };
+}
+
+function isInSetextHeading(allLines, startLineIdx, currentListIndent) {
+  for (let k = startLineIdx + 1; k < allLines.length; k += 1) {
+    const nextRaw = allLines[k];
+    if (nextRaw.trim() === '') return false;
+    const leadSpaces = /^ */u.exec(nextRaw)[0].length;
+    if (leadSpaces >= currentListIndent && SETEXT_UNDERLINE_RE.test(nextRaw.slice(currentListIndent))) {
+      return true;
+    }
+    const checkSub = leadSpaces >= currentListIndent ? nextRaw.slice(currentListIndent) : nextRaw;
+    if (
+      THEMATIC_BREAK_RE.test(checkSub)
+      || stripListMarkers(checkSub).steps.length > 0
+      || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/u.test(checkSub)
+      || matchFenceOpen(checkSub)
+    ) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function findMultiLineClosingBackticks(allLines, startLineIdx, currentListIndent, openLen) {
+  for (let k = startLineIdx + 1; k < allLines.length; k += 1) {
+    const nextRaw = allLines[k];
+    if (nextRaw.trim() === '') return null;
+    const leadSpaces = /^ */u.exec(nextRaw)[0].length;
+    if (leadSpaces >= currentListIndent && SETEXT_UNDERLINE_RE.test(nextRaw.slice(currentListIndent))) {
+      return null;
+    }
+    const checkSub = leadSpaces >= currentListIndent ? nextRaw.slice(currentListIndent) : nextRaw;
+    if (
+      THEMATIC_BREAK_RE.test(checkSub)
+      || stripListMarkers(checkSub).steps.length > 0
+      || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/u.test(checkSub)
+      || matchFenceOpen(checkSub)
+    ) {
+      return null;
+    }
+    const closeCol = findClosingBackticks(nextRaw, 0, openLen);
+    if (closeCol >= 0) return { endLine: k, endCol: closeCol + openLen };
+  }
+  return null;
 }
 
 /**
  * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
- * 段落起訖（1〜3 級標題 `#`〜`###`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、
- * 分隔線（`* * *`／`- - -`／`_ _ _`）、空清單項目與同行縮排程式碼（CommonMark §4.1、§5.2）、
- * HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）由同一個由上而下的狀態機處理：
- * 圍欄或 HTML 註解內的標題不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
- * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r9 R3）。
+ * 段落起訖（1〜3 級 ATX 標題 `#`〜`###` 與頂層 Setext 標題底線 `===`／`---`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、
+ * 圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、引用區塊與無空行段落續行（`>`，CommonMark §5.1）、
+ * 分隔線（`* * *`／`- - -`／`_ _ _`）、逐層清單容器與空清單項目、同行縮排程式碼（CommonMark §4.1、§5.2）、
+ * HTML 註解（`<!-- ... -->`）、ASCII 標點反斜線跳脫（CommonMark §2.4）與單行／跨行行內反引號（`` `...` ``，CommonMark §6.1）
+ * 由同一個由上而下的狀態機處理（#121 r4〜r11 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
@@ -154,10 +205,13 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   let fenceListIndent = 0;
   const listIndents = [];
   let emptyListItem = false;
+  let inBlockquote = false;
+  let inlineCodeUntil = null;
   let inHtmlComment = false;
   let inSection = false;
 
-  for (const rawLine of allLines) {
+  for (let lineIdx = 0; lineIdx < allLines.length; lineIdx += 1) {
+    const rawLine = allLines[lineIdx];
     if (fenceChar) {
       if (rawLine.trim() === '') continue;
       const leadSpaces = /^ */u.exec(rawLine)[0].length;
@@ -175,48 +229,75 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         continue;
       }
     }
-    if (!inHtmlComment) {
+    let currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
+    let isParagraphCandidate = false;
+    if (!inHtmlComment && !inlineCodeUntil) {
       if (rawLine.trim() === '') {
         if (emptyListItem) {
           listIndents.pop();
           emptyListItem = false;
         }
+        inBlockquote = false;
         continue;
       }
       const leadSpaces = /^ */u.exec(rawLine)[0].length;
       while (listIndents.length && leadSpaces < listIndents[listIndents.length - 1]) {
         listIndents.pop();
       }
-      const baseIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
-      const { rest: afterList, listIndent } = stripListMarkers(rawLine.slice(baseIndent));
-      if (listIndent > 0) {
-        listIndents.push(baseIndent + listIndent);
+      let baseIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
+      const { rest: afterList, steps } = stripListMarkers(rawLine.slice(baseIndent));
+      for (const step of steps) {
+        baseIndent += step;
+        listIndents.push(baseIndent);
       }
-      emptyListItem = afterList === '';
-      const currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
+      emptyListItem = steps.length > 0 && afterList === '';
+      currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
       if (currentListIndent === 0 && /^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
+        inBlockquote = false;
         inSection = rawLine.trim() === '### 本輪實際用的設定';
         continue;
       }
-      if (/^ {0,3}#{1,6}(?:\s|$)/u.test(afterList)) continue;
-      if (/^\s*>/u.test(afterList) || /^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
-      const openMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(afterList);
-      if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
+      if (/^ {0,3}#{1,6}(?:\s|$)/u.test(afterList) || THEMATIC_BREAK_RE.test(afterList)) {
+        inBlockquote = false;
+        continue;
+      }
+      if (/^\s*>/u.test(afterList)) {
+        inBlockquote = true;
+        continue;
+      }
+      const openMatch = matchFenceOpen(afterList);
+      if (openMatch) {
+        inBlockquote = false;
         fenceChar = openMatch[1][0];
         fenceLen = openMatch[1].length;
         fenceListIndent = currentListIndent;
         continue;
       }
+      if (steps.length > 0) {
+        inBlockquote = false;
+      }
+      if (inBlockquote) continue;
+      if (/^(?:\t| {0,3}\t| {4,})/u.test(afterList)) continue;
+      isParagraphCandidate = afterList.trim() !== '';
     }
     let line = '';
     let idx = 0;
+    if (inlineCodeUntil) {
+      if (lineIdx < inlineCodeUntil.endLine) continue;
+      idx = inlineCodeUntil.endCol;
+      inlineCodeUntil = null;
+      isParagraphCandidate = true;
+    }
     while (idx < rawLine.length) {
       if (inHtmlComment) {
         const endIdx = rawLine.indexOf('-->', idx);
         if (endIdx < 0) break;
         inHtmlComment = false;
         idx = endIdx + 3;
-      } else if (rawLine[idx] === '`' && (idx === 0 || rawLine[idx - 1] !== '\\')) {
+      } else if (rawLine[idx] === '\\' && idx + 1 < rawLine.length && ASCII_PUNCT_RE.test(rawLine[idx + 1])) {
+        line += rawLine[idx] + rawLine[idx + 1];
+        idx += 2;
+      } else if (rawLine[idx] === '`') {
         let openLen = 0;
         while (idx + openLen < rawLine.length && rawLine[idx + openLen] === '`') openLen += 1;
         const closeIdx = findClosingBackticks(rawLine, idx + openLen, openLen);
@@ -229,6 +310,21 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
           line += isInlineExampleOrComment ? '`code`' : rawLine.slice(idx, closeIdx + openLen);
           idx = closeIdx + openLen;
         } else {
+          const multi = findMultiLineClosingBackticks(allLines, lineIdx, currentListIndent, openLen);
+          if (multi) {
+            const inner = [
+              rawLine.slice(idx + openLen),
+              ...allLines.slice(lineIdx + 1, multi.endLine),
+              allLines[multi.endLine].slice(0, multi.endCol - openLen),
+            ].join('\n');
+            const isRegisteredToken = allowedModels.some((am) => eqSettingToken(inner.trim(), am))
+              || (allowedEffort && eqSettingToken(inner.trim(), allowedEffort));
+            const isInlineExampleOrComment = !isRegisteredToken
+              && /<!--|-->|(?:模型|推理)[ \t\p{L}\p{N}_／/*-]*[：:]/u.test(inner);
+            line += isInlineExampleOrComment ? '`code`' : `\`${inner.trim()}\``;
+            inlineCodeUntil = multi;
+            break;
+          }
           line += rawLine.slice(idx, idx + openLen);
           idx += openLen;
         }
@@ -239,6 +335,10 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
         line += rawLine[idx];
         idx += 1;
       }
+    }
+    if (isParagraphCandidate && !inHtmlComment && !inlineCodeUntil && isInSetextHeading(allLines, lineIdx, currentListIndent)) {
+      if (currentListIndent === 0) inSection = false;
+      continue;
     }
     if (!inSection || !line.trim() || /^\s*>/u.test(line)) continue;
     const segments = [];
