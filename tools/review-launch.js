@@ -409,7 +409,50 @@ function isInsideDir(childPath, parentDir) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
+function getGitManagementDirs(worktreeReal) {
+  const dotGitPath = path.join(worktreeReal, '.git');
+  const dirs = [dotGitPath];
+  try {
+    const realDotGit = nativeRealpath(dotGitPath);
+    if (!dirs.includes(realDotGit)) dirs.push(realDotGit);
+    const st = fs.statSync(realDotGit);
+    if (st.isFile()) {
+      const m = fs.readFileSync(realDotGit, 'utf8').match(/^gitdir:\s*(.+)$/mu);
+      if (m) {
+        const rawGitDir = path.resolve(worktreeReal, m[1].trim());
+        if (!dirs.includes(rawGitDir)) dirs.push(rawGitDir);
+        try {
+          const realGitDir = nativeRealpath(rawGitDir);
+          if (!dirs.includes(realGitDir)) dirs.push(realGitDir);
+          const commonFile = path.join(realGitDir, 'commondir');
+          if (fs.existsSync(commonFile)) {
+            const rawCommon = path.resolve(realGitDir, fs.readFileSync(commonFile, 'utf8').trim());
+            if (!dirs.includes(rawCommon)) dirs.push(rawCommon);
+            const realCommon = nativeRealpath(rawCommon);
+            if (!dirs.includes(realCommon)) dirs.push(realCommon);
+          }
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+  return dirs;
+}
+
+function isGitManagementPath(candidatePath, worktreeReal, gitDirs = getGitManagementDirs(worktreeReal)) {
+  for (const g of gitDirs) {
+    if (candidatePath === g || isInsideDir(candidatePath, g)) return true;
+  }
+  const rel = path.relative(worktreeReal, candidatePath);
+  if (rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
+    if (rel.split(path.sep).includes('.git')) return true;
+  }
+  return false;
+}
+
 function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotGitPath = null, topNodeModules = null } = {}) {
+  const gitDirs = dotGitPath ? getGitManagementDirs(boundaryReal) : [];
+  if (dotGitPath && !gitDirs.includes(dotGitPath)) gitDirs.push(dotGitPath);
+  const isDotGit = (p) => gitDirs.length > 0 && isGitManagementPath(p, boundaryReal, gitDirs);
   let curDir = rawPath.startsWith(path.sep) ? path.sep : startDirReal;
   let enteredBoundary = !rawPath.startsWith(path.sep) && isInsideDir(curDir, boundaryReal);
   const queue = rawPath.split(path.sep).filter(Boolean);
@@ -429,7 +472,7 @@ function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotG
       throw err;
     }
     if (enteredBoundary) {
-      if (dotGitPath && (p === dotGitPath || isInsideDir(p, dotGitPath))) {
+      if (isDotGit(p)) {
         const err = new Error(`ESCAPED_DOTGIT:${p}`);
         err.escapePath = p;
         throw err;
@@ -487,7 +530,7 @@ function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotG
     err.escapePath = kernelFinal;
     throw err;
   }
-  if (dotGitPath && (kernelFinal === dotGitPath || isInsideDir(kernelFinal, dotGitPath))) {
+  if (isDotGit(kernelFinal)) {
     const err = new Error(`ESCAPED_DOTGIT:${kernelFinal}`);
     err.escapePath = kernelFinal;
     throw err;
@@ -506,7 +549,7 @@ function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotG
   if (jsFinal !== null && jsFinal !== kernelFinal) {
     if (
       !isInsideDir(jsFinal, boundaryReal)
-      || (dotGitPath && (jsFinal === dotGitPath || isInsideDir(jsFinal, dotGitPath)))
+      || isDotGit(jsFinal)
       || (topNodeModules && (jsFinal === topNodeModules || isInsideDir(jsFinal, topNodeModules)))
     ) {
       const err = new Error(`ESCAPED_BOUNDARY:${jsFinal}`);
@@ -518,7 +561,8 @@ function resolveKernelPathInBoundary(startDirReal, rawPath, boundaryReal, { dotG
 }
 
 function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree) {
-  const dotGitPath = path.join(sourceWorktree, '.git');
+  const gitDirs = getGitManagementDirs(sourceWorktree);
+  const isDotGit = (p) => isGitManagementPath(p, sourceWorktree, gitDirs);
   const isAllowed = (p) => isInsideDir(p, sourceDir) || isInsideDir(p, sourceWorktree);
   const isAncestorOfAllowed = (p) => isInsideDir(sourceDir, p) || isInsideDir(sourceWorktree, p);
   let curDir = startDirReal;
@@ -541,14 +585,15 @@ function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree
       err.escapePath = p;
       throw err;
     }
-    if (enteredAllowed && (p === dotGitPath || isInsideDir(p, dotGitPath))) {
+    if (enteredAllowed && isDotGit(p)) {
       const err = new Error(`OUTSIDE_WORKTREE:${p}`);
       err.escapePath = p;
       throw err;
     }
     if (enteredAllowed && isInsideDir(p, sourceWorktree) && !isInsideDir(p, sourceDir) && wsRawRelTarget === null) {
-      if (isInsideDir(sourceDir, p) && queue.length > 0) {
-        const nextCandidate = path.join(p, queue[0]);
+      const nextSeg = queue.find((s) => s !== '.');
+      if (isInsideDir(sourceDir, p) && nextSeg) {
+        const nextCandidate = path.join(p, nextSeg);
         if (isInsideDir(nextCandidate, sourceDir) || isInsideDir(sourceDir, nextCandidate)) {
           return;
         }
@@ -599,7 +644,7 @@ function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree
   }
   const fullPath = `${startDirReal.replace(/\/+$/u, '')}${path.sep}${entryName}`;
   const realTarget = nativeRealpath(fullPath);
-  if (!enteredAllowed || curDir !== realTarget || !isAllowed(realTarget) || realTarget === dotGitPath || isInsideDir(realTarget, dotGitPath)) {
+  if (!enteredAllowed || curDir !== realTarget || !isAllowed(realTarget) || realTarget === sourceWorktree || isDotGit(realTarget)) {
     const err = new Error(`OUTSIDE_WORKTREE:${realTarget}`);
     err.escapePath = realTarget;
     throw err;
@@ -611,7 +656,7 @@ function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree
     jsTarget = null;
   }
   if (jsTarget !== null && jsTarget !== realTarget) {
-    if (!isAllowed(jsTarget) || jsTarget === dotGitPath || isInsideDir(jsTarget, dotGitPath)) {
+    if (!isAllowed(jsTarget) || jsTarget === sourceWorktree || isDotGit(jsTarget)) {
       const err = new Error(`OUTSIDE_WORKTREE:${jsTarget}`);
       err.escapePath = jsTarget;
       throw err;
@@ -648,8 +693,13 @@ function findNodeModulesSource(root) {
       throw new LaunchError(`來源相依套件目錄連結無效（${c}）：${(e && e.message) || '讀不到目標'}`);
     }
     if (!fs.statSync(realNm).isDirectory()) continue;
-    if (!isInsideDir(realNm, realWt)) {
-      throw new LaunchError(`來源相依套件目錄連結指向工作樹外（${c} -> ${realNm}），為保受審版本隔離拒絕啟動`);
+    if (!isInsideDir(realNm, realWt) || realNm === realWt || isInsideDir(realWt, realNm) || isGitManagementPath(realNm, realWt)) {
+      throw new LaunchError(`來源相依套件目錄連結指向工作樹外或管理目錄（${c} -> ${realNm}），為保受審版本隔離拒絕啟動`);
+    }
+    try {
+      resolveKernelPathInBoundary(realWt, 'node_modules', realWt, { dotGitPath: path.join(realWt, '.git') });
+    } catch {
+      throw new LaunchError(`來源相依套件目錄連結指向工作樹外或管理目錄（${c} -> ${realNm}），為保受審版本隔離拒絕啟動`);
     }
     return { sourceDir: realNm, worktreeDir: realWt };
   }
@@ -657,6 +707,14 @@ function findNodeModulesSource(root) {
 }
 
 function inspectNodeModulesTree(sourceDir, sourceWorktree) {
+  const gitDirs = getGitManagementDirs(sourceWorktree);
+  if (
+    sourceDir === sourceWorktree
+    || isInsideDir(sourceWorktree, sourceDir)
+    || isGitManagementPath(sourceDir, sourceWorktree, gitDirs)
+  ) {
+    throw new LaunchError(`來源相依套件目錄不可為工作樹根目錄或 .git 管理目錄（${sourceDir}），為保受審版本隔離拒絕啟動`);
+  }
   const dirs = [];
   const files = [];
   const links = [];
@@ -665,6 +723,9 @@ function inspectNodeModulesTree(sourceDir, sourceWorktree) {
     for (const ent of entries) {
       const sp = path.join(curDir, ent.name);
       const relPath = path.relative(sourceDir, sp);
+      if (ent.name === '.git' || isGitManagementPath(sp, sourceWorktree, gitDirs)) {
+        throw new LaunchError(`相依套件內含 Git 管理目錄或檔案（${relPath}），為保受審版本隔離拒絕啟動`);
+      }
       const lst = fs.lstatSync(sp);
       if (lst.isSymbolicLink()) {
         const rawTarget = fs.readlinkSync(sp);
@@ -686,7 +747,11 @@ function inspectNodeModulesTree(sourceDir, sourceWorktree) {
             relTarget: path.relative(sourceDir, realTarget),
             wsRawRelTarget: null,
           });
-        } else if (isInsideDir(realTarget, sourceWorktree)) {
+        } else if (
+          isInsideDir(realTarget, sourceWorktree)
+          && realTarget !== sourceWorktree
+          && !isGitManagementPath(realTarget, sourceWorktree, gitDirs)
+        ) {
           links.push({
             relPath,
             rawTarget,
@@ -714,6 +779,7 @@ function inspectNodeModulesTree(sourceDir, sourceWorktree) {
 
 function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
   const dotGitPath = path.join(targetTreeReal, '.git');
+  const gitDirs = getGitManagementDirs(targetTreeReal);
   const topNodeModules = path.join(targetTreeReal, 'node_modules');
   const rawRel = link.wsRawRelTarget || link.relTarget;
   let realTargetInTree;
@@ -728,6 +794,9 @@ function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
     }
     throw new LaunchError(`受審工作樹的本機套件連結目標無法解析（${link.relPath} -> ${rawRel}）：${(err && err.message) || '不明錯誤'}，拒絕啟動`);
   }
+  if (realTargetInTree === targetTreeReal || isGitManagementPath(realTargetInTree, targetTreeReal, gitDirs)) {
+    throw new LaunchError(`受審工作樹的本機套件連結目標指向工作樹外或管理目錄（${link.relPath} -> ${rawRel} -> ${realTargetInTree}），為保受審版本隔離拒絕啟動`);
+  }
   const visitedDirs = new Set();
   const verifyReachableInsideTree = (realDir) => {
     if (visitedDirs.has(realDir)) return;
@@ -740,7 +809,10 @@ function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
     }
     for (const ent of entries) {
       const ep = path.join(realDir, ent.name);
-      if (ep === dotGitPath || ep === topNodeModules) continue;
+      if (ep === topNodeModules) continue;
+      if (ent.name === '.git' || isGitManagementPath(ep, targetTreeReal, gitDirs)) {
+        throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外或管理目錄的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)}），為保受審版本隔離拒絕啟動`);
+      }
       let realEp;
       try {
         realEp = resolveKernelPathInBoundary(realDir, ent.name, targetTreeReal, { dotGitPath });
@@ -749,6 +821,9 @@ function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
           throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)} -> ${err.escapePath}），為保受審版本隔離拒絕啟動`);
         }
         throw new LaunchError(`受審工作樹的本機套件內含失效連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)}），拒絕啟動`);
+      }
+      if (realEp === targetTreeReal || isGitManagementPath(realEp, targetTreeReal, gitDirs)) {
+        throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外或管理目錄的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)} -> ${realEp}），為保受審版本隔離拒絕啟動`);
       }
       if (fs.statSync(realEp).isDirectory()) {
         verifyReachableInsideTree(realEp);
@@ -759,8 +834,13 @@ function resolveWorkspaceLinkTargetInTree(targetTreeReal, link) {
       } catch {
         jsEp = null;
       }
-      if (jsEp !== null && jsEp !== realEp && fs.statSync(jsEp).isDirectory()) {
-        verifyReachableInsideTree(jsEp);
+      if (jsEp !== null && jsEp !== realEp) {
+        if (jsEp === targetTreeReal || isGitManagementPath(jsEp, targetTreeReal, gitDirs)) {
+          throw new LaunchError(`受審工作樹的本機套件內含指向工作樹外或管理目錄的連結（${link.relPath} -> ${path.relative(targetTreeReal, ep)} -> ${jsEp}），為保受審版本隔離拒絕啟動`);
+        }
+        if (fs.statSync(jsEp).isDirectory()) {
+          verifyReachableInsideTree(jsEp);
+        }
       }
     }
   };
@@ -2792,8 +2872,20 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
     const realSrcTree = nativeRealpath(srcTree);
     const realDestTree = nativeRealpath(destTree);
     const allowedContainerDeps = path.join(path.dirname(realSrcTree), 'deps');
-    if (!isInsideDir(realNodeModulesSrc, realSrcTree) && !isInsideDir(realNodeModulesSrc, allowedContainerDeps)) {
-      throw new LaunchError(`隔離工作樹的 node_modules 指向工作樹外（${realNodeModulesSrc}），拒絕複製`);
+    if (
+      (!isInsideDir(realNodeModulesSrc, realSrcTree) && !isInsideDir(realNodeModulesSrc, allowedContainerDeps))
+      || realNodeModulesSrc === realSrcTree
+      || isInsideDir(realSrcTree, realNodeModulesSrc)
+      || isGitManagementPath(realNodeModulesSrc, realSrcTree)
+    ) {
+      throw new LaunchError(`隔離工作樹的 node_modules 指向工作樹外或管理目錄（${realNodeModulesSrc}），拒絕複製`);
+    }
+    if (isInsideDir(realNodeModulesSrc, realSrcTree)) {
+      try {
+        resolveKernelPathInBoundary(realSrcTree, 'node_modules', realSrcTree, { dotGitPath: path.join(realSrcTree, '.git') });
+      } catch {
+        throw new LaunchError(`隔離工作樹的 node_modules 指向工作樹外或管理目錄（${realNodeModulesSrc}），拒絕複製`);
+      }
     }
     const inspected = inspectNodeModulesTree(realNodeModulesSrc, realSrcTree);
     const dstNm = path.join(destTree, 'node_modules');

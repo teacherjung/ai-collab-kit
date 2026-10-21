@@ -3629,6 +3629,70 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         fs.rmSync(mainDecoyDotdot, { recursive: true, force: true });
       }
 
+      // (八) 來源 node_modules 指向 .git 或工作樹根目錄本身時，複審、掃描與隔離複製皆須退 2 拒啟且不得複製 .git/config
+      const mainNm = path.join(r.dir, 'node_modules');
+      const mainGitConfigPath = path.join(r.dir, '.git', 'config');
+      const origGitConfig = fs.readFileSync(mainGitConfigPath, 'utf8');
+      const backupMainNm = path.join(altTargetDir, 'backup-main-node-modules');
+      fs.renameSync(mainNm, backupMainNm);
+      fs.writeFileSync(mainGitConfigPath, `${origGitConfig}\n# SYNTHETIC_GIT_CONFIG_SECRET_9999\n`);
+      try {
+        for (const [badTarget, label] of [
+          ['.git', '來源 node_modules -> .git'],
+          ['.', '來源 node_modules -> 工作樹根目錄'],
+        ]) {
+          fs.symlinkSync(badTarget, mainNm, 'dir');
+          try {
+            let badExecCalled = false;
+            let badPosts = 0;
+            const badRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+              settings: s,
+              platform: fakePlatform(wsAns),
+              cwd: implWt,
+              template: TEMPLATE,
+              leftoverRoots: [],
+              runExec() { badExecCalled = true; },
+              runPost() { badPosts += 1; },
+            });
+            assert.equal(badRevRes.code, 2, `R2（${label}）：複審應退 2 拒絕啟動`);
+            assert.equal(badExecCalled, false, `R2（${label}）：拒絕啟動時不得呼叫模型`);
+            assert.equal(badPosts, 0, `R2（${label}）：拒絕啟動時代貼次數應為 0`);
+            assert.ok(!fs.existsSync(reviewFolder), `R2（${label}）：回滾後不應殘留複審容器`);
+
+            const badScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+              settings: s,
+              platform: fakePlatform(wsWithPass),
+              cwd: implWt,
+              leftoverRoots: [],
+              runExec() { badExecCalled = true; },
+              runPost() { badPosts += 1; },
+            });
+            assert.equal(badScanRes.code, 2, `R2（${label}）：掃描應退 2 拒絕啟動`);
+            assert.equal(badExecCalled, false, `R2（${label}）：掃描拒絕啟動時不得呼叫模型`);
+
+            const badIsoDest = path.join(altTargetDir, `iso-bad-${Buffer.from(badTarget).toString('hex')}`);
+            assert.throws(
+              () => materializeIsolatedGitRepo(r.dir, badIsoDest, {
+                rootRepo: r.dir,
+                baseSha: r.base,
+                headSha: wsHead,
+              }),
+              /管理目錄|工作樹/u,
+              `R2（${label}）：materializeIsolatedGitRepo 應拒絕複製`,
+            );
+            assert.ok(
+              !fs.existsSync(path.join(badIsoDest, 'node_modules', 'config')),
+              `R2（${label}）：不得將 .git/config 複製進 node_modules`,
+            );
+          } finally {
+            fs.rmSync(mainNm, { force: true });
+          }
+        }
+      } finally {
+        fs.writeFileSync(mainGitConfigPath, origGitConfig);
+        fs.renameSync(backupMainNm, mainNm);
+      }
+
       // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
         settings: s,
@@ -3656,7 +3720,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       );
       assert.equal(isoProbe.status, 0, '盒內隔離工作樹應可正常載入一般依賴與工作區依賴');
 
-      // 驗證 cp 退 42、啟動失敗（ENOENT）、部分複製（退 0 但漏拷檔案）時 materializeIsolatedGitRepo 與 runGrokExec 皆拒絕啟動模型且不代貼
+      // 驗證 cp 退 42（含已完整複製檔案但退 42）、啟動失敗（ENOENT）、部分複製（退 0 但漏拷檔案）時 materializeIsolatedGitRepo 與 runGrokExec 皆拒絕啟動模型且不代貼
       const r4AuthFile = path.join(altTargetDir, 'r4-auth.json');
       const r4EntryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
       fs.writeFileSync(
@@ -3678,7 +3742,13 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       const r4GrokBin = path.join(altTargetDir, 'fake-grok');
       fs.writeFileSync(r4GrokBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       for (const [caseLabel, fakeCopySpawn] of [
-        ['cp 退 42', () => ({ status: 42, signal: null, error: null, stdout: '', stderr: 'simulated cp failure' })],
+        [
+          'cp 退 42（已複製但狀態碼非零）',
+          (cmd, args) => {
+            spawnSync(cmd, args, { encoding: 'utf8' });
+            return { status: 42, signal: null, error: null, stdout: '', stderr: 'simulated cp failure' };
+          },
+        ],
         ['cp 起不來', () => ({ status: null, signal: null, error: Object.assign(new Error('spawn cp ENOENT'), { code: 'ENOENT' }), stdout: '', stderr: '' })],
         [
           'cp 部分複製（退 0 但漏檔）',
