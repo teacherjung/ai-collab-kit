@@ -3199,8 +3199,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         fs.unlinkSync(extLinkPath);
       }
 
-      // R4 與 BACKLOG.md 第 89、93 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼；
-      // 且清理後盒內不留 refs/keep/wanted-* 額外引用
+      // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
         settings: s,
         platform: fakePlatform(wsWithPass),
@@ -3215,8 +3214,6 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         headSha: wsHead,
         extraShas: [r.head],
       });
-      const keepRefs = spawnSync('git', ['for-each-ref', 'refs/keep'], { cwd: isoDestOk, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
-      assert.equal(keepRefs, '', '盒內清理後不應殘留 refs/keep/* 引用');
       assert.equal(
         spawnSync('git', ['cat-file', '-e', `${r.head}^{commit}`], { cwd: isoDestOk, env: gitEnv() }).status,
         0,

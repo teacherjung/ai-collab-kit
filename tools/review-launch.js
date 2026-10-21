@@ -2402,10 +2402,6 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   git(destTree, ['reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all']);
   git(destTree, ['repack', '-a', '-d', '--quiet']);
   git(destTree, ['prune', '--expire=now']);
-  for (let i = 0; i < wantedShas.length; i += 1) {
-    gitOk(destTree, ['update-ref', '-d', `refs/keep/wanted-${i}`]);
-  }
-  try { fs.rmSync(path.join(destTree, '.git', 'refs', 'keep'), { recursive: true, force: true }); } catch { /* ignore */ }
   try { fs.rmSync(path.join(destTree, '.git', 'FETCH_HEAD'), { force: true }); } catch { /* ignore */ }
   try { fs.rmSync(path.join(destTree, '.git', 'logs'), { recursive: true, force: true }); } catch { /* ignore */ }
   for (const sha of wantedShas) {
