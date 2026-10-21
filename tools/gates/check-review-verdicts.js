@@ -131,10 +131,10 @@ function stripListMarkers(line) {
 
 /**
  * 從留言全文掃描「### 本輪實際用的設定」段落，解析唯一宣告的實際模型與推理強度欄位。
- * 段落起訖（1〜3 級標題 `#`〜`###`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、圍欄程式碼區塊（```／~~~，含清單標記後的圍欄）、
+ * 段落起訖（1〜3 級標題 `#`〜`###`；4〜6 級子標題 `####`〜`######` 仍屬同一小節）、圍欄程式碼區塊（```／~~~，含清單同行與跨行延續容器內的圍欄）、
  * HTML 註解（`<!-- ... -->`）與行內反引號（`` `...` ``）由同一個由上而下的狀態機處理：
  * 圍欄或 HTML 註解內的標題不會提前截斷段落，HTML 註解內的 ``` 不會開啟假圍欄，
- * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r6 R3）。
+ * 行內反引號內的 `` `<!--` `` 不會開啟假 HTML 註解，且包反引號的含冒號模型名（如 `` `provider:model-v1` ``）原樣保留（#121 r4〜r8 R3）。
  */
 function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   const modelValues = [];
@@ -142,6 +142,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
   let fenceChar = '';
   let fenceLen = 0;
   let fenceListIndent = 0;
+  const listIndents = [];
   let inHtmlComment = false;
   let inSection = false;
 
@@ -164,8 +165,18 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       }
     }
     if (!inHtmlComment) {
-      const { rest: afterList, listIndent } = stripListMarkers(rawLine);
-      if (listIndent === 0 && /^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
+      if (rawLine.trim() === '') continue;
+      const leadSpaces = /^ */u.exec(rawLine)[0].length;
+      while (listIndents.length && leadSpaces < listIndents[listIndents.length - 1]) {
+        listIndents.pop();
+      }
+      const baseIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
+      const { rest: afterList, listIndent } = stripListMarkers(rawLine.slice(baseIndent));
+      if (listIndent > 0) {
+        listIndents.push(baseIndent + listIndent);
+      }
+      const currentListIndent = listIndents.length ? listIndents[listIndents.length - 1] : 0;
+      if (currentListIndent === 0 && /^ {0,3}#{1,3}(?:\s|$)/u.test(rawLine)) {
         inSection = rawLine.trim() === '### 本輪實際用的設定';
         continue;
       }
@@ -175,7 +186,7 @@ function parseSettingFields(allLines, allowedModels, allowedEffort = '') {
       if (openMatch && !(openMatch[1][0] === '`' && openMatch[2].includes('`'))) {
         fenceChar = openMatch[1][0];
         fenceLen = openMatch[1].length;
-        fenceListIndent = listIndent;
+        fenceListIndent = currentListIndent;
         continue;
       }
     }
