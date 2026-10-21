@@ -453,8 +453,6 @@ function getGitManagementDirs(worktreeReal) {
       throw new LaunchError(`無法解析工作樹的 gitdir（${rawGitDir}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
     }
     addDir(realGitDir);
-    addDir(path.resolve(worktreeReal, gitDirSpec));
-    try { addDir(fs.realpathSync(path.resolve(worktreeReal, gitDirSpec))); } catch { /* ignore */ }
   } else if (st.isDirectory()) {
     realGitDir = realDotGit;
   } else {
@@ -491,8 +489,6 @@ function getGitManagementDirs(worktreeReal) {
       throw new LaunchError(`無法解析工作樹的 commondir（${rawCommon}）：${(e && e.message) || '讀不到目標'}，拒絕啟動`);
     }
     addDir(realCommon);
-    addDir(path.resolve(realGitDir, commonSpec));
-    try { addDir(fs.realpathSync(path.resolve(realGitDir, commonSpec))); } catch { /* ignore */ }
   }
 
   if (!gitOk(worktreeReal, ['rev-parse', '--git-dir', '--git-common-dir'])) {

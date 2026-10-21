@@ -3746,6 +3746,99 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         fs.renameSync(backupMainNm, mainNm);
       }
 
+      // 配置 4 與 5（r9 正向控制）：當 gitdir 或目錄型 .git/commondir 含 symlink + .. 且其實際管理目錄在 deep/node_modules、
+      // 但 path.resolve 詞法折疊位置恰好是工作樹根下的正常 node_modules 時，複審、掃描與隔離複製皆不得誤擋普通依賴
+      const assertAllowedOrdinaryNm = (label) => {
+        let okRevPosts = 0;
+        const okRevRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(wsAns),
+          cwd: r.dir,
+          template: TEMPLATE,
+          leftoverRoots: [],
+          runExec(_cmd, { record }) {
+            assert.equal(
+              fs.readFileSync(path.join(record.tree, 'node_modules', 'fake-dep', 'index.js'), 'utf8'),
+              scanSeedContent,
+              `R2 正例（${label}）：審查樹應正常掛載並讀到普通依賴`,
+            );
+            fs.writeFileSync(
+              record.outFile,
+              `🤖 Beta｜來源：beta CLI｜審 \`${wsHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+            );
+          },
+          runPost() { okRevPosts += 1; },
+        });
+        assert.equal(okRevRes.code, 0, `R2 正例（${label}）：複審應退 0 正常完成：${okRevRes.lines.join('\n')}`);
+        assert.equal(okRevPosts, 1, `R2 正例（${label}）：複審應代貼 1 次`);
+
+        let okScanPosts = 0;
+        const okScanRes = main(['--scan', '7', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(wsWithPass),
+          cwd: r.dir,
+          leftoverRoots: [],
+          runExec(_cmd, { record }) {
+            assert.equal(
+              fs.readFileSync(path.join(record.tree, 'node_modules', 'fake-dep', 'index.js'), 'utf8'),
+              scanSeedContent,
+              `R2 正例（${label}）：掃描樹應正常掛載並讀到普通依賴`,
+            );
+            fs.writeFileSync(
+              record.outFile,
+              `🔍 Gamma｜來源：Grok CLI｜掃 \`${wsHead.slice(0, 7)}\`\n\n### 本次實際用的設定\n- ok\n\n### 掃描結果\n- 零發現\n未貼\n`,
+            );
+          },
+          runPost() { okScanPosts += 1; },
+        });
+        assert.equal(okScanRes.code, 0, `R2 正例（${label}）：掃描應退 0 正常完成：${okScanRes.lines.join('\n')}`);
+        assert.equal(okScanPosts, 1, `R2 正例（${label}）：掃描應代貼 1 次`);
+
+        const okIsoDest = path.join(altTargetDir, `iso-ok-${Buffer.from(label).toString('hex').slice(0, 24)}`);
+        materializeIsolatedGitRepo(r.dir, okIsoDest, {
+          rootRepo: r.dir,
+          baseSha: r.base,
+          headSha: wsHead,
+        });
+        assert.equal(
+          fs.readFileSync(path.join(okIsoDest, 'node_modules', 'fake-dep', 'index.js'), 'utf8'),
+          scanSeedContent,
+          `R2 正例（${label}）：materializeIsolatedGitRepo 應正常複製普通依賴`,
+        );
+      };
+
+      // 配置 4：.git 檔案寫 gitdir: bridge/../node_modules（bridge -> deep/leaf，實際管理目錄為 deep/node_modules，詞法折疊位置為根目錄普通 node_modules）
+      try {
+        const posDeepLeaf = path.join(r.dir, 'deep', 'leaf');
+        const posActualGit = path.join(r.dir, 'deep', 'node_modules');
+        const posTopBridge = path.join(r.dir, 'bridge');
+        fs.mkdirSync(posDeepLeaf, { recursive: true });
+        fs.symlinkSync('deep/leaf', posTopBridge, 'dir');
+        fs.renameSync(mainDotGit, posActualGit);
+        fs.writeFileSync(mainDotGit, 'gitdir: bridge/../node_modules\n');
+        assertAllowedOrdinaryNm('gitdir: bridge/../node_modules 詞法折疊至普通 node_modules');
+      } finally {
+        fs.rmSync(path.join(r.dir, 'bridge'), { force: true });
+        fs.rmSync(mainDotGit, { recursive: true, force: true });
+        fs.cpSync(backupDotGit, mainDotGit, { recursive: true });
+        fs.rmSync(path.join(r.dir, 'deep'), { recursive: true, force: true });
+      }
+
+      // 配置 5：.git 為目錄，.git/bridge -> ../deep/nested/leaf，.git/commondir 寫 bridge/../../node_modules（實際共享管理目錄為 deep/node_modules，詞法折疊位置為根目錄普通 node_modules）
+      try {
+        const posNestedLeaf = path.join(r.dir, 'deep', 'nested', 'leaf');
+        const posCommonGit = path.join(r.dir, 'deep', 'node_modules');
+        fs.mkdirSync(posNestedLeaf, { recursive: true });
+        fs.cpSync(mainDotGit, posCommonGit, { recursive: true });
+        fs.symlinkSync('../deep/nested/leaf', path.join(mainDotGit, 'bridge'), 'dir');
+        fs.writeFileSync(path.join(mainDotGit, 'commondir'), 'bridge/../../node_modules\n');
+        assertAllowedOrdinaryNm('.git/commondir: bridge/../../node_modules 詞法折疊至普通 node_modules');
+      } finally {
+        fs.rmSync(mainDotGit, { recursive: true, force: true });
+        fs.cpSync(backupDotGit, mainDotGit, { recursive: true });
+        fs.rmSync(path.join(r.dir, 'deep'), { recursive: true, force: true });
+      }
+
       // R4 與 BACKLOG.md 第 89 行：materializeIsolatedGitRepo 驗證 cp 退非零、啟動失敗、部分複製皆須拋錯並阻止 runGrokExec 啟動模型或代貼
       const isoScanLaunch = main(['--scan', '7', '--dir', dir], {
         settings: s,
