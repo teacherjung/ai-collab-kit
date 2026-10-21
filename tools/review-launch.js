@@ -2356,14 +2356,8 @@ async function runGrokExec(argv, deps = {}) {
   }
 }
 
-function stripGrokPreamble(rawOutput, mode = 'scan') {
-  const text = String(rawOutput ?? '');
-  const rawLines = text.replace(/\r\n?/g, '\n').split('\n');
-  const headerPrefix = mode === 'scan' ? '🔍 ' : '🤖 ';
-  const headerIdx = rawLines.findIndex((l) => l.startsWith(headerPrefix));
-  return (headerIdx > 0 && !(mode === 'scan' && rawLines.slice(0, headerIdx).some((l) => /🤖/u.test(l))))
-    ? `${rawLines.slice(headerIdx).join('\n')}`
-    : text;
+function stripGrokPreamble(rawOutput) {
+  return String(rawOutput ?? '');
 }
 
 /** 執行複審／掃描啟動指令（清掉 GIT_* 與 platform.clearEnv；以 record.root 為工作目錄跑 shell 指令）。 */

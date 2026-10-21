@@ -23,7 +23,7 @@
 //   ⑫複審後掃生命週期（G1、G2；--scan、--scanner、--scan-post、--scan-close）：templates/scan-record.md 提示範本與 SCAN_FILL 一一對上且不含 🤖；
 //     快速通道、表定不掃、未設定掃描者、指定複審者未對當版貼通過皆印原因或未執行收口句並退 2；支援 --scanner <識別值> 切換為 reviewers 裡其他第三位 AI（自動從複審指令轉換唯讀掃描指令）；通過後開唯讀掃描樹、印啟動指令與紀錄骨架（前版已收樹的舊 scan 資料夾在新提交重掃時自動替換）；
 //     --scan-post 核掃描樹乾淨與 HEAD 未變（不符退 1），擋含 🤖 的掃描留言、核 🔍 標頭、剝除文末未貼、自動補「> 掃描時序：…」並代貼（與 check-review-verdicts.js 相容）；--scan-close 驗乾淨後收樹（支援 --purge 一併清除掃描容器資料夾）；
-//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行、DLP 與標頭前跨行前言剝除（stripGrokPreamble）；
+//   ⑬--grok-exec 隔離與受控認證轉送（Grok 複審／掃描啟動器）：參數解析與未知旗標拒收、Seatbelt 靜態檢查與預檢失敗拒啟、OIDC 自動續期與連結檔拒收、轉送器規則核對、review 模式（含突變副本）端到端執行、DLP 與原始輸出完整保留（含前言之範例輸出由 --post／--scan-post 拒貼）；
 //   ⑭一鍵執行（--run 與 --run --purge）：複審與掃描一鍵串聯開樹→執行啟動指令→外殼驗樹代貼→收樹（含 --purge），任一步失敗即停並保留現場供查。
 // ⚠️ 守不到的：印出來之後有沒有照用、複審者實際用的模型與推理；樣板本身寫得對不對（只驗記號）；平台給的事實是不是真的；
 //    假平台的基底分支名只有一個：工具若把那個名字寫死、不讀平台回的基底欄位，分不出來（#101 掃描 1-2）。
@@ -1755,35 +1755,22 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         assert.match(prevDiff, /-prev-round-diverged/u, '盒內工作樹必須保留非祖先的上一輪提交並可比對跨輪差異');
         // 盒內突變副本的工作區可改檔，盒內審查樹與兩邊 .git 保持不變
         fs.writeFileSync(path.join(boxMutation, 'a.txt'), 'mutated\n');
-        return { status: 0, stdout: '我先檢查一下變更。\n\n🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n### 核對清單\n- ok\n### 發現\n- 零發現\n未貼\n', stderr: '' };
+        return { status: 0, stdout: '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n### 本輪實際用的設定\n- ok\n### 清單逐項結果\n- 零發現\n未貼\n', stderr: '' };
       },
     });
     assert.equal(revRun.code, 0, revRun.lines.join('\n'));
-    assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後自動剝除標頭前的對話前言');
+    assert.match(fs.readFileSync(outFile, 'utf8'), /^🤖 Grok｜來源：Grok CLI/u, '通過 DLP 後完整寫出正式輸出');
 
-    // 跨行提及不完整標頭（r3 R4、r4 R5）可剝除跨行前言；同行緊貼進度前言一律不剝除（r6 R7 裁示選 A：交由 --post／--scan-post 拒收）；scan 模式若前言含 🤖 亦不剝除
+    // stripGrokPreamble 保留完整原始輸出供追查，不裁切任何同行或跨行前言（標頭前若有非空白前言，一律交由 --post／--scan-post 拒貼）
     const sameLineScan = '我現在直接用 git 檢視差異並完成掃描。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
-    assert.equal(
-      stripGrokPreamble(sameLineScan, 'scan'),
-      sameLineScan,
-      '同行緊貼前言不剝除，保留原樣交由 --scan-post 拒收',
-    );
-    assert.equal(
-      stripGrokPreamble('我會使用 🔍 Grok｜來源：Grok CLI 格式輸出。\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', 'scan'),
-      '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
-    );
+    const multiLineScan = '1. 真正發現：工具仍有待修問題（合成範例）。\n以下僅展示零發現的格式：\n```text\n🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n```';
+    assert.equal(stripGrokPreamble(sameLineScan, 'scan'), sameLineScan, '同行緊貼前言不剝除，保留原樣交由 --scan-post 拒收');
+    assert.equal(stripGrokPreamble(multiLineScan, 'scan'), multiLineScan, '跨行前言含圍欄零發現範例不剝除，保留原始發現交由 --scan-post 拒收');
     for (const v of Object.keys(VERDICTS)) {
       const sameLineReview = `我現在開始複審。🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`;
-      assert.equal(
-        stripGrokPreamble(sameLineReview, 'review'),
-        sameLineReview,
-        `同行前言＋${v} 不剝除`,
-      );
-      assert.equal(
-        stripGrokPreamble(`我會使用 🤖 Grok｜來源：Grok CLI 格式輸出。\n🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`, 'review'),
-        `🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n`,
-        `跨行半標頭前言＋${v}`,
-      );
+      const multiLineReview = `審查尚未完成。下面只是格式範例，請勿代貼：\n\`\`\`text\n🤖 Grok｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：${v}\n\`\`\`\n`;
+      assert.equal(stripGrokPreamble(sameLineReview, 'review'), sameLineReview, `同行前言＋${v} 不剝除`);
+      assert.equal(stripGrokPreamble(multiLineReview, 'review'), multiLineReview, `跨行前言＋${v} 不剝除`);
     }
     for (const leaky of [
       '誤帶 🤖 記號的前言。🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n',
@@ -1792,16 +1779,24 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       assert.equal(
         stripGrokPreamble(leaky, 'scan'),
         leaky,
-        'scan 模式若標頭前含有 🤖 不可偷剝掉，必須保留讓 --scan-post 攔截',
+        'scan 模式若標頭前含有 🤖 保留原樣讓 --scan-post 攔截',
       );
     }
 
-    // 首行已是阻擋結論（不可合併）、非正式結論詞、漏來源欄或半形冒號，或跨行前言含引用（> ）／清單（- ）通過範例而後面才是獨立行不可合併、或兩段同行矛盾結論時，絕不可誤把通過範例當正式結論（r4 R5、r5 R6、r6 R7、r7 R8 完整代貼與結論閘回歸）
-    for (const [label, rawStdout, expectPostCode, expectVerdict] of [
+    // 端到端（runGrokExec → --post）：含前言的圍欄／引用／清單「通過」範例、同行矛盾標頭、首行非正式結論詞或壞標頭一律保留原始輸出至 outFile 並由 --post 拒貼（不留下 postedAt 成功紀錄）；正常正式輸出（通過或不可合併）可完成代貼
+    for (const [label, rawStdout, expectPostCode, expectVerdict, expectGateProblems] of [
+      [
+        '跨行前言含圍欄通過範例＋審查尚未完成（#115 掃描第 1 項重評重現）',
+        (_h, _s, p) => `審查尚未完成。下面只是格式範例，請勿代貼：\n\`\`\`text\n${p}\`\`\`\n實際結果：仍有問題，需修改後再審。`,
+        2,
+        null,
+        null,
+      ],
       [
         '首行非正式結論詞＋內文通過範例（r4 R5）',
         (h, s, p) => `🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不同意（建議撤回或重開）${s}\n下列通過範例不可當結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
+        null,
         null,
       ],
       [
@@ -1809,11 +1804,13 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         (h, s, p) => `🤖 Beta｜審 \`${h}\`｜r1｜結論：不可合併${s}\n以下通過範例不可當作本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
         null,
+        null,
       ],
       [
         '首行不可合併來源欄用半形冒號 來源:＋圍欄通過範例（r7 R8）',
         (h, s, p) => `🤖 Beta｜來源: beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}\n以下通過範例不可當作本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
         2,
+        null,
         null,
       ],
       [
@@ -1821,24 +1818,35 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         (h, s, p) => `我現在開始複審。${p}\n進一步核對後更新結論。🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
         2,
         null,
+        null,
+      ],
+      [
+        '跨行前言含 > 引用通過範例＋獨立行不可合併（r5 R6 引用案例：拒貼保留原始輸出）',
+        (h, s, p) => `以下是不可採用的通過範例：\n> ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        2,
+        null,
+        null,
+      ],
+      [
+        '跨行前言含 - 清單通過範例＋獨立行不可合併（r5 R6 清單案例：拒貼保留原始輸出）',
+        (h, s, p) => `以下是不可採用的通過範例：\n- ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        2,
+        null,
+        null,
       ],
       [
         '首行不可合併＋內文通過範例（r4 R5）',
         (h, s, p) => `🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}\n下列同輪錯誤通過範例不可當成本輪結論：\n\`\`\`text\n${p}\`\`\`\n`,
         0,
         '不可合併',
+        true,
       ],
       [
-        '跨行前言含 > 引用通過範例＋獨立行不可合併（r5 R6 引用案例）',
-        (h, s, p) => `以下是不可採用的通過範例：\n> ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
+        '正常正式通過輸出（可含開頭空行與文末未貼）',
+        (_h, _s, p) => `\n${p}未貼\n`,
         0,
-        '不可合併',
-      ],
-      [
-        '跨行前言含 - 清單通過範例＋獨立行不可合併（r5 R6 清單案例）',
-        (h, s, p) => `以下是不可採用的通過範例：\n- ${p.split('\n')[0]}\n\n🤖 Beta｜來源：beta CLI｜審 \`${h}\`｜r1｜結論：不可合併${s}`,
-        0,
-        '不可合併',
+        '通過',
+        false,
       ],
     ]) {
       const caseDir = fs.mkdtempSync(path.join(tmp, 'post-r5-r8-'));
@@ -1864,6 +1872,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         spawnGrok: async () => ({ status: 0, stdout: stdoutText, stderr: '' }),
       });
       assert.equal(execCase.code, 0, `${label} runGrokExec`);
+      assert.equal(fs.readFileSync(launchCase.record.outFile, 'utf8'), stdoutText, `${label} outFile 必須完整保留原始輸出供追查`);
       let sentCase = null;
       const postCase = main(['--post', '7', '--dir', caseDir], {
         settings: sCase,
@@ -1885,12 +1894,87 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
           ['Boss', 'Alpha', 'Beta'],
           { ownerRole: 'Boss' },
         );
-        assert.ok(gateCase.problems.length > 0, `${label} 結論聯集閘必須維持阻擋、problems 不可為空`);
+        if (expectGateProblems) {
+          assert.ok(gateCase.problems.length > 0, `${label} 結論聯集閘必須維持阻擋、problems 不可為空`);
+        } else {
+          assert.deepEqual(gateCase.problems, [], `${label} 正常正式通過輸出應通過結論聯集閘`);
+        }
       }
       assert.equal(close('7', { settings: sCase, dir: caseDir, leftoverRoots: [] }).code, 0, `${label} close`);
     }
 
-    // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 在剝除前言前即攔截並退 2
+    // 端到端（runGrokExec → --scan-post）：前文有發現且後面附圍欄「零發現」範例時拒貼、不留 postedAt 並保留完整原始輸出；正常正式掃描輸出可完成代貼
+    for (const [scanLabel, scanRawFn, expectScanCode] of [
+      [
+        '前文含真正發現＋圍欄零發現格式範例（#115 掃描第 1 項重評重現）',
+        (h) => `1. 真正發現：工具仍有待修問題（合成範例）。\n以下僅展示零發現的格式：\n\`\`\`text\n🔍 Gamma｜來源：Grok CLI｜掃 \`${h}\`\n- 零發現\n\`\`\``,
+        2,
+      ],
+      [
+        '正常正式掃描輸出（可含開頭空行與文末未貼）',
+        (h) => `\n🔍 Gamma｜來源：Grok CLI｜掃 \`${h}\`\n\n### 掃描結果\n- 零發現\n未貼\n`,
+        0,
+      ],
+    ]) {
+      const scanCaseDir = fs.mkdtempSync(path.join(tmp, 'scan-post-e2e-'));
+      const sScanCase = settingsFor({
+        participants: [
+          ...settingsFor().participants,
+          { role: 'AI 丙', id: 'Gamma', account: 'ai-acct' },
+        ],
+        owner: 'Boss',
+        scanner: {
+          participant: 'Gamma',
+          launch: '由掃描發射者執行 tools/review-launch.js --scan',
+          assignedBy: '專案設定',
+          tieBreaker: '由實作者發起',
+          fallback: '未執行：<原因>',
+          strongest: 'grok-4.7',
+          maxEffort: 'xhigh',
+          source: 'Grok CLI',
+          command: 'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}',
+        },
+      });
+      const passCommentForScan = verdict('Beta', 1, r.head, '通過', { id: 'pass-scan-e2e', createdAt: '2026-10-19T12:00:00Z' });
+      const platformScanCase = fakePlatform(answersFor(r, { comments: [passCommentForScan] }));
+      const scanLaunchRes = main(['--scan', '7', '--dir', scanCaseDir], { settings: sScanCase, platform: platformScanCase, cwd: r.dir });
+      assert.equal(scanLaunchRes.code, 0, `${scanLabel} --scan: ${scanLaunchRes.lines.join('\n')}`);
+      const scanStdout = scanRawFn(r.head.slice(0, 7));
+      const scanExecRes = await runGrokExec([
+        '--mode', 'scan',
+        '--cwd', scanLaunchRes.record.tree,
+        '--model', 'grok-4.7',
+        '--reasoning-effort', 'xhigh',
+        '--prompt-file', scanLaunchRes.record.promptFile,
+        '--out', scanLaunchRes.record.outFile,
+      ], {
+        authFile,
+        authOpts: { now: () => Date.parse('2026-10-19T00:05:00.000Z') },
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async () => ({ status: 0, stdout: scanStdout, stderr: '' }),
+      });
+      assert.equal(scanExecRes.code, 0, `${scanLabel} runGrokExec`);
+      assert.equal(fs.readFileSync(scanLaunchRes.record.outFile, 'utf8'), scanStdout, `${scanLabel} outFile 必須完整保留原始輸出供追查`);
+      let sentScanBody = null;
+      const scanPostRes = main(['--scan-post', '7', '--dir', scanCaseDir], {
+        settings: sScanCase,
+        platform: platformScanCase,
+        runPost(_cmd, args) { sentScanBody = fs.readFileSync(args.at(-1), 'utf8'); },
+      });
+      assert.equal(scanPostRes.code, expectScanCode, `${scanLabel} --scan-post: ${scanPostRes.lines.join('\n')}`);
+      const scanMetaAfter = JSON.parse(fs.readFileSync(path.join(path.dirname(scanLaunchRes.record.outFile), 'scan.json'), 'utf8'));
+      if (expectScanCode !== 0) {
+        assert.equal(sentScanBody, null, `${scanLabel} 應拒貼，不可把範例誤貼成零發現`);
+        assert.equal(scanMetaAfter.postedAt, undefined, `${scanLabel} 拒貼時不可寫入 postedAt`);
+      } else {
+        assert.ok(sentScanBody && sentScanBody.startsWith(`🔍 Gamma｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\``), `${scanLabel} 正常正式掃描輸出應完成代貼`);
+        assert.match(sentScanBody, /\n> 掃描時序：依據複審留言 /u, `${scanLabel} 代貼應補上掃描時序`);
+        assert.ok(typeof scanMetaAfter.postedAt === 'string', `${scanLabel} 成功代貼時寫入 postedAt`);
+      }
+      assert.equal(main(['--scan-close', '7', '--dir', scanCaseDir], { settings: sScanCase }).code, 0, `${scanLabel} --scan-close`);
+    }
+
+    // 前言若含真實憑證針（NEW-KEY-SECRET-3333），DLP 直接攔截並退 2
     const dlpOut = path.join(tmp, 'dlp-out.md');
     const dlpRun = await runGrokExec([
       '--mode', 'scan',
