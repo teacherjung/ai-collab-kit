@@ -1688,7 +1688,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.ok(parseGrokExecArgs(bad).error, `應拒收壞參數：${bad.join(' ')}`);
   }
 
-  // (b) Seatbelt 規則靜態檢查與預檢失敗拒啟
+  // (b) Seatbelt 規則靜態檢查與預檢函式單測（正式啟動端 runGrokExec 預檢失敗／無結果拒啟見下方反例）
   assert.equal(verifyGrokSeatbeltProfile(GROK_SEATBELT_PROFILE).ok, true);
   assert.equal(runGrokSeatbeltProbe({ boxDir: '/tmp', relayPort: 54321, spawnSyncImpl: () => ({ status: 71, stdout: '', stderr: 'Operation not permitted' }) }).ok, false);
 
