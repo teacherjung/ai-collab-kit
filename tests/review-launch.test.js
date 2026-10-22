@@ -4133,6 +4133,119 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         sh(implWt, 'checkout', '--detach', '-f', wsHead);
         fs.rmSync(implNmLink, { force: true });
       }
+
+      // R3-1：受審提交若追蹤實體 node_modules 目錄且內含工作區套件連結（node_modules/ws -> ../packages/ws），
+      //       純樹內巢狀連結（控制組）應放行並讀到受審控制哨兵；若 packages/ws/escape 巢狀連向樹外，
+      //       無論一般備樹、--run --purge 或 materializeIsolatedGitRepo 皆須在執行模型前拒啟
+      const extEscapeDir = path.join(altTargetDir, 'r3-external-escape');
+      fs.mkdirSync(extEscapeDir, { recursive: true });
+      fs.writeFileSync(path.join(extEscapeDir, 'sentinel.txt'), 'R3_EXTERNAL_ONLY_SENTINEL_7A91\n');
+
+      // 控制組：已追蹤實體 node_modules/ws -> ../packages/ws，且 packages/ws/inner -> ./sub 仍在樹內
+      fs.mkdirSync(path.join(implWt, 'packages', 'ws', 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(implWt, 'packages', 'ws', 'sub', 'sentinel.txt'), 'R3_CONTROL_SENTINEL_7A91\n');
+      fs.symlinkSync('./sub', path.join(implWt, 'packages', 'ws', 'inner'), 'dir');
+      fs.mkdirSync(path.join(implWt, 'node_modules', 'fake-dep'), { recursive: true });
+      fs.copyFileSync(path.join(depDir, 'package.json'), path.join(implWt, 'node_modules', 'fake-dep', 'package.json'));
+      fs.writeFileSync(path.join(implWt, 'node_modules', 'fake-dep', 'index.js'), scanSeedContent);
+      fs.symlinkSync('../packages/ws', path.join(implWt, 'node_modules', 'ws'), 'dir');
+      sh(implWt, 'add', '-f', 'node_modules/fake-dep/package.json', 'node_modules/fake-dep/index.js', 'node_modules/ws', 'packages/ws/sub/sentinel.txt', 'packages/ws/inner');
+      sh(implWt, 'commit', '-q', '-m', 'tracked node_modules with safe workspace internal link');
+      const r3ControlHead = sh(implWt, 'rev-parse', 'HEAD');
+
+      // 反例：在 packages/ws 新增指向樹外目錄的巢狀連結 escape
+      fs.symlinkSync(extEscapeDir, path.join(implWt, 'packages', 'ws', 'escape'), 'dir');
+      sh(implWt, 'add', '-f', 'packages/ws/escape');
+      sh(implWt, 'commit', '-q', '-m', 'tracked node_modules with workspace nested external escape link');
+      const r3EscapeHead = sh(implWt, 'rev-parse', 'HEAD');
+      try {
+        // 1. 控制組驗證
+        sh(implWt, 'checkout', '--detach', '-f', r3ControlHead);
+        const r3ControlIsoDir = path.join(altTargetDir, 'iso-r3-control');
+        materializeIsolatedGitRepo(implWt, r3ControlIsoDir, {
+          rootRepo: r.dir,
+          baseSha: r.base,
+          headSha: r3ControlHead,
+        });
+        assert.equal(
+          fs.readFileSync(path.join(r3ControlIsoDir, 'node_modules', 'ws', 'inner', 'sentinel.txt'), 'utf8'),
+          'R3_CONTROL_SENTINEL_7A91\n',
+          'R3-1 控制組：隔離建樹應成功並讀到樹內控制哨兵',
+        );
+        let r3ControlPosts = 0;
+        const r3ControlRunRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform({ ...wsAns, change: { ...wsAns.change, headSha: r3ControlHead } }),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+          runExec(_cmd, { record }) {
+            for (const targetCwd of [record.tree, record.mutation]) {
+              assert.equal(
+                fs.readFileSync(path.join(targetCwd, 'node_modules', 'ws', 'inner', 'sentinel.txt'), 'utf8'),
+                'R3_CONTROL_SENTINEL_7A91\n',
+                'R3-1 控制組：--run 審查樹與突變副本皆應讀到樹內控制哨兵',
+              );
+            }
+            fs.writeFileSync(
+              record.outFile,
+              `🤖 Beta｜來源：beta CLI｜審 \`${r3ControlHead.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- ok\n\n### 清單逐項結果\n- ok\n未貼\n`,
+            );
+          },
+          runPost() { r3ControlPosts += 1; },
+        });
+        assert.equal(r3ControlRunRes.code, 0, `R3-1 控制組：--run --purge 應退 0：${r3ControlRunRes.lines.join('\n')}`);
+        assert.equal(r3ControlPosts, 1, 'R3-1 控制組：應完成 1 次代貼');
+
+        // 2. 反例驗證：工作區套件內含指向樹外假目錄的巢狀連結時，隔離建樹、一般備樹與 --run 均須拒啟
+        sh(implWt, 'checkout', '--detach', '-f', r3EscapeHead);
+        const r3EscapeIsoDir = path.join(altTargetDir, 'iso-r3-escape');
+        assert.throws(
+          () => materializeIsolatedGitRepo(implWt, r3EscapeIsoDir, {
+            rootRepo: r.dir,
+            baseSha: r.base,
+            headSha: r3EscapeHead,
+          }),
+          /本機套件內含指向工作樹外的連結/u,
+          'R3-1 反例：已追蹤 node_modules 工作區套件含巢狀外部連結時 materializeIsolatedGitRepo 應拋錯拒啟',
+        );
+
+        const r3EscapeAns = {
+          ...wsAns,
+          change: { ...wsAns.change, headSha: r3EscapeHead },
+        };
+        let r3EscapeExecCount = 0;
+        let r3EscapePostCount = 0;
+        const r3PrepRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(r3EscapeAns),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+        });
+        assert.equal(r3PrepRes.code, 2, 'R3-1 反例：一般備樹應退 2 拒啟');
+        assert.match(r3PrepRes.lines.join('\n'), /本機套件內含指向工作樹外的連結/u);
+        assert.ok(!fs.existsSync(reviewFolder), 'R3-1 反例：一般備樹拒啟回滾後不應留下複審容器');
+
+        const r3RunRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+          settings: s,
+          platform: fakePlatform(r3EscapeAns),
+          cwd: implWt,
+          template: TEMPLATE,
+          leftoverRoots: [],
+          runExec() { r3EscapeExecCount += 1; },
+          runPost() { r3EscapePostCount += 1; },
+        });
+        assert.equal(r3RunRes.code, 2, 'R3-1 反例：--run --purge 應在執行模型前退 2 拒啟');
+        assert.match(r3RunRes.lines.join('\n'), /本機套件內含指向工作樹外的連結/u);
+        assert.equal(r3EscapeExecCount, 0, 'R3-1 反例：執行模型次數必須為 0');
+        assert.equal(r3EscapePostCount, 0, 'R3-1 反例：代貼次數必須為 0');
+        assert.ok(!fs.existsSync(reviewFolder), 'R3-1 反例：--run 拒啟回滾後不應留下複審容器');
+      } finally {
+        sh(implWt, 'checkout', '--detach', '-f', wsHead);
+        fs.rmSync(implNmLink, { recursive: true, force: true });
+        fs.rmSync(path.join(implWt, 'packages', 'ws'), { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(altTargetDir, { recursive: true, force: true });
     }

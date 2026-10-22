@@ -1142,7 +1142,8 @@ function validatePreexistingTreeNodeModules(treeDir) {
   } catch {
     throw new LaunchError(`受審工作樹既存的相依套件目錄連結指向工作樹外或管理目錄（${dst} -> ${realDst}），為保受審版本隔離拒絕啟動`);
   }
-  inspectNodeModulesTree(realDst, realTree);
+  const inspected = inspectNodeModulesTree(realDst, realTree);
+  verifyCopiedNodeModulesTree(realDst, inspected, realTree);
   return true;
 }
 
