@@ -4071,6 +4071,68 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       } finally {
         fs.rmSync(implNmLink, { force: true });
       }
+
+      // R2-1：受審提交若已追蹤指向主工作樹的頂層 node_modules 絕對連結（git add -f node_modules），
+      //       無論從實作樹或主工作樹發動一般備樹、--run --purge 或隔離複製皆須退 2 拒啟，執行與代貼皆為 0 次、來源哨兵不變
+      fs.writeFileSync(path.join(implWt, 'packages', 'shared', 'index.js'), 'export const wsValue = "R2_HEAD_VALUE_20261022";\n');
+      fs.symlinkSync(path.join(r.dir, 'node_modules'), implNmLink, 'dir');
+      sh(implWt, 'add', '-f', 'node_modules', 'packages/shared/index.js');
+      sh(implWt, 'commit', '-q', '-m', 'tracked top-level node_modules symlink to main worktree');
+      const trackedNmHead = sh(implWt, 'rev-parse', 'HEAD');
+      try {
+        const trackedNmAns = {
+          ...wsAns,
+          change: { ...wsAns.change, headSha: trackedNmHead },
+        };
+        let trackedExecCount = 0;
+        let trackedPostCount = 0;
+        for (const [cwdLabel, testCwd] of [['從實作樹啟動', implWt], ['從主工作樹啟動', r.dir]]) {
+          const prepTrackedRes = main(['7', '--reviewer', 'Beta', '--dir', dir], {
+            settings: s,
+            platform: fakePlatform(trackedNmAns),
+            cwd: testCwd,
+            template: TEMPLATE,
+            leftoverRoots: [],
+          });
+          assert.equal(prepTrackedRes.code, 2, `R2-1（${cwdLabel}）：受審提交含已追蹤頂層 node_modules 連結時備樹應退 2 拒啟`);
+          assert.match(prepTrackedRes.lines.join('\n'), /工作樹外|管理目錄/u);
+          assert.ok(!fs.existsSync(reviewFolder), `R2-1（${cwdLabel}）：拒啟回滾後不應留下複審容器`);
+
+          const runTrackedRes = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+            settings: s,
+            platform: fakePlatform(trackedNmAns),
+            cwd: testCwd,
+            template: TEMPLATE,
+            leftoverRoots: [],
+            runExec(_cmd, { record }) {
+              trackedExecCount += 1;
+              fs.writeFileSync(
+                path.join(record.mutation, 'node_modules', 'fake-dep', 'index.js'),
+                'export const depValue = "CORRUPTED_MAIN_SOURCE";\n',
+              );
+            },
+            runPost() { trackedPostCount += 1; },
+          });
+          assert.equal(runTrackedRes.code, 2, `R2-1（${cwdLabel}）：--run --purge 應退 2 拒啟`);
+          assert.equal(trackedExecCount, 0, `R2-1（${cwdLabel}）：拒啟時執行次數必須為 0`);
+          assert.equal(trackedPostCount, 0, `R2-1（${cwdLabel}）：拒啟時代貼次數必須為 0`);
+          assert.equal(fs.readFileSync(path.join(depDir, 'index.js'), 'utf8'), scanSeedContent, `R2-1（${cwdLabel}）：主工作樹相依哨兵必須完好`);
+          assert.ok(!fs.existsSync(reviewFolder), `R2-1（${cwdLabel}）：--run 拒啟回滾後不應留下複審容器`);
+        }
+
+        assert.throws(
+          () => materializeIsolatedGitRepo(implWt, path.join(altTargetDir, 'iso-tracked-nm'), {
+            rootRepo: r.dir,
+            baseSha: r.base,
+            headSha: trackedNmHead,
+          }),
+          /工作樹外|管理目錄/u,
+          'R2-1：受審提交含已追蹤頂層 node_modules 連結時 materializeIsolatedGitRepo 應拒絕複製',
+        );
+      } finally {
+        sh(implWt, 'checkout', '--detach', '-f', wsHead);
+        fs.rmSync(implNmLink, { force: true });
+      }
     } finally {
       fs.rmSync(altTargetDir, { recursive: true, force: true });
     }

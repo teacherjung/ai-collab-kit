@@ -746,6 +746,12 @@ function traceSymlinkInSource(startDirReal, entryName, sourceDir, sourceWorktree
 
 function isRegisteredMainWorktreeNodeModulesLink(linkPath, realWt, mainWt, realMainWt) {
   if (!mainWt || !realMainWt || realWt === realMainWt) return false;
+  if (
+    gitOk(realWt, ['ls-files', '--error-unmatch', '--', 'node_modules'])
+    || gitOk(realWt, ['cat-file', '-e', 'HEAD:node_modules'])
+  ) {
+    return false;
+  }
   try {
     const lst = fs.lstatSync(linkPath);
     if (!lst.isSymbolicLink()) return false;
@@ -1104,7 +1110,49 @@ function cloneNodeModulesForTree(source, targetTree, storeDir, inspected) {
   verifyCopiedNodeModulesTree(storeDir, inspected, realTree);
 }
 
+function validatePreexistingTreeNodeModules(treeDir) {
+  const dst = path.join(treeDir, 'node_modules');
+  let lst;
+  try {
+    lst = fs.lstatSync(dst);
+  } catch (e) {
+    if (!e || e.code === 'ENOENT') return false;
+    throw e;
+  }
+  if (!lst) return false;
+  let realTree;
+  let realDst;
+  try {
+    realTree = nativeRealpath(treeDir);
+    realDst = nativeRealpath(dst);
+  } catch (e) {
+    throw new LaunchError(`受審工作樹既存的相依套件目錄連結無效（${dst}）：${(e && e.message) || '讀不到目標'}，為保受審版本隔離拒絕啟動`);
+  }
+  if (
+    !fs.statSync(realDst).isDirectory()
+    || !isInsideDir(realDst, realTree)
+    || realDst === realTree
+    || isInsideDir(realTree, realDst)
+    || isGitManagementPath(realDst, realTree)
+  ) {
+    throw new LaunchError(`受審工作樹既存的相依套件目錄連結指向工作樹外或管理目錄（${dst} -> ${realDst}），為保受審版本隔離拒絕啟動`);
+  }
+  try {
+    resolveKernelPathInBoundary(realTree, 'node_modules', realTree, { dotGitPath: path.join(realTree, '.git') });
+  } catch {
+    throw new LaunchError(`受審工作樹既存的相依套件目錄連結指向工作樹外或管理目錄（${dst} -> ${realDst}），為保受審版本隔離拒絕啟動`);
+  }
+  inspectNodeModulesTree(realDst, realTree);
+  return true;
+}
+
 function linkNodeModules(root, folder, trees, rec = null) {
+  const preexisting = new Set();
+  for (const t of trees) {
+    if (validatePreexistingTreeNodeModules(t)) {
+      preexisting.add(t);
+    }
+  }
   const source = findNodeModulesSource(root);
   if (!source) return null;
   const inspected = inspectNodeModulesTree(source.sourceDir, source.worktreeDir);
@@ -1116,13 +1164,8 @@ function linkNodeModules(root, folder, trees, rec = null) {
     }
   }
   for (const t of trees) {
+    if (preexisting.has(t)) continue;
     const dst = path.join(t, 'node_modules');
-    try {
-      fs.lstatSync(dst);
-      continue;
-    } catch (e) {
-      if (!e || e.code !== 'ENOENT') throw e;
-    }
     const storeDir = path.join(folder, 'deps', path.basename(t), 'node_modules');
     cloneNodeModulesForTree(source, t, storeDir, inspected);
     fs.symlinkSync(storeDir, dst, 'dir');
@@ -2990,6 +3033,7 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
     }
   }
 
+  const dstPreexisting = validatePreexistingTreeNodeModules(destTree);
   const nodeModulesSrc = path.join(srcTree, 'node_modules');
   let srcNmStat = null;
   try {
@@ -2997,7 +3041,7 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   } catch (e) {
     if (!e || e.code !== 'ENOENT') throw e;
   }
-  if (srcNmStat) {
+  if (!dstPreexisting && srcNmStat) {
     let realNodeModulesSrc;
     try {
       realNodeModulesSrc = nativeRealpath(nodeModulesSrc);
