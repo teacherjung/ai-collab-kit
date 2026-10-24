@@ -1324,13 +1324,29 @@ function parseGrokStrictNDJSON(text, kindLabel) {
 
     if (foundResult) return { error: `${kindLabel}多 result 或尾隨事件` };
 
-    if (event.type === 'system' && event.subtype === 'init') {
-      if (initFound) return { error: `${kindLabel}多 system.init` };
-      const sid = typeof event.session_id === 'string' ? event.session_id.trim() : '';
-      if (!sid) return { error: `${kindLabel}缺 session_id` };
-      sessionId = sid;
-      initFound = true;
-      continue;
+    if (event.type === 'system') {
+      if (event.subtype === 'init') {
+        if (initFound) return { error: `${kindLabel}多 system.init` };
+        const sid = typeof event.session_id === 'string' ? event.session_id.trim() : '';
+        if (!sid) return { error: `${kindLabel}缺 session_id` };
+        sessionId = sid;
+        initFound = true;
+        continue;
+      }
+      if (event.subtype === 'compact_boundary') {
+        if (!initFound) return { error: `${kindLabel}尚未初始化` };
+        if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 compact_boundary` };
+        if (event.session_id !== sessionId) return { error: `${kindLabel}錯 session` };
+        if (typeof event.uuid !== 'string' || !event.uuid) return { error: `${kindLabel}compact_boundary 缺 uuid` };
+        const cm = event.compact_metadata;
+        if (!cm || Array.isArray(cm) || typeof cm !== 'object') return { error: `${kindLabel}compact_boundary 缺 compact_metadata` };
+        if (cm.trigger !== 'auto') return { error: `${kindLabel}compact_metadata.trigger 必須為 auto` };
+        if (typeof cm.pre_tokens !== 'number' || !Number.isInteger(cm.pre_tokens) || cm.pre_tokens < 0) {
+          return { error: `${kindLabel}compact_metadata.pre_tokens 必須為數字 (u64)` };
+        }
+        continue;
+      }
+      return { error: `${kindLabel}應拒絕未知的 system subtype` };
     }
 
     if (!initFound) return { error: `${kindLabel}缺 system.init` };
@@ -3236,6 +3252,23 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   return targetHead;
 }
 
+async function findActiveNeedles(needles, filePath) {
+  if (!needles.length) return [];
+  const found = new Set();
+  const maxNeedleLen = Math.max(...needles.map((n) => n.length));
+  const carryLen = maxNeedleLen > 1 ? maxNeedleLen - 1 : 0;
+  let carry = '';
+  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+  for await (const chunk of stream) {
+    const combined = carry + chunk;
+    for (const n of needles) {
+      if (combined.includes(n)) found.add(n);
+    }
+    carry = carryLen ? combined.slice(-carryLen) : '';
+  }
+  return needles.filter((n) => !found.has(n));
+}
+
 async function runGrokExec(argv, deps = {}) {
   const parsed = parseGrokExecArgs(argv);
   if (parsed.error) return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${parsed.error}——拒絕啟動。`] };
@@ -3329,11 +3362,6 @@ async function runGrokExec(argv, deps = {}) {
       if (currentCwdHead !== recMeta.head) {
         return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描樹 HEAD 與 scan.json 不符——拒絕啟動。'] };
       }
-      const rDiff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', `${recMeta.base}...${recMeta.head}`], { cwd: rootRepo, env: gitEnv(), encoding: 'utf8' });
-      if (rDiff.error || rDiff.status !== 0) {
-        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式產生差異失敗——拒絕啟動。'] };
-      }
-      promptText += `\n\n=== 掃描材料 (git diff ${recMeta.base}...${recMeta.head}) ===\n${rDiff.stdout}`;
     }
 
     const promptShas = [...promptText.matchAll(/\bdiff\s+([0-9a-fA-F]{7,40})\.\.([0-9a-fA-F]{7,40})\b/gu)]
@@ -3404,9 +3432,33 @@ async function runGrokExec(argv, deps = {}) {
     const boxPromptFile = path.join(boxDir, 'prompt.md');
     fs.writeFileSync(boxPromptFile, promptText);
 
+    if (parsed.mode === 'scan') {
+      const diffHeader = `\n\n=== 掃描材料 (git diff ${recMeta.base}...${recMeta.head}) ===\n`;
+      fs.appendFileSync(boxPromptFile, diffHeader);
+      const diffFd = fs.openSync(boxPromptFile, 'a');
+      try {
+        await new Promise((resolve, reject) => {
+          const gitDiff = spawn('git', ['diff', '--no-ext-diff', '--no-textconv', `${recMeta.base}...${recMeta.head}`], {
+            cwd: recMeta.root,
+            env: gitEnv(),
+            stdio: ['ignore', diffFd, 'ignore'],
+          });
+          gitDiff.on('error', reject);
+          gitDiff.on('close', (code, signal) => {
+            if (code === 0) resolve();
+            else reject(new Error(`git diff 退 ${code || signal}`));
+          });
+        });
+      } catch (e) {
+        return { code: 2, lines: [`送審產生器（Grok 隔離執行）：掃描模式產生差異失敗（${e.message}）——拒絕啟動。`] };
+      } finally {
+        fs.closeSync(diffFd);
+      }
+    }
+
     const instruction = parsed.mode === 'scan'
-      ? `以下是掃描提示（材料由外部提供，已附加於文件末尾；請僅使用提供之工具進行檢查，絕不可嘗試執行終端或測試指令），請直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）：\n\n${promptText}`
-      : `以下是送審提示（亦存於 ${boxPromptFile}），請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）：\n\n${promptText}`;
+      ? `先使用 read_file 讀取盒內絕對路徑提示檔 ${boxPromptFile}，可分段直到讀完，並依該提示內容與附加之 git diff 材料工作。請僅使用提供之工具進行檢查，絕不可嘗試執行終端或測試指令。直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）。`
+      : `先使用 read_file 讀取盒內絕對路徑提示檔 ${boxPromptFile}，可分段直到讀完，並依該提示內容工作。請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）。`;
 
     const grokArgs = [
       '--sandbox', 'off',
@@ -3491,7 +3543,7 @@ async function runGrokExec(argv, deps = {}) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹或 .git 狀態被改動（違反唯讀邊界）——已拒絕寫出結果。'] };
     }
     const rawOutput = String(runResult.stdout || '');
-    const activeNeedles = authInfo.needles.filter((n) => n && !promptText.includes(n));
+    const activeNeedles = await findActiveNeedles(authInfo.needles, boxPromptFile);
     if (activeNeedles.some((n) => rawOutput.includes(n))) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
     }

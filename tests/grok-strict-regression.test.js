@@ -186,12 +186,12 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
   await t.test('14: content block text 非 string 應拒絕', () => {
     const badContent = {
       ...validAssistant,
-      message: { 
-        ...validAssistant.message, 
+      message: {
+        ...validAssistant.message,
         content: [
           { type: 'text', text: 'FINAL' },
-          { type: 'text', text: 123 } 
-        ] 
+          { type: 'text', text: 123 }
+        ]
       }
     };
     const raw = [
@@ -272,5 +272,221 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     assert.throws(() => prepareScan(raw, opts), (err) => {
       return err instanceof LaunchError && err.message.includes('複審結論記號');
     }, '正文含 🤖 應拋出含“複審結論記號”的 LaunchError');
+  });
+
+  await t.test('22: Grok system.compact_boundary 正常成功', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.equal(unwrapScanOutput(raw), 'FINAL');
+  });
+
+  await t.test('23: compact_boundary 錯 session_id 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: 'wrong',
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_boundary session_id 必須匹配');
+  });
+
+  await t.test('24: compact_boundary 缺 compact_metadata 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1'
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_boundary 必須含 compact_metadata');
+  });
+
+  await t.test('25: compact_boundary trigger 非 auto 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'manual', pre_tokens: 100 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_metadata.trigger 必須為 auto');
+  });
+
+  await t.test('26: compact_boundary pre_tokens 非數字應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: '100' }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_metadata.pre_tokens 必須為數字 (u64)');
+  });
+
+  await t.test('26a: compact_boundary pre_tokens 為負數應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: -1 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'pre_tokens 不可為負數');
+  });
+
+  await t.test('26b: compact_boundary pre_tokens 為小數應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 1.5 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'pre_tokens 必須為整數');
+  });
+
+  await t.test('26c: compact_boundary 缺 pre_tokens 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto' }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_metadata 必須含 pre_tokens');
+  });
+
+  await t.test('27: compact_boundary 在 end_turn 後出現應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify(validAssistant),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'end_turn 後不可出現 compact_boundary');
+  });
+
+  await t.test('28: compact_boundary 在 result 後出現應拒絕', () => {
+    const raw = [
+      validFrames[0],
+      validFrames[1],
+      validFrames[2],
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      })
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'result 後不可追加任何 system 幀');
+  });
+
+  await t.test('29: 未知 system subtype 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'unknown_future_feature', session_id: sid }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, '應拒絕未知的 system subtype');
+  });
+
+  await t.test('30: compact_boundary 缺 uuid 應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_boundary 必須含 uuid');
+  });
+
+  await t.test('30a: compact_boundary uuid 為空字串應拒絕', () => {
+    const raw = [
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: '',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_boundary uuid 不可為空');
+  });
+
+  await t.test('31: init 前出現 compact_boundary 應拒絕', () => {
+    const raw = [
+      JSON.stringify({
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: sid,
+        uuid: 'u1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 100 }
+      }),
+      validFrames[0],
+      validFrames[1],
+      validFrames[2]
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, '尚未初始化');
   });
 });

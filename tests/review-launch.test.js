@@ -1701,7 +1701,7 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     const expiredAuth = {
       [entryKey]: {
         auth_mode: 'oidc',
-        user_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        user_id: '10000000-0000-4000-8000-000000000001',
         create_time: '2026-10-19T00:00:00.000Z',
         expires_at: '2026-10-19T00:10:00.000Z',
         oidc_issuer: GROK_PINNED_ISSUER,
@@ -1771,7 +1771,9 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
       spawnGrok: async ({ boxWorktree, boxMutation, boxPromptFile, grokArgs }) => {
         const pTxt = fs.readFileSync(boxPromptFile, 'utf8');
         assert.ok(pTxt.includes(boxWorktree) && pTxt.includes(boxMutation), '提示檔內審查樹與突變副本路徑皆已改寫為盒內路徑');
-        assert.ok(grokArgs.at(-1).includes(pTxt), '-p 指令直接帶入完整提示全文，避免跨目錄讀檔卡住');
+        assert.ok(grokArgs.at(-1).includes(boxPromptFile), '指令含 boxPromptFile');
+        assert.ok(!grokArgs.at(-1).includes(pTxt), '未 inline 全文');
+        assert.ok(pTxt.includes('審查樹：') && pTxt.includes(boxWorktree), '實檔包含原提示且 rewrite paths 正確');
         const leak = spawnSync('git', ['-C', boxWorktree, 'show', `${unrelatedSha}:private-branch.txt`], { env: gitEnv(), encoding: 'utf8' });
         assert.notEqual(leak.status, 0, '盒內工作樹不可含未送審本機分支物件');
         const prevDiff = sh(boxWorktree, 'diff', `${prevRoundSha}..${r.head}`);
@@ -2334,16 +2336,44 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
     const sessId = "10000000-0000-4000-8000-000000000001";
     const initEvent = {type:"system",subtype:"init",session_id:sessId,tools:["read_file","search_tool","use_tool"],permissionMode:"default"};
 
-    await t.test('1: 保存提示檔不被修改 且 注入完整未 trim 差異', async () => {
+    await t.test('1: 保存提示檔不被修改 且 注入完整未 trim 差異 (含 compact_boundary)', async () => {
       const scanText = '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
       const successStream = [
-        JSON.stringify({type:"system",subtype:"init",session_id:sessId}),
-        JSON.stringify({type:"assistant",session_id:sessId,parent_tool_use_id:null,message:{role:"assistant",stop_reason:"end_turn",content:[{type:"text",text:scanText}]}}),
-        JSON.stringify({type:"result",subtype:"success",is_error:false,stop_reason:"end_turn",session_id:sessId,result:scanText})
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: sessId }),
+        JSON.stringify({
+          type: 'system',
+          subtype: 'compact_boundary',
+          session_id: sessId,
+          uuid: '10000000-0000-4000-8000-000000000002',
+          compact_metadata: { trigger: 'auto', pre_tokens: 100 },
+        }),
+        JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanText }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: scanText }),
       ];
-      await runStream(successStream, 'scan', 0);
+      const exactRaw = successStream.join('\n') + '\n';
+      await runStream(successStream, 'scan', 0, exactRaw);
       assert.equal(fs.readFileSync(promptFile, 'utf8'), originalPrompt, '外部提示檔絕不可被修改');
       assert.ok(capturedBoxPromptContent.includes(untrimmedDiff), '注入材料必須是未經 trim 的完整 stdout');
+
+      // 錯 session
+      const wrongSessionStream = [
+        successStream[0],
+        JSON.stringify({ ...JSON.parse(successStream[1]), session_id: 'WRONG' }),
+        successStream[2],
+        successStream[3],
+      ];
+      const resSession = await runStream(wrongSessionStream, 'scan', 2);
+      assert.match(resSession.res.lines.join('\n'), /錯 session/);
+
+      // 無效 metadata
+      const badMetaStream = [
+        successStream[0],
+        JSON.stringify({ ...JSON.parse(successStream[1]), compact_metadata: { trigger: 'manual' } }),
+        successStream[2],
+        successStream[3],
+      ];
+      const resMeta = await runStream(badMetaStream, 'scan', 2);
+      assert.match(resMeta.res.lines.join('\n'), /compact_metadata.trigger 必須為 auto/);
     });
 
     await t.test('2: 缺少 scan.json 時（即使有 launch.json）應拒絕且不啟動 Grok', async () => {
@@ -2436,6 +2466,36 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       assert.ok(!resScan.capturedArgs.includes('Bash(*)'), 'scan 不應有 Bash allow');
       assert.ok(!resScan.capturedArgs.includes('Edit(*)'), 'scan 不應有 Edit allow');
       assert.ok(!resScan.capturedArgs.includes('Write(*)'), 'scan 不應有 Write allow');
+    });
+
+    await t.test('DLP: 跨 chunk UTF8 與 ASCII 釘值不誤拒 (bounded carry 驗證)', async () => {
+      const entryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
+      const originalAuth = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+      const marker = '機密😀標記';
+      const newAuth = { ...originalAuth };
+      newAuth[entryKey] = { ...newAuth[entryKey], private_marker: marker };
+      fs.writeFileSync(authFile, JSON.stringify(newAuth));
+
+      try {
+        const getStream = (text) => [
+          JSON.stringify({ type: 'system', subtype: 'init', session_id: sessId }),
+          JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: text }] } }),
+          JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: text }),
+        ];
+
+        // 1. UTF8 跨 64KiB (x.repeat(65534) + marker)
+        fs.writeFileSync(promptFile, 'x'.repeat(65534) + marker);
+        const markerText = `🔍 Grok｜結論：通過\n${marker}\n`;
+        await runStream(getStream(markerText), 'scan', 0);
+
+        // 2. ASCII 跨 64KiB (x.repeat(65532) + VALID-KEY-111)
+        fs.writeFileSync(promptFile, 'x'.repeat(65532) + 'VALID-KEY-111');
+        const keyText = `🔍 Grok｜結論：通過\nVALID-KEY-111\n`;
+        await runStream(getStream(keyText), 'scan', 0);
+      } finally {
+        fs.writeFileSync(authFile, JSON.stringify(originalAuth));
+        fs.writeFileSync(promptFile, originalPrompt);
+      }
     });
 
     await t.test('3: Root 前進但 CWD 固定舊版 應成功且材料不變', async () => {
@@ -4316,7 +4376,7 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
         JSON.stringify({
           [r4EntryKey]: {
             auth_mode: 'oidc',
-            user_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+            user_id: '10000000-0000-4000-8000-000000000001',
             create_time: '2026-10-19T00:00:00.000Z',
             expires_at: '2026-10-19T02:00:00.000Z',
             oidc_issuer: GROK_PINNED_ISSUER,
@@ -4696,5 +4756,172 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
   } finally {
     spawnSync('git', ['worktree', 'prune'], { cwd: r.dir, env: gitEnv() });
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('⑬ runGrokExec 資源限制回歸 (R2)：1MiB 緩衝區與 OS argv 容量上限', async (t) => {
+  const { runGrokExec, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID } = require('../tools/review-launch.js');
+  const created = [];
+  const tmp = (prefix) => {
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+    created.push(d);
+    return d;
+  };
+  const r = repo();
+
+  try {
+    const rootTmp = tmp('ack-grok-r2-');
+    const authFile = path.join(rootTmp, 'auth.json');
+    const entryKey = `${GROK_PINNED_ISSUER}::${GROK_PINNED_CLIENT_ID}`;
+    const auth = {
+      [entryKey]: {
+        auth_mode: 'oidc',
+        user_id: '10000000-0000-4000-8000-000000000001',
+        create_time: '2026-10-19T00:00:00.000Z',
+        expires_at: '2026-10-19T00:10:00.000Z',
+        oidc_issuer: GROK_PINNED_ISSUER,
+        oidc_client_id: GROK_PINNED_CLIENT_ID,
+        key: 'VALID-KEY-111',
+        refresh_token: 'REFRESH-222',
+      },
+    };
+    fs.writeFileSync(authFile, JSON.stringify(auth), { mode: 0o600 });
+    const authOpts = {
+      now: () => new Date('2026-10-19T00:01:00Z').getTime(),
+      earlySecs: 0,
+      fetchImpl: () => { throw 'NO REAL REFRESH'; },
+    };
+    const sessId = 's-r2';
+    const initEvent = { type: 'system', subtype: 'init', session_id: sessId };
+
+    await t.test('1: diff > 1MiB 應成功執行 (R2 已解除 1MiB 限制)', async () => {
+      const subRepoDir = path.join(tmp('r2-repo-large-'), 'repo');
+      fs.mkdirSync(subRepoDir, { recursive: true });
+      sh(subRepoDir, 'init', '-q');
+      sh(subRepoDir, 'config', 'user.name', 'test');
+      sh(subRepoDir, 'config', 'user.email', 'test@example.com');
+      fs.writeFileSync(path.join(subRepoDir, 'f.txt'), 'base');
+      sh(subRepoDir, 'add', 'f.txt');
+      sh(subRepoDir, 'commit', '-qm', 'base');
+      const base = sh(subRepoDir, 'rev-parse', 'HEAD');
+
+      // 產生超過 1MiB 的差異
+      const largeContent = 'x'.repeat(1024 * 1024 + 1024);
+      fs.writeFileSync(path.join(subRepoDir, 'f.txt'), largeContent);
+      sh(subRepoDir, 'add', 'f.txt');
+      sh(subRepoDir, 'commit', '-qm', 'large');
+      const head = sh(subRepoDir, 'rev-parse', 'HEAD');
+
+      const metaDir = tmp('r2-meta-large-');
+      const scanJson = path.join(metaDir, 'scan.json');
+      fs.writeFileSync(scanJson, JSON.stringify({ root: subRepoDir, base, head }));
+
+      const promptFile = path.join(metaDir, 'prompt.md');
+      const rawPrompt = 'scan this';
+      fs.writeFileSync(promptFile, rawPrompt);
+      const outFile = path.join(metaDir, 'out.md');
+
+      const args = ['--mode', 'scan', '--cwd', subRepoDir, '--prompt-file', promptFile, '--out', outFile, '--model', 'grok-4.7', '--reasoning-effort', 'xhigh'];
+
+      const scanText = '🔍 Grok｜R2 LARGE DIFF OK';
+      const successStream = [
+        JSON.stringify(initEvent),
+        JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanText }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: scanText }),
+      ];
+
+      let spawnCalled = false;
+      const res = await runGrokExec(args, {
+        authFile,
+        authOpts,
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async ({ boxPromptFile, grokArgs }) => {
+          spawnCalled = true;
+          const prompt = fs.readFileSync(boxPromptFile);
+          // 使用 8MiB buffer 取得預期差異
+          const expectedDiff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', `${base}...${head}`], { cwd: subRepoDir, env: gitEnv(), maxBuffer: 8 * 1024 * 1024 }).stdout;
+          assert.deepEqual(prompt.slice(-expectedDiff.length), expectedDiff, '隔離提示檔應包含完整大差異位元組');
+          assert.ok(prompt.includes(Buffer.from(rawPrompt)), '應包含原 prompt');
+
+          assert.ok(grokArgs.at(-1).includes(boxPromptFile), '最後一個參數應為提示檔路徑');
+          assert.ok(grokArgs.join(' ').length < 4096, '指令長度應受控 (R2)');
+
+          const actualOSspawn = spawnSync(process.execPath, ['-e', 'process.exit(0)', '--', ...grokArgs], { env: gitEnv() });
+          assert.equal(actualOSspawn.status, 0);
+          return { status: 0, stdout: successStream.join('\n') + '\n', stderr: '' };
+        },
+      });
+      assert.equal(res.code, 0, '應成功執行 (舊碼因 1MiB 限制會退 2)');
+      assert.ok(spawnCalled, 'spawnGrok 應被呼叫');
+    });
+
+    await t.test('2: 超大 prompt/diff 導致 argv 接近 OS 上限 (R2 應正常執行)', async () => {
+      const subRepoDir = path.join(tmp('r2-repo-e2big-'), 'repo');
+      fs.mkdirSync(subRepoDir, { recursive: true });
+      sh(subRepoDir, 'init', '-q');
+      sh(subRepoDir, 'config', 'user.name', 'test');
+      sh(subRepoDir, 'config', 'user.email', 'test@example.com');
+      fs.writeFileSync(path.join(subRepoDir, 'f.txt'), 'base');
+      sh(subRepoDir, 'add', 'f.txt');
+      sh(subRepoDir, 'commit', '-qm', 'base');
+      const base = sh(subRepoDir, 'rev-parse', 'HEAD');
+
+      // 約 1MB 的 diff
+      const largeContent = 'y'.repeat(1040000);
+      fs.writeFileSync(path.join(subRepoDir, 'f.txt'), largeContent);
+      sh(subRepoDir, 'add', 'f.txt');
+      sh(subRepoDir, 'commit', '-qm', 'large');
+      const head = sh(subRepoDir, 'rev-parse', 'HEAD');
+
+      const metaDir = tmp('r2-meta-e2big-');
+      const scanJson = path.join(metaDir, 'scan.json');
+      fs.writeFileSync(scanJson, JSON.stringify({ root: subRepoDir, base, head }));
+
+      // 約 10KB 的 prompt
+      const promptFile = path.join(metaDir, 'prompt.md');
+      const rawPrompt = 'z'.repeat(10000);
+      fs.writeFileSync(promptFile, rawPrompt);
+      const outFile = path.join(metaDir, 'out.md');
+
+      const args = ['--mode', 'scan', '--cwd', subRepoDir, '--prompt-file', promptFile, '--out', outFile, '--model', 'grok-4.7', '--reasoning-effort', 'xhigh'];
+
+      const scanText = '🔍 Grok｜R2 E2BIG OK';
+      const successStream = [
+        JSON.stringify(initEvent),
+        JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanText }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: scanText }),
+      ];
+
+      let spawnCalled = false;
+      const res = await runGrokExec(args, {
+        authFile,
+        authOpts,
+        probeFn: () => ({ ok: true }),
+        spawnGrok: async ({ boxPromptFile, grokArgs }) => {
+          spawnCalled = true;
+          const prompt = fs.readFileSync(boxPromptFile);
+          const expectedDiff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', `${base}...${head}`], { cwd: subRepoDir, env: gitEnv(), maxBuffer: 8 * 1024 * 1024 }).stdout;
+          assert.deepEqual(prompt.slice(-expectedDiff.length), expectedDiff, '隔離提示檔應包含完整大差異位元組');
+          assert.ok(prompt.includes(Buffer.from(rawPrompt)), '應包含原 prompt');
+
+          assert.ok(grokArgs.at(-1).includes(boxPromptFile), '最後一個參數應為提示檔路徑');
+          assert.ok(grokArgs.join(' ').length < 4096, '指令長度應受控 (R2)');
+
+          // 實際執行 spawnSync 驗證 OS argv 限制
+          const actualOSspawn = spawnSync(process.execPath, ['-e', 'process.exit(0)', '--', ...grokArgs], { env: gitEnv() });
+          if (actualOSspawn.error && actualOSspawn.error.code === 'E2BIG') throw actualOSspawn.error;
+          assert.equal(actualOSspawn.status, 0);
+
+          return { status: 0, stdout: successStream.join('\n') + '\n', stderr: '' };
+        },
+      });
+      assert.equal(res.code, 0, '應成功執行 (舊碼因 argv 太長可能觸發 E2BIG 退 2)');
+      assert.ok(spawnCalled, 'spawnGrok 應被呼叫');
+    });
+  } finally {
+    for (const d of created) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {}
+    }
+    try { fs.rmSync(r.dir, { recursive: true, force: true }); } catch (e) {}
   }
 });
