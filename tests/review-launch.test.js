@@ -2416,12 +2416,15 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       assert.ok(resScan.capturedArgs.includes('streaming-messages-json'), '必須使用 streaming-messages-json 格式');
 
       // 檢查工具限制 (精確匹配)
-      const joinedArgs = resScan.capturedArgs.join(' ');
-      assert.match(joinedArgs, /--tools read_file,grep,list_dir/u, 'scan 應精確限制工具');
-      assert.match(joinedArgs, /--disallowed-tools search_tool,use_tool/u, 'scan 應該排除動態工具');
-      assert.ok(!joinedArgs.includes('Bash(*)'), 'scan 不應有 Bash allow');
-      assert.ok(!joinedArgs.includes('Edit(*)'), 'scan 不應有 Edit allow');
-      assert.ok(!joinedArgs.includes('Write(*)'), 'scan 不應有 Write allow');
+      const toolsIdx = resScan.capturedArgs.indexOf('--tools');
+      assert.equal(resScan.capturedArgs.filter(a => a === '--tools').length, 1, '--tools 應只出現 1 次');
+      assert.equal(resScan.capturedArgs[toolsIdx + 1], 'read_file,grep,list_dir', 'tools 值應精確相等');
+      const disallowedIdx = resScan.capturedArgs.indexOf('--disallowed-tools');
+      assert.equal(resScan.capturedArgs.filter(a => a === '--disallowed-tools').length, 1, '--disallowed-tools 應只出現 1 次');
+      assert.equal(resScan.capturedArgs[disallowedIdx + 1], 'search_tool,use_tool', 'disallowed-tools 值應精確相等');
+      assert.ok(!resScan.capturedArgs.includes('Bash(*)'), 'scan 不應有 Bash allow');
+      assert.ok(!resScan.capturedArgs.includes('Edit(*)'), 'scan 不應有 Edit allow');
+      assert.ok(!resScan.capturedArgs.includes('Write(*)'), 'scan 不應有 Write allow');
     });
 
     await t.test('3: Root 前進但 CWD 固定舊版 應成功且材料不變', async () => {
@@ -4684,4 +4687,3 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     for (const d of [dir, r.dir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
-

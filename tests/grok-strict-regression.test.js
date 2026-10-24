@@ -132,17 +132,17 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     assert.equal(unwrapScanOutput(claudeNDJSON), 'CLAUDE-NDJSON');
   });
 
-  await t.test('10: Grok 來源缺 stop_reason 拒貼', () => {
+  await t.test('10: Grok 來源帶 forceGrok 強制核驗（缺 stop_reason 應拒絕）', () => {
     const head = '1234567890abcdef1234567890abcdef12345678';
     const scanBody = '🔍 Beta｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
     const validStream = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10', model: 'grok-4.7' }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10' }),
       JSON.stringify({ type: 'assistant', session_id: 's10', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanBody }] } }),
       JSON.stringify({ type: 'result', session_id: 's10', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: scanBody })
     ].join('\n');
 
     const { prepareScan } = require('../tools/review-launch.js');
-    const opts = { scanner: 'Beta', source: 'Grok CLI', head: head, usable: ['Beta'] };
+    const opts = { scanner: 'Beta', source: 'Grok CLI', head: head, usable: ['Beta'], forceGrok: true };
 
     // 先驗證完整版成功
     const ok = prepareScan(validStream, opts);
@@ -150,7 +150,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
     // 移除 result.stop_reason 後應拒絕
     const missingStopReason = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10', model: 'grok-4.7' }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10' }),
       JSON.stringify({ type: 'assistant', session_id: 's10', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanBody }] } }),
       JSON.stringify({ type: 'result', session_id: 's10', subtype: 'success', is_error: false, result: scanBody })
     ].join('\n');
@@ -200,5 +200,41 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
       validFrames[2]
     ].join('\n');
     assert.throws(() => unwrapScanOutput(raw), LaunchError, '正文內容塊中若有非字串 text 應拒絕');
+  });
+
+  await t.test('15: assistant text 與 result.result 不一致', () => {
+    const diffResult = { ...validResult, result: 'DIFFERENT' };
+    const raw = [
+      validFrames[0],
+      validFrames[1],
+      JSON.stringify(diffResult)
+    ].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'assistant 累積正文必須與 result.result 完全一致');
+  });
+
+  await t.test('16: 重複 result 幀', () => {
+    const raw = [...validFrames, validFrames[2]].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, '不可出現重複的 result 幀');
+  });
+
+  await t.test('17: result 後尾隨 user 幀', () => {
+    const trailingUser = {
+      type: 'user',
+      session_id: sid,
+      message: { content: [{ type: 'text', text: 'next' }] }
+    };
+    const raw = [...validFrames, JSON.stringify(trailingUser)].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'result 幀後不可有任何追加內容');
+  });
+
+  await t.test('18: 缺最後 result 幀', () => {
+    const raw = validFrames.slice(0, 2).join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'NDJSON 流必須以成功的 result 幀結尾');
+  });
+
+  await t.test('19: 未知 event type 應拒絕', () => {
+    const unknownFrame = { type: 'unknown_event', session_id: sid };
+    const raw = [validFrames[0], JSON.stringify(unknownFrame), validFrames[1], validFrames[2]].join('\n');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, '應拒絕未知的事件類型');
   });
 });
