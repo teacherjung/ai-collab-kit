@@ -24,7 +24,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     result: 'FINAL'
   };
   const validFrames = [
-    JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
     JSON.stringify(validAssistant),
     JSON.stringify(validResult)
   ];
@@ -35,7 +35,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('1: 空格 JSON 且 cancelled', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }).replaceAll(':', ': '),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }).replaceAll(':', ': '),
       JSON.stringify(validAssistant).replaceAll(':', ': '),
       JSON.stringify({ ...validResult, stop_reason: 'cancelled' }).replaceAll(':', ': ')
     ].join('\n');
@@ -136,7 +136,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     const head = '1234567890abcdef1234567890abcdef12345678';
     const scanBody = '🔍 Beta｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
     const validStream = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10' }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10', model: 'unknown-engine' }),
       JSON.stringify({ type: 'assistant', session_id: 's10', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanBody }] } }),
       JSON.stringify({ type: 'result', session_id: 's10', subtype: 'success', is_error: false, stop_reason: 'end_turn', result: scanBody })
     ].join('\n');
@@ -150,7 +150,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
     // 移除 result.stop_reason 後應拒絕
     const missingStopReason = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10' }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: 's10', model: 'unknown-engine' }),
       JSON.stringify({ type: 'assistant', session_id: 's10', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanBody }] } }),
       JSON.stringify({ type: 'result', session_id: 's10', subtype: 'success', is_error: false, result: scanBody })
     ].join('\n');
@@ -244,7 +244,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     const head = '1234567890abcdef1234567890abcdef12345678';
     const scanBody = '🔍 Beta｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({ type: 'assistant', session_id: sid, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'text', text: 'Thinking...' }, { type: 'tool_use', id: 'call_1', name: 'grep', input: { pattern: '🤖' } }] } }),
       JSON.stringify({ type: 'user', session_id: sid, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'found 🤖 in source' }] } }),
       JSON.stringify({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: scanBody }] } }),
@@ -263,7 +263,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     const head = '1234567890abcdef1234567890abcdef12345678';
     const badBody = '🔍 Beta｜來源：Grok CLI｜掃 `1234567`\n- 發現 🤖 標記\n';
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: badBody }] } }),
       JSON.stringify({ type: 'result', session_id: sid, subtype: 'success', is_error: false, stop_reason: 'end_turn', result: badBody })
     ].join('\n');
@@ -276,7 +276,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('22: Grok system.compact_boundary 正常成功', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -292,7 +292,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('23: compact_boundary 錯 session_id 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -308,7 +308,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('24: compact_boundary 缺 compact_metadata 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -323,7 +323,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('25: compact_boundary trigger 非 auto 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -339,7 +339,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('26: compact_boundary pre_tokens 非數字應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -355,7 +355,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('26a: compact_boundary pre_tokens 為負數應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -371,7 +371,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('26b: compact_boundary pre_tokens 為小數應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -387,7 +387,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('26c: compact_boundary 缺 pre_tokens 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -403,7 +403,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('27: compact_boundary 在 end_turn 後出現應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify(validAssistant),
       JSON.stringify({
         type: 'system',
@@ -435,7 +435,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('29: 未知 system subtype 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({ type: 'system', subtype: 'unknown_future_feature', session_id: sid }),
       JSON.stringify(validAssistant),
       JSON.stringify(validResult)
@@ -445,7 +445,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('30: compact_boundary 缺 uuid 應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -460,7 +460,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
 
   await t.test('30a: compact_boundary uuid 為空字串應拒絕', () => {
     const raw = [
-      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid }),
+      JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify({
         type: 'system',
         subtype: 'compact_boundary',
@@ -487,6 +487,58 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
       validFrames[1],
       validFrames[2]
     ].join('\n');
-    assert.throws(() => unwrapScanOutput(raw), LaunchError, '尚未初始化');
+    assert.throws(() => unwrapScanOutput(raw, '掃描回覆', true), LaunchError, '尚未初始化');
+  });
+
+  await t.test('Claude CLI 合法格式測試 (R5)', async (t) => {
+    const { prepareVerdict, prepareScan, unwrapScanOutput } = require('../tools/review-launch.js');
+    const head = '1234567890abcdef1234567890abcdef12345678';
+    const head7 = head.slice(0, 7);
+    const sid = 's-claude';
+
+    const reviewBody = `🤖 Beta｜來源：Claude CLI｜審 \`${head7}\`｜r2｜結論：通過\n\n### 本輪實際用的設定\n- test\n\n### 清單逐項結果\n- test\n`;
+    const scanBody = `🔍 Beta｜來源：Claude CLI｜掃 \`${head7}\`\n\n- 零發現\n`;
+
+    const prepareObj = (body) => ({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      stop_reason: 'end_turn',
+      session_id: sid,
+      result: body
+    });
+
+    const formats = (body) => ({
+      singleline: JSON.stringify(prepareObj(body)),
+      pretty: JSON.stringify(prepareObj(body), null, 2),
+      verbosearray: JSON.stringify([
+        { type: 'system', subtype: 'init', session_id: sid, model: 'claude-fable-5-1' },
+        prepareObj(body)
+      ]),
+      ndjson: JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'claude-fable-5-1' }) + '\n' + JSON.stringify(prepareObj(body))
+    });
+
+    const reviewOpts = { reviewer: 'Beta', source: 'Claude CLI', round: 2, head, usable: ['Beta'] };
+    const scanOpts = { scanner: 'Beta', source: 'Claude CLI', head, usable: ['Beta'] };
+
+    for (const [name, raw] of Object.entries(formats(reviewBody))) {
+      await t.test(`複審格式：${name}`, () => {
+        // 驗證 unwrapScanOutput
+        assert.equal(unwrapScanOutput(raw), reviewBody);
+        // 驗證 prepareVerdict
+        const v = prepareVerdict(raw, reviewOpts);
+        assert.equal(v.body, reviewBody);
+      });
+    }
+
+    for (const [name, raw] of Object.entries(formats(scanBody))) {
+      await t.test(`掃描格式：${name}`, () => {
+        // 驗證 unwrapScanOutput
+        assert.equal(unwrapScanOutput(raw), scanBody);
+        // 驗證 prepareScan
+        const s = prepareScan(raw, scanOpts);
+        assert.equal(s.body, scanBody);
+      });
+    }
   });
 });

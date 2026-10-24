@@ -1413,8 +1413,7 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆', forceGrok = false) {
     try {
       const frames = ndLines.map((l) => JSON.parse(l));
       const first = frames[0];
-      const isGrok = forceGrok || (first && first.type === 'system' && first.subtype === 'init' && String(first.model || '').startsWith('grok-'))
-        || frames.some((f) => f && f.type === 'result' && Object.hasOwn(f, 'stop_reason'));
+      const isGrok = forceGrok || (first && first.type === 'system' && first.subtype === 'init' && String(first.model || '').startsWith('grok-'));
 
       if (isGrok) {
         const strictParsed = parseGrokStrictNDJSON(trimmed, kindLabel);
@@ -1468,12 +1467,11 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆', forceGrok = false) {
 }
 
 /**
- * 核對純文字結論（若為 CLI 結構化 JSON 成功包裹如 Claude `--output-format json` 則先解開 `result`）：
- * 去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
+ * 只核已解包正文，不核CLI執行狀態；不再解析正文內的JSON：
+ * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
  * 核第一行標頭（角色、來源、輪次、受審版本短碼）與「通過」的兩行固定小標（F4、F5、F7；擁有者照 F12 豁免小標）。
  */
-function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null, forceGrok = false }) {
-  const unwrapped = unwrapScanOutput(raw, '複審結論', forceGrok || String(source).includes('Grok'));
+function prepareVerdictBody(unwrapped, { reviewer, source, round, head, usable, ownerRole = null }) {
   const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
@@ -1502,6 +1500,14 @@ function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole 
     if (miss.length) throw new LaunchError(`結論是「通過」但少了固定小標：${miss.join('、')}（F7：${PASS_HEADINGS.join('、')} 都要有）`);
   }
   return { body, header: h, strippedUnposted };
+}
+
+/**
+ * 先核CLI封包再核正文的理由：避免自貼摘要例外吞掉執行失敗；正文不再解包，避免模型自寫JSON升格。
+ */
+function prepareVerdict(raw, opts) {
+  const unwrapped = unwrapScanOutput(raw, '複審結論', opts.forceGrok || String(opts.source).includes('Grok'));
+  return prepareVerdictBody(unwrapped, opts);
 }
 
 /**
@@ -1822,14 +1828,16 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
-    // 只傳 raw，由 prepareVerdict 內部統一解 CLI/NDJSON 包並檢查首行核驗，避免二次解包造成模型 JSON 誤升格為通過
+    // 先核執行封包，避免自貼摘要例外吞掉執行失敗；正文不再解包，避免模型自寫JSON升格。
+    const unwrappedRaw = unwrapScanOutput(raw, '複審結論', String(entry.source).includes('Grok'));
+    const vOpts = { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole };
     let prepared = null;
     let prepareErr = null;
     if (!allowAlreadyPosted) {
-      prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      prepared = prepareVerdictBody(unwrappedRaw, vOpts);
     } else {
       try {
-        prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+        prepared = prepareVerdictBody(unwrappedRaw, vOpts);
       } catch (e) {
         if (e instanceof LaunchError) prepareErr = e;
         else throw e;
@@ -1892,7 +1900,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (prepared && prepared.body !== platformPrepared.body) {
         throw new LaunchError(`輸出檔的 r${rec.round} 結論與平台上已貼出的結論內容不一致：不自動收尾`);
       }
-      if (!prepared && /🤖/u.test(raw)) {
+      if (!prepared && /🤖/u.test(unwrappedRaw)) {
         throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
       }
       const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
@@ -3510,7 +3518,7 @@ async function runGrokExec(argv, deps = {}) {
         env: childEnv,
       })
       : await new Promise((resolve) => {
-        const child = spawn(sandboxExec, [
+        const child = (deps.spawnChild || spawn)(sandboxExec, [
           '-p', profile,
           '-D', `SCAN_DIR=${boxDir}`,
           '-D', `RELAY_PORT=${relay.port}`,
@@ -3523,6 +3531,8 @@ async function runGrokExec(argv, deps = {}) {
         });
         let stdout = '';
         let stderr = '';
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
         child.stdout.on('data', (d) => { stdout += d; });
         child.stderr.on('data', (d) => { stderr += d; });
         child.on('error', (err) => resolve({ status: 2, stdout, stderr: err.message }));

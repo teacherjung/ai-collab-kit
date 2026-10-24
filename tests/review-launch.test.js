@@ -2498,6 +2498,71 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       }
     });
 
+    await t.test('真正pipe跨UTF8完整流程子題 (原生收集缺陷重現)', async () => {
+      // 重用外部 sessId, authFile, authOpts, promptFile, r
+      const utf8Tmp = fs.mkdtempSync(path.join(tmp, 'native-utf8-'));
+      const scanJson = path.join(utf8Tmp, 'scan.json');
+      fs.writeFileSync(scanJson, JSON.stringify({ root: r.dir, base: r.base, head: r.head }));
+      const outFile = path.join(utf8Tmp, 'out.md');
+
+      const fakeGrok = path.join(utf8Tmp, 'fake-grok');
+      fs.writeFileSync(fakeGrok, '#!/bin/sh\nexit 73\n');
+      fs.chmodSync(fakeGrok, 0o755);
+
+      const syntheticSandbox = '/synthetic-utf8-sandbox-not-executable';
+      const resultText = '合成測試😀完成';
+      const stderrText = '合成錯誤😀訊息';
+
+      const stream = [
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: sessId }),
+        JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: resultText }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: resultText }),
+      ];
+      const fullNDJSON = stream.join('\n') + '\n';
+
+      const childScript = `
+        const b = Buffer.from(${JSON.stringify(fullNDJSON)});
+        const resText = ${JSON.stringify(resultText)};
+        const cut = b.lastIndexOf(Buffer.from(resText)) + 1;
+        process.stdout.write(b.slice(0, cut));
+        setTimeout(() => {
+          process.stdout.end(b.slice(cut));
+        }, 40);
+
+        const e = Buffer.from(${JSON.stringify(stderrText)});
+        process.stderr.write(e.slice(0, 1));
+        setTimeout(() => {
+          process.stderr.end(e.slice(1));
+        }, 80);
+      `;
+
+      let capturedStderr = '';
+      let spawnChildCalled = false;
+
+      const res = await runGrokExec(['--mode', 'scan', '--cwd', r.dir, '--prompt-file', promptFile, '--out', outFile, '--model', 'grok-4.7', '--reasoning-effort', 'xhigh'], {
+        authFile, authOpts, probeFn: () => ({ ok: true }),
+        grokBin: fakeGrok,
+        sandboxExec: syntheticSandbox,
+        spawnChild: (cmd, args, opts) => {
+          spawnChildCalled = true;
+          assert.equal(cmd, syntheticSandbox);
+          const child = spawn(process.execPath, ['-e', childScript], {
+            cwd: opts.cwd,
+            env: gitEnv(),
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          child.stderr.on('data', (d) => { capturedStderr += d; });
+          return child;
+        }
+      });
+
+      assert.ok(spawnChildCalled, 'spawnChild 應該被呼叫');
+      assert.equal(res.code, 0, '應成功執行');
+      const saved = fs.readFileSync(outFile);
+      assert.deepEqual(saved, Buffer.from(fullNDJSON), 'outFile 應該與原始 NDJSON 逐 byte 相等');
+      assert.equal(capturedStderr, stderrText, '觀察者應該能拿回合法的 stderr');
+    });
+
     await t.test('3: Root 前進但 CWD 固定舊版 應成功且材料不變', async () => {
       const oldTree = path.join(tmp, 'old-tree');
       const addRes = spawnSync('git', ['worktree', 'add', '--detach', oldTree, r.head], { cwd: r.dir, env: gitEnv() });
@@ -2809,7 +2874,8 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
     assert.match(unvoidedBadOut.lines.join('\n'), /未作廢的壞標頭 🤖 留言.*不自動收尾/u);
     assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
 
-    // CLI JSON 輸出包裹（如 Claude --output-format json）：自行貼文成功且 JSON result 含同一份完整結論或摘要時 --run --purge 正常收尾；矛盾或 is_error 則退 2（r3 R2）
+    // R4: CLI JSON 輸出包裹（如 Grok/Claude）自行貼文題
+    // (a) 成功 JSON 同完整正文
     dynamicComments.length = 0;
     const jsonSelfSameOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
       settings: s,
@@ -2818,15 +2884,34 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       template: TEMPLATE,
       leftoverRoots: [],
       runExec(_cmd, { record }) {
-        dynamicComments.push({ id: 'self-json-1', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        dynamicComments.push({ id: 'r4-json-same', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
         fs.writeFileSync(record.outFile, JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: validSelfVerdict }));
       },
       runPost() { selfPostCalls += 1; },
     });
-    assert.equal(jsonSelfSameOut.code, 0, jsonSelfSameOut.lines.join('\n'));
+    assert.equal(jsonSelfSameOut.code, 0, 'R4-a：成功 JSON 同完整正文');
     assert.equal(selfPostCalls, 0);
-    assert.ok(!fs.existsSync(reviewFolder), 'JSON 包裹同正文自貼成功後 --run --purge 已正常收樹並清除容器');
+    assert.ok(!fs.existsSync(reviewFolder), 'R4-a：收樹清除');
 
+    // (b) 成功 JSON 僅自貼摘要
+    dynamicComments.length = 0;
+    const jsonSelfSummaryOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'r4-json-summary', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '已完成：詳見 PR 留言' }));
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(jsonSelfSummaryOut.code, 0, 'R4-b：成功 JSON 僅自貼摘要');
+    assert.equal(selfPostCalls, 0);
+    assert.ok(!fs.existsSync(reviewFolder));
+
+    // (c) 壞例：成功 JSON 但 result 有矛盾機器人結論
     dynamicComments.length = 0;
     const jsonSelfConflictOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
       settings: s,
@@ -2835,16 +2920,63 @@ test('⑭一鍵執行（--run）與收樹清除容器（--purge）：複審與�
       template: TEMPLATE,
       leftoverRoots: [],
       runExec(_cmd, { record }) {
-        dynamicComments.push({ id: 'self-json-conflict', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
-        fs.writeFileSync(
-          record.outFile,
-          JSON.stringify([{ type: 'system' }, { type: 'result', subtype: 'success', is_error: false, result: `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- R1\n` }]),
-        );
+        dynamicComments.push({ id: 'r4-json-conflict', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        const conflictVerdict = `🤖 Beta｜來源：beta CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：需修改後再審\n\n- Conflict\n`;
+        fs.writeFileSync(record.outFile, JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: conflictVerdict }));
       },
       runPost() { selfPostCalls += 1; },
     });
-    assert.equal(jsonSelfConflictOut.code, 2);
+    assert.equal(jsonSelfConflictOut.code, 2, 'R4-c：矛盾結論');
     assert.match(jsonSelfConflictOut.lines.join('\n'), /輸出檔的 r1 結論與平台上已貼出的結論內容不一致/u);
+    assert.ok(fs.existsSync(reviewFolder));
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // (d) 新增壞例：平台 validSelfVerdict；rawJSON 沒有 robot 且標示錯誤
+    dynamicComments.length = 0;
+    const jsonPlatformRobotCliError = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'r4-json-platform-robot', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        fs.writeFileSync(record.outFile, JSON.stringify({ type: 'result', subtype: 'error', is_error: true, result: 'Execution failed' }));
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(jsonPlatformRobotCliError.code, 2, 'R4-d：平台有機器人但 CLI 報錯且無結論');
+    assert.ok(fs.existsSync(reviewFolder), '應保留容器供檢查');
+    const launchRecD = JSON.parse(fs.readFileSync(path.join(reviewFolder, 'launch.json'), 'utf8'));
+    assert.equal(launchRecD.postedAt, undefined, '不應記 postedAt');
+    assert.ok(fs.existsSync(launchRecD.outFile), 'outFile 應存在');
+    assert.equal(selfPostCalls, 0, 'runPost 仍 0');
+    assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
+
+    // (e) 新增壞例：🤖 在 raw 使用完整的 Unicode surrogate escape pair (\\ud83e\\udd16)
+    dynamicComments.length = 0;
+    const jsonSurrogatePairOut = main(['7', '--reviewer', 'Beta', '--run', '--purge', '--dir', dir], {
+      settings: s,
+      platform: fakePlatform(selfPostAns),
+      cwd: r.dir,
+      template: TEMPLATE,
+      leftoverRoots: [],
+      runExec(_cmd, { record }) {
+        dynamicComments.push({ id: 'r4-json-surrogate', author: 'ai-acct', createdAt: '2026-10-20T00:10:00Z', body: validSelfVerdict });
+        const badResult = 'Preamble\n' + validSelfVerdict.replace('通過', '需修改後再審');
+        const raw = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: badResult }).replaceAll('🤖', '\\ud83e\\udd16');
+        assert.ok(!raw.includes('🤖'), 'raw 不含實際 🤖');
+        assert.ok(JSON.parse(raw).result.includes('🤖'), 'JSON.parse(raw) 應含完整 🤖');
+        fs.writeFileSync(record.outFile, raw);
+      },
+      runPost() { selfPostCalls += 1; },
+    });
+    assert.equal(jsonSurrogatePairOut.code, 2, 'R4-e：不合規標頭/不自動收尾');
+    assert.ok(fs.existsSync(reviewFolder));
+    const launchRecE = JSON.parse(fs.readFileSync(path.join(reviewFolder, 'launch.json'), 'utf8'));
+    assert.ok(!launchRecE.postedAt, '未 postedAt');
+    assert.ok(fs.existsSync(launchRecE.outFile), 'outFile 應存在');
+    assert.equal(selfPostCalls, 0, 'runPost 0');
     assert.equal(main(['--close', '7', '--purge', '--dir', dir], { settings: s, leftoverRoots: [] }).code, 0);
 
     // r3 R1：r1 的 --run --purge 在代貼期間（r1 結論已在平台可見），另一程序正式開出 r2 並寫入唯一輸出；r1 收尾只關 r1，r2 的樹、Git 登記與唯一輸出逐字保留

@@ -18,6 +18,12 @@
    - Headless Scripting: https://docs.x.ai/build/cli/headless-scripting
    - Wire Protocol: https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/src/headless/reducer/messages/wire.rs
 
+## 2026-10-25 修正摘要
+1. **CLI 封包核驗優先**：在 `post` 流程中，即使平台已有合法結論，仍優先對本地 CLI 輸出（NDJSON/JSON）執行解包核驗。若解包失敗（CLI 協議錯誤），拒絕自動收尾，保留現場供診斷。
+2. **區分封包與格式**：成功輸出僅是無結論標頭的自貼摘要時，可在平台已有同人/來源/輪次/版本合法結論的前提下收尾；解碼後含不合規機器人標頭或與平台正文不一致仍拒並留現場。
+3. **依來源選解析器**：unwrapScanOutput 說明已知 Grok 以 forceGrok、未知可用 system.init.model 的 grok 前綴識別，不用共用 stop_reason 猜。
+4. **原生輸出 UTF-8 無損**：在建立 Grok 執行子程序時，明確對 `stdout` 與 `stderr` 設定 `utf8` 編碼，確保多位元組字元（如 NDJSON 中的中文或 🤖 記號）在串流接收階段即以正確字元集處理，避免分段拆字損毀合法UTF8封包；後續DLP仍檢查完整解碼文字。
+
 ## 後續證據正本
 1. **正式 Codex 複審及修復 PR 自身 Grok 掃描**：以 https://github.com/teacherjung/ai-collab-kit/pull/128 的正式留言為準。
 2. **#119 修復後補掃**：以 https://github.com/teacherjung/ai-collab-kit/pull/119 的 🔍 留言及合併後補掃記錄為準。
