@@ -1304,25 +1304,132 @@ function freshEntries(roots, folder, since, re) {
   return { fresh, groups, unreadable };
 }
 
-function unwrapScanOutput(raw, kindLabel = '掃描回覆') {
+function parseGrokStrictNDJSON(text, kindLabel) {
+  const lines = text.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+  let sessionId = null;
+  let finalResult = null;
+  let lastEndTurnText = null;
+  let foundResult = false;
+  let foundEndTurn = false;
+  let initFound = false;
+
+  for (const line of lines) {
+    let event;
+    try {
+      event = JSON.parse(line);
+      if (event === null || Array.isArray(event) || typeof event !== 'object') throw new Error();
+    } catch {
+      return { error: `${kindLabel}格式壞` };
+    }
+
+    if (foundResult) return { error: `${kindLabel}多 result 或尾隨事件` };
+
+    if (event.type === 'system' && event.subtype === 'init') {
+      if (initFound) return { error: `${kindLabel}多 system.init` };
+      const sid = typeof event.session_id === 'string' ? event.session_id.trim() : '';
+      if (!sid) return { error: `${kindLabel}缺 session_id` };
+      sessionId = sid;
+      initFound = true;
+      continue;
+    }
+
+    if (!initFound) return { error: `${kindLabel}缺 system.init` };
+    if (event.session_id !== sessionId) return { error: `${kindLabel}錯 session` };
+
+    if (event.type === 'assistant') {
+      if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 assistant` };
+      if (event.parent_tool_use_id === null) {
+        if (event.message && typeof event.message === 'object' && event.message.role === 'assistant' && event.message.stop_reason === 'end_turn') {
+          let t = '';
+          if (Array.isArray(event.message.content)) {
+            for (const c of event.message.content) {
+              if (c && c.type === 'text') {
+                if (typeof c.text !== 'string') return { error: `${kindLabel}正文內容非字串` };
+                t += c.text;
+              }
+            }
+          }
+          lastEndTurnText = t;
+          foundEndTurn = true;
+        }
+      }
+    } else if (event.type === 'user') {
+      if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 user` };
+    } else if (event.type === 'result') {
+      foundResult = true;
+      finalResult = event;
+    } else {
+      return { error: `${kindLabel}end_turn 前後出現未知事件 ${event.type || '未知'}` };
+    }
+  }
+
+  if (!foundResult) return { error: `${kindLabel}缺 result` };
+
+  if (finalResult.subtype !== 'success' || finalResult.is_error !== false || finalResult.stop_reason !== 'end_turn') {
+    if (finalResult.stop_reason === 'cancelled') return { error: `${kindLabel}cancelled` };
+    return { error: `${kindLabel}截短/未知/缺result/執行失敗` };
+  }
+
+  const resText = typeof finalResult.result === 'string' ? finalResult.result.trim() : '';
+  if (!resText) {
+    return { error: `${kindLabel}最終正文為空` };
+  }
+
+  if (lastEndTurnText === null) {
+    return { error: `${kindLabel}正文不一致（缺 assistant end_turn）` };
+  } else if (lastEndTurnText !== finalResult.result) {
+    return { error: `${kindLabel}最終正文不一致` };
+  }
+
+  return { success: true, text: finalResult.result };
+}
+
+function unwrapScanOutput(raw, kindLabel = '掃描回覆', forceGrok = false) {
   const text = String(raw ?? '');
   const trimmed = text.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    const ndLines = trimmed.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
-    if (ndLines.length > 1 && ndLines.every((l) => l.startsWith('{') && l.endsWith('}'))) {
-      try {
-        parsed = ndLines.map((l) => JSON.parse(l));
-      } catch {
-        return text;
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return text;
+  }
+
+  let parsed = null;
+  const ndLines = trimmed.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+  if (ndLines.length > 0) {
+    try {
+      const frames = ndLines.map((l) => JSON.parse(l));
+      const first = frames[0];
+      const isGrok = forceGrok || (first && first.type === 'system' && first.subtype === 'init' && String(first.model || '').startsWith('grok-'))
+        || frames.some((f) => f && f.type === 'result' && Object.hasOwn(f, 'stop_reason'));
+
+      if (isGrok) {
+        const strictParsed = parseGrokStrictNDJSON(trimmed, kindLabel);
+        if (strictParsed.error) throw new LaunchError(strictParsed.error);
+        return strictParsed.text;
       }
-    } else {
+      parsed = frames.length === 1 ? frames[0] : frames;
+    } catch (e) {
+      if (e instanceof LaunchError) throw e;
+      if (forceGrok) throw new LaunchError(`${kindLabel}格式壞或非合規 NDJSON`);
+      // 降級
+    }
+  }
+
+  if (parsed === null) {
+    try {
+      parsed = JSON.parse(trimmed);
+      if (forceGrok) {
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && (parsed.type === 'result' || Object.hasOwn(parsed, 'stop_reason'))) {
+          const strictParsed = parseGrokStrictNDJSON(trimmed, kindLabel);
+          if (strictParsed.error) throw new LaunchError(strictParsed.error);
+          return strictParsed.text;
+        }
+        throw new LaunchError(`${kindLabel}非合規 NDJSON 格式`);
+      }
+    } catch (e) {
+      if (e instanceof LaunchError) throw e;
       return text;
     }
   }
+
   const pickResult = (obj) => {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
     if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
@@ -1349,8 +1456,8 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆') {
  * 去除首尾空行，若最後一行單獨是「未貼」（templates/review-request.md）就剝掉；
  * 核第一行標頭（角色、來源、輪次、受審版本短碼）與「通過」的兩行固定小標（F4、F5、F7；擁有者照 F12 豁免小標）。
  */
-function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null }) {
-  const unwrapped = unwrapScanOutput(raw, '複審結論');
+function prepareVerdict(raw, { reviewer, source, round, head, usable, ownerRole = null, forceGrok = false }) {
+  const unwrapped = unwrapScanOutput(raw, '複審結論', forceGrok || String(source).includes('Grok'));
   const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
@@ -1699,7 +1806,8 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
-    const unwrappedRaw = unwrapScanOutput(raw, '複審結論');
+    const isGrok = String(entry.source).includes('Grok');
+    const unwrappedRaw = unwrapScanOutput(raw, '複審結論', isGrok);
     let prepared = null;
     let prepareErr = null;
     if (!allowAlreadyPosted) {
@@ -2233,11 +2341,11 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
-function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null }) {
+function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null, forceGrok = false }) {
   if (/🤖/u.test(String(raw ?? ''))) {
     throw new LaunchError('掃描回覆含有複審結論記號 🤖：結論聯集閘會把含 🤖 的非結論留言當成壞標頭擋下（F4、G1），請移除後再代貼');
   }
-  const unwrapped = unwrapScanOutput(raw);
+  const unwrapped = unwrapScanOutput(raw, '掃描回覆', forceGrok);
   const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
@@ -2350,9 +2458,11 @@ function scanPost(changeArg, { settings = readSettings(), platform = { ask }, di
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
     const nowIso = now().toISOString();
+    const isGrok = String(rec.source).includes('Grok');
     const prepared = prepareScan(raw, {
       scanner: rec.scanner, source: rec.source, head: rec.head, usable,
       passCommentLink: rec.passCommentLink, startedAt: rec.startedAt, postedAt: nowIso, base: rec.base,
+      forceGrok: isGrok
     });
 
     const sub = substitute(rl.postComment, { project, change: rec.change }, '貼留言的指令');
@@ -2841,6 +2951,11 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
   const blockingRefusals = [];
   const toleratedRefusals = [];
   const forwarded = [];
+  const sockets = new Set();
+  const upReqs = new Set();
+  const upResps = new Set();
+  let isClosed = false;
+
   const server = http.createServer((req, res) => {
     if (req.method === 'CONNECT') {
       blockingRefusals.push('connect CONNECT');
@@ -2876,6 +2991,8 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
       headers,
       timeout: 300000,
     }, (upRes) => {
+      upResps.add(upRes);
+      upRes.once('close', () => upResps.delete(upRes));
       const out = {};
       for (const [k, v] of Object.entries(upRes.headers || {})) {
         if (!GROK_HOP_HEADERS.has(k.toLowerCase()) && v !== undefined) out[k] = v;
@@ -2883,12 +3000,20 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
       res.writeHead(upRes.statusCode || 502, out);
       upRes.pipe(res);
     });
+    upReqs.add(up);
+    up.once('close', () => upReqs.delete(up));
     up.on('error', () => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
       res.end('relay: upstream unreachable');
     });
     req.pipe(up);
   });
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', resolve);
@@ -2901,7 +3026,17 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
     blockingRefusals,
     toleratedRefusals,
     forwarded,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () => new Promise((resolve) => {
+      if (isClosed) return resolve();
+      isClosed = true;
+      for (const s of sockets) s.destroy();
+      for (const r of upReqs) r.destroy();
+      for (const r of upResps) r.destroy();
+      sockets.clear();
+      upReqs.clear();
+      upResps.clear();
+      server.close(() => resolve());
+    }),
   };
 }
 
@@ -3149,6 +3284,11 @@ async function runGrokExec(argv, deps = {}) {
     boxDir = fs.realpathSync(rawBox);
 
     const probeGuardServer = net.createServer();
+    const probeSockets = new Set();
+    probeGuardServer.on('connection', (s) => {
+      probeSockets.add(s);
+      s.once('close', () => probeSockets.delete(s));
+    });
     await new Promise((r) => probeGuardServer.listen(0, '127.0.0.1', r));
     let probe;
     try {
@@ -3162,6 +3302,7 @@ async function runGrokExec(argv, deps = {}) {
         profile,
       });
     } finally {
+      for (const s of probeSockets) s.destroy();
       await new Promise((r) => probeGuardServer.close(() => r()));
     }
     if (!probe || !probe.ok) {
@@ -3170,14 +3311,35 @@ async function runGrokExec(argv, deps = {}) {
 
     const metaDir = path.dirname(outPath);
     let recMeta = null;
-    for (const metaName of ['scan.json', 'launch.json']) {
-      const mf = path.join(metaDir, metaName);
-      if (fs.existsSync(mf)) {
-        try { recMeta = JSON.parse(fs.readFileSync(mf, 'utf8')); break; } catch { /* ignore */ }
-      }
+    const metaName = parsed.mode === 'scan' ? 'scan.json' : 'launch.json';
+    const mf = path.join(metaDir, metaName);
+    if (fs.existsSync(mf)) {
+      try { recMeta = JSON.parse(fs.readFileSync(mf, 'utf8')); } catch { /* ignore */ }
     }
 
     let promptText = fs.readFileSync(promptPath, 'utf8');
+    if (parsed.mode === 'scan') {
+      if (!recMeta || !/^[0-9a-fA-F]{40}$/.test(recMeta.base) || !/^[0-9a-fA-F]{40}$/.test(recMeta.head)) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式缺少合法的 scan.json (需含 40-hex base/head)——拒絕啟動。'] };
+      }
+      const rootRepo = recMeta.root;
+      if (!rootRepo || !fs.existsSync(rootRepo)) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式來源倉庫不存在——拒絕啟動。'] };
+      }
+      if (!gitOk(rootRepo, ['rev-parse', '--verify', `${recMeta.base}^{commit}`]) || !gitOk(rootRepo, ['rev-parse', '--verify', `${recMeta.head}^{commit}`])) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式來源倉庫缺少基底或受審版本——拒絕啟動。'] };
+      }
+      const currentCwdHead = git(cwdPath, ['rev-parse', 'HEAD']);
+      if (currentCwdHead !== recMeta.head) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描樹 HEAD 與 scan.json 不符——拒絕啟動。'] };
+      }
+      const rDiff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', `${recMeta.base}...${recMeta.head}`], { cwd: rootRepo, env: gitEnv(), encoding: 'utf8' });
+      if (rDiff.error || rDiff.status !== 0) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式產生差異失敗——拒絕啟動。'] };
+      }
+      promptText += `\n\n=== 掃描材料 (git diff ${recMeta.base}...${recMeta.head}) ===\n${rDiff.stdout}`;
+    }
+
     const promptShas = [...promptText.matchAll(/\bdiff\s+([0-9a-fA-F]{7,40})\.\.([0-9a-fA-F]{7,40})\b/gu)]
       .flatMap((m) => [m[1], m[2]]);
 
@@ -3247,21 +3409,37 @@ async function runGrokExec(argv, deps = {}) {
     fs.writeFileSync(boxPromptFile, promptText);
 
     const instruction = parsed.mode === 'scan'
-      ? `以下是掃描提示（亦存於 ${boxPromptFile}），請直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）：\n\n${promptText}`
+      ? `以下是掃描提示（材料由外部提供，已附加於文件末尾；請僅使用提供之工具進行檢查，絕不可嘗試執行終端或測試指令），請直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）：\n\n${promptText}`
       : `以下是送審提示（亦存於 ${boxPromptFile}），請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）：\n\n${promptText}`;
+
     const grokArgs = [
       '--sandbox', 'off',
       '--no-subagents',
-      '--allow', 'Bash(*)',
-      '--allow', 'Read(*)',
-      '--allow', 'Edit(*)',
-      '--allow', 'Write(*)',
-      '--allow', 'Grep(*)',
-      '--allow', 'Glob(*)',
+      '--output-format', 'streaming-messages-json'
+    ];
+    if (parsed.mode === 'scan') {
+      grokArgs.push(
+        '--tools', 'read_file,grep,list_dir',
+        '--disallowed-tools', 'search_tool,use_tool',
+        '--allow', 'Read(*)',
+        '--allow', 'Grep(*)',
+        '--allow', 'Glob(*)'
+      );
+    } else {
+      grokArgs.push(
+        '--allow', 'Bash(*)',
+        '--allow', 'Read(*)',
+        '--allow', 'Edit(*)',
+        '--allow', 'Write(*)',
+        '--allow', 'Grep(*)',
+        '--allow', 'Glob(*)'
+      );
+    }
+    grokArgs.push(
       '-m', parsed.model,
       '--reasoning-effort', parsed.effort,
       '-p', instruction,
-    ];
+    );
     const childEnv = {
       HOME: grokHome,
       TMPDIR: grokTmpDir,
@@ -3321,6 +3499,35 @@ async function runGrokExec(argv, deps = {}) {
     if (activeNeedles.some((n) => rawOutput.includes(n))) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
     }
+    const ndLines = rawOutput.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+
+    function findNeedleInObj(obj, needles) {
+      if (typeof obj === 'string') {
+        if (needles.some((n) => obj.includes(n))) return true;
+      } else if (Array.isArray(obj)) {
+        for (const v of obj) {
+          if (findNeedleInObj(v, needles)) return true;
+        }
+      } else if (obj && typeof obj === 'object') {
+        for (const [k, v] of Object.entries(obj)) {
+          if (needles.some((n) => k.includes(n)) || findNeedleInObj(v, needles)) return true;
+        }
+      }
+      return false;
+    }
+
+    for (const line of ndLines) {
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
+      if (findNeedleInObj(obj, activeNeedles)) {
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
+      }
+    }
+    const strictParsed = parseGrokStrictNDJSON(rawOutput, 'Grok 執行');
+    if (strictParsed.error) {
+       return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${strictParsed.error}——已拒絕寫出結果。`] };
+    }
+
     const cleanedOutput = stripGrokPreamble(rawOutput, parsed.mode);
     fs.writeFileSync(outPath, cleanedOutput);
     return { code: 0, lines: [] };
@@ -3613,4 +3820,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, unwrapScanOutput, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
