@@ -71,6 +71,8 @@
 - 2026-10-15（同上查證）`tools/` 與 `tests/` 都沒有處理中斷訊號：工具或考題被 Ctrl-C 或被殺掉時，自己開的暫存資料夾與試合併閘的拋棄樹（連同它的工作樹登記）會漏收；正常結束與拋例外都會收。另 `tests/downstream-lag.test.js` 的 kit() 建置在每題的 try 之外，建置那段失敗也會漏／各支工具的 finally、考題的 test.after 與 kit()／又量到工具或考題的暫存殘留變多時（Mac 三天會清檔，殘留多半是空資料夾）。
 
 - 2026-10-14（[套件 #103 r2 複審](https://github.com/teacherjung/ai-collab-kit/pull/103#issuecomment-6173247604)，低）本 Session 裁示來源的指示缺少可持久辨認的工作階段識別，後續讀者不易分清適用範圍／`AGENTS.md`「本 Session 理財工具登記所需套件工作的裁示來源」的本人原話與操作化兩段／下一次本來就要修改這條指示時，補可查證的工作階段識別；本輪只收待辦，不擴寫常設指示。
+- 2026-10-25（[PR #128 Codex r1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6389449570)）`tests/review-launch.test.js` JSON 跳脫字串值 DLP 回歸：目前未殺掉 value 分支移除突變（現碼仍正確）／`tests/review-launch.test.js`、DLP 相關考題／觸發下一次改 DLP 或相關考題時順手補齊。
+
 
 
 - 2026-10-20（10/15 同步交接轉述套件 #106 r3 建議；本次文件整理收件）同步暫存清單檔遇同名時的清理邊界尚待核對／`tools/kit-lock.js` 的暫存清單與清理路徑、對應考題／下一次修改同步暫存檔生命週期時，先回 #106 原發現確認情境，確保不覆蓋或刪除既有同名檔；本次只承接交接，不宣稱已重新驗證缺陷。
