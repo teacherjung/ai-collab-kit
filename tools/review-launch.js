@@ -1806,15 +1806,14 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
     }
     const raw = fs.readFileSync(realSrc, 'utf8');
-    const isGrok = String(entry.source).includes('Grok');
-    const unwrappedRaw = unwrapScanOutput(raw, '複審結論', isGrok);
+    // 只傳 raw，由 prepareVerdict 內部統一解 CLI/NDJSON 包並檢查首行核驗，避免二次解包造成模型 JSON 誤升格為通過
     let prepared = null;
     let prepareErr = null;
     if (!allowAlreadyPosted) {
-      prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+      prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
     } else {
       try {
-        prepared = prepareVerdict(unwrappedRaw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
+        prepared = prepareVerdict(raw, { reviewer: rec.reviewer, source: entry.source, round: rec.round, head: rec.head, usable, ownerRole });
       } catch (e) {
         if (e instanceof LaunchError) prepareErr = e;
         else throw e;
@@ -1877,7 +1876,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (prepared && prepared.body !== platformPrepared.body) {
         throw new LaunchError(`輸出檔的 r${rec.round} 結論與平台上已貼出的結論內容不一致：不自動收尾`);
       }
-      if (!prepared && /🤖/u.test(unwrappedRaw)) {
+      if (!prepared && /🤖/u.test(raw)) {
         throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
       }
       const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
@@ -2337,14 +2336,11 @@ function scanLaunch(changeArg, { scanner: scannerArg = null, tier: tierArg = nul
 /**
  * 核對掃描回覆：若為 CLI 結構化 JSON 成功包裹（如 Claude `--output-format json` 的 `result` 欄位）先解開純文字；
  * 去除首尾空行，若最後一行單獨是「未貼」就剝掉；
- * 擋下任何含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭擋下）；
+ * 擋下最後正文全文含複審結論記號 🤖 的內容（以免觸發結論聯集閘壞標頭擋下）；
  * 擋下回覆自帶的「掃描時序」行（時序證據一律由 --scan-post 外殼依實際紀錄產生）；
  * 核第一行 🔍 標頭（角色、來源、掃描版本短碼）與後續內容非空，並在第二行補上 `> 掃描時序：...` 引用行。
  */
 function prepareScan(raw, { scanner, source, head, usable, passCommentLink = null, startedAt = null, postedAt = null, base = null, forceGrok = false }) {
-  if (/🤖/u.test(String(raw ?? ''))) {
-    throw new LaunchError('掃描回覆含有複審結論記號 🤖：結論聯集閘會把含 🤖 的非結論留言當成壞標頭擋下（F4、G1），請移除後再代貼');
-  }
   const unwrapped = unwrapScanOutput(raw, '掃描回覆', forceGrok);
   const lines = String(unwrapped ?? '').replace(/\r\n?/g, '\n').split('\n');
   while (lines.length && lines[0].trim() === '') lines.shift();

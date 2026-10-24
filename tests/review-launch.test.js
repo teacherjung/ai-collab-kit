@@ -1870,6 +1870,17 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         true,
       ],
       [
+        '模型輸出內層原生 NDJSON（含正確結論但格式不對，應拒收以免雙重解包誤判）',
+        (_h, _s, p) => [
+          JSON.stringify({ type: 'system', subtype: 'init', session_id: 'model-example', model: 'grok-4.7' }),
+          JSON.stringify({ type: 'assistant', session_id: 'model-example', parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: p }] } }),
+          JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: 'model-example', result: p }),
+        ].join('\n'),
+        2,
+        null,
+        null,
+      ],
+      [
         '正常正式通過輸出（可含開頭空行與文末未貼）',
         (_h, _s, p) => `\n${p}未貼\n`,
         0,
