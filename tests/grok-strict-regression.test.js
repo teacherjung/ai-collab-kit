@@ -490,6 +490,56 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     assert.throws(() => unwrapScanOutput(raw, '掃描回覆', true), LaunchError, '尚未初始化');
   });
 
+  await t.test('32: JSON 物件重複鍵應拒絕 (R3/Grok)', () => {
+    const badInit = `{"type":"system","subtype":"init","session_id":"s1","model":"grok-4.7","meta":{"x":"早先跳脫私針","x":"safe"}}`;
+    const raw = [badInit, validFrames[1], validFrames[2]].join('\n');
+    const hint = '檢查 tools/review-launch.js 的 unwrapScanOutput 重複鍵偵測，重跑 node --test tests/grok-strict-regression.test.js';
+    assert.throws(() => unwrapScanOutput(raw), (err) => err instanceof LaunchError && err.message.includes('重複鍵'), hint);
+  });
+
+  await t.test('33: JSON 物件重複鍵 (Unicode Escape) 應拒絕', () => {
+    const badInit = `{"type":"system","subtype":"init","session_id":"s1","model":"grok-4.7","meta":{"x":"早先跳脫私針","\\u0078":"safe"}}`;
+    const raw = [badInit, validFrames[1], validFrames[2]].join('\n');
+    const hint = '檢查 tools/review-launch.js 的 unwrapScanOutput 重複鍵偵測（含 Unicode），重跑 node --test tests/grok-strict-regression.test.js';
+    assert.throws(() => unwrapScanOutput(raw), (err) => err instanceof LaunchError && err.message.includes('重複鍵'), hint);
+  });
+
+  await t.test('34: 非重複鍵正常案例', () => {
+    const complexInit = JSON.stringify({
+      type: 'system',
+      subtype: 'init',
+      session_id: sid,
+      model: 'grok-4.7',
+      meta: {
+        array: [{ x: 1 }, { x: 2 }],
+        text: '{"k":1,"k":2}',
+        quoted: { 'a"b:c': 1 }
+      }
+    });
+    const raw = [
+      complexInit,
+      JSON.stringify(validAssistant),
+      JSON.stringify(validResult)
+    ].join('\n');
+    assert.equal(unwrapScanOutput(raw), 'FINAL', '正常複雜物件不應被誤判為重複鍵，重跑 node --test tests/grok-strict-regression.test.js');
+  });
+
+  await t.test('掃描指示模板契約校驗', async () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const templatePath = path.join(__dirname, '../templates/scan-record.md');
+    const content = fs.readFileSync(templatePath, 'utf8');
+    const hint = '核對 templates/scan-record.md 的指示文字與契約要求，重跑 node --test tests/grok-strict-regression.test.js';
+
+    assert.ok(content.includes('未執行：<原因>'), hint);
+    assert.ok(content.includes('node --test'), hint);
+    assert.ok(content.includes('git diff'), hint);
+    assert.ok(content.includes('未貼'), hint);
+    assert.ok(content.includes('不要呼叫 `gh`／`curl`'), hint);
+    assert.ok(content.includes('無法使用終端'), hint);
+    assert.ok(content.includes('考題未執行'), hint);
+  });
+
   await t.test('Claude CLI 合法格式測試 (R5)', async (t) => {
     const { prepareVerdict, prepareScan, unwrapScanOutput } = require('../tools/review-launch.js');
     const head = '1234567890abcdef1234567890abcdef12345678';

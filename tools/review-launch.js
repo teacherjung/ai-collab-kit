@@ -1304,6 +1304,39 @@ function freshEntries(roots, folder, since, re) {
   return { fresh, groups, unreadable };
 }
 
+class DuplicateJsonKeyError extends Error {}
+
+function parseUniqueJson(text) {
+  // JSON.parse 會丟掉較早的同名欄位；先按物件範圍核對解碼後的鍵，再驗完整語法。
+  const stack = [];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const frame = stack.at(-1);
+    if (ch === '"') {
+      const start = i;
+      for (i += 1; i < text.length; i += 1) {
+        if (text[i] === '\\') i += 1;
+        else if (text[i] === '"') break;
+      }
+      const value = JSON.parse(text.slice(start, i + 1));
+      if (frame?.keys && frame.expectKey) {
+        if (frame.keys.has(value)) throw new DuplicateJsonKeyError();
+        frame.keys.add(value);
+        frame.expectKey = false;
+      }
+    } else if (ch === '{') {
+      stack.push({ keys: new Set(), expectKey: true });
+    } else if (ch === '[') {
+      stack.push({ keys: null });
+    } else if (ch === '}' || ch === ']') {
+      stack.pop();
+    } else if (ch === ',' && frame?.keys) {
+      frame.expectKey = true;
+    }
+  }
+  return JSON.parse(text);
+}
+
 function parseGrokStrictNDJSON(text, kindLabel) {
   const lines = text.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
   let sessionId = null;
@@ -1316,9 +1349,10 @@ function parseGrokStrictNDJSON(text, kindLabel) {
   for (const line of lines) {
     let event;
     try {
-      event = JSON.parse(line);
+      event = parseUniqueJson(line);
       if (event === null || Array.isArray(event) || typeof event !== 'object') throw new Error();
-    } catch {
+    } catch (error) {
+      if (error instanceof DuplicateJsonKeyError) return { error: `${kindLabel}重複鍵` };
       return { error: `${kindLabel}格式壞` };
     }
 
@@ -1902,6 +1936,9 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       }
       if (!prepared && /🤖/u.test(unwrappedRaw)) {
         throw new LaunchError(`平台上已有 r${rec.round} 結論留言，但輸出檔另有不合規的 🤖 標頭內容（${prepareErr ? prepareErr.message : '格式不符'}）：不自動收尾`);
+      }
+      if (!prepared) {
+        throw new LaunchError('輸出檔缺少完整合法結論，不能與平台正文核對：不自動收尾');
       }
       const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
       if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
@@ -2725,6 +2762,11 @@ const GROK_SEATBELT_PROFILE = [
   '(allow network-bind (local tcp "localhost:*"))',
   '(allow network-inbound (local tcp "localhost:*"))',
   '(allow system-socket)',
+  '(deny process-exec* (literal "/usr/bin/security"))',
+  '(deny process-exec* (literal "/usr/bin/open"))',
+  '(deny process-exec* (literal "/usr/bin/osascript"))',
+  '(deny network-outbound (remote unix-socket))',
+  '(deny mach-lookup (global-name-prefix ""))',
   '(deny file-read* process-exec* (subpath "/usr/local"))',
 ].join('\n');
 
@@ -2756,6 +2798,18 @@ function verifyGrokSeatbeltProfile(profile = GROK_SEATBELT_PROFILE) {
   if (!profile.trimEnd().endsWith('(deny file-read* process-exec* (subpath "/usr/local"))')) {
     return { ok: false, reason: 'Seatbelt 規則檔尾必須明確拒絕 /usr/local 讀寫與執行' };
   }
+  const policyLines = profile.split('\n').map(line => line.trim());
+  for (const rule of [
+    '(deny process-exec* (literal "/usr/bin/security"))',
+    '(deny process-exec* (literal "/usr/bin/open"))',
+    '(deny process-exec* (literal "/usr/bin/osascript"))',
+    '(deny network-outbound (remote unix-socket))',
+    '(deny mach-lookup (global-name-prefix ""))',
+  ]) {
+    if (!policyLines.includes(rule)) {
+      return { ok: false, reason: 'Seatbelt 規則缺少直接執行、Mach 或檔案型 socket 拒絕限制' };
+    }
+  }
   return { ok: true };
 }
 
@@ -2780,6 +2834,9 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
   const probeTmpDir = path.join(boxDir, 'tmp');
   const probeWorktreeDir = path.join(boxDir, 'worktree');
   const probeMutGitDir = path.join(boxDir, 'mutation', '.git');
+  const probeNearDir = path.join(boxDir, 'mutation', '.github');
+  const probePrompt = path.join(boxDir, 'prompt.md');
+  let promptCreated = false;
   const probeFile = path.join(probeTmpDir, '.probe-ok');
   const script = [
     'const fs = require("node:fs");',
@@ -2787,10 +2844,21 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
     'const path = require("node:path");',
     'if (fs.readFileSync(path.join(process.env.BOX_DIR, "tmp", ".probe-ok"), "utf8") !== "ok") process.exit(11);',
     'fs.writeFileSync(path.join(process.env.BOX_DIR, "tmp", ".probe-write"), "ok");',
-    'for (const ro of [path.join(process.env.BOX_DIR, "worktree", ".probe-ro"), path.join(process.env.BOX_DIR, "mutation", ".git", ".probe-ro"), path.join(process.env.BOX_DIR, "prompt.md")]) {',
+    'const gitDir = path.join(process.env.BOX_DIR, "mutation", ".git");',
+    'const original = fs.lstatSync(gitDir);',
+    'if (!original.isDirectory() || original.isSymbolicLink()) process.exit(19);',
+    'const aliases = [".git", ".GIT", ".gIt"].map(name => path.join(process.env.BOX_DIR, "mutation", name));',
+    'for (const alias of aliases) {',
+    '  const stat = fs.lstatSync(alias);',
+    '  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== original.dev || stat.ino !== original.ino) process.exit(19);',
+    '}',
+    'for (const relative of ["mutation/.probe-write", "mutation/.github/.probe-write"]) fs.writeFileSync(path.join(process.env.BOX_DIR, relative), "ok");',
+    'for (const ro of [path.join(process.env.BOX_DIR, "worktree", ".probe-ro"), ...aliases.map(dir => path.join(dir, ".probe-ro")), path.join(process.env.BOX_DIR, "prompt.md")]) {',
+    '  if (fs.readFileSync(ro, "utf8") !== "probe-original") process.exit(20);',
     '  let blocked = false;',
-    '  try { fs.writeFileSync(ro, "x"); } catch { blocked = true; }',
+    '  try { fs.writeFileSync(ro, "x"); } catch (error) { blocked = error.code === "EPERM" || error.code === "EACCES"; }',
     '  if (!blocked) process.exit(17);',
+    '  if (fs.readFileSync(ro, "utf8") !== "probe-original") process.exit(20);',
     '}',
     'if (process.env.AUTH_FILE) {',
     '  let blocked = false;',
@@ -2819,7 +2887,12 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
     fs.mkdirSync(probeTmpDir, { recursive: true });
     fs.mkdirSync(probeWorktreeDir, { recursive: true });
     fs.mkdirSync(probeMutGitDir, { recursive: true });
+    fs.mkdirSync(probeNearDir, { recursive: true });
     fs.writeFileSync(probeFile, 'ok');
+    fs.writeFileSync(path.join(probeWorktreeDir, '.probe-ro'), 'probe-original', { flag: 'wx' });
+    fs.writeFileSync(path.join(probeMutGitDir, '.probe-ro'), 'probe-original', { flag: 'wx' });
+    fs.writeFileSync(probePrompt, 'probe-original', { flag: 'wx' });
+    promptCreated = true;
     const nodeExec = fs.realpathSync(process.execPath);
     const r = spawnSyncImpl(sandboxExec, [
       '-p', profile,
@@ -2845,6 +2918,7 @@ function runGrokSeatbeltProbe({ boxDir, relayPort, authFile = '', unallowedPort 
     }
     return { ok: true };
   } finally {
+    if (promptCreated) fs.unlinkSync(probePrompt);
     for (const p of [probeTmpDir, probeWorktreeDir, path.join(boxDir, 'mutation')]) {
       try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
     }
@@ -2975,6 +3049,8 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
   const upReqs = new Set();
   const upResps = new Set();
   let isClosed = false;
+  let failed = false;
+  let closePromise;
 
   const server = http.createServer((req, res) => {
     if (req.method === 'CONNECT') {
@@ -3003,7 +3079,8 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
     headers.authorization = `Bearer ${realBearer}`;
     const pathname = String(req.url || '').split('?')[0];
     forwarded.push(`${String(req.method || '').toUpperCase()} ${pathname}`);
-    const up = requestImpl({
+    let up;
+    try { up = requestImpl({
       host: upstreamHost,
       port: 443,
       method: req.method,
@@ -3012,6 +3089,8 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
       timeout: 300000,
     }, (upRes) => {
       upResps.add(upRes);
+      upRes.once('aborted', () => { if (!isClosed) failed = true; });
+      upRes.once('error', () => { if (!isClosed) failed = true; });
       upRes.once('close', () => upResps.delete(upRes));
       const out = {};
       for (const [k, v] of Object.entries(upRes.headers || {})) {
@@ -3019,13 +3098,21 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
       }
       res.writeHead(upRes.statusCode || 502, out);
       upRes.pipe(res);
-    });
+    }); } catch {
+      failed = true;
+      res.writeHead(502, { 'content-type': 'text/plain' });
+      res.end('relay: upstream unreachable');
+      req.resume();
+      return;
+    }
     upReqs.add(up);
     up.once('close', () => upReqs.delete(up));
     up.on('error', () => {
+      if (!isClosed) failed = true;
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
       res.end('relay: upstream unreachable');
     });
+    up.once('timeout', () => { failed = true; up.destroy(); });
     req.pipe(up);
   });
 
@@ -3033,6 +3120,8 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
   });
+  server.on('error', () => { failed = true; });
+  server.on('close', () => { if (!isClosed) failed = true; });
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -3046,17 +3135,30 @@ async function startGrokRelay({ realBearer, dummyBearer, upstreamHost = GROK_UPS
     blockingRefusals,
     toleratedRefusals,
     forwarded,
-    close: () => new Promise((resolve) => {
-      if (isClosed) return resolve();
-      isClosed = true;
-      for (const s of sockets) s.destroy();
-      for (const r of upReqs) r.destroy();
-      for (const r of upResps) r.destroy();
-      sockets.clear();
-      upReqs.clear();
-      upResps.clear();
-      server.close(() => resolve());
-    }),
+    get failed() { return failed; },
+    close: () => {
+      if (closePromise) return closePromise;
+      closePromise = new Promise((resolve, reject) => {
+        isClosed = true;
+        const timer = setTimeout(() => reject(new Error('relay cleanup timeout')), GROK_CLEANUP_MS);
+        try {
+          for (const s of sockets) s.destroy();
+          for (const r of upReqs) r.destroy();
+          for (const r of upResps) r.destroy();
+          sockets.clear();
+          upReqs.clear();
+          upResps.clear();
+          server.close(error => {
+            clearTimeout(timer);
+            if (error) reject(new Error('relay cleanup failed')); else resolve();
+          });
+        } catch {
+          clearTimeout(timer);
+          reject(new Error('relay cleanup failed'));
+        }
+      });
+      return closePromise;
+    },
   };
 }
 
@@ -3123,6 +3225,23 @@ function snapshotTreeState(rootDir) {
 }
 
 function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSha = null, headSha = null, extraShas = [], copySpawn = spawnSync } = {}) {
+  // 來源歷史可被 replace/grafts 改寫；複製前拒收，而非改動宿主設定來猜原歷史。
+  for (const source of new Set([srcTree, rootRepo].filter(Boolean))) {
+    let polluted;
+    try {
+      polluted = Boolean(git(source, ['for-each-ref', '--format=%(refname)', 'refs/replace/']).trim());
+      const graftPath = path.resolve(source, git(source, ['rev-parse', '--git-path', 'info/grafts']));
+      try {
+        fs.lstatSync(graftPath);
+        polluted = true;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    } catch {
+      throw new LaunchError('無法核對來源歷史替換狀態');
+    }
+    if (polluted) throw new LaunchError('來源含歷史替換（replace/grafts），拒絕建立審查材料');
+  }
   const resolveCommit = (repoDir, rev) => (repoDir && rev && gitOk(repoDir, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
     ? git(repoDir, ['rev-parse', '--verify', `${rev}^{commit}`])
     : null);
@@ -3260,24 +3379,91 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
   return targetHead;
 }
 
-async function findActiveNeedles(needles, filePath) {
-  if (!needles.length) return [];
-  const found = new Set();
-  const maxNeedleLen = Math.max(...needles.map((n) => n.length));
-  const carryLen = maxNeedleLen > 1 ? maxNeedleLen - 1 : 0;
-  let carry = '';
-  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
-  for await (const chunk of stream) {
-    const combined = carry + chunk;
-    for (const n of needles) {
-      if (combined.includes(n)) found.add(n);
-    }
-    carry = carryLen ? combined.slice(-carryLen) : '';
+const GROK_WALL_MS = 60 * 60 * 1000;
+const GROK_CLEANUP_MS = 10000;
+
+// exit 與 close 分開：後代可持有管線，不能用 close 當作開始收尾的條件。
+async function runGrokChild(command, args, options, deps = {}) {
+  const wallMs = deps.wallMs ?? GROK_WALL_MS;
+  const cleanupMs = deps.cleanupMs ?? GROK_CLEANUP_MS;
+  const kill = deps.kill || process.kill.bind(process);
+  if (deps.signal?.aborted) return { status: 2, stdout: '', groupEmpty: true };
+  const startedAt = Date.now();
+  const deadline = startedAt + wallMs;
+  try { deps.onStart?.({ startedAt, deadline, wallMs, cleanupMs }); }
+  catch { return { status: 2, stdout: '', groupEmpty: true, startedAt, deadline }; }
+  let child;
+  try { child = (deps.spawnChild || spawn)(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch { return { status: 2, stdout: '', groupEmpty: true, startedAt, deadline }; }
+  const pid = child.pid;
+  const trustedPid = Number.isSafeInteger(pid) && pid > 1;
+  let stdout = '';
+  let stderr = '';
+  let closed = false;
+  let invalid = false;
+  let finishing = false;
+  let settle;
+  const done = new Promise(resolve => { settle = resolve; });
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', data => { stdout += data; });
+  child.stderr?.on('data', data => { stderr += data; });
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  function groupState() {
+    if (!trustedPid) return 'unknown';
+    try { kill(-pid, 0); return 'alive'; }
+    catch (error) { return error.code === 'ESRCH' ? 'empty' : 'unknown'; }
   }
-  return needles.filter((n) => !found.has(n));
+  function signalGroup(signal) {
+    try { kill(-pid, signal); return true; }
+    catch (error) { return error.code === 'ESRCH'; }
+  }
+  async function finish(status) {
+    if (finishing) return;
+    finishing = true;
+    const cleanupDeadline = Date.now() + cleanupMs;
+    let state = groupState();
+    if (state === 'alive' && !signalGroup('SIGTERM')) invalid = true;
+    const forceAt = Date.now() + Math.min(250, cleanupMs / 2);
+    let forced = false;
+    while (state === 'alive' && Date.now() < cleanupDeadline) {
+      if (!forced && Date.now() >= forceAt) {
+        forced = true;
+        if (!signalGroup('SIGKILL')) invalid = true;
+      }
+      await delay(20);
+      state = groupState();
+    }
+    while (!closed && Date.now() < cleanupDeadline) await delay(20);
+    const groupEmpty = state === 'empty';
+    if (!groupEmpty || !closed) invalid = true;
+    clearTimeout(timer);
+    clearInterval(watch);
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
+    deps.signal?.removeEventListener('abort', cancel);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref();
+    settle({ status: invalid || status === null ? 2 : status, stdout, stderr, pid, groupEmpty, startedAt, deadline });
+  }
+  function cancel() { invalid = true; void finish(2); }
+  const timer = setTimeout(cancel, Math.max(0, deadline - Date.now()));
+  const watch = setInterval(() => {
+    try { if (deps.failed?.()) cancel(); } catch { cancel(); }
+  }, 25);
+  process.on('SIGINT', cancel);
+  process.on('SIGTERM', cancel);
+  deps.signal?.addEventListener('abort', cancel, { once: true });
+  child.once('error', () => { invalid = true; void finish(2); });
+  child.once('exit', status => { void finish(status); });
+  child.once('close', status => { closed = true; void finish(status); });
+  if (deps.signal?.aborted || !trustedPid) cancel();
+  return done;
 }
 
 async function runGrokExec(argv, deps = {}) {
+  const removeBox = deps.removeBox || fs.rmSync;
   const parsed = parseGrokExecArgs(argv);
   if (parsed.error) return { code: 2, lines: [`送審產生器（Grok 隔離執行）：${parsed.error}——拒絕啟動。`] };
 
@@ -3310,7 +3496,15 @@ async function runGrokExec(argv, deps = {}) {
 
   let relay = null;
   let boxDir = null;
+  // 子程序退出後仍有非同步資源要收；取消資格必須保留到結果落地前。
+  const cancellation = new AbortController();
+  const cancelExecution = () => cancellation.abort();
+  process.on('SIGINT', cancelExecution);
+  process.on('SIGTERM', cancelExecution);
+  deps.signal?.addEventListener('abort', cancelExecution, { once: true });
+  if (deps.signal?.aborted) cancelExecution();
   try {
+    if (cancellation.signal.aborted) return { code: 2, lines: ['送審產生器（Grok 隔離執行）：已取消——未寫出結果。'] };
     relay = await startGrokRelay({
       realBearer: authInfo.realBearer,
       dummyBearer: authInfo.dummyBearer,
@@ -3355,6 +3549,8 @@ async function runGrokExec(argv, deps = {}) {
     }
 
     let promptText = fs.readFileSync(promptPath, 'utf8');
+    // 排除範圍只認本次讀入的原提示；附加差異或路徑改寫不得擴張例外。
+    const activeNeedles = authInfo.needles.filter((needle) => !promptText.includes(needle));
     if (parsed.mode === 'scan') {
       if (!recMeta || !/^[0-9a-fA-F]{40}$/.test(recMeta.base) || !/^[0-9a-fA-F]{40}$/.test(recMeta.head)) {
         return { code: 2, lines: ['送審產生器（Grok 隔離執行）：掃描模式缺少合法的 scan.json (需含 40-hex base/head)——拒絕啟動。'] };
@@ -3517,8 +3713,7 @@ async function runGrokExec(argv, deps = {}) {
         grokArgs,
         env: childEnv,
       })
-      : await new Promise((resolve) => {
-        const child = (deps.spawnChild || spawn)(sandboxExec, [
+      : await runGrokChild(sandboxExec, [
           '-p', profile,
           '-D', `SCAN_DIR=${boxDir}`,
           '-D', `RELAY_PORT=${relay.port}`,
@@ -3527,21 +3722,19 @@ async function runGrokExec(argv, deps = {}) {
         ], {
           cwd: boxWorktree,
           env: childEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
+        }, {
+          spawnChild: deps.spawnChild,
+          signal: cancellation.signal,
+          failed: () => relay.failed || relay.blockingRefusals.length > 0,
+          onStart: limits => fs.writeFileSync(path.join(metaDir, 'execution.json'), JSON.stringify({
+            ...limits, mode: parsed.mode, model: parsed.model, effort: parsed.effort,
+          }, null, 2), { flag: 'wx' }),
         });
-        let stdout = '';
-        let stderr = '';
-        child.stdout.setEncoding('utf8');
-        child.stderr.setEncoding('utf8');
-        child.stdout.on('data', (d) => { stdout += d; });
-        child.stderr.on('data', (d) => { stderr += d; });
-        child.on('error', (err) => resolve({ status: 2, stdout, stderr: err.message }));
-        child.on('close', (status) => resolve({ status: status === null ? 2 : status, stdout, stderr }));
-      });
 
     if (runResult.status !== 0) {
       return { code: 2, lines: [`送審產生器（Grok 隔離執行）：Grok 退 ${runResult.status}——未寫出結果。`] };
     }
+    if (relay.failed) return { code: 2, lines: ['送審產生器（Grok 隔離執行）：受控認證通道失效——未寫出結果。'] };
     if (relay.blockingRefusals.length > 0) {
       return { code: 2, lines: [`送審產生器（Grok 隔離執行）：受控認證通道攔截到 ${relay.blockingRefusals.length} 筆未授權請求——已拒絕寫出結果。`] };
     }
@@ -3553,7 +3746,6 @@ async function runGrokExec(argv, deps = {}) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：執行後盒內工作樹或 .git 狀態被改動（違反唯讀邊界）——已拒絕寫出結果。'] };
     }
     const rawOutput = String(runResult.stdout || '');
-    const activeNeedles = await findActiveNeedles(authInfo.needles, boxPromptFile);
     if (activeNeedles.some((n) => rawOutput.includes(n))) {
       return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
     }
@@ -3587,13 +3779,29 @@ async function runGrokExec(argv, deps = {}) {
     }
 
     const cleanedOutput = stripGrokPreamble(rawOutput, parsed.mode);
+    try {
+      await relay.close();
+      relay = null;
+      removeBox(boxDir, { recursive: true, force: true });
+      boxDir = null;
+    } catch {
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：本次資源收尾失敗——未寫出結果。'] };
+    }
+    if (cancellation.signal.aborted) return { code: 2, lines: ['送審產生器（Grok 隔離執行）：已取消——未寫出結果。'] };
     fs.writeFileSync(outPath, cleanedOutput);
     return { code: 0, lines: [] };
   } finally {
-    if (relay) await relay.close();
-    if (boxDir) {
-      try { fs.rmSync(boxDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    let cleanupFailed = false;
+    if (relay) {
+      try { await relay.close(); } catch { cleanupFailed = true; }
     }
+    if (boxDir) {
+      try { removeBox(boxDir, { recursive: true, force: true }); } catch { cleanupFailed = true; }
+    }
+    process.removeListener('SIGINT', cancelExecution);
+    process.removeListener('SIGTERM', cancelExecution);
+    deps.signal?.removeEventListener('abort', cancelExecution);
+    if (cleanupFailed) return { code: 2, lines: ['送審產生器（Grok 隔離執行）：本次資源收尾失敗——未寫出結果。'] };
   }
 }
 
@@ -3878,4 +4086,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, unwrapScanOutput, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, unwrapScanOutput, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, runGrokChild, GROK_WALL_MS, GROK_CLEANUP_MS, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
