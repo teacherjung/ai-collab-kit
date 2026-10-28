@@ -3090,6 +3090,32 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       assert.match(resF2.res.lines.join('\n'), /DLP/, hintF);
     });
 
+    await t.test('DLP 拒收階段僅固定標記，原字串優先且解碼鍵值仍守門', async () => {
+      const text = '🤖 Grok｜來源：Grok CLI｜審 `1234567`｜r1｜結論：通過\n### 本輪實際用的設定\n- ok\n### 清單逐項結果\n- 零發現\n未貼\n';
+      const valid = [JSON.stringify(initEvent),
+        JSON.stringify({ type: 'assistant', session_id: sessId, parent_tool_use_id: null, message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text }] } }),
+        JSON.stringify({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: sessId, result: text })];
+      const samples = [
+        ['raw', 'VALID-KEY-111', 'dlp_raw'],
+        ['both', '{"marker":"VALID-KEY-111"}', 'dlp_raw'],
+        ['value', '{"marker":"V\\u0041LID-KEY-111"}', 'dlp_decoded'],
+        ['key', '{"V\\u0041LID-KEY-111":"marker"}', 'dlp_decoded'],
+      ];
+      for (const [name, payload, stage] of samples) {
+        assert.equal(payload.includes('VALID-KEY-111'), stage === 'dlp_raw', name);
+        const outcome = await runStream([valid[0], payload, ...valid.slice(1)], 'review', 2);
+        assert.equal(outcome.spawnCalled, true, name);
+        assert.equal(outcome.output, null, name);
+        assert.deepEqual(outcome.res.lines, [
+          '送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。',
+          `拒收階段：${stage}`,
+        ], name);
+        assert.equal(JSON.stringify(outcome.res).includes('VALID-KEY-111'), false, name);
+      }
+      const normal = await runStream(valid, 'review', 0, valid.join('\n') + '\n');
+      assert.equal(normal.spawnCalled, true);
+    });
+
     await t.test('失敗診斷只投影白名單，不帶原始回覆與請求內容', async () => {
       const secret = 'SYNTHETIC-DIAGNOSTIC-CONTENT';
       const diagnostic = { trigger: 'deadline', vetoTrigger: 'cancelled', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,

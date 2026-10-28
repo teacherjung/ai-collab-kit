@@ -3780,7 +3780,7 @@ async function runGrokExec(argv, deps = {}) {
     }
     const rawOutput = String(runResult.stdout || '');
     if (activeNeedles.some((n) => rawOutput.includes(n))) {
-      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
+      return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。', '拒收階段：dlp_raw'] };
     }
     const ndLines = rawOutput.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
 
@@ -3803,7 +3803,7 @@ async function runGrokExec(argv, deps = {}) {
       let obj;
       try { obj = JSON.parse(line); } catch { continue; }
       if (findNeedleInObj(obj, activeNeedles)) {
-        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。'] };
+        return { code: 2, lines: ['送審產生器（Grok 隔離執行）：輸出疑似含真實憑證或私密欄位（DLP 攔截）——已拒絕寫出結果。', '拒收階段：dlp_decoded'] };
       }
     }
     const strictParsed = parseGrokStrictNDJSON(rawOutput, 'Grok 執行');
