@@ -1,5 +1,11 @@
 # Grok 隔離執行環境失敗調查與修正計畫 (2026-10-25 正式送審前快照，真探針 HEAD 3378941 之後)
 
+## 2026-10-29 本支複審改派
+
+- [本人指示](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6476591085)要求先排除 Gemini 工作衝突，再交全新 GPT-6.1 Sol／xhigh 複審；下方 Grok 分工保留為歷史，所有掃描仍暫停。
+- 依[技術裁示](https://github.com/teacherjung/personal-finance-webapp/pull/747#issuecomment-6476698003)，只新增套件實體 Sol 參與者／複審設定、命令釘值與設定產物，沿既有 Codex CLI 樣板及來源；全域分工、其他審查者、安全檢查與合併閘不變。技術裁示者不兼任本支正式複審者。
+- 此登記不等於模型已執行；新固定版本須完整檢查、新 CI、官方備審及可信原生模型／推理證據，正式結論由官方收件後仍獨立對帳與跑全部閘。舊 DLP 拒收證據不改，不讀遭拒內容或真實認證，不用換人解除舊阻擋。
+
 ## 2026-10-27 接手後的修補範圍
 
 - [本人交接授權](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6449877394)：Codex 接手、Grok 正式複審，保留原工作與失敗證據；所有掃描（含下述歷史計畫的 #119 補掃）暫停。完成 #128、#129 後依正式程序同步理財，再接續 #747；下方早期分工與暫不同步敘述是歷史紀錄。
