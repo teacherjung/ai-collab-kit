@@ -3382,19 +3382,36 @@ function materializeIsolatedGitRepo(srcTree, destTree, { rootRepo = null, baseSh
 const GROK_WALL_MS = 60 * 60 * 1000;
 const GROK_CLEANUP_MS = 10000;
 
+// 診斷不可序列化子程序回覆：只投影內容無關的觀測欄位。
+function grokDiagnostic(value = {}) {
+  const triggers = ['record_failed', 'spawn_failed', 'child_exit', 'deadline', 'cancelled', 'relay_problem'];
+  const states = ['empty', 'alive', 'unknown'];
+  return {
+    trigger: triggers.includes(value.trigger) ? value.trigger : 'unknown',
+    childExitCode: Number.isInteger(value.childExitCode) && value.childExitCode >= 0 && value.childExitCode <= 255 ? value.childExitCode : null,
+    childSignalled: typeof value.childSignalled === 'boolean' ? value.childSignalled : null,
+    groupState: states.includes(value.groupState) ? value.groupState : 'unknown',
+    pipesClosed: typeof value.pipesClosed === 'boolean' ? value.pipesClosed : null,
+    cleanupFailed: typeof value.cleanupFailed === 'boolean' ? value.cleanupFailed : null,
+    elapsedMs: Number.isSafeInteger(value.elapsedMs) && value.elapsedMs >= 0 ? value.elapsedMs : null,
+  };
+}
+
 // exit 與 close 分開：後代可持有管線，不能用 close 當作開始收尾的條件。
 async function runGrokChild(command, args, options, deps = {}) {
   const wallMs = deps.wallMs ?? GROK_WALL_MS;
   const cleanupMs = deps.cleanupMs ?? GROK_CLEANUP_MS;
   const kill = deps.kill || process.kill.bind(process);
-  if (deps.signal?.aborted) return { status: 2, stdout: '', groupEmpty: true };
   const startedAt = Date.now();
   const deadline = startedAt + wallMs;
+  const beforeSpawn = trigger => ({ status: 2, stdout: '', groupEmpty: true, startedAt, deadline,
+    diagnostic: grokDiagnostic({ trigger, groupState: 'empty', pipesClosed: true, cleanupFailed: false, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
+  if (deps.signal?.aborted) return beforeSpawn('cancelled');
   try { deps.onStart?.({ startedAt, deadline, wallMs, cleanupMs }); }
-  catch { return { status: 2, stdout: '', groupEmpty: true, startedAt, deadline }; }
+  catch { return beforeSpawn('record_failed'); }
   let child;
   try { child = (deps.spawnChild || spawn)(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
-  catch { return { status: 2, stdout: '', groupEmpty: true, startedAt, deadline }; }
+  catch { return beforeSpawn('spawn_failed'); }
   const pid = child.pid;
   const trustedPid = Number.isSafeInteger(pid) && pid > 1;
   let stdout = '';
@@ -3402,6 +3419,10 @@ async function runGrokChild(command, args, options, deps = {}) {
   let closed = false;
   let invalid = false;
   let finishing = false;
+  let trigger = null;
+  let childExitCode = null;
+  let childSignalled = null;
+  let cleanupFailed = false;
   let settle;
   const done = new Promise(resolve => { settle = resolve; });
   child.stdout?.setEncoding('utf8');
@@ -3423,20 +3444,20 @@ async function runGrokChild(command, args, options, deps = {}) {
     finishing = true;
     const cleanupDeadline = Date.now() + cleanupMs;
     let state = groupState();
-    if (state === 'alive' && !signalGroup('SIGTERM')) invalid = true;
+    if (state === 'alive' && !signalGroup('SIGTERM')) { invalid = true; cleanupFailed = true; }
     const forceAt = Date.now() + Math.min(250, cleanupMs / 2);
     let forced = false;
     while (state === 'alive' && Date.now() < cleanupDeadline) {
       if (!forced && Date.now() >= forceAt) {
         forced = true;
-        if (!signalGroup('SIGKILL')) invalid = true;
+        if (!signalGroup('SIGKILL')) { invalid = true; cleanupFailed = true; }
       }
       await delay(20);
       state = groupState();
     }
     while (!closed && Date.now() < cleanupDeadline) await delay(20);
     const groupEmpty = state === 'empty';
-    if (!groupEmpty || !closed) invalid = true;
+    if (!groupEmpty || !closed) { invalid = true; cleanupFailed = true; }
     clearTimeout(timer);
     clearInterval(watch);
     process.removeListener('SIGINT', cancel);
@@ -3445,20 +3466,22 @@ async function runGrokChild(command, args, options, deps = {}) {
     child.stdout?.destroy();
     child.stderr?.destroy();
     child.unref();
-    settle({ status: invalid || status === null ? 2 : status, stdout, stderr, pid, groupEmpty, startedAt, deadline });
+    settle({ status: invalid || status === null ? 2 : status, stdout, stderr, pid, groupEmpty, startedAt, deadline,
+      diagnostic: grokDiagnostic({ trigger, childExitCode, childSignalled, groupState: state, pipesClosed: closed, cleanupFailed, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
   }
-  function cancel() { invalid = true; void finish(2); }
-  const timer = setTimeout(cancel, Math.max(0, deadline - Date.now()));
+  function cancel(reason) { trigger ??= typeof reason === 'string' && !['SIGINT', 'SIGTERM'].includes(reason) ? reason : 'cancelled'; invalid = true; void finish(2); }
+  const timer = setTimeout(() => cancel('deadline'), Math.max(0, deadline - Date.now()));
   const watch = setInterval(() => {
-    try { if (deps.failed?.()) cancel(); } catch { cancel(); }
+    try { if (deps.failed?.()) cancel('relay_problem'); } catch { cancel('relay_problem'); }
   }, 25);
   process.on('SIGINT', cancel);
   process.on('SIGTERM', cancel);
   deps.signal?.addEventListener('abort', cancel, { once: true });
-  child.once('error', () => { invalid = true; void finish(2); });
-  child.once('exit', status => { void finish(status); });
+  child.once('error', () => { trigger ??= 'spawn_failed'; invalid = true; void finish(2); });
+  child.once('exit', (status, signal) => { childExitCode = status; childSignalled = Boolean(signal); trigger ??= 'child_exit'; void finish(status); });
   child.once('close', status => { closed = true; void finish(status); });
-  if (deps.signal?.aborted || !trustedPid) cancel();
+  if (deps.signal?.aborted) cancel();
+  else if (!trustedPid) cancel('spawn_failed');
   return done;
 }
 
@@ -3732,7 +3755,7 @@ async function runGrokExec(argv, deps = {}) {
         });
 
     if (runResult.status !== 0) {
-      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：Grok 退 ${runResult.status}——未寫出結果。`] };
+      return { code: 2, lines: [`送審產生器（Grok 隔離執行）：Grok 退 ${runResult.status}——未寫出結果。`, `執行觀測：${JSON.stringify(grokDiagnostic(runResult.diagnostic))}`] };
     }
     if (relay.failed) return { code: 2, lines: ['送審產生器（Grok 隔離執行）：受控認證通道失效——未寫出結果。'] };
     if (relay.blockingRefusals.length > 0) {

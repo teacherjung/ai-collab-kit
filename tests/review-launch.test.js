@@ -2259,13 +2259,14 @@ test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', 
   const { runGrokChild } = require('../tools/review-launch');
   assert.equal(typeof runGrokChild, 'function');
   const { gitEnv } = require('../tools/git-env');
-  for (const mode of ['normal', 'nonzero', 'timeout', 'cancel', 'relay']) {
+  for (const mode of ['normal', 'nonzero', 'timeout', 'cancel', 'relay', 'SIGINT', 'SIGTERM']) {
     const controller = new AbortController();
     let broken = false;
     const beforeInt = process.listenerCount('SIGINT');
     const beforeTerm = process.listenerCount('SIGTERM');
     const timer = mode === 'cancel' ? setTimeout(() => controller.abort(), 100)
-      : mode === 'relay' ? setTimeout(() => { broken = true; }, 100) : null;
+      : mode === 'relay' ? setTimeout(() => { broken = true; }, 100)
+      : ['SIGINT', 'SIGTERM'].includes(mode) ? setTimeout(() => process.emit(mode, mode, mode === 'SIGINT' ? 2 : 15), 100) : null;
     const source = mode === 'normal' ? 'process.stdout.write("合成🤖");'
       : mode === 'nonzero' ? 'process.exitCode=3;' : 'setTimeout(()=>process.exit(0),500);';
     let result;
@@ -2278,6 +2279,13 @@ test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', 
       });
     } finally { clearTimeout(timer); }
     assert.equal(result.status, mode === 'normal' ? 0 : mode === 'nonzero' ? 3 : 2, mode);
+    assert.ok(result.diagnostic, '檢查 runGrokChild 的有限診斷，重跑本檔有界子程序題');
+    assert.equal(result.diagnostic.trigger, ({ normal: 'child_exit', nonzero: 'child_exit', timeout: 'deadline', cancel: 'cancelled', relay: 'relay_problem', SIGINT: 'cancelled', SIGTERM: 'cancelled' })[mode]);
+    assert.equal(result.diagnostic.childExitCode, mode === 'normal' ? 0 : mode === 'nonzero' ? 3 : null);
+    assert.equal(result.diagnostic.groupState, 'empty');
+    assert.equal(result.diagnostic.pipesClosed, true);
+    assert.equal(result.diagnostic.cleanupFailed, false);
+    assert.ok(result.diagnostic.elapsedMs >= 0);
     if (mode === 'normal') assert.equal(result.stdout, '合成🤖');
     assert.equal(result.groupEmpty, true, mode);
     assert.equal(result.deadline, fixedLimits.deadline);
@@ -2286,6 +2294,50 @@ test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', 
     assert.equal(process.listenerCount('SIGINT'), beforeInt);
     assert.equal(process.listenerCount('SIGTERM'), beforeTerm);
   }
+});
+
+test('Grok 有界子程序診斷分離觸發與清理且不留合成機密', async () => {
+  const { runGrokChild } = require('../tools/review-launch');
+  const { gitEnv } = require('../tools/git-env');
+  const secret = 'SYNTHETIC-PRIVATE-DIAGNOSTIC';
+  const source = `process.stdout.write(${JSON.stringify(secret)});process.stderr.write(${JSON.stringify(secret)});process.exitCode=2;`;
+  const direct = await runGrokChild(process.execPath, ['-e', source], { env: gitEnv() });
+  assert.equal(direct.status, 2);
+  assert.equal(direct.diagnostic.trigger, 'child_exit');
+  assert.equal(direct.diagnostic.childExitCode, 2);
+  assert.equal(direct.diagnostic.childSignalled, false);
+  assert.equal(direct.stdout, secret);
+  assert.equal(direct.stderr, secret);
+  assert.equal(JSON.stringify(direct.diagnostic).includes(secret), false);
+  for (const stage of ['record', 'spawn']) {
+    let spawned = false;
+    const failed = await runGrokChild(secret, [secret], { env: gitEnv() }, {
+      onStart() { if (stage === 'record') throw new Error(secret); },
+      spawnChild() { spawned = true; throw new Error(secret); },
+    });
+    assert.equal(failed.status, 2);
+    assert.equal(failed.diagnostic.trigger, stage === 'record' ? 'record_failed' : 'spawn_failed');
+    assert.equal(spawned, stage === 'spawn');
+    assert.equal(failed.diagnostic.childExitCode, null);
+    assert.equal(JSON.stringify(failed.diagnostic).includes(secret), false);
+  }
+  const missing = await runGrokChild(`/synthetic-missing/${secret}`, [], { env: gitEnv() }, { cleanupMs: 100 });
+  assert.equal(missing.status, 2);
+  assert.equal(missing.diagnostic.trigger, 'spawn_failed');
+  assert.equal(missing.diagnostic.childExitCode, null);
+  assert.equal(JSON.stringify(missing.diagnostic).includes(secret), false);
+  const combined = await runGrokChild(process.execPath, ['-e', 'setTimeout(()=>process.exit(0),250)'], { env: gitEnv() }, {
+    wallMs: 50, cleanupMs: 500,
+    kill(pid, signal) { if (signal === 0) throw Object.assign(new Error(secret), { code: 'EPERM' }); return process.kill(pid, signal); },
+  });
+  assert.equal(combined.status, 2);
+  assert.equal(combined.diagnostic.trigger, 'deadline');
+  assert.equal(combined.diagnostic.childExitCode, 0);
+  assert.equal(combined.diagnostic.groupState, 'unknown');
+  assert.equal(combined.diagnostic.cleanupFailed, true);
+  assert.equal(combined.diagnostic.pipesClosed, true);
+  assert.equal(JSON.stringify(combined.diagnostic).includes(secret), false);
+  assert.throws(() => process.kill(-combined.pid, 0), { code: 'ESRCH' });
 });
 
 test('Grok 有界子程序收持管線後代且不碰另一群組，未知狀態拒收', async () => {
@@ -2311,6 +2363,11 @@ test('Grok 有界子程序收持管線後代且不碰另一群組，未知狀態
       kill: (pid, signal) => { if (signal === 0) throw Object.assign(new Error('synthetic'), { code: 'EPERM' }); return process.kill(pid, signal); },
     });
     assert.equal(unknown.status, 2);
+    assert.ok(unknown.diagnostic, '檢查 runGrokChild 的清理診斷，重跑本檔有界子程序題');
+    assert.equal(unknown.diagnostic.trigger, 'child_exit');
+    assert.equal(unknown.diagnostic.childExitCode, 0);
+    assert.equal(unknown.diagnostic.cleanupFailed, true);
+    assert.equal(unknown.diagnostic.groupState, 'unknown');
     assert.equal(unknown.groupEmpty, false);
     assert.throws(() => process.kill(-unknown.pid, 0), { code: 'ESRCH' });
   } finally {
@@ -2432,7 +2489,7 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
     let capturedBoxDir = null;
     let capturedBoxPromptContent = null;
     let spawnCalled = false;
-    const runStream = async (stdoutLines, mode = 'review', expectCode = 0, checkOutFile = null, { workingDir = r.dir, metadataName = null, deleteMetadata = false, metadataRoot = r.dir, metadataBase = r.base, metadataHead = r.head, checkBox = null, stderr = '', status = 0, mutationSetup = null, cleanupFailure = false, cleanupCancel = false, upstreamFailure = false } = {}) => {
+    const runStream = async (stdoutLines, mode = 'review', expectCode = 0, checkOutFile = null, { workingDir = r.dir, metadataName = null, deleteMetadata = false, metadataRoot = r.dir, metadataBase = r.base, metadataHead = r.head, checkBox = null, stderr = '', status = 0, diagnostic, mutationSetup = null, cleanupFailure = false, cleanupCancel = false, upstreamFailure = false } = {}) => {
       const runTmp = fs.mkdtempSync(path.join(tmp, 'run-'));
       const outFile = path.join(runTmp, `out.md`);
       const metaName = metadataName || (mode === 'scan' ? 'scan.json' : 'launch.json');
@@ -2486,7 +2543,7 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
             await response.text();
           }
           const stdoutStr = Array.isArray(stdoutLines) ? stdoutLines.join('\n') + '\n' : stdoutLines;
-          return { status, stdout: stdoutStr, stderr };
+          return { status, stdout: stdoutStr, stderr, diagnostic };
         },
       });
       assert.deepEqual(['SIGINT', 'SIGTERM'].map(name => process.listenerCount(name)), signalCounts, '取消監聽必須在收尾後釋放');
@@ -2976,6 +3033,27 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       assert.equal(resF2.spawnCalled, true, hintF);
       assert.equal(resF2.res.lines.join('\n').includes('VALID-KEY-111'), false, hintF);
       assert.match(resF2.res.lines.join('\n'), /DLP/, hintF);
+    });
+
+    await t.test('失敗診斷只投影白名單，不帶原始回覆與請求內容', async () => {
+      const secret = 'SYNTHETIC-DIAGNOSTIC-CONTENT';
+      const diagnostic = { trigger: 'deadline', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
+        stdout: secret, stderr: secret, url: `https://example.invalid/${secret}`, headers: { authorization: secret }, path: `/synthetic/${secret}`, error: new Error(secret) };
+      const outcome = await runStream(secret, 'review', 2, null, { status: 2, stderr: secret, diagnostic });
+      const line = outcome.res.lines.find(x => x.startsWith('執行觀測：'));
+      assert.ok(line, '檢查非零回覆的有限診斷接線，重跑本檔失敗診斷題');
+      assert.deepEqual(JSON.parse(line.slice('執行觀測：'.length)), {
+        trigger: 'deadline', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
+      });
+      assert.equal(JSON.stringify(outcome.res).includes(secret), false);
+      assert.equal(outcome.output, null);
+      const unknown = await runStream(secret, 'review', 2, null, { status: 2, diagnostic: { trigger: secret, groupState: secret, childExitCode: secret, elapsedMs: secret } });
+      const safeLine = unknown.res.lines.find(x => x.startsWith('執行觀測：'));
+      assert.ok(safeLine);
+      assert.deepEqual(JSON.parse(safeLine.slice('執行觀測：'.length)), {
+        trigger: 'unknown', childExitCode: null, childSignalled: null, groupState: 'unknown', pipesClosed: null, cleanupFailed: null, elapsedMs: null,
+      });
+      assert.equal(JSON.stringify(unknown.res).includes(secret), false);
     });
 
     await t.test('合成 stderr 不進成功結果或失敗訊息', async () => {
