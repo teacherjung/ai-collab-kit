@@ -3385,9 +3385,11 @@ const GROK_CLEANUP_MS = 10000;
 // 診斷不可序列化子程序回覆：只投影內容無關的觀測欄位。
 function grokDiagnostic(value = {}) {
   const triggers = ['record_failed', 'spawn_failed', 'child_exit', 'deadline', 'cancelled', 'relay_problem'];
+  const vetoes = ['none', 'deadline', 'cancelled', 'relay_problem'];
   const states = ['empty', 'alive', 'unknown'];
   return {
     trigger: triggers.includes(value.trigger) ? value.trigger : 'unknown',
+    vetoTrigger: vetoes.includes(value.vetoTrigger) ? value.vetoTrigger : 'unknown',
     childExitCode: Number.isInteger(value.childExitCode) && value.childExitCode >= 0 && value.childExitCode <= 255 ? value.childExitCode : null,
     childSignalled: typeof value.childSignalled === 'boolean' ? value.childSignalled : null,
     groupState: states.includes(value.groupState) ? value.groupState : 'unknown',
@@ -3405,7 +3407,7 @@ async function runGrokChild(command, args, options, deps = {}) {
   const startedAt = Date.now();
   const deadline = startedAt + wallMs;
   const beforeSpawn = trigger => ({ status: 2, stdout: '', groupEmpty: true, startedAt, deadline,
-    diagnostic: grokDiagnostic({ trigger, groupState: 'empty', pipesClosed: true, cleanupFailed: false, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
+    diagnostic: grokDiagnostic({ trigger, vetoTrigger: trigger === 'cancelled' ? 'cancelled' : 'none', groupState: 'empty', pipesClosed: true, cleanupFailed: false, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
   if (deps.signal?.aborted) return beforeSpawn('cancelled');
   try { deps.onStart?.({ startedAt, deadline, wallMs, cleanupMs }); }
   catch { return beforeSpawn('record_failed'); }
@@ -3420,6 +3422,7 @@ async function runGrokChild(command, args, options, deps = {}) {
   let invalid = false;
   let finishing = false;
   let trigger = null;
+  let vetoTrigger = null;
   let childExitCode = null;
   let childSignalled = null;
   let cleanupFailed = false;
@@ -3467,9 +3470,16 @@ async function runGrokChild(command, args, options, deps = {}) {
     child.stderr?.destroy();
     child.unref();
     settle({ status: invalid || status === null ? 2 : status, stdout, stderr, pid, groupEmpty, startedAt, deadline,
-      diagnostic: grokDiagnostic({ trigger, childExitCode, childSignalled, groupState: state, pipesClosed: closed, cleanupFailed, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
+      diagnostic: grokDiagnostic({ trigger, vetoTrigger: vetoTrigger ?? 'none', childExitCode, childSignalled, groupState: state, pipesClosed: closed, cleanupFailed, elapsedMs: Math.max(0, Date.now() - startedAt) }) });
   }
-  function cancel(reason) { trigger ??= typeof reason === 'string' && !['SIGINT', 'SIGTERM'].includes(reason) ? reason : 'cancelled'; invalid = true; void finish(2); }
+  function cancel(reason) {
+    const observed = typeof reason === 'string' && !['SIGINT', 'SIGTERM'].includes(reason) ? reason : 'cancelled';
+    trigger ??= observed;
+    // exit 先開始清理時，不能讓它遮住稍後的首個否決觀測。
+    if (observed !== 'spawn_failed') vetoTrigger ??= observed;
+    invalid = true;
+    void finish(2);
+  }
   const timer = setTimeout(() => cancel('deadline'), Math.max(0, deadline - Date.now()));
   const watch = setInterval(() => {
     try { if (deps.failed?.()) cancel('relay_problem'); } catch { cancel('relay_problem'); }

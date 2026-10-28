@@ -2296,6 +2296,61 @@ test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', 
   }
 });
 
+test('Grok 清理期間的首個否決保留原始退出與安全診斷', async () => {
+  const { runGrokChild } = require('../tools/review-launch');
+  const { EventEmitter } = require('node:events');
+  const { PassThrough } = require('node:stream');
+  for (const mode of ['cancelled', 'deadline', 'relay_problem', 'cancel_then_relay', 'none']) {
+    const controller = new AbortController();
+    const child = new EventEmitter();
+    child.pid = 12345678;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.unref = () => {};
+    let cleaning = false;
+    let empty = false;
+    let relayObserved = false;
+    const timers = [];
+    const close = () => { empty = true; child.emit('close', 0, null); };
+    let result;
+    try {
+      result = await runGrokChild('synthetic-only', [], {}, {
+        signal: controller.signal, wallMs: mode === 'deadline' ? 50 : 2000, cleanupMs: 1000,
+        spawnChild() { queueMicrotask(() => child.emit('exit', 0, null)); return child; },
+        kill(pid, signal) {
+          assert.equal(pid, -child.pid);
+          if (signal === 0 && empty) throw Object.assign(new Error('synthetic'), { code: 'ESRCH' });
+          if (signal === 'SIGTERM') {
+            cleaning = true;
+            queueMicrotask(() => {
+              if (mode === 'cancelled' || mode === 'cancel_then_relay') controller.abort();
+              if (mode === 'none' || mode === 'cancelled') close();
+              if (mode === 'deadline') timers.push(setTimeout(close, 100));
+            });
+          }
+          return true;
+        },
+        failed() {
+          if (!cleaning || !['relay_problem', 'cancel_then_relay'].includes(mode)) return false;
+          relayObserved = true;
+          queueMicrotask(close);
+          return true;
+        },
+      });
+    } finally { timers.forEach(clearTimeout); }
+    assert.equal(cleaning, true, mode);
+    assert.equal(relayObserved, ['relay_problem', 'cancel_then_relay'].includes(mode), mode);
+    assert.equal(result.status, mode === 'none' ? 0 : 2, mode);
+    assert.equal(result.diagnostic.trigger, 'child_exit', mode);
+    assert.equal(result.diagnostic.childExitCode, 0, mode);
+    assert.equal(result.diagnostic.childSignalled, false, mode);
+    assert.equal(result.diagnostic.groupState, 'empty', mode);
+    assert.equal(result.diagnostic.pipesClosed, true, mode);
+    assert.equal(result.diagnostic.cleanupFailed, false, mode);
+    assert.equal(result.diagnostic.vetoTrigger, mode === 'cancel_then_relay' ? 'cancelled' : mode, mode);
+  }
+});
+
 test('Grok 有界子程序診斷分離觸發與清理且不留合成機密', async () => {
   const { runGrokChild } = require('../tools/review-launch');
   const { gitEnv } = require('../tools/git-env');
@@ -3037,21 +3092,21 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
 
     await t.test('失敗診斷只投影白名單，不帶原始回覆與請求內容', async () => {
       const secret = 'SYNTHETIC-DIAGNOSTIC-CONTENT';
-      const diagnostic = { trigger: 'deadline', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
+      const diagnostic = { trigger: 'deadline', vetoTrigger: 'cancelled', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
         stdout: secret, stderr: secret, url: `https://example.invalid/${secret}`, headers: { authorization: secret }, path: `/synthetic/${secret}`, error: new Error(secret) };
       const outcome = await runStream(secret, 'review', 2, null, { status: 2, stderr: secret, diagnostic });
       const line = outcome.res.lines.find(x => x.startsWith('執行觀測：'));
       assert.ok(line, '檢查非零回覆的有限診斷接線，重跑本檔失敗診斷題');
       assert.deepEqual(JSON.parse(line.slice('執行觀測：'.length)), {
-        trigger: 'deadline', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
+        trigger: 'deadline', vetoTrigger: 'cancelled', childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true, cleanupFailed: true, elapsedMs: 123,
       });
       assert.equal(JSON.stringify(outcome.res).includes(secret), false);
       assert.equal(outcome.output, null);
-      const unknown = await runStream(secret, 'review', 2, null, { status: 2, diagnostic: { trigger: secret, groupState: secret, childExitCode: secret, elapsedMs: secret } });
+      const unknown = await runStream(secret, 'review', 2, null, { status: 2, diagnostic: { trigger: secret, vetoTrigger: secret, groupState: secret, childExitCode: secret, elapsedMs: secret } });
       const safeLine = unknown.res.lines.find(x => x.startsWith('執行觀測：'));
       assert.ok(safeLine);
       assert.deepEqual(JSON.parse(safeLine.slice('執行觀測：'.length)), {
-        trigger: 'unknown', childExitCode: null, childSignalled: null, groupState: 'unknown', pipesClosed: null, cleanupFailed: null, elapsedMs: null,
+        trigger: 'unknown', vetoTrigger: 'unknown', childExitCode: null, childSignalled: null, groupState: 'unknown', pipesClosed: null, cleanupFailed: null, elapsedMs: null,
       });
       assert.equal(JSON.stringify(unknown.res).includes(secret), false);
     });
