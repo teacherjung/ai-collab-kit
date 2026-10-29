@@ -1,5 +1,13 @@
 # Grok 隔離執行環境失敗調查與修正計畫 (2026-10-25 正式送審前快照，真探針 HEAD 3378941 之後)
 
+## 2026-10-29 R6：response 完成不等於整場完成
+
+- [獨立 Codex r4](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6492169378)在 `6c05a2d` 重現合法多段完成回覆及壓縮交錯誤拒；[原題](https://github.com/teacherjung/personal-finance-webapp/pull/747#issuecomment-6492654279)與[Sol 技術裁示](https://github.com/teacherjung/personal-finance-webapp/pull/747#issuecomment-6492889215)限定本支修共享解析器及直接回歸，其他待辦不順修。
+- 官方固定版本的[連續 response 正控](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/headless/reducer/messages/tests/content.rs)產生多個完成 response；[reducer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/src/headless/reducer/messages/mod.rs)以最後沖出的正文產生 result。壓縮先 flush 邊界，但壓縮事件本身不建立新正文。
+- 候選正文以當前資格判定：任何 assistant／user 先使舊候選失效，只有頂層、角色正確且 `end_turn` 的合規 assistant 正文能重建；合法壓縮保留當前資格、不能復活已失效正文。唯一末尾成功 result 必須與該候選逐字相同，不能回退舊正文、拼接跨 response 或各自 trim 後比對。
+- 驗證須同時涵蓋兩個收件入口與真正 `runGrokExec` 搭配合成模型的正常、失效、恢復及壓縮序列；成功原包完整保存，拒收不寫成功結果。早幀合成機密、後幀乾淨仍須被完整原包 DLP 擋下。這些測試不啟真實模型或掃描，不代表所有未來協定變體皆已涵蓋。
+- 不改來源、session、重複鍵、取消／期限、未知事件、result 唯一末尾、正文匹配、自貼全文、DLP、隔離與合併閘。技術裁示不解除正式阻擋；新版仍須完整檢查、新 CI、同版 Sol 主審及獨立 Codex 續審。
+
 ## 2026-10-29 本支複審改派
 
 - [本人指示](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6476591085)要求先排除 Gemini 工作衝突，再交全新 GPT-6.1 Sol／xhigh 複審；下方 Grok 分工保留為歷史，所有掃描仍暫停。
@@ -69,3 +77,9 @@
 ## 後續證據正本
 1. **正式 Codex 複審及修復 PR 自身 Grok 掃描**：以 https://github.com/teacherjung/ai-collab-kit/pull/128 的正式留言為準。
 2. **#119 修復後補掃**：以 https://github.com/teacherjung/ai-collab-kit/pull/119 的 🔍 留言及合併後補掃記錄為準。
+
+## 2026-10-29 清理題診斷前置
+
+R6 修補的完整檢查曾在持管線後代題的 `groupEmpty` 斷言失敗；原次沒有詳細診斷，原因未定。後續單次正控不消除原失敗，也不證明與並行負載有因果關係。
+
+依 [原題](https://github.com/teacherjung/personal-finance-webapp/pull/747#issuecomment-6493261830) 與 [Sol 技術裁示](https://github.com/teacherjung/personal-finance-webapp/pull/747#issuecomment-6493394505)，測試只增加白名單診斷與原呼叫的同步觀測；未知群組仍拒收，產品清理實作與時間限額不變。先驗合成未知狀態的有效突變及前後正常對照，再循序執行三次指定清理題組與一次完整三關。非預定失敗立即停止後續推送發審，不能追加重跑直到綠；每場實際結果留在 PR 對帳，不用後來成功回填原次原因。

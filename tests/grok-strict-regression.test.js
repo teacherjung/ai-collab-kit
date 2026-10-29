@@ -3,6 +3,95 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { unwrapScanOutput, LaunchError } = require('../tools/review-launch.js');
 
+test('Grok R6：正式收件入口只採最後仍有效的頂層完成正文', async (t) => {
+  const { prepareVerdict, prepareScan } = require('../tools/review-launch.js');
+  const head = '1234567890abcdef1234567890abcdef12345678';
+  for (const mode of ['review', 'scan']) {
+    const receive = raw => mode === 'review'
+      ? prepareVerdict(raw, { reviewer: 'Beta', source: 'Grok CLI', round: 1, head, usable: ['Beta'] })
+      : prepareScan(raw, { scanner: 'Beta', source: 'Grok CLI', head, usable: ['Beta'], forceGrok: true });
+    const fixture = name => {
+      const sid = `r6-${mode}-${name}`;
+      const body = label => mode === 'review'
+        ? `🤖 Beta｜來源：Grok CLI｜審 \`1234567\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 合成 ${name}\n\n### 清單逐項結果\n- ${label}\n`
+        : `🔍 Beta｜來源：Grok CLI｜掃 \`1234567\`\n\n- 合成 ${name} ${label}\n`;
+      const a = body('A'), b = body('B');
+      const init = { type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' };
+      const assistant = (text, message = {}, extra = {}) => ({
+        type: 'assistant', session_id: sid, parent_tool_use_id: null,
+        message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text }], ...message }, ...extra,
+      });
+      const user = { type: 'user', session_id: sid, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-r6', content: a }] } };
+      const compact = { type: 'system', subtype: 'compact_boundary', session_id: sid, uuid: 'compact-r6', compact_metadata: { trigger: 'auto', pre_tokens: 200 } };
+      const result = text => ({ type: 'result', session_id: sid, subtype: 'success', is_error: false, stop_reason: 'end_turn', result: text });
+      const raw = (middle, final) => [init, ...middle, result(final)].map(JSON.stringify).join('\n');
+      return { a, b, assistant, user, compact, raw };
+    };
+
+    const positive = {
+      single: f => [[f.assistant(f.a)], f.a],
+      successive: f => [[f.assistant(f.a), f.assistant(f.b)], f.b],
+      compactBetween: f => [[f.assistant(f.a), f.compact, f.assistant(f.b)], f.b],
+      compactAfter: f => [[f.assistant(f.a), f.compact], f.a],
+      compactBefore: f => [[f.compact, f.assistant(f.b)], f.b],
+      textBlocks: f => [[f.assistant(f.a), f.assistant('', { content: [{ type: 'text', text: f.b.slice(0, 9) }, { type: 'text', text: f.b.slice(9) }] })], f.b],
+    };
+    for (const [name, sequence] of Object.entries(positive)) {
+      await t.test(`${mode} 接受 ${name} 並取出指定完整正文`, () => {
+        const f = fixture(name), [frames, expected] = sequence(f);
+        assert.equal(receive(f.raw(frames, expected)).body, expected);
+      });
+    }
+
+    const invalidate = {
+      unfinished: f => f.assistant(f.a, { stop_reason: null }),
+      toolUse: f => f.assistant(f.a, { stop_reason: 'tool_use' }),
+      missingStop: f => f.assistant(f.a, { stop_reason: undefined }),
+      wrongRole: f => f.assistant(f.a, { role: 'user' }),
+      missingMessage: f => f.assistant(f.a, {}, { message: undefined }),
+      subagent: f => f.assistant(f.a, {}, { parent_tool_use_id: 'subagent-call' }),
+      missingParent: f => f.assistant(f.a, {}, { parent_tool_use_id: undefined }),
+      user: f => f.user,
+    };
+    for (const [name, frame] of Object.entries(invalidate)) {
+      for (const withCompact of [false, true]) {
+        await t.test(`${mode} ${name}${withCompact ? ' 後壓縮' : ''} 不能重用相同舊正文`, () => {
+          const f = fixture(`${name}-${withCompact}`);
+          const frames = [f.assistant(f.a), frame(f), ...(withCompact ? [f.compact] : [])];
+          assert.throws(() => receive(f.raw(frames, f.a)), LaunchError);
+        });
+      }
+      await t.test(`${mode} ${name} 失效後須由新頂層完成正文恢復`, () => {
+        const f = fixture(`${name}-recover`);
+        assert.equal(receive(f.raw([f.assistant(f.a), frame(f), f.compact, f.assistant(f.b)], f.b)).body, f.b);
+      });
+    }
+
+    const invalidFinal = {
+      staleA: f => [[f.assistant(f.a), f.assistant(f.b)], f.a],
+      joined: f => [[f.assistant(f.a), f.assistant(f.b)], f.a + f.b],
+      trimmed: f => [[f.assistant(f.a), f.assistant(' ' + f.b)], f.b],
+      noAssistant: f => [[], f.a],
+      onlySubagent: f => [[f.assistant(f.a, {}, { parent_tool_use_id: 'subagent-call' })], f.a],
+      subagentB: f => [[f.assistant(f.a), f.assistant(f.b, {}, { parent_tool_use_id: 'subagent-call' })], f.b],
+      emptyFallback: f => [[f.assistant(f.a), f.assistant('')], f.a],
+      blankFallback: f => [[f.assistant(f.a), f.assistant('  ')], f.a],
+      emptyResult: f => [[f.assistant(f.a), f.assistant('')], ''],
+      blankResult: f => [[f.assistant(f.a), f.assistant('  ')], '  '],
+      missingContent: f => [[f.assistant(f.a), f.assistant('', { content: undefined })], f.a],
+      malformedContent: f => [[f.assistant(f.a), f.assistant('', { content: { text: f.a } })], f.a],
+      nonStringText: f => [[f.assistant(f.a), f.assistant('', { content: [{ type: 'text', text: f.a }, { type: 'text', text: 7 }] })], f.a],
+      unknownSubagentEvent: f => [[f.assistant(f.a), { type: 'subagent', session_id: `r6-${mode}-unknownSubagentEvent` }], f.a],
+    };
+    for (const [name, sequence] of Object.entries(invalidFinal)) {
+      await t.test(`${mode} 拒絕 ${name}`, () => {
+        const f = fixture(name), [frames, final] = sequence(f);
+        assert.throws(() => receive(f.raw(frames, final)), LaunchError);
+      });
+    }
+  }
+});
+
 test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
   const sid = 's1';
   const validAssistant = {
@@ -59,7 +148,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
       JSON.stringify(lateTool),
       validFrames[2]
     ].join('\n');
-    assert.throws(() => unwrapScanOutput(raw), LaunchError, '應拒絕 end_turn 後出現的任何 assistant 幀');
+    assert.throws(() => unwrapScanOutput(raw), LaunchError, '後續工具呼叫不能借用先前完成正文');
   });
 
   await t.test('3: init 後插 user 錯 session', () => {
@@ -401,7 +490,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
     assert.throws(() => unwrapScanOutput(raw), LaunchError, 'compact_metadata 必須含 pre_tokens');
   });
 
-  await t.test('27: compact_boundary 在 end_turn 後出現應拒絕', () => {
+  await t.test('27: compact_boundary 保留仍有效的完成正文', () => {
     const raw = [
       JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: 'grok-4.7' }),
       JSON.stringify(validAssistant),
@@ -414,7 +503,7 @@ test('Grok NDJSON 嚴格解析回歸（純函式題）', async (t) => {
       }),
       JSON.stringify(validResult)
     ].join('\n');
-    assert.throws(() => unwrapScanOutput(raw), LaunchError, 'end_turn 後不可出現 compact_boundary');
+    assert.equal(unwrapScanOutput(raw), 'FINAL', '合法壓縮本身不建立或取消完成正文');
   });
 
   await t.test('28: compact_boundary 在 result 後出現應拒絕', () => {

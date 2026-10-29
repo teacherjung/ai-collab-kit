@@ -2585,6 +2585,66 @@ test('Grok 隔離執行：startGrokRelay 未完上游串流與連線時，close 
   }
 });
 
+function cleanupFailureEvidence(result, signals = []) {
+  const diagnostic = result.diagnostic || {};
+  const pick = (value, values) => values.includes(value) ? value : null;
+  const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const boolean = value => typeof value === 'boolean' ? value : null;
+  const projected = {
+    status: integer(result.status), groupEmpty: boolean(result.groupEmpty),
+    diagnostic: {
+      trigger: pick(diagnostic.trigger, ['record_failed', 'spawn_failed', 'child_exit', 'deadline', 'cancelled', 'relay_problem', 'unknown']),
+      vetoTrigger: pick(diagnostic.vetoTrigger, ['none', 'deadline', 'cancelled', 'relay_problem', 'unknown']),
+      childExitCode: integer(diagnostic.childExitCode), childSignalled: boolean(diagnostic.childSignalled),
+      groupState: pick(diagnostic.groupState, ['empty', 'alive', 'unknown']), pipesClosed: boolean(diagnostic.pipesClosed),
+      cleanupFailed: boolean(diagnostic.cleanupFailed), elapsedMs: integer(diagnostic.elapsedMs),
+    },
+    signals: signals.map(event => ({
+      signal: pick(event.signal, [0, 'SIGTERM', 'SIGKILL']), ownGroup: boolean(event.ownGroup),
+      outcome: pick(event.outcome, ['ok', 'ESRCH', 'EPERM', 'EACCES', 'EINVAL', 'OTHER']),
+    })),
+  };
+  return `檢查 runGrokChild 群組清理，重跑本檔有界子程序題；${JSON.stringify(projected)}`;
+}
+
+function observeCleanupKill(events, getPid, kill) {
+  return (pid, signal) => {
+    const ownPid = getPid();
+    const ownGroup = Number.isSafeInteger(ownPid) && ownPid > 1 && pid === -ownPid;
+    try {
+      const value = kill(pid, signal);
+      events.push({ signal, ownGroup, outcome: 'ok' });
+      return value;
+    } catch (error) {
+      events.push({ signal, ownGroup, outcome: ['ESRCH', 'EPERM', 'EACCES', 'EINVAL'].includes(error.code) ? error.code : 'OTHER' });
+      throw error;
+    }
+  };
+}
+
+test('Grok 清理考題診斷先投影且觀測不改呼叫結果', () => {
+  const secret = 'SYNTHETIC-UNSAFE-CLEANUP-CONTENT';
+  const events = [];
+  const calls = [];
+  const error = Object.assign(new Error(secret), { code: secret });
+  const value = {};
+  const observed = observeCleanupKill(events, () => 12345, (pid, signal) => {
+    calls.push([pid, signal]);
+    if (signal === 0) throw error;
+    return value;
+  });
+  assert.equal(observed(-12345, 'SIGTERM'), value);
+  assert.throws(() => observed(-12345, 0), e => e === error);
+  assert.deepEqual(calls, [[-12345, 'SIGTERM'], [-12345, 0]]);
+  assert.deepEqual(events, [{ signal: 'SIGTERM', ownGroup: true, outcome: 'ok' }, { signal: 0, ownGroup: true, outcome: 'OTHER' }]);
+  const text = cleanupFailureEvidence({ status: 2, groupEmpty: false, stdout: secret, stderr: secret, error, env: secret, command: secret, path: secret,
+    diagnostic: { trigger: 'child_exit', vetoTrigger: secret, childExitCode: 0, childSignalled: false, groupState: 'unknown', pipesClosed: true,
+      cleanupFailed: true, elapsedMs: 42, extra: secret } }, [...events, { signal: secret, ownGroup: secret, outcome: secret, error }]);
+  assert.equal(text.includes(secret), false, '檢查 cleanupFailureEvidence 的白名單投影，重跑本檔清理考題診斷題');
+  assert.ok(text.includes('"groupState":"unknown"') && text.includes('"cleanupFailed":true'));
+  assert.ok(text.includes('"outcome":"OTHER"') && text.includes('"signal":null'));
+});
+
 test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', async () => {
   const { runGrokChild } = require('../tools/review-launch');
   assert.equal(typeof runGrokChild, 'function');
@@ -2608,16 +2668,17 @@ test('Grok 有界子程序正常、非零、逾時與取消皆收本次群組', 
         onStart: limits => { fixedLimits = limits; },
       });
     } finally { clearTimeout(timer); }
-    assert.equal(result.status, mode === 'normal' ? 0 : mode === 'nonzero' ? 3 : 2, mode);
+    const evidence = `${mode}：${cleanupFailureEvidence(result)}`;
+    assert.equal(result.status, mode === 'normal' ? 0 : mode === 'nonzero' ? 3 : 2, evidence);
     assert.ok(result.diagnostic, '檢查 runGrokChild 的有限診斷，重跑本檔有界子程序題');
     assert.equal(result.diagnostic.trigger, ({ normal: 'child_exit', nonzero: 'child_exit', timeout: 'deadline', cancel: 'cancelled', relay: 'relay_problem', SIGINT: 'cancelled', SIGTERM: 'cancelled' })[mode]);
     assert.equal(result.diagnostic.childExitCode, mode === 'normal' ? 0 : mode === 'nonzero' ? 3 : null);
-    assert.equal(result.diagnostic.groupState, 'empty');
-    assert.equal(result.diagnostic.pipesClosed, true);
-    assert.equal(result.diagnostic.cleanupFailed, false);
+    assert.equal(result.diagnostic.groupState, 'empty', evidence);
+    assert.equal(result.diagnostic.pipesClosed, true, evidence);
+    assert.equal(result.diagnostic.cleanupFailed, false, evidence);
     assert.ok(result.diagnostic.elapsedMs >= 0);
     if (mode === 'normal') assert.equal(result.stdout, '合成🤖');
-    assert.equal(result.groupEmpty, true, mode);
+    assert.equal(result.groupEmpty, true, evidence);
     assert.equal(result.deadline, fixedLimits.deadline);
     assert.equal(fixedLimits.deadline - fixedLimits.startedAt, mode === 'timeout' ? 100 : 3000);
     assert.throws(() => process.kill(-result.pid, 0), { code: 'ESRCH' });
@@ -2670,7 +2731,7 @@ test('Grok 清理期間的首個否決保留原始退出與安全診斷', async 
     } finally { timers.forEach(clearTimeout); }
     assert.equal(cleaning, true, mode);
     assert.equal(relayObserved, ['relay_problem', 'cancel_then_relay'].includes(mode), mode);
-    assert.equal(result.status, mode === 'none' ? 0 : 2, mode);
+    assert.equal(result.status, mode === 'none' ? 0 : 2, `${mode}：${cleanupFailureEvidence(result)}`);
     assert.equal(result.diagnostic.trigger, 'child_exit', mode);
     assert.equal(result.diagnostic.childExitCode, 0, mode);
     assert.equal(result.diagnostic.childSignalled, false, mode);
@@ -2715,7 +2776,7 @@ test('Grok 有界子程序診斷分離觸發與清理且不留合成機密', asy
     wallMs: 50, cleanupMs: 500,
     kill(pid, signal) { if (signal === 0) throw Object.assign(new Error(secret), { code: 'EPERM' }); return process.kill(pid, signal); },
   });
-  assert.equal(combined.status, 2);
+  assert.equal(combined.status, 2, cleanupFailureEvidence(combined));
   assert.equal(combined.diagnostic.trigger, 'deadline');
   assert.equal(combined.diagnostic.childExitCode, 0);
   assert.equal(combined.diagnostic.groupState, 'unknown');
@@ -2733,27 +2794,40 @@ test('Grok 有界子程序收持管線後代且不碰另一群組，未知狀態
   const otherClosed = new Promise(resolve => other.once('close', resolve));
   assert.ok(other.pid > 1);
   try {
+    let groupPid;
+    const signals = [];
     const source = `const {spawn}=require('node:child_process');
       const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore',1,2]});
       child.once('spawn',()=>{console.log(child.pid);setTimeout(()=>process.exit(0),50);});`;
-    const result = await runGrokChild(process.execPath, ['-e', source], { env: gitEnv() }, { wallMs: 3000, cleanupMs: 2000 });
+    const result = await runGrokChild(process.execPath, ['-e', source], { env: gitEnv() }, { wallMs: 3000, cleanupMs: 2000,
+      spawnChild(...args) { const child = spawn(...args); groupPid = child.pid; return child; },
+      kill: observeCleanupKill(signals, () => groupPid, process.kill.bind(process)),
+    });
+    const evidence = cleanupFailureEvidence(result, signals);
     const descendant = Number(result.stdout.trim());
     assert.ok(Number.isSafeInteger(descendant) && descendant > 1, '後代確實建立且持有管線');
-    assert.equal(result.groupEmpty, true);
-    assert.equal(result.status, 0);
+    assert.equal(result.groupEmpty, true, evidence);
+    assert.equal(result.status, 0, evidence);
     assert.throws(() => process.kill(descendant, 0), { code: 'ESRCH' });
     assert.doesNotThrow(() => process.kill(other.pid, 0));
+    let unknownPid;
+    const unknownSignals = [];
     const unknown = await runGrokChild(process.execPath, ['-e', 'process.stdout.write("synthetic")'], { env: gitEnv() }, {
       wallMs: 3000, cleanupMs: 500,
-      kill: (pid, signal) => { if (signal === 0) throw Object.assign(new Error('synthetic'), { code: 'EPERM' }); return process.kill(pid, signal); },
+      spawnChild(...args) { const child = spawn(...args); unknownPid = child.pid; return child; },
+      kill: observeCleanupKill(unknownSignals, () => unknownPid, (pid, signal) => {
+        if (signal === 0) throw Object.assign(new Error('synthetic'), { code: 'EPERM' }); return process.kill(pid, signal);
+      }),
     });
-    assert.equal(unknown.status, 2);
+    const unknownEvidence = cleanupFailureEvidence(unknown, unknownSignals);
+    assert.ok(unknownSignals.some(event => event.signal === 0 && event.ownGroup && event.outcome === 'EPERM'), unknownEvidence);
+    assert.equal(unknown.status, 2, unknownEvidence);
     assert.ok(unknown.diagnostic, '檢查 runGrokChild 的清理診斷，重跑本檔有界子程序題');
     assert.equal(unknown.diagnostic.trigger, 'child_exit');
     assert.equal(unknown.diagnostic.childExitCode, 0);
-    assert.equal(unknown.diagnostic.cleanupFailed, true);
-    assert.equal(unknown.diagnostic.groupState, 'unknown');
-    assert.equal(unknown.groupEmpty, false);
+    assert.equal(unknown.diagnostic.cleanupFailed, true, unknownEvidence);
+    assert.equal(unknown.diagnostic.groupState, 'unknown', unknownEvidence);
+    assert.equal(unknown.groupEmpty, false, unknownEvidence);
     assert.throws(() => process.kill(-unknown.pid, 0), { code: 'ESRCH' });
   } finally {
     try { process.kill(-other.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
@@ -2992,6 +3066,60 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
       ];
       const resMeta = await runStream(badMetaStream, 'scan', 2);
       assert.match(resMeta.res.lines.join('\n'), /compact_metadata.trigger 必須為 auto/);
+    });
+
+    await t.test('R6：多 response 的真執行入口保留原包、只收有效末段且檢查全流機密', async (t) => {
+      const assistant = (text, message = {}, extra = {}) => ({
+        type: 'assistant', session_id: sessId, parent_tool_use_id: null,
+        message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text }], ...message }, ...extra,
+      });
+      const compact = { type: 'system', subtype: 'compact_boundary', session_id: sessId, uuid: 'r6-compact', compact_metadata: { trigger: 'auto', pre_tokens: 200 } };
+      for (const mode of ['review', 'scan']) {
+        const body = label => mode === 'review'
+          ? `🤖 Grok｜來源：Grok CLI｜審 \`${r.head.slice(0, 7)}\`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- 合成 R6\n\n### 清單逐項結果\n- ${label}\n`
+          : `🔍 Grok｜來源：Grok CLI｜掃 \`${r.head.slice(0, 7)}\`\n\n- ${label}\n`;
+        const receive = raw => mode === 'review'
+          ? prepareVerdict(raw, { reviewer: 'Grok', source: 'Grok CLI', round: 1, head: r.head, usable: ['Grok'] })
+          : prepareScan(raw, { scanner: 'Grok', source: 'Grok CLI', head: r.head, usable: ['Grok'], forceGrok: true });
+        const cases = ['successive', 'compactBetween', 'compactAfter', 'toolRecovery', 'subagentRecovery', 'staleAfterAssistant', 'staleAfterUser', 'staleAfterSubagent', 'secretEarlier', 'escapedSecretEarlier'];
+        for (const name of cases) {
+          await t.test(`${mode} ${name}`, async () => {
+            const a = body(`${name}-A`), b = body(`${name}-B`);
+            let middle = [assistant(a), assistant(b)], expected = b, code = 0;
+            if (name === 'compactBetween') middle = [assistant(a), compact, assistant(b)];
+            if (name === 'compactAfter') { middle = [assistant(a), compact]; expected = a; }
+            if (name === 'toolRecovery') middle = [assistant(a), assistant(a, { stop_reason: 'tool_use' }), { type: 'user', session_id: sessId, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r6-tool', content: a }] } }, compact, assistant(b)];
+            if (name === 'subagentRecovery') middle = [assistant(a), assistant(a, {}, { parent_tool_use_id: 'r6-subagent' }), compact, assistant(b)];
+            if (name.startsWith('staleAfter')) {
+              const stale = name === 'staleAfterUser'
+                ? { type: 'user', session_id: sessId, message: { role: 'user', content: [{ type: 'text', text: a }] } }
+                : assistant(a, name === 'staleAfterAssistant' ? { stop_reason: 'tool_use' } : {}, name === 'staleAfterSubagent' ? { parent_tool_use_id: 'r6-subagent' } : {});
+              middle = [assistant(a), stale, compact]; expected = a; code = 2;
+            }
+            if (name.endsWith('SecretEarlier') || name === 'secretEarlier') {
+              middle = [assistant('VALID-KEY-111'), compact, assistant(b)]; code = 2;
+            }
+            let raw = [initEvent, ...middle, { type: 'result', session_id: sessId, subtype: 'success', is_error: false, stop_reason: 'end_turn', result: expected }].map(JSON.stringify).join('\n') + '\n';
+            if (name === 'escapedSecretEarlier') {
+              assert.ok(raw.includes('VALID-KEY-111'));
+              raw = raw.replace('VALID-KEY-111', 'VALID\\u002dKEY-111');
+              assert.ok(!raw.includes('VALID-KEY-111'), '解碼反例不可由原字串比對代抓');
+            }
+            const got = await runStream(raw, mode, code, code === 0 ? raw : null);
+            assert.equal(got.spawnCalled, true, '須走到合成模型，不能以前置失敗充當協定測試');
+            if (code === 0) {
+              assert.equal(got.output, raw, '受測執行須保存本題完整原包，不能只保存最後正文');
+              assert.equal(receive(got.output).body, expected);
+            } else {
+              assert.equal(got.output, null);
+              const diagnostic = got.res.lines.join('\n');
+              assert.match(diagnostic, name.startsWith('staleAfter') ? /正文不一致/ : /DLP/);
+              if (name === 'escapedSecretEarlier') assert.match(diagnostic, /dlp_decoded/);
+              assert.ok(!diagnostic.includes('VALID-KEY-111'), '拒收診斷不得帶合成機密');
+            }
+          });
+        }
+      }
     });
 
     await t.test('2: 缺少 scan.json 時（即使有 launch.json）應拒絕且不啟動 Grok', async () => {

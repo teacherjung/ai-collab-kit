@@ -1452,7 +1452,6 @@ function parseGrokStrictNDJSON(text, kindLabel) {
   let finalResult = null;
   let lastEndTurnText = null;
   let foundResult = false;
-  let foundEndTurn = false;
   let initFound = false;
 
   for (const line of lines) {
@@ -1478,7 +1477,6 @@ function parseGrokStrictNDJSON(text, kindLabel) {
       }
       if (event.subtype === 'compact_boundary') {
         if (!initFound) return { error: `${kindLabel}尚未初始化` };
-        if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 compact_boundary` };
         if (event.session_id !== sessionId) return { error: `${kindLabel}錯 session` };
         if (typeof event.uuid !== 'string' || !event.uuid) return { error: `${kindLabel}compact_boundary 缺 uuid` };
         const cm = event.compact_metadata;
@@ -1496,7 +1494,8 @@ function parseGrokStrictNDJSON(text, kindLabel) {
     if (event.session_id !== sessionId) return { error: `${kindLabel}錯 session` };
 
     if (event.type === 'assistant') {
-      if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 assistant` };
+      // 新對話活動使先前完成資格失效，避免未完成或子代理回覆借用舊正文。
+      lastEndTurnText = null;
       if (event.parent_tool_use_id === null) {
         if (event.message && typeof event.message === 'object' && event.message.role === 'assistant' && event.message.stop_reason === 'end_turn') {
           let t = '';
@@ -1509,11 +1508,10 @@ function parseGrokStrictNDJSON(text, kindLabel) {
             }
           }
           lastEndTurnText = t;
-          foundEndTurn = true;
         }
       }
     } else if (event.type === 'user') {
-      if (foundEndTurn) return { error: `${kindLabel}end_turn 後出現 user` };
+      lastEndTurnText = null;
     } else if (event.type === 'result') {
       foundResult = true;
       finalResult = event;
