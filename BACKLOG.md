@@ -75,6 +75,7 @@
 - 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）補可直接執行的邊界考題：非字串 message body、主程序結束但子程序仍持有輸出管線、上游串流異常時資源清理、直接代貼不得二次拆包／`tools/review-launch.js` 的 Grok 串流及代貼路徑、`tests/review-launch.test.js`／下一次修改相應傳輸／清理／拆包路徑時補；本次只承接正式建議，不把舊場補充突變當成倉庫內既有考題，也不擴修續審接線以外的傳輸行為。
 - 2026-10-29（[#128 主審 r2 R2](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，非阻擋）補 result subtype 單欄異常的回歸，保留其餘完成欄位合法的正常對照／`tests/grok-strict-regression.test.js`，可另在 `tests/review-launch.test.js` 的 E8 執行路徑核拒收且無輸出／下次修改嚴格解析或相應考題時；本輪現碼拒收，移除該欄限制才會漏接，補充探針的紅燈不當成現碼缺陷。
 - 2026-10-29（[#128 主審 r2 清單第 15 項](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，註解待辦）整理自貼摘要案例旁仍稱成功路徑的舊註解／`tests/review-launch.test.js` 的 `selfPostedSummaryOut` 及其所在分組註解／下次整理該組考題註解時；現有斷言要求拒收並保留容器，不改收件判準。
+- 2026-10-29（[#128 主審 r4 R3](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6494198662)，非阻擋）補低風險第四輪獨立續審仍強制全審的正常對照與移除反證／`tests/review-launch.test.js` 的獨立續審題組／下次修改續審範圍判斷或相關考題時；現碼正確，既有高風險題組不能區分移除續審專用強制全審條件，補充探針不冒稱倉庫既有考題。
 
 
 
