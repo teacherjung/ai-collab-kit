@@ -117,7 +117,7 @@ test('Sol 實體登記沿官方命令保留精確模型推理與收件防線', {
   const text = '🤖 Sol｜來源：codex CLI｜審 `0123456`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\n### 清單逐項結果\n';
   const opts = { reviewer: 'Sol', source: sol.source, round: 1, head, usable };
   assert.equal(prepareVerdict(text, opts).body, text);
-  for (const [from, to] of [['codex CLI', 'Codex 桌面'], ['🤖 Sol', '🤖 Codex'], ['0123456', 'abcdef0'], ['### 清單逐項結果', '清單未完成']]) {
+  for (const [from, to] of [['codex CLI', 'Codex 桌面'], ['🤖 Sol', '🤖 Codex'], ['0123456', 'abcdef0'], ['｜r1｜', '｜r2｜'], ['### 清單逐項結果', '清單未完成']]) {
     assert.throws(() => prepareVerdict(text.replace(from, to), opts));
   }
   const pass = { id: 'sol-pass', createdAt: '2026-10-29T00:02:00Z', body: text };

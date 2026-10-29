@@ -423,11 +423,11 @@
    "maxEffort": "xhigh",
    "autoMode": "不使用自動模式",
    "source": "codex CLI",
-   "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer Sol 依本列印出固定模型與推理的命令；本次指派見 #128 本人留言 6476591085",
+   "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer Sol 依本列印出固定模型與推理的命令；本次指派見 #129 本人留言 6487957761",
    "command": "codex exec -m {model} -c model_reasoning_effort='\"{effort}\"' -c approval_policy='\"never\"' -s workspace-write -c sandbox_workspace_write.network_access=true -C {reviewTree} -o {outFile} - < {promptFile}",
    "machine": "approval_policy＝never 禁止申請提權；-o 只收最後結論，外殼 --post 核兩棵樹乾淨、版本、角色、來源及固定小標後代貼",
    "promptOnly": "workspace-write 執行期間可寫審查樹與暫存區，唯讀靠標準提示與審後驗樹；正式資格須另核可信原生執行紀錄，設定登記不是實跑證據",
-   "verified": "尚無本身分的正式實跑紀錄；每場依原生證據核模型、推理、完成狀態及結論"
+   "verified": "尚無本支本次正式實跑紀錄；每場依原生證據核模型、推理、完成狀態及結論"
   }
  ],
  "reviewLaunch": {
