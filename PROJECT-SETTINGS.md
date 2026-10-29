@@ -17,6 +17,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | AI 乙 | Codex | teacherjung |
 | AI 丙 | Grok | teacherjung |
 | AI 丁 | Gemini | teacherjung |
+| AI 戊 | Sol | teacherjung |
 
 貼文帳號資格：只採計登記在參與者表裡的貼文帳號貼的 ❓／⚖️／🚫；沒登記的帳號貼的不採計為有效留痕——它貼的 ❓ 不入待裁，它貼的 ⚖️／🚫 不能替已採計的問題收口（原題繼續待裁），形狀合規的會另列成疑似。⚖️ 另外要由裁示者那一位的帳號貼。結論閘只認識別值、不認帳號。多方共用同一個帳號時，機器分不出是誰親自貼的——那是這套機制的邊界，不是保證。
 
@@ -165,6 +166,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | Codex | gpt\-6\-astra | gpt\-6\-sol | max | ultra（這一檔會自動派助手） |
 | Grok | grok\-4\.7 | 未設定 | xhigh | 自動選模 |
 | Gemini | gemini\-3\.1\-pro | gemini\-3\-flash | high | auto\-model |
+| Sol | gpt\-6\.1\-sol | 未設定 | xhigh | 不使用自動模式 |
 
 | 複審者 | 怎麼起（含放行哪些考題指令） | 機器擋得住的 | 只靠提示的、已知缺口 | 驗過的日期 |
 |---|---|---|---|---|
@@ -172,6 +174,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | Codex | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；為什麼這樣寫見 README\.md「本倉庫自己怎麼合併」的「送審」那一項 | 樣板帶 approval\_policy＝never，申請提權一律不准（不帶就照本機設定檔自動核准）；\-o \{outFile\} 只把最後結論寫入 \{outFile\}（不含命令列工具進度雜訊），審完由外殼 \-\-post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論 | 審查樹與系統暫存區在執行期間可寫，唯讀靠提示與審後 \-\-post／\-\-close 的樹乾淨核對；設定檔預設推理是 low，指令漏帶就靜默降級；唯讀沙箱配 \-\-add\-dir 突變副本（2026\-10\-07 實測）連副本、暫存區、網路都被擋，不能拿來讓審查樹唯讀 | 2026\-10\-03 本倉庫 \#30 兩輪；2026\-10\-07 \#49 r1 用產生器印的指令（帶 approval\_policy＝never）跑一輪；2026\-10\-19 \#112、\#113 實跑通過 |
 | Grok | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；審完由外殼 \-\-post 核對樹乾淨與標頭後代貼結論；詳見 README\.md「本倉庫自己怎麼合併」 | 經 tools\/review\-launch\.js \-\-grok\-exec 以預設拒絕（\(version 1\)\(deny default\)\(import \"system\.sb\"\)）之 macOS Seatbelt 規則與本機受控認證轉送通道執行：啟動前先跑隔離預檢（確認可讀盒內目錄、可寫 tmp 且核心攔截寫入 worktree／mutation\/\.git／prompt\.md，並確認讀不到宿主 auth\.json、\$HOME、\/private\/tmp、\/Users\/Shared、\/opt\/homebrew\/var、\/Library\/Application Support、\/usr\/local 且攔截非轉送器本機連接埠；預檢失敗即拒絕啟動）；盒內獨立 Git 副本僅抓取受審 HEAD、基底與提示 diff 提及的提交（不帶其他本機分支物件）；真實 auth\.json 維持在沙盒程序與子程序之外，盒內僅寫入白名單 6 欄與當場隨機假權杖 DUMMY\-SCAN\-TOKEN\-\*，對外網路僅准連線本機轉送器單一連接埠並驗端點白名單後代換真實權杖轉送 cli\-chat\-proxy\.grok\.com；執行後以純檔案系統快照（lstat＋SHA\-256，不在宿主執行 git）核對盒內 worktree 與 mutation\/\.git 未變動，且無未授權請求與憑證或認證私密欄位外流（DLP），再由外殼 \-\-post／\-\-scan\-post 代貼 | file\-read\-metadata 放行供 node／git 解析路徑（可 stat 得知路徑存在與否但核心禁止讀內容與列目錄）；轉送器容許拒絕 GET \/、GET \/v1\/bundle\/archive、GET \/v1\/subagents\/bundle（皆回 403 不外送）；審查樹與突變副本最終乾淨再由 \-\-post／\-\-close 二次核對；輸出零不代表通過或已貼文 | 2026\-10\-20 本機 grok 1\.0\.62 搭配 tools\/review\-launch\.js \-\-grok\-exec（deny\-default Seatbelt ＋ 本機受控認證通道 ＋ 啟動前預檢 ＋ DLP）實測通過 |
 | Gemini | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer \<識別值\> 照下一格的樣板印出填好的那一行；審完由外殼 \-\-post 核對樹乾淨與標頭後代貼結論；詳見 README\.md「本倉庫自己怎麼合併」 | 先 cd \{reviewTree\} 固定進入審查樹，\-\-approval\-mode plan 限制在唯讀規劃模式並以 \-\-include\-directories \{mutationCopy\} 納入突變副本；審完由外殼 \-\-post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論 | CLI 旗標未開放獨立調整推理強度（\{effort\} 以環境變數 GEMINI\_EFFORT 傳入，實際推理由模型預設承接）；plan 模式下若需在突變副本實際改檔跑突變測試，改由外殼或提示引導 | 2026\-10\-20 本機 gemini CLI 旗標、cwd 切換與唯讀模式核對 |
+| Sol | 送審產生器 node tools\/review\-launch\.js \<編號\> \-\-reviewer Sol 依本列印出固定模型與推理的命令；本次指派見 \#129 本人留言 6487957761 | approval\_policy＝never 禁止申請提權；\-o 只收最後結論，外殼 \-\-post 核兩棵樹乾淨、版本、角色、來源及固定小標後代貼 | workspace\-write 執行期間可寫審查樹與暫存區，唯讀靠標準提示與審後驗樹；正式資格須另核可信原生執行紀錄，設定登記不是實跑證據 | 尚無本支本次正式實跑紀錄；每場依原生證據核模型、推理、完成狀態及結論 |
 
 | 複審者 | 結論標頭的來源字串 | 啟動指令樣板（送審產生器替換記號後印出） |
 |---|---|---|
@@ -179,6 +182,7 @@ PR說明的「實作者」「複審者」兩欄、結論標頭與自評的角色
 | Codex | codex CLI | codex exec \-m \{model\} \-c model\_reasoning\_effort\=\'\"\{effort\}\"\' \-c approval\_policy\=\'\"never\"\' \-s workspace\-write \-c sandbox\_workspace\_write\.network\_access\=true \-C \{reviewTree\} \-o \{outFile\} \- \< \{promptFile\} |
 | Grok | Grok CLI | node tools\/review\-launch\.js \-\-grok\-exec \-\-mode review \-\-cwd \{reviewTree\} \-\-mutation\-copy \{mutationCopy\} \-\-model \{model\} \-\-reasoning\-effort \{effort\} \-\-prompt\-file \{promptFile\} \-\-out \{outFile\} |
 | Gemini | Gemini CLI | cd \{reviewTree\} \&\& GEMINI\_EFFORT\=\{effort\} gemini \-\-model \{model\} \-\-approval\-mode plan \-\-include\-directories \{mutationCopy\} \-p \"\$\(cat \{promptFile\}\)\" \> \{outFile\} |
+| Sol | codex CLI | codex exec \-m \{model\} \-c model\_reasoning\_effort\=\'\"\{effort\}\"\' \-c approval\_policy\=\'\"never\"\' \-s workspace\-write \-c sandbox\_workspace\_write\.network\_access\=true \-C \{reviewTree\} \-o \{outFile\} \- \< \{promptFile\} |
 
 送審產生器另外要的：PR 網址樣板 https\:\/\/github\.com\/\{project\}\/pull\/\{change\}；留言網址樣板 https\:\/\/github\.com\/\{project\}\/pull\/\{change\}\#issuecomment\-\{comment\}；複審者貼結論的指令 gh pr comment \{change\} \-R \{project\} \-\-body\-file \<你寫好的結論檔\>；在突變副本裡跑考題 npm \-\-prefix \{mutationCopy\} test \-\- \<考題檔\>
 

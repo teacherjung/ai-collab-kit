@@ -5,7 +5,7 @@
 // kit-only/ 不在那張清單上、不搬。node --test 不帶參數會把這裡的 *.test.js 一起撿起來（package.json 的 test 就是這樣跑）。
 //
 // 守得到的：下面釘住的值一改就紅（改值要連這一支一起改，那是看得見的改動）。
-// ⚠️ 守不到的：沒釘的欄位（位置表的字、各工具的指令樣板、忽略清單）；settings.json 整份被換掉但釘的值剛好一樣；
+// ⚠️ 守不到的：沒釘的欄位（位置表的字、未列入斷言的指令樣板、忽略清單）；settings.json 整份被換掉但釘的值剛好一樣；
 //   使用專案的設定（它們各有自己的釘值題）。
 'use strict';
 const test = require('node:test');
@@ -30,6 +30,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     ['AI 乙', 'Codex', 'teacherjung'],
     ['AI 丙', 'Grok', 'teacherjung'],
     ['AI 丁', 'Gemini', 'teacherjung'],
+    ['AI 戊', 'Sol', 'teacherjung'],
   ]);
   assert.deepEqual(s.defaultDivision, { implementer: 'Gemini', reviewer: 'Codex' });
   assert.equal(s.platform.name, 'GitHub');
@@ -40,6 +41,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     ['Codex', 'gpt-6-astra', 'max', 'ultra（這一檔會自動派助手）', 'codex CLI'],
     ['Grok', 'grok-4.7', 'xhigh', '自動選模', 'Grok CLI'],
     ['Gemini', 'gemini-3.1-pro', 'high', 'auto-model', 'Gemini CLI'],
+    ['Sol', 'gpt-6.1-sol', 'xhigh', '不使用自動模式', 'codex CLI'],
   ]);
   assert.deepEqual(s.gates.map((g) => g.name), [
     '待裁（本支貼的 ❓ 都配到 ⚖️ 或 🚫）',
@@ -88,6 +90,40 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   for (const m of s.machines) {
     if (m.state === '已啟用') assert.match(m.verified, /^\d{4}-\d{2}-\d{2}$/u, `已啟用的機器要有驗證日期：${m.name}`);
   }
+});
+
+test('Sol 實體登記沿官方命令保留精確模型推理與收件防線', { skip: IN_KIT ? false : '不是套件倉庫' }, () => {
+  const { substitute, prepareVerdict } = require('../tools/review-launch.js');
+  const { problemsOf, rolesOf } = require('../tools/gates/check-collab-fields.js');
+  const { evaluate } = require('../tools/gates/check-review-verdicts.js');
+  const s = read();
+  const sol = s.reviewers.find((r) => r.participant === 'Sol');
+  assert.ok(sol, '必須有 Sol 實體複審登記');
+  assert.equal(sol.strongest, 'gpt-6.1-sol');
+  assert.equal(sol.maxEffort, 'xhigh');
+  assert.equal(sol.second, '未設定');
+  assert.equal(sol.source, 'codex CLI');
+  const { text: command } = substitute(sol.command, {
+    model: sol.strongest, effort: sol.maxEffort, reviewTree: '/synthetic/review',
+    outFile: '/synthetic/output.log', promptFile: '/synthetic/prompt.md',
+  }, 'Sol 合成命令');
+  assert.equal(command, 'codex exec -m gpt-6.1-sol -c model_reasoning_effort=\'"xhigh"\' -c approval_policy=\'"never"\' -s workspace-write -c sandbox_workspace_write.network_access=true -C /synthetic/review -o /synthetic/output.log - < /synthetic/prompt.md');
+  const { usable } = rolesOf(s);
+  const body = '## 協作欄位\n\n- **實作者**：Codex\n- **複審者**：Sol\n- **預計修改的檔案**：settings.json\n- **這支若完全失敗，最糟失去什麼**：錯誤複審資格\n';
+  assert.deepEqual(problemsOf(body, usable), []);
+  assert.ok(problemsOf(body.replace('：Codex', '：Sol'), usable).length, '換名字不准同人自審');
+  assert.ok(problemsOf(body, usable.filter((id) => id !== 'Sol')).length, '未登記的角色不可收件');
+  const head = '0123456789abcdef0123456789abcdef01234567';
+  const text = '🤖 Sol｜來源：codex CLI｜審 `0123456`｜r1｜結論：通過\n\n### 本輪實際用的設定\n\n### 清單逐項結果\n';
+  const opts = { reviewer: 'Sol', source: sol.source, round: 1, head, usable };
+  assert.equal(prepareVerdict(text, opts).body, text);
+  for (const [from, to] of [['codex CLI', 'Codex 桌面'], ['🤖 Sol', '🤖 Codex'], ['0123456', 'abcdef0'], ['｜r1｜', '｜r2｜'], ['### 清單逐項結果', '清單未完成']]) {
+    assert.throws(() => prepareVerdict(text.replace(from, to), opts));
+  }
+  const pass = { id: 'sol-pass', createdAt: '2026-10-29T00:02:00Z', body: text };
+  const blocked = { id: 'grok-block', createdAt: '2026-10-29T00:01:00Z', body: text.replace('🤖 Sol', '🤖 Grok').replace('codex CLI', 'Grok CLI').replace('結論：通過', '結論：需修改後再審') };
+  assert.deepEqual(evaluate([pass], head, 'Sol', usable).problems, []);
+  assert.ok(evaluate([blocked, pass], head, 'Sol', usable).problems.length, 'Sol 通過不可替 Grok 解除原阻擋');
 });
 
 test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證通道、啟動前預檢與 DLP 正反驗證', { skip: IN_KIT ? false : '不是套件倉庫' }, async () => {

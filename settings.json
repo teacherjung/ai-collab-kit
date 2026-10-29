@@ -24,6 +24,11 @@
    "role": "AI 丁",
    "id": "Gemini",
    "account": "teacherjung"
+  },
+  {
+   "role": "AI 戊",
+   "id": "Sol",
+   "account": "teacherjung"
   }
  ],
  "accountRule": "只採計登記在參與者表裡的貼文帳號貼的 ❓／⚖️／🚫；沒登記的帳號貼的不採計為有效留痕——它貼的 ❓ 不入待裁，它貼的 ⚖️／🚫 不能替已採計的問題收口（原題繼續待裁），形狀合規的會另列成疑似。⚖️ 另外要由裁示者那一位的帳號貼。結論閘只認識別值、不認帳號。多方共用同一個帳號時，機器分不出是誰親自貼的——那是這套機制的邊界，不是保證。",
@@ -410,6 +415,19 @@
    "machine": "先 cd {reviewTree} 固定進入審查樹，--approval-mode plan 限制在唯讀規劃模式並以 --include-directories {mutationCopy} 納入突變副本；審完由外殼 --post 先核對審查樹與突變副本乾淨、HEAD 沒變、標頭與小標合規，才代貼結論",
    "promptOnly": "CLI 旗標未開放獨立調整推理強度（{effort} 以環境變數 GEMINI_EFFORT 傳入，實際推理由模型預設承接）；plan 模式下若需在突變副本實際改檔跑突變測試，改由外殼或提示引導",
    "verified": "2026-10-20 本機 gemini CLI 旗標、cwd 切換與唯讀模式核對"
+  },
+  {
+   "participant": "Sol",
+   "strongest": "gpt-6.1-sol",
+   "second": "未設定",
+   "maxEffort": "xhigh",
+   "autoMode": "不使用自動模式",
+   "source": "codex CLI",
+   "launch": "送審產生器 node tools/review-launch.js <編號> --reviewer Sol 依本列印出固定模型與推理的命令；本次指派見 #129 本人留言 6487957761",
+   "command": "codex exec -m {model} -c model_reasoning_effort='\"{effort}\"' -c approval_policy='\"never\"' -s workspace-write -c sandbox_workspace_write.network_access=true -C {reviewTree} -o {outFile} - < {promptFile}",
+   "machine": "approval_policy＝never 禁止申請提權；-o 只收最後結論，外殼 --post 核兩棵樹乾淨、版本、角色、來源及固定小標後代貼",
+   "promptOnly": "workspace-write 執行期間可寫審查樹與暫存區，唯讀靠標準提示與審後驗樹；正式資格須另核可信原生執行紀錄，設定登記不是實跑證據",
+   "verified": "尚無本支本次正式實跑紀錄；每場依原生證據核模型、推理、完成狀態及結論"
   }
  ],
  "reviewLaunch": {
