@@ -242,7 +242,7 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
     }
 
     // 4. 由 settings.json 的 scanner.command 與 Grok.command 實際展開參數送入 runGrokExec，驗預檢失敗拒啟、DLP 攔截、工作樹污染攔截、fsmonitor 不執行、無關分支不帶入、非祖先上一輪提交保留（r6 R1）與 GIT_DIR 誘餌零污染（r6 R8）
-    const { substitute, splitCommandArgs } = require('../tools/review-launch.js');
+    const { unwrapScanOutput, substitute, splitCommandArgs } = require('../tools/review-launch.js');
     const s = read();
     const grokRev = s.reviewers.find((r) => r.participant === 'Grok');
     const decoyDir = path.join(baseDir, 'decoy');
@@ -296,6 +296,11 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
         `請檢查 ${treeDir}\ngit -C ${treeDir} diff ${baseCommit}..${headCommit}\ngit -C ${treeDir} diff ${prevRoundCommit}..${headCommit}\n`,
       );
 
+      fs.writeFileSync(
+        path.join(baseDir, 'scan.json'),
+        JSON.stringify({ root: treeDir, base: baseCommit, head: headCommit })
+      );
+
       const scanArgv = splitCommandArgs(substitute(s.scanner.command, {
         scanTree: treeDir,
         model: s.scanner.strongest,
@@ -322,7 +327,7 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
       const failProbeRun = await runGrokExec(baseArgs, {
         authFile,
         probeFn: (opts) => { seenUnallowedPort = opts.unallowedPort; return { ok: false, reason: '模擬預檢失敗' }; },
-        spawnGrok: async () => { grokCalled = true; return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' }; },
+        spawnGrok: async () => { grokCalled = true; const text = '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n'; return { status: 0, stdout: `{"type":"system","subtype":"init","session_id":"s1"}\n{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":${JSON.stringify(text)}}]}}\n{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"s1","result":${JSON.stringify(text)}}\n`, stderr: '' }; },
       });
       assert.equal(failProbeRun.code, 2);
       assert.ok(seenUnallowedPort > 0, 'runGrokExec 正式呼叫必須傳入有效的 unallowedPort');
@@ -333,7 +338,7 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
       const dlpRun = await runGrokExec(baseArgs, {
         authFile,
         probeFn: () => ({ ok: true }),
-        spawnGrok: async () => ({ status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n外流 SYNTHETIC-REFRESH-TOKEN-SECRET-8888\n', stderr: '' }),
+        spawnGrok: async () => { const text = '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n外流 SYNTHETIC-REFRESH-TOKEN-SECRET-8888\n'; return { status: 0, stdout: `{"type":"system","subtype":"init","session_id":"s2"}\n{"type":"assistant","session_id":"s2","parent_tool_use_id":null,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":${JSON.stringify(text)}}]}}\n{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"s2","result":${JSON.stringify(text)}}\n`, stderr: '' }; },
       });
       assert.equal(dlpRun.code, 2);
       assert.equal(fs.existsSync(outFile), false, 'DLP 攔截時不可寫出 outFile');
@@ -347,7 +352,8 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
           const hook = path.join(boxWorktree, '.git', 'r5-fsmonitor.sh');
           fs.writeFileSync(hook, `#!/bin/sh\nprintf 'PWNED' > '${fsmonitorMarker}'\nprintf 'token\\000'\n`, { mode: 0o700 });
           g(boxWorktree, 'config', 'core.fsmonitor', hook);
-          return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+          const text = '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
+          return { status: 0, stdout: `{"type":"system","subtype":"init","session_id":"s3"}\n{"type":"assistant","session_id":"s3","parent_tool_use_id":null,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":${JSON.stringify(text)}}]}}\n{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"s3","result":${JSON.stringify(text)}}\n`, stderr: '' };
         },
       });
       assert.equal(fs.existsSync(fsmonitorMarker), false, '盒外收尾絕不可執行盒內 .git/config 的 core.fsmonitor');
@@ -375,11 +381,12 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
           assert.ok(boxAuthText.includes('DUMMY-SCAN-TOKEN-'), '盒內 auth.json 僅含假權杖');
           const boxPrompt = fs.readFileSync(boxPromptFile, 'utf8');
           assert.ok(boxPrompt.includes(boxWorktree) && !boxPrompt.includes(treeDir), '盒內提示檔已改寫為盒內隔離路徑');
-          return { status: 0, stdout: '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n', stderr: '' };
+          const text = '🔍 Grok｜來源：Grok CLI｜掃 `1234567`\n- 零發現\n';
+          return { status: 0, stdout: `{"type":"system","subtype":"init","session_id":"s4"}\n{"type":"assistant","session_id":"s4","parent_tool_use_id":null,"message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":${JSON.stringify(text)}}]}}\n{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","session_id":"s4","result":${JSON.stringify(text)}}\n`, stderr: '' };
         },
       });
       assert.equal(okRun.code, 0);
-      assert.match(fs.readFileSync(outFile, 'utf8'), /^🔍 Grok｜來源：Grok CLI｜掃 `1234567`/u);
+      assert.match(unwrapScanOutput(fs.readFileSync(outFile, 'utf8')), /^🔍 Grok｜來源：Grok CLI｜掃 `1234567`/u);
       assert.equal(fs.existsSync(capturedBoxDir), false, '執行結束後自動清除隔離盒目錄');
     } finally {
       if (savedGitDir === undefined) delete process.env.GIT_DIR;
