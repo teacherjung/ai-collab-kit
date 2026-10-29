@@ -35,7 +35,7 @@ const { gitEnv } = require('./git-env.js');
 const { parseInstant } = require('./time-point.js');
 const { fieldValue, canonicalRole, rolesOf } = require('./gates/check-collab-fields.js');
 const { headerOf, missingHeadings, PASS_HEADINGS, evaluate: evaluateVerdicts } = require('./gates/check-review-verdicts.js');
-const { evaluate: evaluateRulings, deciderOf, rulingLink } = require('./pending-rulings.js');
+const { evaluate: evaluateRulings, deciderOf, rulingLink, readPart } = require('./pending-rulings.js');
 const { run: riskRun, gitIn } = require('./risk-tier.js');
 
 const UNSET = '未設定';
@@ -43,6 +43,7 @@ const TEMPLATE = path.join(__dirname, '..', 'templates', 'review-request.md');
 const SCAN_TEMPLATE = path.join(__dirname, '..', 'templates', 'scan-record.md');
 const FILE_SLOT = '<你寫好的結論檔>';
 const USAGE = `用法：node tools/review-launch.js <變更編號> --reviewer <複審者識別值> [--run] [--purge] [--dir <放樹的資料夾>]
+      獨立續審另加：--continue-blocker <原阻擋網址> --owner-question <本人原題網址> --owner-approval <本人批准網址>
       node tools/review-launch.js --post <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--file <結論檔>] [--dir <放樹的資料夾>]
       node tools/review-launch.js --close <變更編號> [--round <輪次>] [--expect-head <版本碼>] [--expect-started-at <ISO時間>] [--purge] [--dir <放樹的資料夾>]
       node tools/review-launch.js --scan <變更編號> [--scanner <掃描者識別值>] [--tier <高|中|低>] [--run] [--purge] [--dir <放樹的資料夾>]
@@ -174,6 +175,111 @@ function twoMissesInARow(comments, reviewer, source, roles) {
   return [...rounds.keys()].some((k) => rounds.has(k + 1) && !passedIn(k) && !passedIn(k + 1));
 }
 
+const sourceKey = (source) => String(source).trim().replace(/\s+/gu, ' ');
+const bodyHash = (body) => crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+const CONTINUATION_PURPOSE = 'independent-blocker-continuation-v1';
+
+/**
+ * 本人逐字批准只解鎖原身分的歷史續審用途，不把第二個審查者升成主審。
+ * 同帳號不能證明人類授權語意或另一場次的獨立性；發審者仍須讀原題及原話、核全新原生場次。
+ */
+function continuationBinding(change, comments, reviewer, refs, settings) {
+  if (!refs || Object.keys(refs).sort().join() !== 'approval,blocker,question'
+      || Object.values(refs).some((v) => typeof v !== 'string' || !v)) {
+    throw new LaunchError('獨立續審須明確給本人原題、本人批准及原阻擋網址');
+  }
+  const { usable } = rolesOf(settings);
+  const primary = canonicalRole(fieldValue(change.body, '複審者'), usable);
+  const implementer = canonicalRole(fieldValue(change.body, '實作者'), usable);
+  const entry = settings.reviewers.find((r) => r.participant === reviewer);
+  const primaryEntry = settings.reviewers.find((r) => r.participant === primary);
+  if (!primary || !implementer || primary === reviewer || primary === implementer || !entry || !primaryEntry
+      || !/^[0-9a-f]{40}$/u.test(change.headSha) || change.state !== 'OPEN') {
+    throw new LaunchError('獨立續審須保留另一位指定主審、實作者及開啟中 PR 的完整 HEAD');
+  }
+  const project = settings.platform.project;
+  const commentUrl = (id) => substitute(settings.reviewLaunch.commentLink,
+    { project, change: change.id, comment: id }, '留言網址樣板').text;
+  const original = (url) => {
+    const found = comments.filter((c) => commentUrl(c.id) === url);
+    if (found.length !== 1) throw new LaunchError('獨立續審原件不是同倉庫同 PR 的唯一留言');
+    return found[0];
+  };
+  const question = original(refs.question);
+  const approval = original(refs.approval);
+  const blocker = original(refs.blocker);
+  const ruled = evaluateRulings(comments.map((c) => ({ ...c, change: change.id })), deciderOf(settings), settings);
+  const pair = ruled.ruled.find((r) => String(r.ask.id) === String(question.id) && String(r.by.id) === String(approval.id));
+  const approvalPart = readPart(approval.body);
+  // D1 的配對只認錨點；這裡另核第一個網址的整串，不能借別倉庫的同名編號。
+  const firstUrl = /https?:\/\/[^\s)>，,、；;。｜|）\]`'"]+/iu.exec(approvalPart);
+  const quotes = approvalPart.split('\n').filter((line) => line.startsWith('原話（對話中，'));
+  const quote = quotes.length === 1 && /^原話（對話中，([^\s，（）]+) 轉述）：\*\*「(.+)」\*\*[ \t]*$/u.exec(quotes[0]);
+  if (ruled.unsure || !pair || !pair.by.ownerRuling || !firstUrl || firstUrl[0] !== refs.question
+      || !quote || !usable.includes(quote[1]) || quote[2] !== `同意追加獨立 ${reviewer} 續審（建議）`
+      || !readPart(question.body).includes(`保留 ${primary} 主審`)
+      || !readPart(question.body).includes(`獨立 ${reviewer} 續審`)) {
+    throw new LaunchError('獨立續審本人原題／逐字批准／指定主審不配對；不可借其他裁示解鎖');
+  }
+  const header = headerOf(blocker.body, usable);
+  const source = sourceKey(entry.source);
+  if (!header || !header.blocking || header.role !== reviewer || header.source !== source) {
+    throw new LaunchError('獨立續審原阻擋的角色或來源與正式登記不符');
+  }
+  const verdicts = evaluateVerdicts(comments, change.headSha, primary, usable,
+    { ownerRole: canonicalRole(settings.owner, usable) });
+  // 不重寫 F7 事件消解規則。只採原閘逐事件指出的未解阻擋；訊息契約漂移時拒絕，不猜。
+  const unresolvedPrefix = `${reviewer}（${source}） 在 r${header.round}（審 ${header.sha}，留言 ${blocker.id}）的結論是「`;
+  if (verdicts.unsure || !verdicts.problems.some((p) => p.startsWith(unresolvedPrefix))) {
+    throw new LaunchError('指定原阻擋未被原結論閘列為仍未解除；不開放獨立續審');
+  }
+  const primaryState = verdicts.reviewers[`${primary}（${sourceKey(primaryEntry.source)}）`];
+  if (!primaryState || primaryState.blocking || !change.headSha.startsWith(primaryState.sha)) {
+    throw new LaunchError('獨立續審須先取得指定主審對當版的正式通過');
+  }
+  const snapshot = (c) => ({ id: String(c.id), author: c.author, createdAt: c.createdAt, bodySha256: bodyHash(c.body) });
+  return {
+    purpose: CONTINUATION_PURPOSE, project, change: String(change.id), refs,
+    primary, implementer, reviewer, source, model: entry.strongest, effort: entry.maxEffort, command: entry.command,
+    head: change.headSha, baseBranch: change.baseBranch, round: roundsOf(comments, reviewer, entry.source, usable).round,
+    question: snapshot(question), approval: snapshot(approval), blocker: { ...snapshot(blocker), ...header },
+  };
+}
+
+/** 收件時排除的只能是本場完整自貼候選，否則新通過本身會把原阻擋消掉而無法核原用途。 */
+function recheckContinuation(rec, change, comments, prepared, allowAlreadyPosted, settings, requireCandidate = false) {
+  const binding = rec.continuation;
+  if (!binding || binding.purpose !== CONTINUATION_PURPOSE) throw new LaunchError('獨立續審用途紀錄缺失或不明');
+  const session = continuationSession(rec);
+  if (parseInstant(rec.startedAt) === null || JSON.stringify(session) !== JSON.stringify(binding.session)) {
+    throw new LaunchError('獨立續審基底、場次時間或路徑綁定已變；不收件');
+  }
+  const { usable } = rolesOf(settings);
+  const candidates = comments.filter((c) => {
+    const h = headerOf(c.body, usable);
+    return h && h.role === rec.reviewer && h.source === binding.source && h.round === rec.round;
+  });
+  if (requireCandidate && candidates.length !== 1) throw new LaunchError('獨立續審貼後尚無唯一完整平台結論；保留現場，不記收據');
+  let history = comments;
+  if (candidates.length) {
+    if (!allowAlreadyPosted || candidates.length !== 1 || !prepared
+        || candidates[0].body !== prepared.body
+        || !(parseInstant(candidates[0].createdAt) > parseInstant(rec.startedAt))) {
+      throw new LaunchError('獨立續審自貼不是本場唯一、啟動後且完整正文一致的候選');
+    }
+    history = comments.filter((c) => c !== candidates[0]);
+  }
+  const actual = continuationBinding(change, history, rec.reviewer, binding.refs, settings);
+  const { session: _session, ...facts } = binding;
+  if (JSON.stringify(actual) !== JSON.stringify(facts) || actual.round !== rec.round || actual.head !== rec.head) {
+    throw new LaunchError('獨立續審原件、身分、來源、設定、HEAD 或輪次已變；不收件');
+  }
+}
+
+function continuationSession(rec) {
+  return Object.fromEntries(['base', 'root', 'tree', 'mutation', 'promptFile', 'outFile', 'startedAt'].map((k) => [k, rec[k]]));
+}
+
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' });
   if (r.error) throw new LaunchError(`git 起不來：${r.error.message}`);
@@ -246,7 +352,7 @@ function templateProblems(settings) {
 }
 
 /** 產生：所有平台與設定的事先問完、核完，才動 git 與磁碟（中途失敗不留半套樹）。 */
-function launch(changeArg, reviewerArg, { settings = readSettings(), platform = { ask }, cwd = process.cwd(), dir: dirArg = os.tmpdir(), template = null, now = () => new Date() } = {}) {
+function launch(changeArg, reviewerArg, { settings = readSettings(), platform = { ask }, cwd = process.cwd(), dir: dirArg = os.tmpdir(), template = null, now = () => new Date(), continuation = null } = {}) {
   const dir = realDir(dirArg);
   const { usable } = rolesOf(settings);
   const reviewer = canonicalRole(reviewerArg, usable);
@@ -272,11 +378,12 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   const id = change.id;
   const head = change.headSha;
   const named = canonicalRole(fieldValue(change.body, '複審者'), usable);
-  if (named !== reviewer) throw new LaunchError(`PR說明的「複審者」欄是「${named || '讀不出'}」，不是 ${reviewer}：這一輪的通過不會算數（F5 只認說明裡指定的那一位）`);
+  if (named !== reviewer && continuation === null) throw new LaunchError(`PR說明的「複審者」欄是「${named || '讀不出'}」，不是 ${reviewer}：這一輪的通過不會算數（F5 只認說明裡指定的那一位）`);
   const implementer = canonicalRole(fieldValue(change.body, '實作者'), usable);
   if (!implementer) throw new LaunchError('PR說明的「實作者」欄讀不出一位登記過的參與者');
   const base = askPlatform(platform, settings, 'branchSha', { branch: change.baseBranch }).sha;
   const comments = askPlatform(platform, settings, 'comments', { change: id });
+  const binding = continuation === null ? null : continuationBinding(change, comments, reviewer, continuation, settings);
   const all = askPlatform(platform, settings, 'allComments', {});
   const rulings = evaluateRulings(all, decider, settings);
   if (rulings.unsure) throw new LaunchError(`相關裁示算不出來（${rulings.unsure}）`);
@@ -298,14 +405,15 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   // 快速通道（AI）（F12）：第 1 輪起只核差異；這一位連兩輪沒「通過」，這一輪起照這一級走一般流程
   const lane = risk.result.fastLaneAI === true;
   const exhausted = lane && twoMissesInARow(comments, reviewer, entry.source, usable);
-  const scope = lane && !exhausted ? '只核差異' : scopeOf((settings.reviewTiers || {})[tier], round, passed);
+  const scope = binding ? '全審' : lane && !exhausted ? '只核差異' : scopeOf((settings.reviewTiers || {})[tier], round, passed);
   if (!scope) throw new LaunchError(`複審與掃描分級表「${tier}」那一列讀不出第 ${round} 輪該全審還是只核差異`);
-  const tierWhy = !lane ? '照表算的'
+  const tierWhy = binding ? '照表算的；本人批准的獨立歷史阻擋續審強制全審' : !lane ? '照表算的'
     : exhausted ? '照表算的；這一支原本走快速通道（AI），這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（F12）'
       : '照表算的；分級腳本判這一支走快速通道（AI）：第 1 輪起只核差異、不掃描（F12）';
   const commentLink = (changeId, comment) => substitute(rl.commentLink, { project, change: changeId, comment }, '留言網址樣板').text;
   const related = rulings.ruled.filter((x) => String(x.ask.change) === String(id)).map((x) =>
     rulingLink(x.by, commentLink(x.by.change, x.by.id)));
+  if (binding) related.push(`本人原題 ${binding.refs.question}；本人批准 ${binding.refs.approval}；原阻擋 ${binding.refs.blocker}；保留 ${binding.primary} 主審，${reviewer} 獨立續審（人工核原話語意及全新場次）`);
 
   for (const [what, sha] of [['受審版本', head], ['基底', base]]) {
     if (!gitOk(root, ['cat-file', '-e', `${sha}^{commit}`])) throw new LaunchError(`本機倉庫沒有${what} ${sha}${fetched ? '' : '（git fetch 也沒成功）'}：開不了樹`);
@@ -334,6 +442,7 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   if (fs.existsSync(folder)) throw new LaunchError(`${folder} 已經在了：上一次的樹還沒收（先跑 --close ${id}），或這一輪已經送過`);
 
   const record = { change: id, reviewer, round, head, base, root, tree, mutation, promptFile, outFile, startedAt: now().toISOString() };
+  if (binding) record.continuation = { ...binding, session: continuationSession(record) };
   const before = new Set(lockedTrees(root).keys());
   // 排他地建（不帶 recursive：已經在就丟 EEXIST）：上面那一次檢查跟這裡之間，另一個送審可能剛好建好同一輪的資料夾；
   // 帶 recursive 會接受別人的資料夾，下面開樹失敗時再把它整個刪掉（理財 #672 r4 第 1 條）。建成的才是自己的，失敗才收。
@@ -374,10 +483,10 @@ function launch(changeArg, reviewerArg, { settings = readSettings(), platform = 
   }
   const lines = [
     `送審產生器｜變更 ${id}｜複審者 ${reviewer}（來源 ${entry.source}）｜r${round}｜受審 ${head.slice(0, 7)}｜基底 ${change.baseBranch} 的 ${base.slice(0, 7)}`,
-    `  風險級別：${tier}（${lane && !exhausted
+    `  風險級別：${tier}（${!binding && lane && !exhausted
       ? '照表算的；這一支走快速通道（AI）：本輪範圍照 F12 只核差異、不照分級表，往重調或裁示者改級只改風險級別那一格'
       : '照表算的；要往重調或裁示者改級，提示的風險級別與本輪範圍兩格要一起照分級表改'}）；本輪範圍：${scope}`,
-    lane ? `  快速通道（AI）：${exhausted ? '這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（要掃的照 G1 掃）' : '分級腳本判可以，這一輪只核差異、不掃描'}（F12）` : null,
+    binding ? `  用途：獨立歷史阻擋續審；保留 ${binding.primary} 主審，本輪強制全審。人工須核原話語意、獨立性及原生模型證據。` : lane ? `  快速通道（AI）：${exhausted ? '這一位已經連兩輪沒「通過」，這一輪起照這一級走一般流程（要掃的照 G1 掃）' : '分級腳本判可以，這一輪只核差異、不掃描'}（F12）` : null,
     `  上一輪的結論：${values.previous}；相關裁示：${values.rulings}`,
     `  審查樹：${tree}（HEAD ${head.slice(0, 7)}）`,
     `  突變副本：${mutation}（HEAD ${head.slice(0, 7)}）`,
@@ -1890,10 +1999,20 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       throw new LaunchError(`平台目前受審版本是 ${String(change.headSha).slice(0, 7)}，不是開樹時的 ${String(rec.head).slice(0, 7)}：版本已變，不代貼舊版結論`);
     }
     const named = canonicalRole(fieldValue(change.body, '複審者'), usable);
-    if (named !== rec.reviewer) {
+    if (named !== rec.reviewer && !Object.hasOwn(rec, 'continuation')) {
       throw new LaunchError(`PR說明的「複審者」欄目前是「${named || '讀不出'}」，不是開樹時的 ${rec.reviewer}：不代貼`);
     }
     const comments = askPlatform(platform, settings, 'comments', { change: rec.change });
+    const continuationRecord = Object.hasOwn(rec, 'continuation') ? JSON.stringify(rec) : null;
+    if (continuationRecord) recheckContinuation(rec, change, comments, prepared, allowAlreadyPosted, settings);
+    const recheckBeforeReceipt = (allowCandidate, requireCandidate = false) => {
+      if (!continuationRecord) return;
+      const latest = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+      if (JSON.stringify(latest) !== continuationRecord) throw new LaunchError('獨立續審場次紀錄在收件期間已變；不覆寫');
+      recheckContinuation(rec,
+        askPlatform(platform, settings, 'change', { change: String(rec.change) }),
+        askPlatform(platform, settings, 'comments', { change: rec.change }), prepared, allowCandidate, settings, requireCandidate);
+    };
     const wantSource = String(entry.source).trim().replace(/\s+/gu, ' ');
     const roundComments = comments.filter((c) => {
       const h = headerOf(c.body, usable);
@@ -1940,6 +2059,7 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
       if (!prepared) {
         throw new LaunchError('輸出檔缺少完整合法結論，不能與平台正文核對：不自動收尾');
       }
+      recheckBeforeReceipt(true, true);
       const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
       if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
         throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
@@ -1965,7 +2085,16 @@ function post(changeArg, { settings = readSettings(), platform = { ask }, dir: d
     fs.writeFileSync(verdictFile, prepared.body, { flag: 'wx' });
     const argv = parts.map((p) => (p === FILE_SLOT ? verdictFile : p));
     const clearEnv = Array.isArray(settings.platform && settings.platform.clearEnv) ? settings.platform.clearEnv : [];
-    runPost(argv[0], argv.slice(1), { clearEnv });
+    recheckBeforeReceipt(false);
+    if (continuationRecord) {
+      try {
+        runPost(argv[0], argv.slice(1), { clearEnv });
+        recheckBeforeReceipt(true, true);
+      } catch (e) {
+        if (!(e instanceof LaunchError)) throw e;
+        return { code: 2, lines: [`獨立續審貼文已送出或結果不明：${e.message}。未記 postedAt、未收樹；先讀回平台核對，勿盲重貼。`] };
+      }
+    } else runPost(argv[0], argv.slice(1), { clearEnv });
     const latestRec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
     if (latestRec.head !== rec.head || latestRec.startedAt !== rec.startedAt || latestRec.closedAt) {
       throw new LaunchError('代貼期間容器紀錄已變更或已收樹，拒絕覆寫新紀錄');
@@ -3877,12 +4006,18 @@ function parseArgs(argv) {
     '--round': 'round',
     '--expect-head': 'expectHead',
     '--expect-started-at': 'expectStartedAt',
+    '--continue-blocker': 'continueBlocker',
+    '--owner-question': 'ownerQuestion',
+    '--owner-approval': 'ownerApproval',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (Object.hasOwn(flagMap, a)) {
       const v = argv[i + 1];
       if (v === undefined || v.startsWith('--')) return { error: `${a} 後面要接值` };
+      if (['--continue-blocker', '--owner-question', '--owner-approval'].includes(a) && out[flagMap[a]] !== undefined) {
+        return { error: `獨立續審旗標不可重複：${a}` };
+      }
       out[flagMap[a]] = v;
       i += 1;
     } else if (a === '--run') out.run = true;
@@ -3892,6 +4027,14 @@ function parseArgs(argv) {
     else return { error: `多給了一個參數：${a}` };
   }
   const modes = ['close', 'post', 'scan', 'scanPost', 'scanClose'].filter((k) => out[k] !== undefined);
+  const continuationKeys = ['continueBlocker', 'ownerQuestion', 'ownerApproval'];
+  if (continuationKeys.some((k) => out[k] !== undefined)) {
+    if (modes.length || continuationKeys.some((k) => out[k] === undefined)) {
+      return { error: '獨立續審只用於備審，須一起給 --continue-blocker、--owner-question、--owner-approval；收件依固定場次重核' };
+    }
+    if (out.purge) return { error: '獨立續審不自動 purge；保留場次供原件與收據核對' };
+    out.continuation = { question: out.ownerQuestion, approval: out.ownerApproval, blocker: out.continueBlocker };
+  }
   if (modes.length > 1) return { error: '一次只能指定一種模式（--close、--post、--scan、--scan-post、--scan-close）' };
   if (out.purge && !out.run && out.close === undefined && out.scanClose === undefined) {
     return { error: '--purge 只能配 --close、--scan-close 或 --run 用' };
@@ -4020,13 +4163,20 @@ function main(argv, opts = {}) {
     }
     if (a.scanPost !== undefined) return scanPost(a.scanPost, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(a.file ? { file: a.file } : {}) });
     if (a.scanClose !== undefined) return scanClose(a.scanClose, { ...opts, ...expectOpts, ...(dir ? { dir } : {}), ...(purge ? { purge: true } : {}) });
-    const launched = launch(a.change, a.reviewer, { ...opts, ...(dir ? { dir } : {}) });
+    const launched = launch(a.change, a.reviewer, { ...opts, ...(a.continuation ? { continuation: a.continuation } : {}), ...(dir ? { dir } : {}) });
     if (!a.run || launched.code !== 0) return launched;
     const s = opts.settings || readSettings();
     const clearEnv = Array.isArray(s.platform && s.platform.clearEnv) ? s.platform.clearEnv : [];
     const runExec = opts.runExec || defaultRunExec;
     const folder = path.dirname(launched.record.promptFile);
     try {
+      if (Object.hasOwn(launched.record, 'continuation')) {
+        const saved = JSON.parse(fs.readFileSync(path.join(folder, 'launch.json'), 'utf8'));
+        if (JSON.stringify(saved) !== JSON.stringify(launched.record)) throw new LaunchError('獨立續審場次在模型啟動前已變');
+        recheckContinuation(launched.record,
+          askPlatform(opts.platform || { ask }, s, 'change', { change: String(launched.record.change) }),
+          askPlatform(opts.platform || { ask }, s, 'comments', { change: launched.record.change }), null, false, s);
+      }
       runExec(launched.command, { record: launched.record, clearEnv });
     } catch (e) {
       if (e instanceof LaunchError) {

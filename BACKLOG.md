@@ -72,6 +72,7 @@
 
 - 2026-10-14（[套件 #103 r2 複審](https://github.com/teacherjung/ai-collab-kit/pull/103#issuecomment-6173247604)，低）本 Session 裁示來源的指示缺少可持久辨認的工作階段識別，後續讀者不易分清適用範圍／`AGENTS.md`「本 Session 理財工具登記所需套件工作的裁示來源」的本人原話與操作化兩段／下一次本來就要修改這條指示時，補可查證的工作階段識別；本輪只收待辦，不擴寫常設指示。
 - 2026-10-25（[PR #128 Codex r1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6389449570)）`tests/review-launch.test.js` JSON 跳脫字串值 DLP 回歸：目前未殺掉 value 分支移除突變（現碼仍正確）／`tests/review-launch.test.js`、DLP 相關考題／觸發下一次改 DLP 或相關考題時順手補齊。
+- 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）補可直接執行的邊界考題：非字串 message body、主程序結束但子程序仍持有輸出管線、上游串流異常時資源清理、直接代貼不得二次拆包／`tools/review-launch.js` 的 Grok 串流及代貼路徑、`tests/review-launch.test.js`／下一次修改相應傳輸／清理／拆包路徑時補；本次只承接正式建議，不把舊場補充突變當成倉庫內既有考題，也不擴修續審接線以外的傳輸行為。
 
 
 

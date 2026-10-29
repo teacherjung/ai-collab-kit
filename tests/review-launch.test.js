@@ -124,6 +124,336 @@ const answersFor = ({ head, base }, over = {}) => ({
 });
 const values = () => Object.fromEntries(FILL.filter(([, k]) => k).map(([, k]) => [k, `〔${k}〕`]));
 
+/** 同 CLI 的不同身分：主審通過不能代結原身分的歷史阻擋。全為合成留言及本題倉庫。 */
+function continuationFixture(r) {
+  const s = settingsFor({ owner: 'Boss' });
+  s.participants[1].id = 'Codex';
+  s.participants[2].id = 'Sol';
+  const reviewer = s.reviewers[0];
+  s.reviewers = [
+    { ...reviewer, participant: 'Codex', source: 'codex CLI', strongest: 'gpt-6-astra', maxEffort: 'max' },
+    { ...reviewer, participant: 'Sol', source: 'codex CLI', strongest: 'gpt-6.1-sol', maxEffort: 'xhigh' },
+  ];
+  const url = (id) => `https://x.invalid/acme/kit/pull/7#c-${id}`;
+  const cv = (id, role, round, sha, conclusion, time) => ({
+    id, author: 'ai-acct', createdAt: `2026-10-28T${time}:00Z`,
+    body: `🤖 ${role}｜來源：codex CLI｜審 \`${sha.slice(0, 7)}\`｜r${round}｜結論：${conclusion}\n\n### 本輪實際用的設定\n- 合成\n\n### 清單逐項結果\n- 合成\n`,
+  });
+  const comments = [
+    cv('block', 'Codex', 1, r.base, '需修改後再審', '00:00'),
+    cv('old-pass', 'Codex', 3, r.base, '通過', '00:01'),
+    cv('primary-pass', 'Sol', 2, r.head, '通過', '00:02'),
+    { id: 'question', author: 'ai-acct', createdAt: '2026-10-28T01:00:00Z',
+      body: '## ❓ 待裁（2026-10-28）：保留 Sol 主審，是否追加獨立 Codex 續審？\n\n請本人批准。\n' },
+    { id: 'approval', author: 'boss-acct', createdAt: '2026-10-28T02:00:00Z',
+      body: `## ⚖️ Boss 裁示（2026-10-28）：保留主審，追加獨立續審\n\n原話（對話中，Codex 轉述）：**「同意追加獨立 Codex 續審（建議）」**\n\n原題：${url('question')}\n` },
+  ];
+  const a = answersFor(r, { change: { ...answersFor(r).change, body: BODY.replaceAll('Alpha', 'Codex').replaceAll('Beta', 'Sol') } });
+  a.comments = () => comments;
+  a.allComments = () => comments.map((c) => ({ ...c, change: '7' }));
+  const refs = { question: url('question'), approval: url('approval'), blocker: url('block') };
+  const flags = ['--continue-blocker', refs.blocker, '--owner-question', refs.question, '--owner-approval', refs.approval];
+  const dir = tmp('review-continuation-');
+  const options = { settings: s, platform: fakePlatform(a), cwd: r.dir, dir, template: TEMPLATE,
+    now: () => new Date('2026-10-29T00:00:00Z'), leftoverRoots: [] };
+  const output = `🤖 Codex｜來源：codex CLI｜審 \`${r.head.slice(0, 7)}\`｜r4｜結論：通過\n\n### 本輪實際用的設定\n- 合成\n\n### 清單逐項結果\n- 合成\n`;
+  return { s, a, comments, refs, flags, dir, options, output, cv };
+}
+
+test('獨立續審：明確本人配對才備審，保留主審與舊阻擋、沿原來源最高輪次且強制全審', () => {
+  const r = repo();
+  const f = continuationFixture(r);
+  const before = structuredClone(f.comments);
+  const ordinary = main(['7', '--reviewer', 'Codex', '--dir', f.dir], f.options);
+  assert.equal(ordinary.code, 2);
+  assert.match(ordinary.lines.join('\n'), /複審者.*Sol/u);
+  assert.deepEqual(fs.readdirSync(f.dir), []);
+  const launched = main(['7', '--reviewer', 'Codex', '--dir', f.dir, ...f.flags], f.options);
+  assert.equal(launched.code, 0, launched.lines.join('\n'));
+  const rec = launched.record;
+  assert.equal(rec.round, 4);
+  assert.equal(rec.continuation.primary, 'Sol');
+  assert.equal(rec.continuation.reviewer, 'Codex');
+  assert.equal(rec.continuation.source, 'codex CLI');
+  assert.equal(rec.continuation.model, 'gpt-6-astra');
+  assert.equal(rec.continuation.effort, 'max');
+  assert.equal(rec.continuation.blocker.sha, r.base.slice(0, 7));
+  assert.equal(rec.head, r.head);
+  assert.match(rec.continuation.approval.bodySha256, /^[0-9a-f]{64}$/u);
+  assert.match(launched.command, /--model gpt-6-astra --effort max/u);
+  assert.match(launched.prompt, /本輪範圍：全審/u);
+  assert.ok(launched.prompt.includes(f.refs.question) && launched.prompt.includes(f.refs.approval));
+  assert.equal(sh(rec.tree, 'rev-parse', 'HEAD'), r.head);
+  assert.equal(sh(rec.mutation, 'rev-parse', 'HEAD'), r.head);
+  assert.deepEqual(f.comments, before, '備審不得改寫平台原件');
+  const gate = evaluateVerdicts(f.comments, r.head, 'Sol', ['Boss', 'Codex', 'Sol'], { ownerRole: 'Boss' });
+  assert.ok(gate.problems.some((p) => p.includes('留言 block')), '主審通過尚未消掉歷史 Codex 阻擋');
+  assert.equal(main(['--close', '7', '--dir', f.dir], f.options).code, 0);
+});
+
+test('獨立續審：備審資格失敗零開樹、不寫場次、不啟模型', () => {
+  const r = repo();
+  const cases = [
+    ['缺明確批准旗標', (f) => { f.flags.splice(4, 2); }, /須一起給/u],
+    ['跨 PR 原件', (f) => { f.flags[1] = f.flags[1].replace('/pull/7', '/pull/8'); }, /同倉庫同 PR/u],
+    ['跨倉庫引用同錨點', (f) => { f.comments[4].body = f.comments[4].body.replace('acme/kit', 'other/kit'); }, /不配對/u],
+    ['批准帳號不符', (f) => { f.comments[4].author = 'intruder'; }, /不配對/u],
+    ['非本人裁示', (f) => { f.comments[4].body = f.comments[4].body.replace('⚖️ Boss', '⚖️ Sol'); }, /不配對/u],
+    ['批准早於原題', (f) => { f.comments[4].createdAt = '2026-10-28T00:30:00Z'; }, /不配對/u],
+    ['批准不含逐字原話', (f) => { f.comments[4].body = f.comments[4].body.replace('同意追加獨立 Codex 續審（建議）', '同意處理'); }, /不配對/u],
+    ['混入另一列假轉述', (f) => { f.comments[4].body = f.comments[4].body.replace('Codex 轉述', 'Intruder 轉述') + '\n原話（對話中，Codex 轉述）：**「不同意」**\n'; }, /不配對/u],
+    ['雙列相同原話', (f) => { f.comments[4].body += '\n原話（對話中，Codex 轉述）：**「同意追加獨立 Codex 續審（建議）」**\n'; }, /不配對/u],
+    ['原題主審不符', (f) => { f.comments[3].body = f.comments[3].body.replace('保留 Sol', '保留 Codex'); }, /不配對/u],
+    ['原題藏在引用段', (f) => { f.comments[3].body = '## ❓ 待裁（2026-10-28）：其他\n\n> 保留 Sol 主審，獨立 Codex 續審\n'; }, /不配對/u],
+    ['原件重複', (f) => { f.comments.push({ ...f.comments[0] }); }, /唯一留言/u],
+    ['原阻擋角色不符', (f) => { f.comments[0].body = f.comments[0].body.replace('🤖 Codex', '🤖 Sol'); }, /角色或來源/u],
+    ['原阻擋來源不符', (f) => { f.comments[0].body = f.comments[0].body.replace('codex CLI', 'desktop'); }, /角色或來源/u],
+    ['原件不是阻擋', (f) => { f.comments[0].body = f.comments[0].body.replace('需修改後再審', '通過'); }, /角色或來源/u],
+    ['歷史阻擋已解除', (f) => { f.comments[1].body = f.comments[1].body.replace(r.base.slice(0, 7), r.head.slice(0, 7)); }, /未被原結論閘/u],
+    ['主審沒有當版通過', (f) => { f.comments[2].body = f.comments[2].body.replace(r.head.slice(0, 7), r.base.slice(0, 7)); }, /須先取得指定主審/u],
+    ['主審通過缺小標', (f) => { f.comments[2].body = f.comments[2].body.replace('### 清單逐項結果', '結果'); }, /須先取得指定主審/u],
+    ['主審同輪衝突', (f) => { f.comments.push({ ...f.comments[2], id: 'conflict', body: f.comments[2].body.replace('通過', '需修改後再審') }); }, /須先取得指定主審/u],
+    ['PR 已關閉', (f) => { f.a.change.state = 'CLOSED'; }, /開啟中 PR/u],
+    ['HEAD 非完整碼', (f) => { f.a.change.headSha = r.head.slice(0, 7); }, /完整 HEAD/u],
+    ['無法核先後', (f) => { f.comments[0].createdAt = 'not-a-time'; }, /不配對/u],
+    ['普通模式不能帶收件參數', (f) => { f.flags.push('--post', '7'); }, /只用於備審/u],
+    ['重複授權旗標', (f) => { f.flags.push('--owner-approval', f.refs.approval); }, /不可重複/u],
+    ['一鍵不得清除證據', (f) => { f.flags.push('--run', '--purge'); }, /不自動 purge/u],
+  ];
+  for (const [name, alter, error] of cases) {
+    const f = continuationFixture(r); alter(f);
+    let execCalls = 0;
+    const result = main(['7', '--reviewer', 'Codex', '--dir', f.dir, ...f.flags], { ...f.options, runExec() { execCalls++; } });
+    assert.equal(result.code, 2, `${name}：${result.lines.join('\n')}`);
+    assert.match(result.lines.join('\n'), error, name);
+    assert.deepEqual(fs.readdirSync(f.dir), [], name);
+    assert.equal(sh(r.dir, 'worktree', 'list', '--porcelain').match(/^worktree /gmu).length, 1, name);
+    assert.equal(execCalls, 0, name);
+  }
+});
+
+test('獨立續審：收件重核原件、用途、設定、版本與輪次，拒收不記 postedAt', () => {
+  const r = repo();
+  const cases = [
+    ['原題正文改動', (f) => { f.comments[3].body += '改動\n'; }],
+    ['批准正文改動', (f) => { f.comments[4].body += '改動\n'; }],
+    ['阻擋正文改動', (f) => { f.comments[0].body += '改動\n'; }],
+    ['原件時間改動', (f) => { f.comments[0].createdAt = '2026-10-28T00:00:01Z'; }],
+    ['刪除原件', (f) => { f.comments.splice(3, 1); }],
+    ['換主審', (f) => { f.a.change.body = f.a.change.body.replace('**複審者**：Sol', '**複審者**：Boss'); }],
+    ['換實作者', (f) => { f.a.change.body = f.a.change.body.replace('**實作者**：Codex', '**實作者**：Boss'); }],
+    ['換 HEAD', (f) => { f.a.change.headSha = r.base; }],
+    ['換基底分支', (f) => { f.a.change.baseBranch = 'another'; }],
+    ['主審新阻擋', (f) => { f.comments.push(f.cv('primary-fail', 'Sol', 3, r.head, '需修改後再審', '04:00')); }],
+    ['追加更高輪', (f) => { f.comments.push(f.cv('newer', 'Codex', 8, r.base, '需修改後再審', '04:00')); }],
+    ['角色來源改動', (f) => { f.s.reviewers[0].source = 'desktop'; }],
+    ['模型改動', (f) => { f.s.reviewers[0].strongest = 'other-model'; }],
+    ['推理改動', (f) => { f.s.reviewers[0].maxEffort = 'low'; }],
+    ['啟動指令改動', (f) => { f.s.reviewers[0].command += ' extra'; }],
+    ['用途消失', (_f, rec) => { delete rec.continuation; }],
+    ['用途為 null', (_f, rec) => { rec.continuation = null; }],
+    ['用途未知', (_f, rec) => { rec.continuation.purpose = 'other-purpose'; }],
+    ['輪次漂移', (_f, rec) => { rec.round = 5; }],
+    ['場次時間漂移', (_f, rec) => { rec.startedAt = '2026-10-29T00:00:01Z'; }],
+    ['場次時間無時區', (_f, rec) => { rec.startedAt = '2026-10-29T00:00:00'; }],
+    ['場次基底漂移', (_f, rec) => { rec.base = r.head; }],
+    ['場次紀錄缺綁定', (_f, rec) => { delete rec.continuation.session; }],
+    ['場次輸出檔被換', (f, rec) => { rec.outFile = path.join(f.dir, 'other-output.log'); fs.writeFileSync(rec.outFile, f.output); }],
+    ['完整結論只剩摘要', (f, rec) => { fs.writeFileSync(rec.outFile, '審查完成，詳見平台\n'); }],
+  ];
+  for (const [name, alter] of cases) {
+    const f = continuationFixture(r);
+    const launched = main(['7', '--reviewer', 'Codex', ...f.flags], f.options);
+    assert.equal(launched.code, 0, launched.lines.join('\n'));
+    const rec = launched.record;
+    fs.writeFileSync(rec.outFile, f.output);
+    alter(f, rec);
+    const recFile = path.join(path.dirname(rec.promptFile), 'launch.json');
+    fs.writeFileSync(recFile, JSON.stringify(rec));
+    let postCalls = 0;
+    const got = main(['--post', '7', '--dir', f.dir], { ...f.options, runPost() { postCalls++; } });
+    assert.notEqual(got.code, 0, `${name}：${got.lines.join('\n')}`);
+    assert.equal(postCalls, 0, name);
+    assert.equal(JSON.parse(fs.readFileSync(recFile, 'utf8')).postedAt, undefined, name);
+    assert.ok(fs.existsSync(rec.tree) && fs.existsSync(rec.mutation), name);
+  }
+});
+
+test('獨立續審：正式代貼及完整自貼承接逐字一致，F7 只由同身分新結論解除', () => {
+  const r = repo();
+  for (const self of [false, true]) {
+    const f = continuationFixture(r);
+    let execCalls = 0;
+    let postCalls = 0;
+    const posted = { id: 'fresh-pass', author: 'ai-acct', createdAt: '2026-10-29T00:01:00Z', body: f.output };
+    const got = main(['7', '--reviewer', 'Codex', '--run', ...f.flags], {
+      ...f.options,
+      runExec(_cmd, { record }) {
+        execCalls++;
+        assert.equal(record.round, 4);
+        fs.writeFileSync(record.outFile, `${f.output}\n未貼\n`);
+        if (self) f.comments.push(posted);
+      },
+      runPost(_cmd, args) {
+        postCalls++;
+        assert.equal(fs.readFileSync(args.at(-1), 'utf8'), f.output);
+        f.comments.push(posted);
+      },
+    });
+    assert.equal(got.code, 0, got.lines.join('\n'));
+    assert.equal(execCalls, 1);
+    assert.equal(postCalls, self ? 0 : 1);
+    const record = JSON.parse(fs.readFileSync(path.join(f.dir, 'review-acme-kit-7-r4', 'launch.json'), 'utf8'));
+    assert.ok(record.postedAt && record.closedAt);
+    assert.equal(record.continuation.primary, 'Sol');
+    assert.ok(f.a.change.body.includes('**複審者**：Sol'));
+    const gate = evaluateVerdicts(f.comments, r.head, 'Sol', ['Boss', 'Codex', 'Sol'], { ownerRole: 'Boss' });
+    assert.deepEqual(gate.problems, []);
+  }
+});
+
+test('獨立續審：備審後、原生啟動前資格改變，保留雙樹而不呼叫模型', () => {
+  const r = repo(); const f = continuationFixture(r);
+  let commentsReads = 0;
+  f.a.comments = () => {
+    if (++commentsReads === 2) f.comments[4].body += 'changed\n';
+    return f.comments;
+  };
+  let execCalls = 0; let postCalls = 0;
+  const got = main(['7', '--reviewer', 'Codex', '--run', ...f.flags], { ...f.options,
+    runExec() { execCalls++; }, runPost() { postCalls++; } });
+  assert.equal(got.code, 1, got.lines.join('\n'));
+  assert.equal(execCalls, 0); assert.equal(postCalls, 0);
+  const rec = JSON.parse(fs.readFileSync(path.join(f.dir, 'review-acme-kit-7-r4', 'launch.json'), 'utf8'));
+  assert.equal(rec.postedAt, undefined); assert.equal(rec.closedAt, undefined);
+  assert.ok(fs.existsSync(rec.tree) && fs.existsSync(rec.mutation));
+});
+
+test('獨立續審：代貼前後競態與不明結果不重貼、不寫收據、不刪現場', () => {
+  const r = repo();
+  for (const mode of ['before-candidate', 'after-missing', 'after-different', 'after-question', 'after-record', 'throw-after-send']) {
+    const f = continuationFixture(r);
+    const launched = main(['7', '--reviewer', 'Codex', ...f.flags], f.options);
+    assert.equal(launched.code, 0, launched.lines.join('\n'));
+    const rec = launched.record; const recFile = path.join(path.dirname(rec.promptFile), 'launch.json');
+    fs.writeFileSync(rec.outFile, f.output);
+    const candidate = { id: 'new-pass', author: 'ai-acct', createdAt: '2026-10-29T00:01:00Z', body: f.output };
+    let reads = 0; let postCalls = 0;
+    f.a.comments = () => {
+      if (mode === 'before-candidate' && ++reads === 2) f.comments.push(candidate);
+      return f.comments;
+    };
+    const got = main(['--post', '7', '--dir', f.dir], { ...f.options,
+      runPost() {
+        postCalls++;
+        if (mode !== 'after-missing') f.comments.push(candidate);
+        if (mode === 'after-different') candidate.body += 'different\n';
+        if (mode === 'after-question') f.comments[3].body += 'changed\n';
+        if (mode === 'after-record') fs.writeFileSync(recFile, JSON.stringify({ ...rec, injected: true }));
+        if (mode === 'throw-after-send') throw new LaunchError('transport ended without confirmation');
+      },
+    });
+    assert.equal(got.code, 2, `${mode}：${got.lines.join('\n')}`);
+    assert.equal(postCalls, mode === 'before-candidate' ? 0 : 1, mode);
+    if (postCalls) assert.match(got.lines.join('\n'), /已送出或結果不明/u);
+    const saved = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    assert.equal(saved.postedAt, undefined, mode); assert.equal(saved.closedAt, undefined, mode);
+    assert.ok(fs.existsSync(rec.tree) && fs.existsSync(rec.mutation), mode);
+    assert.ok(fs.existsSync(rec.promptFile) && fs.existsSync(rec.outFile), mode);
+  }
+});
+
+test('獨立續審：自貼必須唯一、啟動後、完整同正文；模型失敗不承接既有候選', () => {
+  const r = repo();
+  for (const mode of ['summary', 'missing', 'duplicate', 'conflict', 'different', 'early', 'exec-fail']) {
+    const f = continuationFixture(r); let postCalls = 0;
+    const got = main(['7', '--reviewer', 'Codex', '--run', ...f.flags], { ...f.options,
+      runExec(_cmd, { record }) {
+        const body = f.output;
+        f.comments.push({ id: 'self-pass', author: 'ai-acct', createdAt: mode === 'early' ? record.startedAt : '2026-10-29T00:01:00Z', body });
+        if (mode === 'duplicate' || mode === 'conflict') f.comments.push({ ...f.comments.at(-1), id: 'another',
+          body: mode === 'conflict' ? body.replace('結論：通過', '結論：需修改後再審') : body });
+        if (mode !== 'missing') fs.writeFileSync(record.outFile, mode === 'summary' ? '完成，請看平台\n' : mode === 'different' ? `${body}different\n` : body);
+        if (mode === 'exec-fail') throw new LaunchError('native failed');
+      }, runPost() { postCalls++; },
+    });
+    assert.notEqual(got.code, 0, `${mode}：${got.lines.join('\n')}`);
+    assert.equal(postCalls, 0, mode);
+    const rec = JSON.parse(fs.readFileSync(path.join(f.dir, 'review-acme-kit-7-r4', 'launch.json'), 'utf8'));
+    assert.equal(rec.postedAt, undefined, mode); assert.equal(rec.closedAt, undefined, mode);
+    assert.ok(fs.existsSync(rec.tree) && fs.existsSync(rec.mutation), mode);
+  }
+});
+
+test('獨立續審：非通過結論照實代貼，普通 Sol 備審不受新用途影響', () => {
+  const r = repo();
+  for (const conclusion of ['需修改後再審', '不可合併']) {
+    const f = continuationFixture(r);
+    const launched = main(['7', '--reviewer', 'Codex', ...f.flags], f.options);
+    assert.equal(launched.code, 0, launched.lines.join('\n'));
+    const body = f.output.replace('結論：通過', `結論：${conclusion}`);
+    fs.writeFileSync(launched.record.outFile, body);
+    const got = main(['--post', '7', '--dir', f.dir], { ...f.options, runPost(_cmd, args) {
+      assert.equal(fs.readFileSync(args.at(-1), 'utf8'), body);
+      f.comments.push({ id: 'new-block', author: 'ai-acct', createdAt: '2026-10-29T00:01:00Z', body });
+    } });
+    assert.equal(got.code, 0, got.lines.join('\n'));
+    assert.ok(evaluateVerdicts(f.comments, r.head, 'Sol', ['Boss', 'Codex', 'Sol'], { ownerRole: 'Boss' }).problems.length);
+  }
+  const f = continuationFixture(r);
+  const ordinary = main(['7', '--reviewer', 'Sol'], f.options);
+  assert.equal(ordinary.code, 0, ordinary.lines.join('\n'));
+  assert.equal(ordinary.record.continuation, undefined);
+  assert.match(ordinary.command, /--model gpt-6.1-sol --effort xhigh/u);
+});
+
+test('獨立續審：真 CLI 穿過合成平台與原生命令替身，留正文及同版紀錄、不啟真模型', () => {
+  const r = repo(); const f = continuationFixture(r);
+  const copy = tmp('continuation-native-kit-');
+  fs.cpSync(path.join(__dirname, '..', 'tools'), path.join(copy, 'tools'), { recursive: true });
+  fs.cpSync(path.join(__dirname, '..', 'templates'), path.join(copy, 'templates'), { recursive: true });
+  const platformData = path.join(copy, 'answers.json');
+  const platformScript = path.join(copy, 'platform.cjs');
+  const runner = path.join(copy, 'model-fixture.cjs');
+  const answers = { ...f.a, branchSha: { sha: r.base }, comments: f.comments, allComments: f.a.allComments() };
+  fs.writeFileSync(platformData, JSON.stringify(answers));
+  fs.writeFileSync(platformScript, `
+const fs = require('node:fs');
+const dataFile = ${JSON.stringify(platformData)};
+const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+const op = process.argv[2];
+if (op === 'post') {
+  data.comments.push({id: 'native-pass', author: 'ai-acct', createdAt: new Date(Date.now() + 1000).toISOString(), body: fs.readFileSync(process.argv[4], 'utf8')});
+  fs.writeFileSync(dataFile, JSON.stringify(data));
+} else process.stdout.write(JSON.stringify(data[op]));
+`);
+  fs.writeFileSync(runner, `
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+assert.equal(process.argv[2], 'gpt-6-astra');
+assert.equal(process.argv[3], 'max');
+assert.notEqual(process.argv[4], process.argv[5]);
+fs.writeFileSync(process.argv[6], ${JSON.stringify(f.output)});
+`);
+  f.s.platform.operations = Object.fromEntries(['change', 'comments', 'changedFiles', 'branchSha', 'allComments'].map((op) =>
+    [op, [process.execPath, platformScript, op, ...(op === 'allComments' ? [] : [op === 'branchSha' ? '{branch}' : '{change}'])]]));
+  f.s.reviewers[0].command = `"${process.execPath}" "${runner}" {model} {effort} {reviewTree} {mutationCopy} {outFile}`;
+  f.s.reviewLaunch.postComment = `"${process.execPath}" "${platformScript}" post {change} <你寫好的結論檔>`;
+  fs.writeFileSync(path.join(copy, 'settings.json'), JSON.stringify(f.s));
+  const env = gitEnv(); delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [path.join(copy, 'tools/review-launch.js'), '7', '--reviewer', 'Codex', '--run', '--dir', f.dir, ...f.flags],
+    { cwd: r.dir, env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const recFile = path.join(f.dir, 'review-acme-kit-7-r4', 'launch.json');
+  const rec = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+  assert.ok(rec.postedAt && rec.closedAt);
+  assert.equal(rec.head, r.head); assert.equal(rec.continuation.primary, 'Sol');
+  assert.equal(fs.readFileSync(rec.outFile, 'utf8'), f.output);
+  assert.ok(fs.existsSync(rec.promptFile));
+  const posted = JSON.parse(fs.readFileSync(platformData, 'utf8')).comments.filter((c) => c.id === 'native-pass');
+  assert.equal(posted.length, 1); assert.equal(posted[0].body, f.output);
+});
+
 test('①範本的格子跟產生器的表一一對上；同一個字樣在不同位置填不同的值；只留 <三選一>', () => {
   const text = fill(TEMPLATE, values());
   assert.deepEqual(text.match(/<[^<>\n]+>/gu), ['<三選一>'], '填完只剩複審者要填的那一格');
