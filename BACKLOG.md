@@ -73,6 +73,8 @@
 - 2026-10-14（[套件 #103 r2 複審](https://github.com/teacherjung/ai-collab-kit/pull/103#issuecomment-6173247604)，低）本 Session 裁示來源的指示缺少可持久辨認的工作階段識別，後續讀者不易分清適用範圍／`AGENTS.md`「本 Session 理財工具登記所需套件工作的裁示來源」的本人原話與操作化兩段／下一次本來就要修改這條指示時，補可查證的工作階段識別；本輪只收待辦，不擴寫常設指示。
 - 2026-10-25（[PR #128 Codex r1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6389449570)）`tests/review-launch.test.js` JSON 跳脫字串值 DLP 回歸：目前未殺掉 value 分支移除突變（現碼仍正確）／`tests/review-launch.test.js`、DLP 相關考題／觸發下一次改 DLP 或相關考題時順手補齊。
 - 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）補可直接執行的邊界考題：非字串 message body、主程序結束但子程序仍持有輸出管線、上游串流異常時資源清理、直接代貼不得二次拆包／`tools/review-launch.js` 的 Grok 串流及代貼路徑、`tests/review-launch.test.js`／下一次修改相應傳輸／清理／拆包路徑時補；本次只承接正式建議，不把舊場補充突變當成倉庫內既有考題，也不擴修續審接線以外的傳輸行為。
+- 2026-10-29（[#128 主審 r2 R2](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，非阻擋）補 result subtype 單欄異常的回歸，保留其餘完成欄位合法的正常對照／`tests/grok-strict-regression.test.js`，可另在 `tests/review-launch.test.js` 的 E8 執行路徑核拒收且無輸出／下次修改嚴格解析或相應考題時；本輪現碼拒收，移除該欄限制才會漏接，補充探針的紅燈不當成現碼缺陷。
+- 2026-10-29（[#128 主審 r2 清單第 15 項](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，註解待辦）整理自貼摘要案例旁仍稱成功路徑的舊註解／`tests/review-launch.test.js` 的 `selfPostedSummaryOut` 及其所在分組註解／下次整理該組考題註解時；現有斷言要求拒收並保留容器，不改收件判準。
 
 
 
