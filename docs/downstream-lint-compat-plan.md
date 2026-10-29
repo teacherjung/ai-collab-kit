@@ -6,6 +6,7 @@
 
 - [原題](https://github.com/teacherjung/personal-finance-webapp/pull/748#issuecomment-6498833795)
 - [實際 Sol 技術裁示全文](https://github.com/teacherjung/personal-finance-webapp/pull/748#issuecomment-6498883766)
+- [直接命中待辦的補充裁示全文](https://github.com/teacherjung/personal-finance-webapp/pull/748#issuecomment-6499864820)
 - [理財同步草稿](https://github.com/teacherjung/personal-finance-webapp/pull/748)
 
 套件 #128、#129 保持結案。本支從最新主幹另起，Codex 實作；正式複審依本線必要前置授權仍由 Grok 4.7／xhigh 執行，不延伸兩支舊 PR 的 Sol 特例。技術裁示不是正式複審。
@@ -15,6 +16,7 @@
 - `tests/grok-strict-regression.test.js`：消除缺欄夾具未使用綁定，保留單獨缺 `is_error` 拒收及正常夾具不變。
 - `tests/review-launch.test.js`：移除局部未使用引入；重整清理函式的寫法，保留 kill 只有 ESRCH 可容忍、其他錯誤覆蓋主體錯誤並停止後續等待的語意；補必要分支行為題。
 - `tools/review-launch.js`：比較投影只排除 `session`，其餘自有欄完整保留；重整 finally 外的結果決策，保留原回傳、原拋值與清理失敗優先順序。
+- `BACKLOG.md`：達成證據後只結案 R1 上游串流異常清理部分及 R2 result subtype 單欄拒收；保留 R1 其餘三項與來源、觸發條件，不預先宣稱完成。
 - 本計畫，以及上述檔內直接驗證等價語意所需的局部 helper／考題。
 
 不改設定、規則、忽略清單、manifest、時間限額、對外 API、安全接受集合、正式複審者或任何閘；不在理財手修共用檔。Gemini 封存稿與未來 review-launch 同檔宣告仍須在實作／發審／合併前重核，不能以乾淨工作樹推定永遠無衝突。
@@ -31,7 +33,9 @@ relay 關閉失敗仍嘗試清盒，最後釋放取消監聽。成功路徑仍�
 
 ## 驗證與交件
 
-先補能走到真分支的回歸紅題，再修等價寫法。覆蓋正常回傳、原拋值、清理覆蓋回傳／拋值、前清理失敗仍執行後清理、清理途中取消、無輸出及監聽釋放；kill 清理覆蓋成功、ESRCH、非 ESRCH 與主體同時失敗。每個關鍵保存點以樹外有效突變驗證，先核替換目標存在。
+保存型回歸先核原版正常，可以在等價重構前即為綠；保留真受測操作、破壞保存機制或強制壞結果取得紅燈，再恢復正確程式後轉綠。原 lint 紅燈獨立保存，不把原版回歸綠燈說成產品缺陷。覆蓋正常回傳、原拋值、清理覆蓋回傳／拋值、前清理失敗仍執行後清理、清理途中取消、無輸出及監聽釋放；kill 清理覆蓋成功、ESRCH、非 ESRCH 與主體同時失敗。每個關鍵保存點以樹外有效突變驗證，先核替換目標存在。
+
+上游串流異常須經正式執行入口與真實轉送器，證明已建立串流的 aborted／error 分支執行、拒收且無輸出、盒子及資源與監聽收妥；同步建立上游失敗或 probe 拋錯不能代替。result subtype 反例只改該欄，其他完成欄位合法，正常對照成功；移除 subtype 限制才使反例轉紅。非字串 message body、父退子持管線、直接代貼二次拆包、DLP、自貼註解及低風險第四輪續審待辦仍保留。
 
 跑套件完整既有檢查，再於隔離副本使用理財既有 ESLint 版本及規則驗候選來源，不安裝依賴、不改下游設定。未使用綁定以原 lint 驗證，不造鏡像形狀考題。所有非預期失敗保留並查因，不盲重跑。
 
