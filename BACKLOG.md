@@ -72,8 +72,7 @@
 
 - 2026-10-14（[套件 #103 r2 複審](https://github.com/teacherjung/ai-collab-kit/pull/103#issuecomment-6173247604)，低）本 Session 裁示來源的指示缺少可持久辨認的工作階段識別，後續讀者不易分清適用範圍／`AGENTS.md`「本 Session 理財工具登記所需套件工作的裁示來源」的本人原話與操作化兩段／下一次本來就要修改這條指示時，補可查證的工作階段識別；本輪只收待辦，不擴寫常設指示。
 - 2026-10-25（[PR #128 Codex r1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6389449570)）`tests/review-launch.test.js` JSON 跳脫字串值 DLP 回歸：目前未殺掉 value 分支移除突變（現碼仍正確）／`tests/review-launch.test.js`、DLP 相關考題／觸發下一次改 DLP 或相關考題時順手補齊。
-- 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）補可直接執行的邊界考題：非字串 message body、主程序結束但子程序仍持有輸出管線、上游串流異常時資源清理、直接代貼不得二次拆包／`tools/review-launch.js` 的 Grok 串流及代貼路徑、`tests/review-launch.test.js`／下一次修改相應傳輸／清理／拆包路徑時補；本次只承接正式建議，不把舊場補充突變當成倉庫內既有考題，也不擴修續審接線以外的傳輸行為。
-- 2026-10-29（[#128 主審 r2 R2](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，非阻擋）補 result subtype 單欄異常的回歸，保留其餘完成欄位合法的正常對照／`tests/grok-strict-regression.test.js`，可另在 `tests/review-launch.test.js` 的 E8 執行路徑核拒收且無輸出／下次修改嚴格解析或相應考題時；本輪現碼拒收，移除該欄限制才會漏接，補充探針的紅燈不當成現碼缺陷。
+- 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）待補可直接執行的邊界考題：非字串 message body、主程序結束但子程序仍持有輸出管線、直接代貼不得二次拆包／`tools/review-launch.js` 的 Grok 串流及代貼路徑、`tests/review-launch.test.js`／下一次修改相應傳輸／清理／拆包路徑時補。
 - 2026-10-29（[#128 主審 r2 清單第 15 項](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，註解待辦）整理自貼摘要案例旁仍稱成功路徑的舊註解／`tests/review-launch.test.js` 的 `selfPostedSummaryOut` 及其所在分組註解／下次整理該組考題註解時；現有斷言要求拒收並保留容器，不改收件判準。
 - 2026-10-29（[#128 主審 r4 R3](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6494198662)，非阻擋）補低風險第四輪獨立續審仍強制全審的正常對照與移除反證／`tests/review-launch.test.js` 的獨立續審題組／下次修改續審範圍判斷或相關考題時；現碼正確，既有高風險題組不能區分移除續審專用強制全審條件，補充探針不冒稱倉庫既有考題。
 
@@ -113,6 +112,9 @@
 7. G2 掃描指令——做完，搬到下一節（套件 #114）。
 
 ## 做完的
+
+- 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）上游串流異常清理部分由 [#130](https://github.com/teacherjung/ai-collab-kit/pull/130) 補正式入口＋真轉送器的 partial／aborted／error、拒收無輸出及資源監聽收妥題；保留事件操作、移除兩事件失敗標記時錯誤放行而轉紅。只結案這一部分，不把舊場補充突變或其他三項當成既有倉庫考題。
+- 2026-10-29（[#128 主審 r2 R2](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，非阻擋）result subtype 單欄異常回歸由 [#130](https://github.com/teacherjung/ai-collab-kit/pull/130) 補齊／`tests/grok-strict-regression.test.js` 題名「result subtype 單欄非 success 不得借用合法完成正文」／其他完成欄位合法、正常對照成功；只移除 subtype 限制使反例未拒收而轉紅，還原後須通過。結案限這個純函式單欄反例，不宣稱另有 E8 專項。
 
 - 2026-10-06（理財鐵則搬移；原專案 #463、#470）E6 子點「文字檔的內容也不放控制字元」沒有考題逐檔掃（案例簿考題與規矩、設定、案例欄位的資料契約只順帶擋幾種，見 MACHINES E6 列；新考題不要跟它們的判準打架）／新考題（例如 `tests/file-contents.test.js`）掃所有追蹤的文字檔、整檔逐字看（不只開頭幾千個位元組）；文字檔照副檔名名單判，不照版本控制的自動判斷（含空字元的原始碼會被它判成二進位），二進位副檔名的名單照 E7 登記，加一份很長之後才放空字元的誘餌檔（要被抓到）與檔數下限；MACHINES E6 列跟著改。2026-10-06 掃主幹 4a06fe6 已追蹤的 277 個檔（本支 edfdf98 的 291 個結果相同）：控制字元 0 個；看不見但不算控制字元的另有 `manual/build.verify.js` 兩個 U+FEFF、`tests/check-collab-fields.test.js` 兩個 U+200B 與 U+034F、U+3164 各一個、`tests/forbidden-tools.test.js` 的 U+2028 與 U+2029 各一個（都是夾具直接貼原字；表情符號後面的 U+FE0F、不換行空格 U+00A0、全形空白 U+3000 沒算進去），要不要一起管，做的時候問裁示者／下一支本來就要動考題時，或有一顆控制字元真的進了套件時。 [2026-10-14 技術代裁](https://github.com/teacherjung/personal-finance-webapp/pull/689#issuecomment-6170230839)：本次不併全倉新閘，改動檔仍全文掃描；新機器排在工具登記與安裝主線完成後的獨立目的 PR。——落地：套件 #121（套件優化第 3 批）：`tests/file-names.test.js` 新增已追蹤文字檔（照二進位副檔名允許清單排除）整檔逐字控制字元掃描（C0/C1，`\t`、`\n`、`\r` 除外）、二進位副檔名排除測試、檔數下限與超過 16 KiB 的尾端空字元誘餌斷言，MACHINES E6 列與規矩 E6 標籤跟著更新；零寬空白與 BOM 等非控制字元維持原夾具不納入。
 - 2026-10-06（理財鐵則搬移；原專案 #470）`tests/signposts.test.js` 的路標檢查有三個缺口：關鍵字整個是空白時，只要檔裡別處有同樣長度的連續空白就當成找得到（縮排就算；只有一個空白時幾乎每支檔都過。2026-10-06 照它的判斷式另寫一份實跑：兩個空白配有縮排的來源、一個空白配沒縮排但有空白的來源，都回空陣列）；沒有接線誘餌證明真的有在掃；沒有檔數下限／那支考題與 MACHINES K3 列／下一次動那支考題時。——落地：套件 #121（套件優化第 3 批）：`tests/signposts.test.js` 拒絕全為空白的路標關鍵字、補掃描檔數下限（>= 20）與本檔頂端接線誘餌及目標題名改動突變斷言，MACHINES K3 列跟著更新。
