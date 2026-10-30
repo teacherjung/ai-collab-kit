@@ -87,7 +87,7 @@
 - 2026-10-19（[套件 #114 複審後掃第 7 項](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278666609)；2026-10-21 補收件）`runGrokExec` 抽取提示內額外 SHA 的正規式只認兩點 `diff A..B`、未認三點 `diff A...B`，且同目錄 `scan.json`／`launch.json` 解析失敗時靜默忽略，致無紀錄檔或紀錄檔損壞時非祖先基底不會進入 `wantedShas`／`tools/review-launch.js` 的 `runGrokExec`（第 2199〜2212 行）／當支援不經 `--scan`／送審產生器而無 `scan.json`／`launch.json` 的手動 `--grok-exec` 呼叫、或下一次動到 `wantedShas` 抽取邏輯時。
 - 2026-10-19（[套件 #114 r7 複審 N3](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278019285)；2026-10-21 補收件）區分 Gemini 啟動時與退出計畫後的權限：依非互動樣板啟動後，若模型呼叫 `exit_plan_mode`，Gemini CLI 會自動切為 YOLO，只讀 `machine` 欄容易把初始狀態當成全程限制／`settings.json` 的 Gemini `machine`／`promptOnly`（改完重產 `PROJECT-SETTINGS.md`）／下一次更新 Gemini 複審接線或 CLI 版本時，補上「非互動退出轉 YOLO，之後唯讀靠提示與事後核樹」。
 - 2026-10-19（[套件 #114 PR 說明對帳表自記待辦](https://github.com/teacherjung/ai-collab-kit/pull/114)；2026-10-21 補收件）`materializeIsolatedGitRepo` 為保留非祖先上一輪提交而建立的引用置於 `refs/keep/wanted-*`（供盒內 `git fsck --unreachable --no-reflogs` 維持零未引用物件），盒內執行 `git for-each-ref` 或 `git log --all` 會看到該命名空間／`tools/review-launch.js` 的 `materializeIsolatedGitRepo`（第 2114 行）／當盒內工具對 `git for-each-ref` 或 `--all` 有零額外可見引用要求且一併調整 `kit-only/settings-pin.test.js` 的 `fsck --unreachable` 驗證方式時。
-- 最晚 2026-09-23（定案頁第 2 批第 4 件；2026-10-30 成本重算由「排定」轉入，擁有者裁定選項 A）C1 支數提醒：本文 C1 規定每個專案各工作線全體最多兩支進行中、草稿也算（C1 文字已於 #121 對齊；10/30 量測近 30 支 PR 違反 C1 次數為 0，單獨改共用工具並觸發雙倉同步成本高於收益）／`tools/preflight.js` 讀取既有 `openPulls` 筆數，若大於或等於 2 則印黃燈提醒（只列不擋）／下一次因別的需求本來就要修改 `tools/preflight.js` 時順手併入，或第一次發生超開第 3 支 PR 的違規事故時。
+- 最晚 2026-09-23（定案頁第 2 批第 4 件；2026-10-30 成本重算由「排定」轉入，擁有者裁定選項 A）C1 支數提醒：本文 C1 規定每個專案各工作線全體最多兩支進行中、草稿也算（C1 文字已於 #121 對齊；10/30 量測近 30 支 PR 違反 C1 次數為 0，單獨改共用工具並觸發雙倉同步成本高於收益）／`tools/preflight.js` 讀取既有 `openChanges` 筆數，若大於或等於 2 則印黃燈提醒（只列不擋）／下一次因別的需求本來就要修改 `tools/preflight.js` 時順手併入，或第一次發生超開第 3 支 PR 的違規事故時。
 
 ## 排定
 
@@ -97,7 +97,7 @@
 
 1. 待辦的固定去處——做完（清單＝#21、#22；開工印待辦＝#50）。
 2. A5 待裁閘——做完（#48）。
-3. G1 提醒——做完（#88 開工預檢滿 7 天黃燈提醒、#114 掃描時序自動補齊與合併閘核對；#132 成本重算確認零漏跑結案）。
+3. G1 提醒——做完（#88 `tools/merge.js` 合併後印 H6 規矩原文、#114 `tools/review-launch.js` 自動判斷是否應掃描並於 `--scan-post` 自動補齊掃描時序；#132 成本重算結案）。
 4. C1 支數——轉入「## 待辦」依條件觸發（#121 已對齊 C1 文字；#132 成本重算近 30 支零違規，改列待辦於下次動 `tools/preflight.js` 時順手併入）。
 5. F3 送審說明產生器——做完（#49）。
 6. E8 半自動突變表——做完（#132 完成樹外 Stryker 實測與成本重算結案）。
@@ -109,7 +109,7 @@
 
 - 2026-10-10（稽核 2026-10-06 複查，擁有者第 22 題裁「a）全部寫進待辦」）`README.md`「搬進一個專案」第 3 步（接禁區攔截器）拆分為四個段落小標並消弭重複——落地：套件 #131（先將第 3 步重複段改指 `MACHINES.md` B1 列與 `tools/guard-copy.js` 檔頭，由 13,885 減至 6,620 位元組）與套件 #132（於第 3 步內加上 `〔一、填禁區設定與放行探針〕`、`〔二、Claude 側裝法〕`、`〔三、四種裝法的共同驗收〕`、`〔四、Codex 側裝法〕` 四段粗體標記，維持 `tools/kit-lock.js` 的 STEP3 與說明書產生器 `manual/build.js` 零耦合）。
 - 最晚 2026-09-23（定案頁第 2 批第 6 件；10/15 盤點第 5 題、10/29 擁有者裁定先試跑量測）E8 半自動突變表與 Stryker 突變測試樹外實測（報告 `Archive/batch2-remaining-machines-report-20261030.md`）——落地：套件 #132（2026-10-30 樹外實測 `@stryker-mutator/core`：拉入 166 個套件，`markdown-effective.js` 88.96% 耗時 30.24 秒、`ruling-assignments.js` 77.66% 耗時 37.83 秒且 105 個存活突變多為中文訊息常數雜訊、`git-env.js` 因沙盒無 `.git` 且插樁改動原始碼位元組雜湊於 DryRun 173.50 秒退 1；擁有者拍板選項 A 定案不入日常三關、不自寫 AST 突變器，僅於翻修純函式演算法時在樹外臨時執行）。
-- 最晚 2026-09-23（定案頁第 2 批第 3 件；9/26 加核時序與合併後印分級）G1 提醒與掃描時序核對——落地：套件 #88（`tools/preflight.js` 滿 7 天起印黃燈提醒）、套件 #114（`tools/review-launch.js --scan-post` 自動驗證並補齊掃描時序、`tools/gates/check-scan-postmortem.js` 合併閘核對）與套件 #132（成本重算確認近 30 支高風險 PR 零漏跑，正式結案）。
+- 最晚 2026-09-23（定案頁第 2 批第 3 件；9/26 加核時序與合併後印分級）G1 提醒與掃描時序核對——落地：套件 #88（`tools/merge.js` 合併成功時印出 H6 驗收分級提醒與規矩原文）、套件 #114（`tools/review-launch.js` 的 `--scan` 自動判斷是否應掃描並印出標準收口句、`--scan-post` 自動驗證並補齊掃描時序）與套件 #132（成本重算確認核心功能已涵蓋，正式結案）。
 - 2026-10-29（承接 [#128 Sol 正式複審 R1](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6479121763)，非阻擋建議）上游串流異常清理部分由 [#130](https://github.com/teacherjung/ai-collab-kit/pull/130) 補正式入口＋真轉送器的 partial／aborted／error、拒收無輸出及資源監聽收妥題；保留事件操作、移除兩事件失敗標記時錯誤放行而轉紅。只結案這一部分，不把舊場補充突變或其他三項當成既有倉庫考題。
 - 2026-10-29（[#128 主審 r2 R2](https://github.com/teacherjung/ai-collab-kit/pull/128#issuecomment-6489420604)，非阻擋）result subtype 單欄異常回歸由 [#130](https://github.com/teacherjung/ai-collab-kit/pull/130) 補齊／`tests/grok-strict-regression.test.js` 題名「result subtype 單欄非 success 不得借用合法完成正文」／其他完成欄位合法、正常對照成功；只移除 subtype 限制使反例未拒收而轉紅，還原後須通過。結案限這個純函式單欄反例，不宣稱另有 E8 專項。
 - 2026-09-16（擁有者裁「要」；09/30、10/07 排定第④項）盤點現成可換（33 台套件機器與 2 項原專案機制對照現成工具四族 40 列比較表，報告 `Archive/kit-buy-vs-build-2026-10-15.md`）——落地：套件 #117（10/20 收件）與 2026-10-29 擁有者裁定選項 A（採建議預設「先記待辦、只量不改」，第 1〜6 題裁定結果全數寫入「## 待辦」與「## 排定」第 6 件，不另開改碼 PR）。
