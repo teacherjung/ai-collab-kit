@@ -1,3 +1,4 @@
+// 守 Grok 嚴格收件與轉送器防線（R6〜R8 回歸考題）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
