@@ -174,7 +174,7 @@ function ownHeader(text) {
   }
   return { line: para.match(/^[^。]*。/u)[0], para };
 }
-const HEADER_SAMPLES = { 'tests/forbidden-defaults.test.js': '包含空白範本 tests/helpers/unfilled-settings.json 的同名清單', 'tests/kit-lock.test.js': '清單的豁免；K1：每條', 'tools/gates/check-review-verdicts.js': '；放行只認' };
+const HEADER_SAMPLES = { 'tests/forbidden-defaults.test.js': '包含空白範本 tests/helpers/unfilled-settings.json 的同名清單', 'tests/kit-lock.test.js': '不覆蓋；K1：每條', 'tools/gates/check-review-verdicts.js': '；放行只認' };
 
 /** 考題自己列 tools/ 與 tools/gates/ 的 .js（不用產生器的 readTools）。 */
 function ownTools() {
@@ -298,7 +298,7 @@ function ownTagNames(tag, names) {
   const text = tag.replace(/`[^`]*`/gu, '框').replace(/\*\*/gu, '');
   return text.split('；').map((seg) => names.find((n) => seg === n || seg.startsWith(`${n}：`))).filter(Boolean);
 }
-const TAG_SAMPLES = { A2: ['雲端', '合併閘'], B1: ['攔截', '靠自覺'], D1: ['清單腳本', '靠自覺'], E1: ['雲端'], F4: ['合併閘'], G2: ['掃描自檢', '靠自覺'], H5: ['靠自覺'], H6: ['分級腳本', '靠自覺'] };
+const TAG_SAMPLES = { A2: ['雲端', '合併閘'], B1: ['攔截', '靠自覺'], D1: ['清單腳本', '靠自覺'], E1: ['雲端'], F4: ['合併閘'], G2: ['靠自覺'], H5: ['靠自覺'], H6: ['分級腳本', '靠自覺'] };
 
 function kindOfTag(tag, names) {
   const got = ownTagNames(tag, names);
@@ -401,7 +401,7 @@ test('④ 跳窗資料：每個標籤一筆、意思與守不到的照原文；�
   const data = JSON.parse(json[1]);
   const o = own();
   const ownL = ownLabels(o.machines);
-  assert.ok(ownL.length >= 9, '考題自己讀到的標籤太少：對照讀錯了');
+  assert.ok(ownL.length >= 8, '考題自己讀到的標籤太少：對照讀錯了');
   assert.deepEqual(labels, ownL, '產生器讀到的標籤表跟考題自己讀的不一樣');
   assert.deepEqual(Object.keys(data).sort(), ownL.map((l) => l.name).sort());
   for (const l of ownL) {
@@ -787,8 +787,8 @@ test('⑬ 考題頁：照 tests/manifest.json 的清單與順序每一支一則�
   assert.ok(page.includes(`<span class="sec-count">${tests.length} 支</span>`), '考題那一塊的支數不對');
   // 機器表那一欄用別的寫法提到考題檔（兩個路徑放同一個框、沒有框）＝停，不說「沒有直接寫到它」
   const mm = src.machines;
-  assert.ok(mm.includes('`tests/scan-probe.test.js`、`tests/scan-postmortem.test.js`') && mm.includes('`tests/file-names.test.js`'), '前提：機器表 G2、E6 兩列照現在的寫法');
-  assert.throws(() => manual.build({ ...src, machines: mm.replace('`tests/scan-probe.test.js`、`tests/scan-postmortem.test.js`', '`tests/scan-probe.test.js、tests/scan-postmortem.test.js`') }), /G2」那一列的「原專案的實作」提到 tests\/scan-(probe|postmortem)\.test\.js，但不是一個灰底框剛好放這一個路徑/u);
+  assert.ok(mm.includes('`tests/guard-copy.test.js`、`tests/guard-copy-claude.test.js`') && mm.includes('`tests/file-names.test.js`'), '前提：機器表 B1、E6 兩列照現在的寫法');
+  assert.throws(() => manual.build({ ...src, machines: mm.replace('`tests/guard-copy.test.js`、`tests/guard-copy-claude.test.js`', '`tests/guard-copy.test.js、tests/guard-copy-claude.test.js`') }), /B1」那一列的「原專案的實作」提到 tests\/guard-copy(-claude)?\.test\.js，但不是一個灰底框剛好放這一個路徑/u);
   assert.throws(() => manual.build({ ...src, machines: mm.replace('`tests/file-names.test.js`', 'tests/file-names.test.js') }), /E6」那一列的「原專案的實作」提到 tests\/file-names\.test\.js/u);
   assert.doesNotThrow(() => manual.build({ ...src, machines: mm.replace('`tests/file-names.test.js`', '`tests/file-names.test.js`（另見 `tests/file-names.test.js.bak` 與 x/tests/file-names.test.js）') }), '對照組：較長的路徑裡含它不算');
   // 檔頭沒有說明就停（用注入的來源，不動真的檔）
@@ -1180,7 +1180,7 @@ test('⑮ 設定頁：設定說明產生器對空白範本的產出，每一節�
   assert.ok(strip(page).includes('(^|_)(transfer|withdraw(al)?|') && strip(page).includes('_\\w*?('), '跳脫的標點沒有還原（禁區那幾條樣式）');
   assert.ok(page.includes('<strong>展示</strong>') && page.includes('<code>docs/money-guard-two-pattern-tables.md</code>'), '粗體或灰底框沒排出來');
   assert.ok(page.includes('<td></td>'), '還沒驗過的日期那一格應該是空的格子');
-  assert.equal(count(/<ol>/gu), 2, '寫死的樣本：子項清單有兩串（掃描那條鏈、三關指令）');
+  assert.equal(count(/<ol>/gu), 1, '寫死的樣本：子項清單有一串（三關指令）');
   // 停下：認不得的形狀與行內記號（直接餵整條排版流程，原因要對；最前面是合法的對照組）
   const OK = '# 標題\n\n開頭一段。\n\n## 一、甲\n\n| 欄 | 值 |\n|---|---|\n| a \\| b |  |\n\n- 一項\n  1. 子項\n- 二項\n';
   assert.ok(manual.renderSettings(OK).includes('<td>a | b</td><td></td>'), '對照組要照收：跳脫的「|」不分格、空格照收');
@@ -1546,9 +1546,9 @@ test('⑰ 套用頁：README.md「搬進一個專案」「專案裡改到套件�
   assert.ok(page.includes(`<p class="page-sum">怎麼把套件搬進一個專案、專案裡改到套件的檔要怎麼辦：下面是 README.md 的「搬進一個專案」「專案裡改到套件的檔」這 ${secs.length} 節原文，照說明書的排法排。</p>`), '套用頁頁首那一句不對（數字或字）');
   assert.ok(html.includes('<p class="source-note">來源：README.md 的「搬進一個專案」「專案裡改到套件的檔」兩節。這一頁不照 GitHub 的畫法：只排標題、段落、表格、清單（含從 1 連號的編號清單，與編號清單項底下的程式碼框）、灰底框、粗體，其他字照原文顯示（只有寫在符號前面、讓符號不被當成排版記號的「\\」，與程式碼框開頭的語言名不顯示；GitHub 會把表情代碼變成圖示、網址變成連結，這裡照字面）。說明書認不得的行，以及一部分 GitHub 可能另作排版的行內記號（例如會變成斜體、刪除線、HTML 的寫法），會讓整份停下不產生。</p>'), '套用頁的來源註記不對');
   assert.ok(!html.includes('<section class="page" id="page-adopt" data-page="adopt" hidden>\n<header class="page-head"><p class="eyebrow">第 7 頁</p>'), '套用頁不該再是「準備中」');
-  // 寫死的樣本：第 2 步底下的程式碼框、第二節開頭是粗體的清單項、第 3 步補了灰底框的家目錄路徑、編號清單至少 5 步
+  // 寫死的樣本：第 2 步底下的程式碼框、第二節第一個清單項開頭的粗體、第 3 步補了灰底框的家目錄路徑、編號清單至少 5 步
   assert.ok(page.includes("</li><li>專案若有 ESLint、而且把 <code>.js</code> 當 ES 模組：在它的設定補一組（package.json 的宣告管不到 lint）。漏了＝lint 對套件檔報幾百個錯，推送前那道門推不上去。<pre class=\"code-box\"><code>{ files: ['tools/**/*.js', 'tests/**/*.js'], languageOptions: { sourceType: 'commonjs', globals: globals.node } }</code></pre></li>"), '第 2 步與它底下的程式碼框不對（寫死的樣本）');
-  assert.ok(page.includes('<ul class="items"><li><strong>預設：套件先改、再同步回專案</strong>——'), '第二節第一項開頭的粗體不對（寫死的樣本）');
+  assert.ok(page.includes('<ul class="items"><li><strong>只在套件改、再同步回專案</strong>——'), '第二節第一項開頭的粗體不對（寫死的樣本）');
   assert.ok(page.includes('例如 <code>~/.local/share/ai-collab-kit/guard/&lt;版本碼前幾碼&gt;</code>）。②'), '第 3 步那一處家目錄路徑要在灰底框裡（寫死的樣本）');
   assert.ok(secs[0].blocks.filter((b) => b.kind === 'olist').reduce((n, b) => n + b.items.length, 0) >= 5, '前提：考題自己讀到的編號清單太少');
   // 照原文靠的樣式：程式碼框保留換行與縮排；編號清單要看得到號碼（整份樣式不准有 list-style）
@@ -2557,7 +2557,7 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
   assert.equal(both.status, 1);
   assert.equal(both.stdout, '');
   assert.match(both.stderr, /不跟 --stamp 一起用/u);
-  assert.equal(manual.handbookCodeLines('# 白話手冊\n\n## 甲\n\n- 原文 B1：必含 `還沒送出也算`\n- 原文 B1｜核對碼 00000000：必含 `x`\n', o.rules), `B1 ${ownCode(byId.get('B1'))}\n`, '新加的一則還沒寫碼也印得出來、同一條只印一次');
+  assert.equal(manual.handbookCodeLines('# 白話手冊\n\n## 甲\n\n- 原文 B1：必含 `還沒送出的`\n- 原文 B1｜核對碼 00000000：必含 `x`\n', o.rules), `B1 ${ownCode(byId.get('B1'))}\n`, '新加的一則還沒寫碼也印得出來、同一條只印一次');
   assert.throws(() => manual.handbookCodeLines('- 原文 K99｜核對碼 00000000：必含 `x`\n', o.rules), /K99：條號不在規則資料裡（刪了或改號）/u);
   const brokenRules = { ...o.rules, sections: [] };
   assert.ok(rulesBook.validate(brokenRules).length, '前提：規則書產生器的資料契約挑得出這份的錯');
@@ -2574,9 +2574,9 @@ test('㉒ 白話手冊：manual/handbook.md 每一節照順序排在名詞頁最
     '## 甲 <一> & "二"',
     '',
     '- 一句話：**粗體** 與 `灰底框` 與 B1 條號 <一> & "二" 與 $& 照字面',
-    `- 原文 B1｜核對碼 ${codeOf('B1')}：必含 \`還沒送出也算\``,
+    `- 原文 B1｜核對碼 ${codeOf('B1')}：必含 \`還沒送出的\``,
     "- 白話：價錢 $& 與 $' 照字面，見 B2。",
-    `- 原文 B2｜核對碼 ${codeOf('B2')}：必含 \`不存在合法來源\`、\`拒絕並直接回報\``,
+    `- 原文 B2｜核對碼 ${codeOf('B2')}：必含 \`無合法來源\`、\`拒絕並直接回報\``,
     '- 比方：兩  格 **粗** `框`',
     '- 見名詞：`「禁區」`、`「錢」`',
     '',
