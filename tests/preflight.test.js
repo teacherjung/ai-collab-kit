@@ -620,11 +620,13 @@ setTimeout(() => {
     assert.equal(nestedStillAlive, false, '巢狀 runGrokChild 內層程序在 probeSeats 回傳時必須已終止');
     assert.equal(ticksAfterWait, ticksAtReturn, 'probeSeats 回傳後巢狀內層程序不得再新增任何標記');
 
-    // (g) N1（續）：外層點火程序群組收到 SIGTERM 取消時，必須先終止已 detached 的 CLI 子程序才結束
+    // (g) N1（續）：外層點火收到整組（-pid）或單一主程序（pid）之 SIGINT／SIGTERM 取消時，必須終止已 detached 的 CLI 子程序且中斷後續座位點火（不吞掉取消、不誤啟動下一座位）
     const cancelTicks = path.join(tmp, 'cancel-cli.ticks');
     const cancelPidFile = path.join(tmp, 'cancel-cli.pid');
+    const secondSeatMarker = path.join(tmp, 'cancel-second-seat-ran.txt');
     const cancelOuterScript = path.join(tmp, 'cancel-outer.cjs');
     const preflightPath = path.join(__dirname, '..', 'tools', 'preflight.js');
+    const claudeCancelCli = path.join(pathFrontDir, 'claude');
     fs.writeFileSync(
       frontCli,
       [
@@ -637,35 +639,68 @@ setTimeout(() => {
       { mode: 0o755 },
     );
     fs.writeFileSync(
+      claudeCancelCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(secondSeatMarker)}, 'ran');`,
+        'process.exit(0);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const twoSeatCancelSettings = {
+      ...settings,
+      reviewers: [settings.reviewers[0], settings.reviewers[1]],
+    };
+    fs.writeFileSync(
       cancelOuterScript,
       [
         `const { probeSeats } = require(${JSON.stringify(preflightPath)});`,
-        `const settings = ${JSON.stringify(singleCodexSettings)};`,
-        `probeSeats(settings, { seatFilter: 'Codex', env: ${JSON.stringify(customEnv)}, homedir: ${JSON.stringify(tmp)}, timeoutMs: 2000 });`,
+        `const settings = ${JSON.stringify(twoSeatCancelSettings)};`,
+        `const res = probeSeats(settings, { seatFilter: '*', env: ${JSON.stringify(customEnv)}, homedir: ${JSON.stringify(tmp)}, timeoutMs: 3000 });`,
+        'process.stdout.write(JSON.stringify(res));',
       ].join('\n'),
     );
     const { spawn: spawnAsync } = require('node:child_process');
-    const cancelJob = spawnAsync(process.execPath, [cancelOuterScript], {
-      env: customEnv,
-      detached: true,
-      stdio: 'ignore',
-    });
-    const cancelJobExit = new Promise((r) => cancelJob.once('exit', (code, signal) => r({ code, signal })));
-    for (let i = 0; i < 150 && !fs.existsSync(cancelPidFile); i += 1) {
-      await new Promise((r) => setTimeout(r, 20));
+    for (const cancelMode of [
+      { label: '群組 SIGTERM (-pid)', toGroup: true, sig: 'SIGTERM' },
+      { label: '單一主程序 SIGINT (pid)', toGroup: false, sig: 'SIGINT' },
+      { label: '單一主程序 SIGTERM (pid)', toGroup: false, sig: 'SIGTERM' },
+    ]) {
+      try { fs.unlinkSync(cancelPidFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(cancelTicks); } catch { /* ignore */ }
+      try { fs.unlinkSync(secondSeatMarker); } catch { /* ignore */ }
+      const cancelJob = spawnAsync(process.execPath, [cancelOuterScript], {
+        env: customEnv,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let cancelStdout = '';
+      cancelJob.stdout.on('data', (d) => { cancelStdout += d.toString('utf8'); });
+      const cancelJobExit = new Promise((r) => cancelJob.once('exit', (code, signal) => r({ code, signal })));
+      for (let i = 0; i < 150 && !fs.existsSync(cancelPidFile); i += 1) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.equal(fs.existsSync(cancelPidFile), true, `${cancelMode.label}：合成 CLI 應已啟動並寫出 PID`);
+      process.kill(cancelMode.toGroup ? -cancelJob.pid : cancelJob.pid, cancelMode.sig);
+      const exitInfo = await cancelJobExit;
+      const cancelTicksBefore = countLines(cancelTicks);
+      await new Promise((r) => setTimeout(r, 400));
+      const cancelTicksAfter = countLines(cancelTicks);
+      const cancelChildPid = Number(fs.readFileSync(cancelPidFile, 'utf8'));
+      let cancelChildAlive = false;
+      try { process.kill(cancelChildPid, 0); cancelChildAlive = true; } catch { /* expected ESRCH */ }
+      try { process.kill(cancelChildPid, 'SIGKILL'); } catch { /* cleanup */ }
+      assert.equal(cancelChildAlive, false, `${cancelMode.label}：外層點火結束時，detached CLI 子程序必須已一併終止`);
+      assert.equal(cancelTicksAfter, cancelTicksBefore, `${cancelMode.label}：外層點火結束後 CLI 子程序不得繼續寫入標記`);
+      assert.equal(fs.existsSync(secondSeatMarker), false, `${cancelMode.label}：第一座位取消後不得繼續啟動第二座位`);
+      if (!cancelMode.toGroup) {
+        const parsedOut = JSON.parse(cancelStdout);
+        assert.equal(parsedOut.probes.length, 1, `${cancelMode.label}：取消後應立即跳出座位迴圈`);
+        assert.equal(parsedOut.probes[0].reason, '執行已取消');
+        assert.equal(exitInfo.code, cancelMode.sig === 'SIGINT' ? 130 : 143);
+      }
     }
-    assert.equal(fs.existsSync(cancelPidFile), true, '合成 CLI 應已啟動並寫出 PID');
-    process.kill(-cancelJob.pid, 'SIGTERM');
-    await cancelJobExit;
-    const cancelTicksBefore = countLines(cancelTicks);
-    await new Promise((r) => setTimeout(r, 400));
-    const cancelTicksAfter = countLines(cancelTicks);
-    const cancelChildPid = Number(fs.readFileSync(cancelPidFile, 'utf8'));
-    let cancelChildAlive = false;
-    try { process.kill(cancelChildPid, 0); cancelChildAlive = true; } catch { /* expected ESRCH */ }
-    try { process.kill(cancelChildPid, 'SIGKILL'); } catch { /* cleanup */ }
-    assert.equal(cancelChildAlive, false, '外層點火收到 SIGTERM 結束時，detached CLI 子程序必須已一併終止');
-    assert.equal(cancelTicksAfter, cancelTicksBefore, '外層點火結束後 CLI 子程序不得繼續寫入標記');
 
     // (h) N6：點火必須清掉 GIT_* 選倉環境變數與 platform.clearEnv，使 CLI 內部 Git 指向隔離點火樹而非外部 GIT_DIR
     const decoyRepo = path.join(tmp, 'decoy-git-repo');
@@ -705,7 +740,7 @@ setTimeout(() => {
     assert.equal(observedEnv.gitDir, path.join(observedEnv.cwd, '.git'), 'CLI 內部 Git 必須指向隔離點火樹的 .git，不得受繼承 GIT_DIR 影響');
     assert.equal(observedEnv.ghRepo, null, 'platform.clearEnv 指定的環境變數必須在點火時清除');
 
-    // (i) N7：臨時提交停用簽名（不受全域 commit.gpgsign=true 阻擋），且當 Git 建樹失敗時不啟動 CLI、直接回報固定建樹診斷
+    // (i) N7：臨時提交停用簽名（不受全域 commit.gpgsign=true 阻擋），且當 git init 失敗且 TMPDIR 位於外層 Git 倉庫內時，不可執行 git config 汙染外層倉庫
     const fakeGitDir = path.join(tmp, 'fake-git-bin');
     fs.mkdirSync(fakeGitDir, { recursive: true });
     const realGitPath = realSpawnSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/git';
@@ -731,6 +766,7 @@ setTimeout(() => {
         "const { spawnSync } = require('node:child_process');",
         'const args = process.argv.slice(2);',
         "if (process.env.FAKE_GIT_MODE === 'fail') process.exit(127);",
+        "if (process.env.FAKE_GIT_MODE === 'fail-init-only' && args[0] === 'init') process.exit(1);",
         "const actual = args[0] === 'commit' ? ['-c', 'commit.gpgsign=true', '-c', 'gpg.program=/usr/bin/false', ...args] : args;",
         `const r = spawnSync(${JSON.stringify(realGitPath)}, actual, { env: process.env, encoding: 'utf8' });`,
         "process.stdout.write(r.stdout || '');",
@@ -754,20 +790,125 @@ setTimeout(() => {
     assert.equal(fs.existsSync(cliRanMarker), true);
 
     try { fs.unlinkSync(cliRanMarker); } catch { /* ignore */ }
-    const failGitEnv = {
-      ...signingEnv,
-      FAKE_GIT_MODE: 'fail',
-    };
-    const failGitProbe = probeSeats(singleCodexSettings, {
-      seatFilter: 'Codex',
-      env: failGitEnv,
-      homedir: tmp,
-    });
-    assert.equal(failGitProbe.probes[0].ok, false, 'Git 建樹失敗時必須判為點火失敗');
-    assert.match(failGitProbe.probes[0].reason, /建立隔離點火 Git 樹失敗/u);
-    assert.equal(fs.existsSync(cliRanMarker), false, 'Git 建樹失敗時絕不可啟動 CLI');
+    const outerRepoTmp = path.join(tmp, 'outer-repo-tmpdir');
+    fs.mkdirSync(outerRepoTmp, { recursive: true });
+    realSpawnSync(realGitPath, ['init', '-q', outerRepoTmp], { env: gitEnv(), encoding: 'utf8' });
+    realSpawnSync(realGitPath, ['config', '--local', 'user.name', 'OuterKeepName'], { cwd: outerRepoTmp, env: gitEnv(), encoding: 'utf8' });
+    realSpawnSync(realGitPath, ['config', '--local', 'user.email', 'outer-keep@example.com'], { cwd: outerRepoTmp, env: gitEnv(), encoding: 'utf8' });
+    const prevTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = outerRepoTmp;
+    let failInitOnlyProbe;
+    try {
+      failInitOnlyProbe = probeSeats(singleCodexSettings, {
+        seatFilter: 'Codex',
+        env: { ...signingEnv, FAKE_GIT_MODE: 'fail-init-only', TMPDIR: outerRepoTmp },
+        homedir: tmp,
+      });
+    } finally {
+      if (prevTmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = prevTmpDir;
+    }
+    assert.equal(failInitOnlyProbe.probes[0].ok, false, 'git init 失敗時必須判為點火失敗');
+    assert.match(failInitOnlyProbe.probes[0].reason, /建立隔離點火 Git 樹失敗/u);
+    assert.equal(fs.existsSync(cliRanMarker), false, 'git init 失敗時絕不可啟動 CLI');
+    const outerNameAfter = realSpawnSync(realGitPath, ['config', '--local', '--get', 'user.name'], { cwd: outerRepoTmp, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+    const outerEmailAfter = realSpawnSync(realGitPath, ['config', '--local', '--get', 'user.email'], { cwd: outerRepoTmp, env: gitEnv(), encoding: 'utf8' }).stdout.trim();
+    assert.equal(outerNameAfter, 'OuterKeepName', 'git init 失敗時不得執行 git config 覆寫外層倉庫的 user.name');
+    assert.equal(outerEmailAfter, 'outer-keep@example.com', 'git init 失敗時不得執行 git config 覆寫外層倉庫的 user.email');
 
-    // (j) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
+    // (j) N8：同一座位同時登記於 reviewers 與 scanner 時，probeSeats 必須逐一實測 review 與 scan 兩條命令，任一角色命令失敗即判該座位點火失敗
+    const dualRoleSettings = {
+      participants: [
+        { role: '裁示者（人）', id: 'Boss', account: 'boss' },
+        { role: 'AI 雙棲', id: 'Grok', account: 'ai' },
+      ],
+      defaultDivision: { implementer: 'Boss', reviewer: 'Grok' },
+      platform: { project: 'fake/repo' },
+      reviewers: [
+        {
+          participant: 'Grok',
+          tool: 'Grok 4.7',
+          source: 'Grok CLI',
+          strongest: 'grok-4.7',
+          maxEffort: 'xhigh',
+          command: 'node tools/review-launch.js --grok-exec --mode review --cwd {reviewTree} --add-dir {mutationCopy} --prompt-file {promptFile} --out-file {outFile} --model {model} --effort {effort}',
+        },
+      ],
+      scanner: {
+        participant: 'Grok',
+        tool: 'Grok 4.7',
+        source: 'Grok CLI',
+        strongest: 'grok-4.7',
+        maxEffort: 'xhigh',
+        command: 'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --prompt-file {promptFile} --out-file {outFile} --model {model} --effort {effort}',
+      },
+    };
+    const dualCalledModes = [];
+    const dualBothPass = probeSeats(dualRoleSettings, {
+      seatFilter: 'Grok',
+      env: { PATH: process.env.PATH },
+      homedir: tmp,
+      authFile: fakeAuthFile,
+      grokBin: fakeGrokBin,
+      spawnSyncImpl: (_bin, args) => {
+        const cmdStr = args[1];
+        const mode = /--mode\s+(review|scan)\b/u.exec(cmdStr)[1];
+        dualCalledModes.push(mode);
+        const outFile = /--out-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        const promptFile = /--prompt-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        fs.writeFileSync(path.join(path.dirname(outFile), 'execution.json'), JSON.stringify({ mode }), { flag: 'wx' });
+        const promptLines = fs.readFileSync(promptFile, 'utf8').split('\n').slice(1);
+        fs.writeFileSync(outFile, promptLines.join('\n'));
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.deepEqual(dualCalledModes, ['review', 'scan'], '雙棲座位點火必須依序實測 review 與 scan 兩條啟動命令');
+    assert.equal(dualBothPass.probes[0].ok, true);
+    assert.match(dualBothPass.lines.join('\n'), /Grok.*🟢 點火通過.*prepareVerdict＋prepareScan/u);
+
+    const dualScanFail = probeSeats(dualRoleSettings, {
+      seatFilter: 'Grok',
+      env: { PATH: process.env.PATH },
+      homedir: tmp,
+      authFile: fakeAuthFile,
+      grokBin: fakeGrokBin,
+      spawnSyncImpl: (_bin, args) => {
+        const cmdStr = args[1];
+        const mode = /--mode\s+(review|scan)\b/u.exec(cmdStr)[1];
+        const outFile = /--out-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        const promptFile = /--prompt-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        if (mode === 'scan') {
+          return { status: 7, stdout: '', stderr: 'scan command broken' };
+        }
+        const promptLines = fs.readFileSync(promptFile, 'utf8').split('\n').slice(1);
+        fs.writeFileSync(outFile, promptLines.join('\n'));
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(dualScanFail.probes[0].ok, false, '雙棲座位若複審通過但掃描命令失敗，必須判為點火失敗');
+    assert.equal(dualScanFail.probes[0].status, 7);
+    assert.match(dualScanFail.probes[0].reason, /［掃描］/u);
+
+    const dualReviewFail = probeSeats(dualRoleSettings, {
+      seatFilter: 'Grok',
+      env: { PATH: process.env.PATH },
+      homedir: tmp,
+      authFile: fakeAuthFile,
+      grokBin: fakeGrokBin,
+      spawnSyncImpl: (_bin, args) => {
+        const cmdStr = args[1];
+        const mode = /--mode\s+(review|scan)\b/u.exec(cmdStr)[1];
+        if (mode === 'review') {
+          return { status: 5, stdout: '', stderr: 'review command broken' };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(dualReviewFail.probes[0].ok, false, '雙棲座位若複審命令失敗，必須判為點火失敗');
+    assert.equal(dualReviewFail.probes[0].status, 5);
+    assert.match(dualReviewFail.probes[0].reason, /［複審］/u);
+
+    // (k) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
     const fullProbeRun = run(['--skip-downstream', '--probe', 'Codex'], {
       runners: {
         pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),

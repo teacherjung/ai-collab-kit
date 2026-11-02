@@ -13,6 +13,7 @@
 // 退出碼：0＝所有執行的項目都順利算完（含「0 筆命中」、C1 黃燈提醒、座位缺執行檔或點火未過的提醒）／2＝參數不對，或任一子工具算不出來（如設定未填、平台問不到、基準版本找不到、--probe 指定了不存在的座位）。⚠️ 不是閘。
 'use strict';
 const { spawnSync } = require('node:child_process');
+const { Worker, MessageChannel, receiveMessageOnPort } = require('node:worker_threads');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -183,33 +184,50 @@ function collectSeats(settings = {}) {
   const seats = new Map();
   for (const r of Array.isArray(settings.reviewers) ? settings.reviewers : []) {
     if (!r || !filled(r.participant)) continue;
-    seats.set(r.participant, {
-      participant: r.participant,
-      roles: ['複審候選'],
+    const revSpec = {
+      mode: 'review',
+      command: r.command,
       source: filled(r.source) ? r.source : '未填來源',
       model: filled(r.strongest) ? r.strongest : '未填模型',
       effort: filled(r.maxEffort) ? r.maxEffort : '未填推理',
+    };
+    seats.set(r.participant, {
+      participant: r.participant,
+      roles: ['複審候選'],
+      source: revSpec.source,
+      model: revSpec.model,
+      effort: revSpec.effort,
       commands: [r.command],
       probeCommand: r.command,
       probeMode: 'review',
+      probeSpecs: [revSpec],
     });
   }
   const sc = settings.scanner || {};
   if (sc && sc.tool !== '無' && filled(sc.participant)) {
+    const scanSpec = {
+      mode: 'scan',
+      command: sc.command,
+      source: filled(sc.source) ? sc.source : '未填來源',
+      model: filled(sc.strongest) ? sc.strongest : '未填模型',
+      effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
+    };
     const existing = seats.get(sc.participant);
     if (existing) {
       existing.roles.push('掃描者');
       existing.commands.push(sc.command);
+      existing.probeSpecs.push(scanSpec);
     } else {
       seats.set(sc.participant, {
         participant: sc.participant,
         roles: ['掃描者'],
-        source: filled(sc.source) ? sc.source : '未填來源',
-        model: filled(sc.strongest) ? sc.strongest : '未填模型',
-        effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
+        source: scanSpec.source,
+        model: scanSpec.model,
+        effort: scanSpec.effort,
         commands: [sc.command],
         probeCommand: sc.command,
         probeMode: 'scan',
+        probeSpecs: [scanSpec],
       });
     }
   }
@@ -352,19 +370,43 @@ function summarizeProbeFailure(runRes, rawOut, verdictErr) {
   return 'CLI 執行失敗（已遮蔽原始輸出，請於本機單獨執行該 CLI 檢查登入與連線狀態）';
 }
 
+let cachedSignalPipeFd;
+function getSignalPipeFd() {
+  if (cachedSignalPipeFd !== undefined) return cachedSignalPipeFd;
+  const beforeFds = new Map();
+  for (let fd = 3; fd < 64; fd += 1) {
+    try {
+      const st = fs.fstatSync(fd);
+      if (st.isFIFO()) beforeFds.set(fd, st.size);
+    } catch { /* ignore */ }
+  }
+  const initNoop = () => {};
+  process.on('SIGCONT', initNoop);
+  try { process.kill(process.pid, 'SIGCONT'); } catch { /* ignore */ }
+  let found = null;
+  for (let fd = 3; fd < 64; fd += 1) {
+    try {
+      const st = fs.fstatSync(fd);
+      if (st.isFIFO()) {
+        const oldSize = beforeFds.has(fd) ? beforeFds.get(fd) : 0;
+        if (st.size - oldSize >= 8) {
+          found = fd;
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  process.removeListener('SIGCONT', initNoop);
+  cachedSignalPipeFd = found;
+  return cachedSignalPipeFd;
+}
+
 const PROBE_GROUP_RUNNER_SCRIPT = `
 'use strict';
-const { spawn, spawnSync } = require('node:child_process');
-const cmd = process.argv[1];
+const { spawn } = require('node:child_process');
+const cmd = process.argv[1] || '';
 const timeoutMs = Number(process.argv[2]) || 60000;
-const initialPpid = process.ppid;
-const child = spawn('/bin/sh', ['-c', cmd], {
-  detached: true,
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-const pid = child.pid;
-const trackedPids = new Set(pid && pid > 1 ? [pid] : []);
-const trackedPgids = new Set(pid && pid > 1 ? [pid] : []);
+let pid = 0;
 let stdout = '';
 let stderr = '';
 let closed = false;
@@ -372,141 +414,186 @@ let timedOut = false;
 let cancelledSignal = null;
 let finishing = false;
 let exitStatus = null;
-child.stdout.setEncoding('utf8');
-child.stderr.setEncoding('utf8');
-child.stdout.on('data', (d) => { stdout += d; });
-child.stderr.on('data', (d) => { stderr += d; });
-function scanProcessTree() {
-  if (!pid || pid <= 1) return;
-  try {
-    const r = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', timeout: 500 });
-    if (r.status !== 0 || !r.stdout) return;
-    const rows = [];
-    for (const line of r.stdout.split(/\\r?\\n/u)) {
-      const m = line.trim().match(/^(\\d+)\\s+(\\d+)\\s+(\\d+)$/u);
-      if (!m) continue;
-      const p = Number(m[1]);
-      const pp = Number(m[2]);
-      const pg = Number(m[3]);
-      if (p > 1 && p !== process.pid && p !== initialPpid) rows.push({ p, pp, pg });
-    }
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const { p, pp, pg } of rows) {
-        if (trackedPids.has(pp) || (pg > 1 && trackedPgids.has(pg))) {
-          if (!trackedPids.has(p)) {
-            trackedPids.add(p);
-            changed = true;
-          }
-          if (pg > 1 && pg !== initialPpid && !trackedPgids.has(pg)) {
-            trackedPgids.add(pg);
-            changed = true;
-          }
-        }
-      }
-    }
-  } catch { /* ignore */ }
-}
+let child = null;
 function anyAlive() {
-  for (const pg of trackedPgids) {
-    if (pg > 1) {
-      try { process.kill(-pg, 0); return true; } catch { /* ignore */ }
-    }
-  }
-  for (const p of trackedPids) {
-    if (p > 1) {
-      try { process.kill(p, 0); return true; } catch { /* ignore */ }
-    }
-  }
+  if (!pid || pid <= 1) return false;
+  try { process.kill(-pid, 0); return true; } catch { /* ignore */ }
+  try { process.kill(pid, 0); return true; } catch { /* ignore */ }
   return false;
 }
-function signalAll(sig) {
-  for (const pg of trackedPgids) {
-    if (pg > 1) {
-      try { process.kill(-pg, sig); } catch { /* ignore */ }
-    }
-  }
-  for (const p of trackedPids) {
-    if (p > 1) {
-      try { process.kill(p, sig); } catch { /* ignore */ }
-    }
-  }
+function signalGroup(sig) {
+  if (!pid || pid <= 1) return;
+  try { process.kill(-pid, sig); } catch { /* ignore */ }
+  try { process.kill(pid, sig); } catch { /* ignore */ }
 }
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 async function finish(status) {
   if (finishing) return;
   finishing = true;
   clearTimeout(timer);
-  clearInterval(treeWatch);
-  scanProcessTree();
   if (anyAlive()) {
-    signalAll('SIGTERM');
-    const forceAt = Date.now() + 180;
+    signalGroup('SIGTERM');
+    const forceAt = Date.now() + 360;
     const deadline = Date.now() + 2500;
     let forced = false;
     while (anyAlive() && Date.now() < deadline) {
-      scanProcessTree();
       if (!forced && Date.now() >= forceAt) {
         forced = true;
-        signalAll('SIGKILL');
+        signalGroup('SIGKILL');
       } else if (forced) {
-        signalAll('SIGKILL');
+        signalGroup('SIGKILL');
       }
       await delay(20);
     }
     if (anyAlive()) {
-      scanProcessTree();
-      signalAll('SIGKILL');
+      signalGroup('SIGKILL');
     }
   }
   const pipeDeadline = Date.now() + 1000;
   while (!closed && Date.now() < pipeDeadline) await delay(20);
-  process.removeListener('SIGINT', onCancel);
-  process.removeListener('SIGTERM', onCancel);
-  child.stdout.destroy();
-  child.stderr.destroy();
-  process.stdout.write(JSON.stringify({
+  if (timedOut || cancelledSignal) await delay(40);
+  if (child) {
+    child.stdout.destroy();
+    child.stderr.destroy();
+  }
+  const payload = JSON.stringify({
     status: timedOut || cancelledSignal ? null : status,
     stdout,
     stderr,
     timedOut,
     cancelledSignal,
-  }));
+  });
+  await new Promise((resolve) => {
+    let done = false;
+    const finishWait = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    process.stdin.once('end', finishWait);
+    process.stdin.once('close', finishWait);
+    process.stdin.once('error', finishWait);
+    process.stdin.resume();
+    process.stdout.write('RESULT:' + payload + '\\n');
+    setTimeout(finishWait, 500);
+  });
+  process.exit(0);
 }
 function onCancel(sig) {
   cancelledSignal = typeof sig === 'string' ? sig : 'SIGTERM';
   void finish(null);
 }
-process.on('SIGINT', onCancel);
-process.on('SIGTERM', onCancel);
-const treeWatch = setInterval(() => {
-  scanProcessTree();
-  if (process.ppid <= 1 || process.ppid !== initialPpid) {
-    onCancel('SIGTERM');
-  }
-}, 25);
+process.on('SIGINT', () => onCancel('SIGINT'));
+process.on('SIGTERM', () => onCancel('SIGTERM'));
+process.on('SIGHUP', () => onCancel('SIGHUP'));
 const timer = setTimeout(() => {
   timedOut = true;
   void finish(null);
 }, Math.max(1, timeoutMs));
-child.once('error', (err) => {
-  stderr += String(err && err.message ? err.message : err);
-  void finish(null);
-});
-child.once('exit', (code) => {
-  exitStatus = code;
-  if (closed) void finish(exitStatus);
-});
-child.once('close', (code) => {
+try {
+  child = spawn('/bin/sh', ['-c', cmd], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  pid = child.pid;
+} catch (err) {
   closed = true;
-  void finish(exitStatus !== null ? exitStatus : code);
+  stderr += String(err && err.message ? err.message : err);
+  process.stdout.write('READY\\n');
+  void finish(null);
+}
+if (child) {
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (d) => { stdout += d; });
+  child.stderr.on('data', (d) => { stderr += d; });
+  child.once('error', (err) => {
+    stderr += String(err && err.message ? err.message : err);
+    void finish(null);
+  });
+  child.once('exit', (code) => {
+    exitStatus = code;
+    if (closed) void finish(exitStatus);
+  });
+  child.once('close', (code) => {
+    closed = true;
+    void finish(exitStatus !== null ? exitStatus : code);
+  });
+  process.stdout.write('READY\\n');
+}
+`;
+
+const PROBE_GROUP_WORKER_SCRIPT = `
+'use strict';
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+const { workerData } = require('node:worker_threads');
+const { runnerScript, cmd, cwd, env, timeoutMs, sigPipeFd, initSigSize, port, i32 } = workerData;
+const runner = spawn(process.execPath, ['-e', runnerScript, cmd, String(timeoutMs)], {
+  cwd,
+  env,
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let outBuf = '';
+let runnerReady = false;
+let runnerDone = false;
+let resultMsg = null;
+let pendingCancel = false;
+let forwardedCancel = false;
+function forwardCancelIfReady() {
+  if (!pendingCancel || forwardedCancel || runnerDone || !runnerReady) return;
+  forwardedCancel = true;
+  clearInterval(parentWatch);
+  try { runner.kill('SIGTERM'); } catch { /* ignore */ }
+}
+runner.stdout.setEncoding('utf8');
+runner.stdout.on('data', (chunk) => {
+  outBuf += chunk;
+  const lines = outBuf.split('\\n');
+  outBuf = lines.pop();
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === 'READY') {
+      runnerReady = true;
+      forwardCancelIfReady();
+    } else if (line.startsWith('RESULT:') && !runnerDone) {
+      runnerDone = true;
+      clearInterval(parentWatch);
+      try {
+        resultMsg = JSON.parse(line.slice('RESULT:'.length));
+      } catch {
+        resultMsg = null;
+      }
+      try { runner.stdin.end(); } catch { /* ignore */ }
+    }
+  }
+});
+const parentWatch = setInterval(() => {
+  if (runnerDone || forwardedCancel) return;
+  if (typeof sigPipeFd === 'number' && Number.isFinite(initSigSize) && initSigSize >= 0) {
+    try {
+      if (fs.fstatSync(sigPipeFd).size > initSigSize) {
+        pendingCancel = true;
+        forwardCancelIfReady();
+      }
+    } catch { /* ignore */ }
+  }
+}, 15);
+runner.once('close', () => {
+  clearInterval(parentWatch);
+  if (!resultMsg && pendingCancel) {
+    resultMsg = { status: null, stdout: '', stderr: '', timedOut: false, cancelledSignal: 'SIGTERM' };
+  }
+  port.postMessage(resultMsg);
+  Atomics.store(i32, 0, 1);
+  Atomics.notify(i32, 0);
+  process.exit(0);
 });
 `;
 
 /**
- * 以獨立程序群組執行點火命令，期限到或收到取消訊號時先送 SIGTERM、必要時送 SIGKILL 終止整組與巢狀後代並等待管線關閉後才回傳，
- * 避免 /bin/sh 逾時或外層取消後底下的 CLI 仍在背景執行或寫檔。
+ * 以獨立程序群組執行點火命令，期限到或收到取消訊號（含單一主程序 PID 或整組 SIGINT／SIGTERM）時，
+ * 先送 SIGTERM 並留 360ms 讓內層受管子群組（如 runGrokChild 的 250ms 升級）完成清理、必要時再送 SIGKILL 終止整組並等待管線關閉後才回傳。
  */
 function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSync } = {}) {
   if (spawnSyncImpl !== spawnSync) {
@@ -517,58 +604,78 @@ function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSy
       timeout: timeoutMs,
     });
   }
+  const sigPipeFd = getSignalPipeFd();
   let caughtSignal = null;
   const onSignal = (sig) => {
     caughtSignal = sig;
+    process.exitCode = sig === 'SIGINT' ? 130 : 143;
   };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
-  let res;
+  let initSigSize = -1;
+  if (typeof sigPipeFd === 'number') {
+    try {
+      initSigSize = fs.fstatSync(sigPipeFd).size;
+    } catch {
+      initSigSize = -1;
+    }
+  }
+  const sab = new SharedArrayBuffer(4);
+  const i32 = new Int32Array(sab);
+  const { port1, port2 } = new MessageChannel();
+  let parsed = null;
   try {
-    res = spawnSync(process.execPath, ['-e', PROBE_GROUP_RUNNER_SCRIPT, cmd, String(timeoutMs)], {
-      cwd,
-      env,
-      encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
+    const worker = new Worker(PROBE_GROUP_WORKER_SCRIPT, {
+      eval: true,
+      workerData: {
+        runnerScript: PROBE_GROUP_RUNNER_SCRIPT,
+        cmd,
+        cwd,
+        env,
+        timeoutMs: Math.max(1, Number(timeoutMs) || 60000),
+        sigPipeFd,
+        initSigSize,
+        port: port2,
+        i32,
+      },
+      transferList: [port2],
     });
+    Atomics.wait(i32, 0, 0, Math.max(1, Number(timeoutMs) || 60000) + 5000);
+    const msg = receiveMessageOnPort(port1);
+    parsed = msg ? msg.message : null;
+    void worker.terminate();
   } finally {
-    process.removeListener('SIGINT', onSignal);
-    process.removeListener('SIGTERM', onSignal);
+    port1.close();
+    setImmediate(() => {
+      process.removeListener('SIGINT', onSignal);
+      process.removeListener('SIGTERM', onSignal);
+    }).unref();
   }
-  if (res.error) return res;
-  try {
-    const parsed = JSON.parse(String(res.stdout || '').trim());
-    const cancelSig = caughtSignal || parsed.cancelledSignal || null;
-    if (cancelSig) {
-      if (process.exitCode === undefined) {
-        process.exitCode = cancelSig === 'SIGINT' ? 130 : 143;
-      }
-      const err = new Error('ECANCELLED');
-      err.code = 'ECANCELLED';
-      return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err, cancelled: true };
-    }
-    if (parsed.timedOut) {
-      const err = new Error('ETIMEDOUT');
-      err.code = 'ETIMEDOUT';
-      return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err };
-    }
-    return { status: parsed.status, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: null };
-  } catch {
-    if (caughtSignal) {
-      if (process.exitCode === undefined) {
-        process.exitCode = caughtSignal === 'SIGINT' ? 130 : 143;
-      }
-      const err = new Error('ECANCELLED');
-      err.code = 'ECANCELLED';
-      return { status: null, stdout: res.stdout || '', stderr: res.stderr || '', error: err, cancelled: true };
-    }
-    return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: null };
+  if (!parsed) {
+    const err = new Error('ETIMEDOUT');
+    err.code = 'ETIMEDOUT';
+    return { status: null, stdout: '', stderr: '', error: err };
   }
+  const cancelSig = caughtSignal || parsed.cancelledSignal || null;
+  if (cancelSig) {
+    if (process.exitCode === undefined) {
+      process.exitCode = cancelSig === 'SIGINT' ? 130 : 143;
+    }
+    const err = new Error('ECANCELLED');
+    err.code = 'ECANCELLED';
+    return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err, cancelled: true };
+  }
+  if (parsed.timedOut) {
+    const err = new Error('ETIMEDOUT');
+    err.code = 'ETIMEDOUT';
+    return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err };
+  }
+  return { status: parsed.status, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: null };
 }
 
 /**
  * 對已登記的 AI 座位執行十秒極小點火試跑（--probe [<座位識別值>]）。
- * 在系統暫存區建立極小隔離 Git 樹與標準通過提示，實跑啟動樣板並交由 prepareVerdict／prepareScan 驗收件格式。
+ * 在系統暫存區建立極小隔離 Git 樹與標準通過提示，對座位登記的每一個角色模式實跑啟動樣板並交由 prepareVerdict／prepareScan 驗收件格式。
  */
 function probeSeats(settings = {}, {
   seatFilter = '*',
@@ -619,8 +726,15 @@ function probeSeats(settings = {}, {
       continue;
     }
 
-    const rawTemplate = String(seat.probeCommand || '');
-    const isScanProbe = seat.probeMode === 'scan' || /--mode\s+scan\b/u.test(rawTemplate);
+    const specsToRun = Array.isArray(seat.probeSpecs) && seat.probeSpecs.length > 0
+      ? seat.probeSpecs
+      : [{
+          mode: seat.probeMode || 'review',
+          command: seat.probeCommand,
+          source: seat.source,
+          model: seat.model,
+          effort: seat.effort,
+        }];
     const probeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `ack-probe-${seat.participant.toLowerCase()}-`)));
     const reviewTree = path.join(probeRoot, 'tree');
     const mutationCopy = path.join(probeRoot, 'mutation');
@@ -649,31 +763,32 @@ function probeSeats(settings = {}, {
         env: probeEnv,
         encoding: 'utf8',
       });
-      const gitStepsOk = [
-        runGitStep(['init', '-q', '-b', 'main']),
-        runGitStep(['config', 'user.name', 'probe']),
-        runGitStep(['config', 'user.email', 'probe@localhost']),
-      ].every((r) => r && !r.error && !r.signal && r.status === 0);
+      const stepOk = (r) => Boolean(r && !r.error && !r.signal && r.status === 0);
+      const initRes = runGitStep(['init', '-q', '-b', 'main']);
+      const hasLocalGitDir = stepOk(initRes) && fs.existsSync(path.join(reviewTree, '.git'));
+      const nameRes = hasLocalGitDir ? runGitStep(['config', '--local', 'user.name', 'probe']) : null;
+      const emailRes = stepOk(nameRes) ? runGitStep(['config', '--local', 'user.email', 'probe@localhost']) : null;
+      const gitStepsOk = stepOk(emailRes);
       let headSha = '';
       let treeReady = false;
       if (gitStepsOk) {
         fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
         const addRes = runGitStep(['add', 'README.md']);
-        const commitRes = addRes && !addRes.error && !addRes.signal && addRes.status === 0
+        const commitRes = stepOk(addRes)
           ? runGitStep(['commit', '--no-gpg-sign', '-q', '-m', 'probe'])
           : null;
-        const revRes = commitRes && !commitRes.error && !commitRes.signal && commitRes.status === 0
+        const revRes = stepOk(commitRes)
           ? runGitStep(['rev-parse', '--verify', 'HEAD'])
           : null;
-        const candidateSha = revRes && !revRes.error && !revRes.signal && revRes.status === 0
+        const candidateSha = stepOk(revRes)
           ? String(revRes.stdout || '').trim()
           : '';
         if (/^[0-9a-f]{40}$/u.test(candidateSha) && fs.existsSync(path.join(reviewTree, '.git'))) {
           const cloneRes = runGitStep(['clone', '--quiet', reviewTree, mutationCopy], probeRoot);
-          const mutRev = cloneRes && !cloneRes.error && !cloneRes.signal && cloneRes.status === 0
+          const mutRev = stepOk(cloneRes)
             ? runGitStep(['rev-parse', '--verify', 'HEAD'], mutationCopy)
             : null;
-          const mutSha = mutRev && !mutRev.error && !mutRev.signal && mutRev.status === 0
+          const mutSha = stepOk(mutRev)
             ? String(mutRev.stdout || '').trim()
             : '';
           if (mutSha === candidateSha && fs.existsSync(path.join(mutationCopy, '.git'))) {
@@ -695,86 +810,109 @@ function probeSeats(settings = {}, {
       fs.writeFileSync(path.join(probeRoot, 'launch.json'), metaPayload);
       fs.writeFileSync(path.join(probeRoot, 'scan.json'), metaPayload);
 
-      const promptBody = isScanProbe
-        ? [
-            '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 4 行即可）：',
-            `🔍 ${seat.participant}｜來源：${seat.source}｜掃 \`${headShort}\``,
-            '',
-            '- 零發現',
-            '未貼',
-            '',
-          ].join('\n')
-        : [
-            '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
-            `🤖 ${seat.participant}｜來源：${seat.source}｜審 \`${headShort}\`｜r1｜結論：通過`,
-            '',
-            '### 本輪實際用的設定',
-            '- 點火試跑',
-            '',
-            '### 清單逐項結果',
-            '- 零發現',
-            '未貼',
-            '',
-          ].join('\n');
-      fs.writeFileSync(promptFile, promptBody);
+      const verifiedNames = [];
+      let seatFailed = null;
+      for (const spec of specsToRun) {
+        const rawTemplate = String(spec.command || '');
+        const isScanProbe = spec.mode === 'scan' || /--mode\s+scan\b/u.test(rawTemplate);
+        const specSource = filled(spec.source) ? spec.source : seat.source;
+        const specModel = filled(spec.model) ? spec.model : seat.model;
+        const specEffort = filled(spec.effort) ? spec.effort : seat.effort;
+        const modeLabel = specsToRun.length > 1 ? `［${isScanProbe ? '掃描' : '複審'}］` : '';
 
-      const { text: cmd } = substitute(rawTemplate, {
-        model: seat.model,
-        effort: seat.effort,
-        reviewTree,
-        scanTree: reviewTree,
-        mutationCopy,
-        promptFile,
-        outFile,
-        change: '1',
-        project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
-      }, `${seat.participant} 點火指令`);
+        try { fs.rmSync(outFile, { force: true }); } catch { /* ignore */ }
+        try { fs.rmSync(path.join(probeRoot, 'execution.json'), { force: true }); } catch { /* ignore */ }
+        const promptBody = isScanProbe
+          ? [
+              '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 4 行即可）：',
+              `🔍 ${seat.participant}｜來源：${specSource}｜掃 \`${headShort}\``,
+              '',
+              '- 零發現',
+              '未貼',
+              '',
+            ].join('\n')
+          : [
+              '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
+              `🤖 ${seat.participant}｜來源：${specSource}｜審 \`${headShort}\`｜r1｜結論：通過`,
+              '',
+              '### 本輪實際用的設定',
+              '- 點火試跑',
+              '',
+              '### 清單逐項結果',
+              '- 零發現',
+              '未貼',
+              '',
+            ].join('\n');
+        fs.writeFileSync(promptFile, promptBody);
 
-      const runRes = runProbeCommandSync(cmd, {
-        cwd,
-        env: probeEnv,
-        timeoutMs,
-        spawnSyncImpl,
-      });
-      if (runRes && runRes.cancelled) shouldBreak = true;
-      const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
-      const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
-      let verdictErr = null;
-      let verdictOk = false;
-      const verifierName = isScanProbe ? 'prepareScan' : 'prepareVerdict';
-      if (!runRes.error && runRes.status === 0 && rawOut.trim()) {
-        try {
-          if (isScanProbe) {
-            prepareScan(rawOut, {
-              scanner: seat.participant,
-              source: seat.source,
-              head: headSha,
-              usable: usableRoles,
-              forceGrok: String(seat.source).includes('Grok'),
-            });
-          } else {
-            prepareVerdict(rawOut, {
-              reviewer: seat.participant,
-              source: seat.source,
-              round: 1,
-              head: headSha,
-              usable: usableRoles,
-            });
+        const { text: cmd } = substitute(rawTemplate, {
+          model: specModel,
+          effort: specEffort,
+          reviewTree,
+          scanTree: reviewTree,
+          mutationCopy,
+          promptFile,
+          outFile,
+          change: '1',
+          project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
+        }, `${seat.participant}${modeLabel} 點火指令`);
+
+        const runRes = runProbeCommandSync(cmd, {
+          cwd,
+          env: probeEnv,
+          timeoutMs,
+          spawnSyncImpl,
+        });
+        if (runRes && runRes.cancelled) shouldBreak = true;
+        const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
+        let verdictErr = null;
+        let verdictOk = false;
+        const verifierName = isScanProbe ? 'prepareScan' : 'prepareVerdict';
+        if (!runRes.error && runRes.status === 0 && rawOut.trim()) {
+          try {
+            if (isScanProbe) {
+              prepareScan(rawOut, {
+                scanner: seat.participant,
+                source: specSource,
+                head: headSha,
+                usable: usableRoles,
+                forceGrok: String(specSource).includes('Grok'),
+              });
+            } else {
+              prepareVerdict(rawOut, {
+                reviewer: seat.participant,
+                source: specSource,
+                round: 1,
+                head: headSha,
+                usable: usableRoles,
+              });
+            }
+            verdictOk = true;
+          } catch (err) {
+            verdictErr = err;
           }
-          verdictOk = true;
-        } catch (err) {
-          verdictErr = err;
         }
+
+        if (!verdictOk) {
+          const baseReason = summarizeProbeFailure(runRes, rawOut, verdictErr);
+          seatFailed = {
+            status: runRes ? runRes.status : null,
+            reason: `${modeLabel}${baseReason}`,
+          };
+          break;
+        }
+        verifiedNames.push(verifierName);
+        if (shouldBreak) break;
       }
 
-      if (verdictOk) {
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 ${verifierName} 收件核驗）`);
+      const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+      if (!seatFailed) {
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 ${verifiedNames.join('＋')} 收件核驗）`);
         probes.push({ participant: seat.participant, ok: true, status: 0, reason: null });
       } else {
-        const reason = summarizeProbeFailure(runRes, rawOut, verdictErr);
-        const codeLabel = runRes && typeof runRes.status === 'number' ? `退 ${runRes.status}` : '未完成';
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${codeLabel}｜${reason}）`);
-        probes.push({ participant: seat.participant, ok: false, status: runRes ? runRes.status : null, reason });
+        const codeLabel = typeof seatFailed.status === 'number' ? `退 ${seatFailed.status}` : '未完成';
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${codeLabel}｜${seatFailed.reason}）`);
+        probes.push({ participant: seat.participant, ok: false, status: seatFailed.status, reason: seatFailed.reason });
       }
     } catch (e) {
       const reason = summarizeProbeFailure(null, '', e);
