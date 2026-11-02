@@ -571,7 +571,203 @@ setTimeout(() => {
     await new Promise((r) => setTimeout(r, 750));
     assert.equal(fs.existsSync(timeoutMarker), false, '逾時收尾後子程序群組必須已被終止，不得在函式回傳後繼續寫檔');
 
-    // (f) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
+    // (f) N1（續）：巢狀 runGrokChild（忽略 SIGTERM 的內層 detached 程序群組）於逾時收尾時必須一併終止，回傳後不得繼續存活或寫入標記
+    const nestedTicks = path.join(tmp, 'nested-grok.ticks');
+    const nestedPidFile = path.join(tmp, 'nested-grok.pid');
+    const nestedChildScript = path.join(tmp, 'nested-grok-child.cjs');
+    const nestedWrapperScript = path.join(tmp, 'nested-grok-wrapper.cjs');
+    const reviewLaunchPath = path.join(__dirname, '..', 'tools', 'review-launch.js');
+    fs.writeFileSync(
+      nestedChildScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(nestedPidFile)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(nestedTicks)}, Date.now() + '\\n'), 30);`,
+        'setTimeout(() => process.exit(0), 6000);',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      nestedWrapperScript,
+      [
+        `const { runGrokChild } = require(${JSON.stringify(reviewLaunchPath)});`,
+        `runGrokChild(process.execPath, [${JSON.stringify(nestedChildScript)}], { env: process.env }, { wallMs: 5000 }).then((r) => { process.exitCode = r.status; });`,
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      frontCli,
+      `#!/bin/sh\nexec "${process.execPath}" "${nestedWrapperScript}"\n`,
+      { mode: 0o755 },
+    );
+    const countLines = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).length : 0);
+    const nestedTimeoutProbe = probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      timeoutMs: 350,
+    });
+    const ticksAtReturn = countLines(nestedTicks);
+    const nestedPid = fs.existsSync(nestedPidFile) ? Number(fs.readFileSync(nestedPidFile, 'utf8')) : null;
+    await new Promise((r) => setTimeout(r, 350));
+    const ticksAfterWait = countLines(nestedTicks);
+    let nestedStillAlive = false;
+    if (nestedPid) {
+      try { process.kill(nestedPid, 0); nestedStillAlive = true; } catch { /* expected ESRCH */ }
+      try { process.kill(-nestedPid, 'SIGKILL'); } catch { /* cleanup if needed */ }
+    }
+    assert.equal(nestedTimeoutProbe.probes[0].ok, false);
+    assert.equal(nestedTimeoutProbe.probes[0].reason, '執行逾時');
+    assert.equal(nestedStillAlive, false, '巢狀 runGrokChild 內層程序在 probeSeats 回傳時必須已終止');
+    assert.equal(ticksAfterWait, ticksAtReturn, 'probeSeats 回傳後巢狀內層程序不得再新增任何標記');
+
+    // (g) N1（續）：外層點火程序群組收到 SIGTERM 取消時，必須先終止已 detached 的 CLI 子程序才結束
+    const cancelTicks = path.join(tmp, 'cancel-cli.ticks');
+    const cancelPidFile = path.join(tmp, 'cancel-cli.pid');
+    const cancelOuterScript = path.join(tmp, 'cancel-outer.cjs');
+    const preflightPath = path.join(__dirname, '..', 'tools', 'preflight.js');
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(cancelPidFile)}, String(process.pid));`,
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(cancelTicks)}, Date.now() + '\\n'), 30);`,
+        'setTimeout(() => process.exit(0), 6000);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      cancelOuterScript,
+      [
+        `const { probeSeats } = require(${JSON.stringify(preflightPath)});`,
+        `const settings = ${JSON.stringify(singleCodexSettings)};`,
+        `probeSeats(settings, { seatFilter: 'Codex', env: ${JSON.stringify(customEnv)}, homedir: ${JSON.stringify(tmp)}, timeoutMs: 2000 });`,
+      ].join('\n'),
+    );
+    const { spawn: spawnAsync } = require('node:child_process');
+    const cancelJob = spawnAsync(process.execPath, [cancelOuterScript], {
+      env: customEnv,
+      detached: true,
+      stdio: 'ignore',
+    });
+    const cancelJobExit = new Promise((r) => cancelJob.once('exit', (code, signal) => r({ code, signal })));
+    for (let i = 0; i < 150 && !fs.existsSync(cancelPidFile); i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(fs.existsSync(cancelPidFile), true, '合成 CLI 應已啟動並寫出 PID');
+    process.kill(-cancelJob.pid, 'SIGTERM');
+    await cancelJobExit;
+    const cancelTicksBefore = countLines(cancelTicks);
+    await new Promise((r) => setTimeout(r, 400));
+    const cancelTicksAfter = countLines(cancelTicks);
+    const cancelChildPid = Number(fs.readFileSync(cancelPidFile, 'utf8'));
+    let cancelChildAlive = false;
+    try { process.kill(cancelChildPid, 0); cancelChildAlive = true; } catch { /* expected ESRCH */ }
+    try { process.kill(cancelChildPid, 'SIGKILL'); } catch { /* cleanup */ }
+    assert.equal(cancelChildAlive, false, '外層點火收到 SIGTERM 結束時，detached CLI 子程序必須已一併終止');
+    assert.equal(cancelTicksAfter, cancelTicksBefore, '外層點火結束後 CLI 子程序不得繼續寫入標記');
+
+    // (h) N6：點火必須清掉 GIT_* 選倉環境變數與 platform.clearEnv，使 CLI 內部 Git 指向隔離點火樹而非外部 GIT_DIR
+    const decoyRepo = path.join(tmp, 'decoy-git-repo');
+    fs.mkdirSync(decoyRepo, { recursive: true });
+    const { spawnSync: realSpawnSync } = require('node:child_process');
+    const { gitEnv } = require('../tools/git-env.js');
+    realSpawnSync('git', ['init', '-q', decoyRepo], { env: gitEnv(), encoding: 'utf8' });
+    const observedEnvFile = path.join(tmp, 'observed-git-env.json');
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const { spawnSync } = require('node:child_process');",
+        'const args = process.argv.slice(2);',
+        "const cwd = args[args.indexOf('-C') + 1];",
+        "const outFile = args[args.indexOf('-o') + 1];",
+        "const r = spawnSync('git', ['rev-parse', '--absolute-git-dir'], { cwd, env: process.env, encoding: 'utf8' });",
+        `fs.writeFileSync(${JSON.stringify(observedEnvFile)}, JSON.stringify({ cwd, gitDir: (r.stdout || '').trim(), ghRepo: process.env.GH_REPO || null }));`,
+        "const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');",
+        'fs.writeFileSync(outFile, prompt);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const envWithPoison = {
+      ...customEnv,
+      GIT_DIR: path.join(decoyRepo, '.git'),
+      GIT_WORK_TREE: decoyRepo,
+      GH_REPO: 'poison/repo',
+    };
+    const envProbeRes = probeSeats(
+      { ...singleCodexSettings, platform: { clearEnv: ['GH_REPO'] } },
+      { seatFilter: 'Codex', env: envWithPoison, homedir: tmp },
+    );
+    assert.equal(envProbeRes.probes[0].ok, true);
+    const observedEnv = JSON.parse(fs.readFileSync(observedEnvFile, 'utf8'));
+    assert.equal(observedEnv.gitDir, path.join(observedEnv.cwd, '.git'), 'CLI 內部 Git 必須指向隔離點火樹的 .git，不得受繼承 GIT_DIR 影響');
+    assert.equal(observedEnv.ghRepo, null, 'platform.clearEnv 指定的環境變數必須在點火時清除');
+
+    // (i) N7：臨時提交停用簽名（不受全域 commit.gpgsign=true 阻擋），且當 Git 建樹失敗時不啟動 CLI、直接回報固定建樹診斷
+    const fakeGitDir = path.join(tmp, 'fake-git-bin');
+    fs.mkdirSync(fakeGitDir, { recursive: true });
+    const realGitPath = realSpawnSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/git';
+    const cliRanMarker = path.join(tmp, 'n7-cli-ran.txt');
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(cliRanMarker)}, 'ran');`,
+        'const args = process.argv.slice(2);',
+        "const outFile = args[args.indexOf('-o') + 1];",
+        "const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');",
+        'fs.writeFileSync(outFile, prompt);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const fakeGitBin = path.join(fakeGitDir, 'git');
+    fs.writeFileSync(
+      fakeGitBin,
+      [
+        `#!${process.execPath}`,
+        "const { spawnSync } = require('node:child_process');",
+        'const args = process.argv.slice(2);',
+        "if (process.env.FAKE_GIT_MODE === 'fail') process.exit(127);",
+        "const actual = args[0] === 'commit' ? ['-c', 'commit.gpgsign=true', '-c', 'gpg.program=/usr/bin/false', ...args] : args;",
+        `const r = spawnSync(${JSON.stringify(realGitPath)}, actual, { env: process.env, encoding: 'utf8' });`,
+        "process.stdout.write(r.stdout || '');",
+        "process.stderr.write(r.stderr || '');",
+        'process.exit(r.status === null ? 1 : r.status);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const signingEnv = {
+      ...customEnv,
+      PATH: `${fakeGitDir}${path.delimiter}${customEnv.PATH}`,
+      FAKE_GIT_MODE: 'signing',
+    };
+    try { fs.unlinkSync(cliRanMarker); } catch { /* ignore */ }
+    const signingProbe = probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: signingEnv,
+      homedir: tmp,
+    });
+    assert.equal(signingProbe.probes[0].ok, true, '停用臨時提交簽名後，即使全域設了 commit.gpgsign=true 亦應建樹成功並通過點火');
+    assert.equal(fs.existsSync(cliRanMarker), true);
+
+    try { fs.unlinkSync(cliRanMarker); } catch { /* ignore */ }
+    const failGitEnv = {
+      ...signingEnv,
+      FAKE_GIT_MODE: 'fail',
+    };
+    const failGitProbe = probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: failGitEnv,
+      homedir: tmp,
+    });
+    assert.equal(failGitProbe.probes[0].ok, false, 'Git 建樹失敗時必須判為點火失敗');
+    assert.match(failGitProbe.probes[0].reason, /建立隔離點火 Git 樹失敗/u);
+    assert.equal(fs.existsSync(cliRanMarker), false, 'Git 建樹失敗時絕不可啟動 CLI');
+
+    // (j) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
     const fullProbeRun = run(['--skip-downstream', '--probe', 'Codex'], {
       runners: {
         pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),

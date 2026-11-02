@@ -37,10 +37,10 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   assert.equal(s.platform.project, 'teacherjung/ai-collab-kit');
   assert.deepEqual(s.platform.clearEnv, ['GH_REPO', 'GH_HOST']);
   assert.deepEqual(s.reviewers.map((r) => [r.participant, r.strongest, r.maxEffort, r.autoMode, r.source]), [
-    ['Claude', 'claude-fable-5-1', 'max', 'Ultracode', 'Claude CLI'],
+    ['Claude', 'claude-opus-5-5-high', 'high', 'auto', 'Claude CLI'],
     ['Codex', 'gpt-6-astra', 'max', 'ultra（這一檔會自動派助手）', 'codex CLI'],
     ['Grok', 'grok-4.7', 'xhigh', '自動選模', 'Grok CLI'],
-    ['Gemini', 'gemini-3.1-pro-preview', 'high', 'auto-model', 'Gemini CLI'],
+    ['Gemini', 'gemini-4-argon-high', 'high', 'auto', 'Gemini CLI'],
     ['Sol', 'gpt-6.1-sol', 'xhigh', '不使用自動模式', 'codex CLI'],
   ]);
   assert.deepEqual(s.gates.map((g) => g.name), [
@@ -73,9 +73,12 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     'node tools/review-launch.js --grok-exec --mode review --cwd {reviewTree} --mutation-copy {mutationCopy} --model {model} --reasoning-effort {effort} --prompt-file {promptFile} --out {outFile}',
     'Grok 複審啟動指令統一走 review-launch.js --grok-exec --mode review',
   );
-  const geminiRev = s.reviewers.find((r) => r.participant === 'Gemini');
-  assert.ok(geminiRev.command.startsWith('cd {reviewTree} && '), 'Gemini 複審啟動指令先切換至 {reviewTree}');
-  assert.ok(geminiRev.command.includes('--skip-trust'), 'Gemini 複審啟動指令含 --skip-trust 以放行系統暫存區審查樹');
+  for (const id of ['Claude', 'Gemini']) {
+    const rev = s.reviewers.find((r) => r.participant === id);
+    assert.ok(rev.command.startsWith('cd {reviewTree} && agy -p '), `${id} 複審啟動指令先切換至 {reviewTree} 並透過 agy -p 啟動`);
+    assert.ok(rev.command.includes('--add-dir {mutationCopy}'), `${id} 複審啟動指令納入突變副本`);
+    assert.ok(rev.command.includes('--output-format json'), `${id} 複審啟動指令輸出結構化 JSON 封包`);
+  }
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
   const states = Object.fromEntries(s.machines.map((m) => [m.name.split('（')[0], m.state]));
   assert.deepEqual(states, {

@@ -1592,6 +1592,12 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆', forceGrok = false) {
     if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
       throw new LaunchError(`${kindLabel} JSON 標示執行失敗（is_error 或非 success），不代貼`);
     }
+    if (Object.hasOwn(obj, 'status') && Object.hasOwn(obj, 'response')) {
+      if (obj.status !== 'SUCCESS' || typeof obj.response !== 'string' || !obj.response.trim()) {
+        throw new LaunchError(`${kindLabel} JSON 標示執行失敗（status 非 SUCCESS 或 response 為空），不代貼`);
+      }
+      return obj.response;
+    }
     return typeof obj.result === 'string' ? obj.result : null;
   };
   if (Array.isArray(parsed)) {

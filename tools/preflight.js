@@ -301,6 +301,7 @@ function checkSeats(settings = {}, {
 function summarizeProbeFailure(runRes, rawOut, verdictErr) {
   if (runRes && runRes.error) {
     if (runRes.error.code === 'ETIMEDOUT') return '執行逾時';
+    if (runRes.error.code === 'ECANCELLED') return '執行已取消';
     const safeCode = typeof runRes.error.code === 'string' && /^[A-Z0-9_]{2,24}$/u.test(runRes.error.code)
       ? `（${runRes.error.code}）`
       : '';
@@ -353,62 +354,138 @@ function summarizeProbeFailure(runRes, rawOut, verdictErr) {
 
 const PROBE_GROUP_RUNNER_SCRIPT = `
 'use strict';
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const cmd = process.argv[1];
 const timeoutMs = Number(process.argv[2]) || 60000;
+const initialPpid = process.ppid;
 const child = spawn('/bin/sh', ['-c', cmd], {
   detached: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 const pid = child.pid;
+const trackedPids = new Set(pid && pid > 1 ? [pid] : []);
+const trackedPgids = new Set(pid && pid > 1 ? [pid] : []);
 let stdout = '';
 let stderr = '';
 let closed = false;
 let timedOut = false;
+let cancelledSignal = null;
 let finishing = false;
 let exitStatus = null;
 child.stdout.setEncoding('utf8');
 child.stderr.setEncoding('utf8');
 child.stdout.on('data', (d) => { stdout += d; });
 child.stderr.on('data', (d) => { stderr += d; });
-function groupAlive() {
-  if (!pid || pid <= 1) return false;
-  try { process.kill(-pid, 0); return true; } catch { return false; }
-}
-function killGroup(sig) {
+function scanProcessTree() {
   if (!pid || pid <= 1) return;
-  try { process.kill(-pid, sig); } catch { /* ignore */ }
+  try {
+    const r = spawnSync('/bin/ps', ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', timeout: 500 });
+    if (r.status !== 0 || !r.stdout) return;
+    const rows = [];
+    for (const line of r.stdout.split(/\\r?\\n/u)) {
+      const m = line.trim().match(/^(\\d+)\\s+(\\d+)\\s+(\\d+)$/u);
+      if (!m) continue;
+      const p = Number(m[1]);
+      const pp = Number(m[2]);
+      const pg = Number(m[3]);
+      if (p > 1 && p !== process.pid && p !== initialPpid) rows.push({ p, pp, pg });
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const { p, pp, pg } of rows) {
+        if (trackedPids.has(pp) || (pg > 1 && trackedPgids.has(pg))) {
+          if (!trackedPids.has(p)) {
+            trackedPids.add(p);
+            changed = true;
+          }
+          if (pg > 1 && pg !== initialPpid && !trackedPgids.has(pg)) {
+            trackedPgids.add(pg);
+            changed = true;
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+}
+function anyAlive() {
+  for (const pg of trackedPgids) {
+    if (pg > 1) {
+      try { process.kill(-pg, 0); return true; } catch { /* ignore */ }
+    }
+  }
+  for (const p of trackedPids) {
+    if (p > 1) {
+      try { process.kill(p, 0); return true; } catch { /* ignore */ }
+    }
+  }
+  return false;
+}
+function signalAll(sig) {
+  for (const pg of trackedPgids) {
+    if (pg > 1) {
+      try { process.kill(-pg, sig); } catch { /* ignore */ }
+    }
+  }
+  for (const p of trackedPids) {
+    if (p > 1) {
+      try { process.kill(p, sig); } catch { /* ignore */ }
+    }
+  }
 }
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 async function finish(status) {
   if (finishing) return;
   finishing = true;
   clearTimeout(timer);
-  if (groupAlive()) {
-    killGroup('SIGTERM');
-    const forceAt = Date.now() + 200;
-    const deadline = Date.now() + 2000;
+  clearInterval(treeWatch);
+  scanProcessTree();
+  if (anyAlive()) {
+    signalAll('SIGTERM');
+    const forceAt = Date.now() + 180;
+    const deadline = Date.now() + 2500;
     let forced = false;
-    while (groupAlive() && Date.now() < deadline) {
+    while (anyAlive() && Date.now() < deadline) {
+      scanProcessTree();
       if (!forced && Date.now() >= forceAt) {
         forced = true;
-        killGroup('SIGKILL');
+        signalAll('SIGKILL');
+      } else if (forced) {
+        signalAll('SIGKILL');
       }
       await delay(20);
     }
-    if (groupAlive()) killGroup('SIGKILL');
+    if (anyAlive()) {
+      scanProcessTree();
+      signalAll('SIGKILL');
+    }
   }
   const pipeDeadline = Date.now() + 1000;
   while (!closed && Date.now() < pipeDeadline) await delay(20);
+  process.removeListener('SIGINT', onCancel);
+  process.removeListener('SIGTERM', onCancel);
   child.stdout.destroy();
   child.stderr.destroy();
   process.stdout.write(JSON.stringify({
-    status: timedOut ? null : status,
+    status: timedOut || cancelledSignal ? null : status,
     stdout,
     stderr,
     timedOut,
+    cancelledSignal,
   }));
 }
+function onCancel(sig) {
+  cancelledSignal = typeof sig === 'string' ? sig : 'SIGTERM';
+  void finish(null);
+}
+process.on('SIGINT', onCancel);
+process.on('SIGTERM', onCancel);
+const treeWatch = setInterval(() => {
+  scanProcessTree();
+  if (process.ppid <= 1 || process.ppid !== initialPpid) {
+    onCancel('SIGTERM');
+  }
+}, 25);
 const timer = setTimeout(() => {
   timedOut = true;
   void finish(null);
@@ -428,8 +505,8 @@ child.once('close', (code) => {
 `;
 
 /**
- * 以獨立程序群組執行點火命令，期限到時先送 SIGTERM、必要時送 SIGKILL 終止整組後代並等待管線關閉後才回傳，
- * 避免 /bin/sh 逾時結束後底下的 CLI 仍在背景執行或寫檔。
+ * 以獨立程序群組執行點火命令，期限到或收到取消訊號時先送 SIGTERM、必要時送 SIGKILL 終止整組與巢狀後代並等待管線關閉後才回傳，
+ * 避免 /bin/sh 逾時或外層取消後底下的 CLI 仍在背景執行或寫檔。
  */
 function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSync } = {}) {
   if (spawnSyncImpl !== spawnSync) {
@@ -440,15 +517,36 @@ function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSy
       timeout: timeoutMs,
     });
   }
-  const res = spawnSync(process.execPath, ['-e', PROBE_GROUP_RUNNER_SCRIPT, cmd, String(timeoutMs)], {
-    cwd,
-    env,
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let caughtSignal = null;
+  const onSignal = (sig) => {
+    caughtSignal = sig;
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  let res;
+  try {
+    res = spawnSync(process.execPath, ['-e', PROBE_GROUP_RUNNER_SCRIPT, cmd, String(timeoutMs)], {
+      cwd,
+      env,
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  }
   if (res.error) return res;
   try {
     const parsed = JSON.parse(String(res.stdout || '').trim());
+    const cancelSig = caughtSignal || parsed.cancelledSignal || null;
+    if (cancelSig) {
+      if (process.exitCode === undefined) {
+        process.exitCode = cancelSig === 'SIGINT' ? 130 : 143;
+      }
+      const err = new Error('ECANCELLED');
+      err.code = 'ECANCELLED';
+      return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err, cancelled: true };
+    }
     if (parsed.timedOut) {
       const err = new Error('ETIMEDOUT');
       err.code = 'ETIMEDOUT';
@@ -456,6 +554,14 @@ function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSy
     }
     return { status: parsed.status, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: null };
   } catch {
+    if (caughtSignal) {
+      if (process.exitCode === undefined) {
+        process.exitCode = caughtSignal === 'SIGINT' ? 130 : 143;
+      }
+      const err = new Error('ECANCELLED');
+      err.code = 'ECANCELLED';
+      return { status: null, stdout: res.stdout || '', stderr: res.stderr || '', error: err, cancelled: true };
+    }
     return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: null };
   }
 }
@@ -521,18 +627,69 @@ function probeSeats(settings = {}, {
     const promptFile = path.join(probeRoot, 'prompt.md');
     const outFile = path.join(probeRoot, 'output.log');
     const t0 = Date.now();
+    let shouldBreak = false;
     try {
+      const resolvedDirs = st.binPath
+        ? st.binPath.split('、').map((p) => path.dirname(p)).filter(Boolean)
+        : [];
+      const searchDirs = [...new Set([...resolvedDirs, ...buildSearchDirs({ env, homedir })])];
+      const probeEnv = gitEnv({
+        ...env,
+        PATH: searchDirs.join(path.delimiter),
+      });
+      const clearEnvList = Array.isArray(settings?.platform?.clearEnv)
+        ? settings.platform.clearEnv
+        : [];
+      for (const k of clearEnvList) delete probeEnv[k];
+      delete probeEnv.CLAUDECODE;
+
       fs.mkdirSync(reviewTree, { recursive: true });
-      const gEnv = gitEnv();
-      spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: reviewTree, env: gEnv });
-      spawnSync('git', ['config', 'user.name', 'probe'], { cwd: reviewTree, env: gEnv });
-      spawnSync('git', ['config', 'user.email', 'probe@localhost'], { cwd: reviewTree, env: gEnv });
-      fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
-      spawnSync('git', ['add', 'README.md'], { cwd: reviewTree, env: gEnv });
-      spawnSync('git', ['commit', '-q', '-m', 'probe'], { cwd: reviewTree, env: gEnv });
-      const headSha = String(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: reviewTree, env: gEnv, encoding: 'utf8' }).stdout || '').trim() || '0123456789abcdef0123456789abcdef01234567';
+      const runGitStep = (args, stepCwd = reviewTree) => spawnSync('git', args, {
+        cwd: stepCwd,
+        env: probeEnv,
+        encoding: 'utf8',
+      });
+      const gitStepsOk = [
+        runGitStep(['init', '-q', '-b', 'main']),
+        runGitStep(['config', 'user.name', 'probe']),
+        runGitStep(['config', 'user.email', 'probe@localhost']),
+      ].every((r) => r && !r.error && !r.signal && r.status === 0);
+      let headSha = '';
+      let treeReady = false;
+      if (gitStepsOk) {
+        fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
+        const addRes = runGitStep(['add', 'README.md']);
+        const commitRes = addRes && !addRes.error && !addRes.signal && addRes.status === 0
+          ? runGitStep(['commit', '--no-gpg-sign', '-q', '-m', 'probe'])
+          : null;
+        const revRes = commitRes && !commitRes.error && !commitRes.signal && commitRes.status === 0
+          ? runGitStep(['rev-parse', '--verify', 'HEAD'])
+          : null;
+        const candidateSha = revRes && !revRes.error && !revRes.signal && revRes.status === 0
+          ? String(revRes.stdout || '').trim()
+          : '';
+        if (/^[0-9a-f]{40}$/u.test(candidateSha) && fs.existsSync(path.join(reviewTree, '.git'))) {
+          const cloneRes = runGitStep(['clone', '--quiet', reviewTree, mutationCopy], probeRoot);
+          const mutRev = cloneRes && !cloneRes.error && !cloneRes.signal && cloneRes.status === 0
+            ? runGitStep(['rev-parse', '--verify', 'HEAD'], mutationCopy)
+            : null;
+          const mutSha = mutRev && !mutRev.error && !mutRev.signal && mutRev.status === 0
+            ? String(mutRev.stdout || '').trim()
+            : '';
+          if (mutSha === candidateSha && fs.existsSync(path.join(mutationCopy, '.git'))) {
+            headSha = candidateSha;
+            treeReady = true;
+          }
+        }
+      }
+      if (!treeReady) {
+        const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+        const reason = '建立隔離點火 Git 樹失敗（請確認本機 git 可正常執行 init／commit／clone）';
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${reason}）`);
+        probes.push({ participant: seat.participant, ok: false, status: null, reason });
+        continue;
+      }
       const headShort = headSha.slice(0, 7);
-      spawnSync('git', ['clone', '--quiet', reviewTree, mutationCopy], { cwd: probeRoot, env: gEnv });
 
       const metaPayload = JSON.stringify({ base: headSha, head: headSha, root: reviewTree });
       fs.writeFileSync(path.join(probeRoot, 'launch.json'), metaPayload);
@@ -573,22 +730,13 @@ function probeSeats(settings = {}, {
         project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
       }, `${seat.participant} 點火指令`);
 
-      const resolvedDirs = st.binPath
-        ? st.binPath.split('、').map((p) => path.dirname(p)).filter(Boolean)
-        : [];
-      const searchDirs = [...new Set([...resolvedDirs, ...buildSearchDirs({ env, homedir })])];
-      const probeEnv = {
-        ...env,
-        PATH: searchDirs.join(path.delimiter),
-      };
-      delete probeEnv.CLAUDECODE;
-
       const runRes = runProbeCommandSync(cmd, {
         cwd,
         env: probeEnv,
         timeoutMs,
         spawnSyncImpl,
       });
+      if (runRes && runRes.cancelled) shouldBreak = true;
       const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
       const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
       let verdictErr = null;
@@ -635,6 +783,7 @@ function probeSeats(settings = {}, {
     } finally {
       try { fs.rmSync(probeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+    if (shouldBreak) break;
   }
 
   return { code: 0, lines, probes };

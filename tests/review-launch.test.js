@@ -6351,3 +6351,54 @@ test('⑬ runGrokExec 資源限制回歸 (R2)：1MiB 緩衝區與 OS argv 容量
     try { fs.rmSync(r.dir, { recursive: true, force: true }); } catch (e) {}
   }
 });
+
+test('unwrapScanOutput / prepareVerdict / prepareScan：支援 agy --output-format json 封包（status === SUCCESS 解出 response，非 SUCCESS 或空 response 拒收）', () => {
+  const head = '0123456789abcdef0123456789abcdef01234567';
+  const usable = ['Claude', 'Gemini', 'Codex', 'Grok'];
+  const verdictText = '🤖 Claude｜來源：Claude CLI｜審 `0123456`｜r1｜結論：通過\n\n### 本輪實際用的設定\n- claude-opus-5-5-high\n\n### 清單逐項結果\n- 零發現\n未貼\n';
+  const agyVerdictJson = JSON.stringify({
+    conversation_id: 'conv-1',
+    status: 'SUCCESS',
+    response: verdictText,
+    duration_seconds: 7.5,
+    num_turns: 1,
+  });
+  const vRes = prepareVerdict(agyVerdictJson, {
+    reviewer: 'Claude',
+    source: 'Claude CLI',
+    round: 1,
+    head,
+    usable,
+  });
+  assert.match(vRes.body, /^🤖 Claude｜來源：Claude CLI｜審 `0123456`｜r1｜結論：通過/u);
+  assert.equal(vRes.strippedUnposted, true);
+
+  const scanText = '🔍 Gemini｜來源：Gemini CLI｜掃 `0123456`\n\n- 零發現\n未貼\n';
+  const agyScanJson = JSON.stringify({
+    conversation_id: 'conv-2',
+    status: 'SUCCESS',
+    response: scanText,
+    duration_seconds: 6.2,
+    num_turns: 1,
+  });
+  const sRes = prepareScan(agyScanJson, {
+    scanner: 'Gemini',
+    source: 'Gemini CLI',
+    head,
+    usable,
+  });
+  assert.match(sRes.body, /^🔍 Gemini｜來源：Gemini CLI｜掃 `0123456`/u);
+
+  for (const badEnvelope of [
+    JSON.stringify({ conversation_id: 'c3', status: 'ERROR', response: verdictText }),
+    JSON.stringify({ conversation_id: 'c4', status: 'CANCELLED', response: verdictText }),
+    JSON.stringify({ conversation_id: 'c5', status: 'SUCCESS', response: '   ' }),
+    JSON.stringify({ conversation_id: 'c6', status: 'SUCCESS', response: null }),
+  ]) {
+    assert.throws(
+      () => prepareVerdict(badEnvelope, { reviewer: 'Claude', source: 'Claude CLI', round: 1, head, usable }),
+      /JSON 標示執行失敗（status 非 SUCCESS 或 response 為空），不代貼/u,
+    );
+  }
+});
+

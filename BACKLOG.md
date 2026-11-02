@@ -102,7 +102,7 @@
 > 各條原始完整調查、中間量測與三欄背景全文已歸檔於主目錄上一層歸檔區（`kit-backlog-completed-full-20261029.md`、`batch2-remaining-machines-report-20261030.md`），本節保留每件來源、主題與落地 PR 摘要（共 71 件，不刪條目）。
 
 - 最晚 2026-09-23（定案頁第 2 批第 4 件；2026-10-30 依 [#132 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 轉待辦）C1 支數提醒（每個專案各工作線全體最多兩支進行中、草稿也算）——落地：套件 #121（對齊 C1 條文）與套件 #134（`tools/preflight.js` 新增 `checkOpenChanges` 讀取 `openChanges` 筆數，達 2 支或以上時印出黃燈提醒，只列不擋）。
-- 2026-10-19（[套件 #114 r7 複審 N3](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278019285)；2026-10-21 補收件）區分 Gemini 啟動時與退出計畫後的權限（非互動退出轉 YOLO，之後唯讀靠提示與事後核樹）——落地：套件 #134（更新 `settings.json` 與 `PROJECT-SETTINGS.md` 的 Gemini `command`、`machine` 與 `promptOnly`，補齊 `--skip-trust`、`gemini-3.1-pro-preview` 模型代號與退出規劃模式後轉 YOLO 之唯讀邊界說明）。
+- 2026-10-19（[套件 #114 r7 複審 N3](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278019285)；2026-10-21 補收件）區分 Gemini 啟動時與退出計畫後的權限（非互動退出轉 YOLO，之後唯讀靠提示與事後核樹）——落地：套件 #134（更新 `settings.json` 與 `PROJECT-SETTINGS.md` 的 Claude／Gemini `command`、`machine` 與 `promptOnly`，接線至本機 `agy -p` 並寫明非互動模式與獨立 `gemini` CLI 呼叫 `exit_plan_mode` 退出規劃模式後轉 YOLO 之唯讀邊界說明）。
 - 2026-10-08（原記 S141）說明書手寫缺點「多數修改要審兩輪以上」的已合併 PR 輪數重數——落地：套件 #133（`manual/plain.md` 更新為 2026-10-31 下午量：套件倉庫已合併的 117 支裡有 75 支，並同步更新第 8 項掃描隔離與本機工具現況）。
 - 2026-10-15（套件「協作套件的檔只在套件改」施工舊文字掃描）說明書 `manual/plain.md` 套用流向更新為 D5 無例外與 `manual/build.verify.js` 兩處樣本更新——落地：套件 #133（依 #107 擁有者裁示 `⚖️ 6185765768` 與 #133 裁示更新 `manual/plain.md` 套用節及 `manual/build.verify.js` 的 `HEADER_SAMPLES` 與套用頁第二節第一項粗體樣本）。
 - 2026-10-14（套件 #99 複審後掃 1-1〜1-4）說明書手冊 `manual/handbook.md` K2 白話補齊進門第一問細節——落地：套件 #133（依 #107 擁有者裁示 `⚖️ 6185766145` 與 #133 裁示更新 K2 白話）。
