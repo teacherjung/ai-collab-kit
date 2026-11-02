@@ -330,7 +330,7 @@ test('⑤ 真 CLI 長輸出經管線與普通檔案 fd 逐位元組一致；成�
   }
 });
 
-test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火試跑（probeSeats / --probe）', () => {
+test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火試跑（probeSeats / --probe）', async () => {
   // 1. checkOpenChanges：0 支、1 支（未達上限）、>=2 支（含草稿印 C1 黃燈提醒，只列不擋退 0）、平台失敗退 2，且呼叫簽章為 ask('openChanges', {}, { settings })
   let askCall = null;
   const fakeSettings = { platform: { project: 'fake/repo' } };
@@ -363,7 +363,7 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
   assert.equal(errOpen.code, 2);
   assert.match(errOpen.lines[0], /問不到平台開啟中變更清單（網路斷線）——算不出來/u);
 
-  // 2. probeSeats：成功輸出經 prepareVerdict 核驗通過、失敗輸出濃縮診斷並遮蔽長權杖、指定未知座位退 2
+  // 2. probeSeats：成功輸出經 prepareVerdict 核驗通過、失敗輸出固定白名單分類且不洩漏短權杖或個資、指定未知座位退 2
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-probe-unit-'));
   try {
     const binDir = path.join(tmp, 'bin');
@@ -405,7 +405,7 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
     assert.equal(unknownSeat.code, 2);
     assert.match(unknownSeat.lines[0], /找不到已登記的座位「NoSuchAI」/u);
 
-    // (b) Codex 點火通過（提取 prompt 內的標準標頭寫入 outFile）、Claude 點火失敗（JSON 陣列事件包裹 OAuth 過期且遮蔽長權杖）
+    // (b) Codex 點火通過（提取 prompt 內的標準標頭寫入 outFile）、Claude 點火失敗（含 email 與短敏感值，確認白名單摘要完全不回顯原始敏感值，N4）
     const probeRes = probeSeats(settings, {
       seatFilter: '*',
       which,
@@ -420,13 +420,12 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
           fs.writeFileSync(outFile, promptLines.join('\n'));
           return { status: 0, stdout: '', stderr: '' };
         }
-        const leakedSecret = 'SUPER_LONG_SECRET_BEARER_TOKEN_1234567890ABCDEF';
         fs.writeFileSync(outFile, JSON.stringify([
           { type: 'system', subtype: 'init' },
           {
             type: 'result',
             is_error: true,
-            result: `Failed to authenticate: OAuth session expired (${leakedSecret})`,
+            result: 'OAuth session expired for privateperson@example.invalid; refresh_token=private123',
           },
         ]));
         return { status: 1, stdout: '', stderr: '' };
@@ -438,16 +437,141 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
     assert.equal(probeRes.probes[0].ok, true);
     assert.equal(probeRes.probes[1].participant, 'Claude');
     assert.equal(probeRes.probes[1].ok, false);
-    assert.match(probeRes.lines.join('\n'), /Codex.*🟢 點火通過/u);
-    assert.match(probeRes.lines.join('\n'), /Claude.*🔴 點火失敗.*OAuth session expired/u);
-    assert.equal(probeRes.lines.join('\n').includes('SUPER_LONG_SECRET_BEARER_TOKEN_1234567890ABCDEF'), false, '點火錯誤摘要必須遮蔽長權杖字串');
-    assert.match(summarizeProbeFailure({ status: 1, stdout: '', stderr: '' }, '{"is_error":true,"result":"Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"}', null), /\[REDACTED\]/u);
+    const joinedLines = probeRes.lines.join('\n');
+    assert.match(joinedLines, /Codex.*🟢 點火通過.*prepareVerdict/u);
+    assert.match(joinedLines, /Claude.*🔴 點火失敗.*認證失敗（OAuth 或權杖已過期/u);
+    assert.equal(joinedLines.includes('privateperson@example.invalid'), false, '白名單診斷摘要不得洩漏 email');
+    assert.equal(joinedLines.includes('private123'), false, '白名單診斷摘要不得洩漏短權杖');
+    assert.equal(probeRes.probes[1].reason.includes('privateperson@example.invalid'), false);
+    assert.equal(probeRes.probes[1].reason.includes('private123'), false);
     assert.match(
-      summarizeProbeFailure({ status: 1, stdout: '', stderr: '_ApiError [Error]: {\n  "message": "Your prepayment credits are depleted."\n}' }, '', null),
-      /Your prepayment credits are depleted\./u,
+      summarizeProbeFailure({ status: 1, stdout: '', stderr: '_ApiError [Error]: {\n  "message": "Your prepayment credits are depleted. account=secret999"\n}' }, '', null),
+      /API 額度或預付餘額不足（HTTP 402/u,
+    );
+    assert.equal(
+      summarizeProbeFailure({ status: 1, stdout: '', stderr: 'unexpected raw secret=my_short_pw_99' }, '', null).includes('my_short_pw_99'),
+      false,
+      '未知錯誤亦不得回顯原始 stderr',
     );
 
-    // (c) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
+    // (c) N3：僅登記為掃描者（scanner-only）的座位，點火應準備合法 40-hex scan.json、送出 🔍 提示並以 prepareScan 核驗通過
+    let observedScanMeta = null;
+    const grokDir = path.join(tmp, '.grok');
+    const grokBinDir = path.join(grokDir, 'bin');
+    fs.mkdirSync(grokBinDir, { recursive: true });
+    const fakeGrokBin = path.join(grokBinDir, 'grok');
+    const fakeAuthFile = path.join(grokDir, 'auth.json');
+    fs.writeFileSync(fakeGrokBin, '#!/bin/sh\n', { mode: 0o755 });
+    fs.writeFileSync(fakeAuthFile, '{"key":"dummy"}');
+    const scannerOnlySettings = {
+      participants: [
+        { role: '裁示者（人）', id: 'Boss', account: 'boss' },
+        { role: 'AI 掃描', id: 'Grok', account: 'ai' },
+      ],
+      defaultDivision: { implementer: 'Boss', reviewer: 'Boss' },
+      platform: { project: 'fake/repo' },
+      reviewers: [],
+      scanner: {
+        participant: 'Grok',
+        tool: 'Grok 4.7',
+        source: 'Grok CLI',
+        strongest: 'grok-4.7',
+        maxEffort: 'xhigh',
+        command: 'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --prompt-file {promptFile} --out-file {outFile} --model {model} --effort {effort}',
+      },
+    };
+    const scanProbeRes = probeSeats(scannerOnlySettings, {
+      seatFilter: 'Grok',
+      env: { PATH: process.env.PATH },
+      homedir: tmp,
+      authFile: fakeAuthFile,
+      grokBin: fakeGrokBin,
+      spawnSyncImpl: (_bin, args) => {
+        const cmdStr = args[1];
+        const outFile = /--out-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        const promptFile = /--prompt-file\s+([^\s]+)/u.exec(cmdStr)[1];
+        const scanJsonPath = path.join(path.dirname(outFile), 'scan.json');
+        observedScanMeta = JSON.parse(fs.readFileSync(scanJsonPath, 'utf8'));
+        const promptLines = fs.readFileSync(promptFile, 'utf8').split('\n').slice(1);
+        fs.writeFileSync(outFile, promptLines.join('\n'));
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(scanProbeRes.code, 0);
+    assert.ok(observedScanMeta && /^[0-9a-f]{40}$/u.test(observedScanMeta.base) && observedScanMeta.base === observedScanMeta.head, 'scanner-only 點火必須寫入含 40-hex base/head 的 scan.json');
+    assert.equal(scanProbeRes.probes[0].ok, true);
+    assert.match(scanProbeRes.lines.join('\n'), /Grok.*🟢 點火通過.*prepareScan/u);
+
+    // (d) N2：現有 PATH 優先於後備目錄（.local/bin），靜態體檢 checkSeats 與動態點火 probeSeats 必須命中同一支 CLI
+    const pathFrontDir = path.join(tmp, 'path-front');
+    const fallbackLocalBin = path.join(tmp, '.local', 'bin');
+    fs.mkdirSync(pathFrontDir, { recursive: true });
+    fs.mkdirSync(fallbackLocalBin, { recursive: true });
+    const markerPath = path.join(tmp, 'which-cli-ran.txt');
+    const frontCli = path.join(pathFrontDir, 'codex');
+    const fallbackCli = path.join(fallbackLocalBin, 'codex');
+    // 前置 CLI：寫入 front 並把標準通過內容寫進 -o 指定檔案
+    fs.writeFileSync(
+      frontCli,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(markerPath)}, 'front');
+const outIdx = process.argv.indexOf('-o');
+const outFile = process.argv[outIdx + 1];
+const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');
+fs.writeFileSync(outFile, prompt);
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      fallbackCli,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(markerPath)}, 'fallback');
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+    const customEnv = { ...process.env, PATH: `${pathFrontDir}${path.delimiter}${process.env.PATH || ''}` };
+    const singleCodexSettings = {
+      ...settings,
+      reviewers: [settings.reviewers[0]],
+    };
+    const staticOrderCheck = checkSeats(singleCodexSettings, { env: customEnv, homedir: tmp });
+    assert.equal(staticOrderCheck.seats[0].binPath, frontCli, 'checkSeats 應優先選中現有 PATH 最前面的 CLI');
+    const realOrderProbe = probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+    });
+    assert.equal(realOrderProbe.probes[0].ok, true);
+    assert.equal(fs.readFileSync(markerPath, 'utf8'), 'front', 'probeSeats 實際執行的必須與 checkSeats 同一支前置 CLI');
+
+    // (e) N1：點火逾時必須一併終止 /bin/sh 底下的子程序群組，回傳「執行逾時」後子程序不得繼續存活寫入標記
+    const timeoutMarker = path.join(tmp, 'late-write-after-timeout.txt');
+    fs.writeFileSync(
+      frontCli,
+      `#!/usr/bin/env node
+const fs = require('node:fs');
+setTimeout(() => {
+  fs.writeFileSync(${JSON.stringify(timeoutMarker)}, 'escaped');
+  process.exit(0);
+}, 600);
+`,
+      { mode: 0o755 },
+    );
+    const timeoutProbe = probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      timeoutMs: 120,
+    });
+    assert.equal(timeoutProbe.probes[0].ok, false);
+    assert.equal(timeoutProbe.probes[0].reason, '執行逾時');
+    await new Promise((r) => setTimeout(r, 750));
+    assert.equal(fs.existsSync(timeoutMarker), false, '逾時收尾後子程序群組必須已被終止，不得在函式回傳後繼續寫檔');
+
+    // (f) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
     const fullProbeRun = run(['--skip-downstream', '--probe', 'Codex'], {
       runners: {
         pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),

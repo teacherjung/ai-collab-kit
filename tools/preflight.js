@@ -24,7 +24,7 @@ const { run: runBacklog } = require('./backlog-touch.js');
 const { run: runDownstream } = require('./downstream-lag.js');
 const { run: runStale } = require('./stale-text.js');
 const { run: runRisk, gitIn } = require('./risk-tier.js');
-const { substitute, prepareVerdict } = require('./review-launch.js');
+const { substitute, prepareVerdict, prepareScan } = require('./review-launch.js');
 const { rolesOf } = require('./gates/check-collab-fields.js');
 
 const UNSET = '未設定';
@@ -114,6 +114,18 @@ function checkOpenChanges({ settings = readSettings(), platform = { ask } } = {}
   };
 }
 
+/** 組合執行檔搜尋目錄清單：維持既有 env.PATH 優先順序，常見本機安裝路徑僅作後備。 */
+function buildSearchDirs({ env = process.env, homedir = os.homedir() } = {}) {
+  const home = homedir || '';
+  const extra = [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    home ? path.join(home, '.local', 'bin') : '',
+    home ? path.join(home, '.grok', 'bin') : '',
+  ].filter(Boolean);
+  return [...new Set([...String((env && env.PATH) || '').split(path.delimiter).filter(Boolean), ...extra])];
+}
+
 /** 在環境 PATH 與常見本機安裝路徑裡找可執行檔（純檔案系統檢查，不起子行程）；若已帶路徑則只驗該路徑本身。 */
 function defaultWhich(bin, { env = process.env, homedir = os.homedir(), fsImpl = fs } = {}) {
   if (!bin || typeof bin !== 'string') return null;
@@ -127,14 +139,7 @@ function defaultWhich(bin, { env = process.env, homedir = os.homedir(), fsImpl =
       return null;
     }
   }
-  const home = homedir || '';
-  const extra = [
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    home ? path.join(home, '.local', 'bin') : '',
-    home ? path.join(home, '.grok', 'bin') : '',
-  ].filter(Boolean);
-  const dirs = [...new Set([...String(env.PATH || '').split(path.delimiter).filter(Boolean), ...extra])];
+  const dirs = buildSearchDirs({ env, homedir });
   for (const d of dirs) {
     const candidate = path.join(d, bin);
     try {
@@ -186,6 +191,7 @@ function collectSeats(settings = {}) {
       effort: filled(r.maxEffort) ? r.maxEffort : '未填推理',
       commands: [r.command],
       probeCommand: r.command,
+      probeMode: 'review',
     });
   }
   const sc = settings.scanner || {};
@@ -203,6 +209,7 @@ function collectSeats(settings = {}) {
         effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
         commands: [sc.command],
         probeCommand: sc.command,
+        probeMode: 'scan',
       });
     }
   }
@@ -215,13 +222,15 @@ function collectSeats(settings = {}) {
  */
 function checkSeats(settings = {}, {
   which,
-  authFile = path.join(os.homedir(), '.grok', 'auth.json'),
+  env = process.env,
+  homedir = os.homedir(),
+  authFile = path.join(homedir || os.homedir(), '.grok', 'auth.json'),
   grokBin = path.basename(path.dirname(authFile)) === '.grok'
     ? path.join(path.dirname(authFile), 'bin', 'grok')
-    : path.join(os.homedir(), '.grok', 'bin', 'grok'),
+    : path.join(homedir || os.homedir(), '.grok', 'bin', 'grok'),
   fsImpl = fs,
 } = {}) {
-  const resolveBin = typeof which === 'function' ? which : (b) => defaultWhich(b, { fsImpl });
+  const resolveBin = typeof which === 'function' ? which : (b) => defaultWhich(b, { env, homedir, fsImpl });
   const div = settings.defaultDivision || {};
   const impl = filled(div.implementer) ? div.implementer : '未設定';
   const rev = filled(div.reviewer) ? div.reviewer : '未設定';
@@ -256,7 +265,7 @@ function checkSeats(settings = {}, {
       checkTargets.push({
         label: s.usesGrokExec ? grokBin : s.bin,
         displayBin: s.bin,
-        path: s.usesGrokExec ? defaultWhich(grokBin, { fsImpl }) : resolveBin(s.bin),
+        path: s.usesGrokExec ? defaultWhich(grokBin, { env, homedir, fsImpl }) : resolveBin(s.bin),
       });
     }
     const missingBins = checkTargets.filter((r) => !r.path).map((r) => r.label);
@@ -286,59 +295,188 @@ function checkSeats(settings = {}, {
   return { code: 0, lines, seats: results };
 }
 
-/** 將點火失敗輸出濃縮為單行安全診斷摘要（遮蔽長權杖字串，絕不讀憑證檔）。 */
+/**
+ * 將點火失敗濃縮為固定分類診斷摘要（白名單制，不直接回顯 CLI 原始 result／stdout／stderr，杜絕短權杖、email 或路徑外洩）。
+ */
 function summarizeProbeFailure(runRes, rawOut, verdictErr) {
-  const redact = (s) => String(s || '')
-    .replace(/\b(?:Bearer\s+)?[A-Za-z0-9._~+/=-]{28,}\b/gu, '[REDACTED]')
-    .replace(/\s+/gu, ' ')
-    .trim();
   if (runRes && runRes.error) {
     if (runRes.error.code === 'ETIMEDOUT') return '執行逾時';
-    return `子行程錯誤：${redact(runRes.error.message || runRes.error.code)}`;
+    const safeCode = typeof runRes.error.code === 'string' && /^[A-Z0-9_]{2,24}$/u.test(runRes.error.code)
+      ? `（${runRes.error.code}）`
+      : '';
+    return `子行程啟動失敗${safeCode}`;
   }
   const trimmedOut = String(rawOut || '').trim();
-  if (trimmedOut.startsWith('{') || trimmedOut.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(trimmedOut);
-      const item = Array.isArray(parsed)
-        ? [...parsed].reverse().find((el) => el && typeof el === 'object' && (el.is_error || typeof el.result === 'string'))
-        : parsed;
-      if (item && item.is_error && typeof item.result === 'string' && item.result.trim()) {
-        return redact(item.result).slice(0, 160);
-      }
-    } catch {
-      /* 非標準 JSON 物件／陣列，繼續看文字行 */
-    }
-  }
   const combined = `${String((runRes && runRes.stderr) || '')}\n${String((runRes && runRes.stdout) || '')}\n${trimmedOut}`;
-  const allLines = combined.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
-  const specificLine = allLines.find((l) => /OAuth|expired|ModelNotFoundError|RESOURCE_EXHAUSTED|credits|prepayment|quota|not trusted|認證|憑證|外流|dlp_/iu.test(l));
-  if (specificLine) {
-    const innerMessages = [...specificLine.matchAll(/\\?"message\\?":\s*\\?"([^"\\]{6,})/gu)].map((m) => m[1].trim()).filter((m) => !m.startsWith('{'));
-    const chosen = innerMessages.length ? innerMessages[innerMessages.length - 1] : specificLine;
-    return redact(chosen).slice(0, 160);
+  if (/OAuth.*expired|token.*expired|Failed to authenticate|authentication_error|UNAUTHENTICATED|invalid_grant/iu.test(combined)) {
+    return '認證失敗（OAuth 或權杖已過期，請重新登入該 CLI）';
   }
-  const genericErrLine = allLines.find((l) => /Error:|error:/iu.test(l) && !/[:{]\s*$/u.test(l));
-  if (genericErrLine) return redact(genericErrLine).slice(0, 160);
-  if (verdictErr && verdictErr.message) return redact(verdictErr.message).slice(0, 160);
-  return allLines[0] ? redact(allLines[0]).slice(0, 160) : '未產生有效結論輸出';
+  if (/prepayment credits are depleted|credits.*depleted|insufficient_quota|\b402\b/iu.test(combined)) {
+    return 'API 額度或預付餘額不足（HTTP 402／請檢查帳戶額度與帳單設定）';
+  }
+  if (/RESOURCE_EXHAUSTED|rate.?limit|quota.*exceeded|\b429\b/iu.test(combined)) {
+    return 'API 速率或配額達上限（HTTP 429／RESOURCE_EXHAUSTED）';
+  }
+  if (/ModelNotFoundError|model.*not found|does not exist/iu.test(combined)) {
+    return '找不到指定模型（ModelNotFoundError）';
+  }
+  if (/not trusted|folder.*trust|--skip-trust/iu.test(combined)) {
+    return '工作資料夾未獲 CLI 信任（請確認 --skip-trust 或信任設定）';
+  }
+  if (/掃描模式缺少合法的 scan\.json/u.test(combined)) {
+    return '掃描模式缺少合法的 scan.json';
+  }
+  if (/沙盒隔離預檢未通過/u.test(combined)) {
+    return 'Grok 沙盒隔離預檢未通過';
+  }
+  if (/憑證準備失敗/u.test(combined)) {
+    return 'Grok 盒外憑證準備失敗';
+  }
+  if (/內容安全檢查未通過|dlp_[a-z_]+/iu.test(combined)) {
+    return 'Grok 內容安全檢查未通過';
+  }
+  if (verdictErr && typeof verdictErr.message === 'string') {
+    const msg = verdictErr.message;
+    if (/是空的/u.test(msg)) return 'CLI 未產生結論輸出（輸出檔為空）';
+    if (/不是合規標頭/u.test(msg)) return '輸出第一行不是合規標頭（🤖／🔍 格式不符或含前言雜訊）';
+    if (/角色是|不是本支/u.test(msg)) return '輸出標頭角色與座位識別值不符';
+    if (/來源是|不是設定登記的/u.test(msg)) return '輸出標頭來源與設定登記字串不符';
+    if (/審的是|掃的是|對不上/u.test(msg)) return '輸出標頭版本短碼與點火樹 HEAD 不符';
+    if (/缺少固定小標|本輪實際用的設定|清單逐項結果|驗了什麼|發現/u.test(msg)) return '複審輸出缺少固定小標';
+    return '輸出未通過收件格式核驗';
+  }
+  if (!trimmedOut && (!runRes || runRes.status === 0)) {
+    return '未產生有效結論輸出';
+  }
+  return 'CLI 執行失敗（已遮蔽原始輸出，請於本機單獨執行該 CLI 檢查登入與連線狀態）';
+}
+
+const PROBE_GROUP_RUNNER_SCRIPT = `
+'use strict';
+const { spawn } = require('node:child_process');
+const cmd = process.argv[1];
+const timeoutMs = Number(process.argv[2]) || 60000;
+const child = spawn('/bin/sh', ['-c', cmd], {
+  detached: true,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+const pid = child.pid;
+let stdout = '';
+let stderr = '';
+let closed = false;
+let timedOut = false;
+let finishing = false;
+let exitStatus = null;
+child.stdout.setEncoding('utf8');
+child.stderr.setEncoding('utf8');
+child.stdout.on('data', (d) => { stdout += d; });
+child.stderr.on('data', (d) => { stderr += d; });
+function groupAlive() {
+  if (!pid || pid <= 1) return false;
+  try { process.kill(-pid, 0); return true; } catch { return false; }
+}
+function killGroup(sig) {
+  if (!pid || pid <= 1) return;
+  try { process.kill(-pid, sig); } catch { /* ignore */ }
+}
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+async function finish(status) {
+  if (finishing) return;
+  finishing = true;
+  clearTimeout(timer);
+  if (groupAlive()) {
+    killGroup('SIGTERM');
+    const forceAt = Date.now() + 200;
+    const deadline = Date.now() + 2000;
+    let forced = false;
+    while (groupAlive() && Date.now() < deadline) {
+      if (!forced && Date.now() >= forceAt) {
+        forced = true;
+        killGroup('SIGKILL');
+      }
+      await delay(20);
+    }
+    if (groupAlive()) killGroup('SIGKILL');
+  }
+  const pipeDeadline = Date.now() + 1000;
+  while (!closed && Date.now() < pipeDeadline) await delay(20);
+  child.stdout.destroy();
+  child.stderr.destroy();
+  process.stdout.write(JSON.stringify({
+    status: timedOut ? null : status,
+    stdout,
+    stderr,
+    timedOut,
+  }));
+}
+const timer = setTimeout(() => {
+  timedOut = true;
+  void finish(null);
+}, Math.max(1, timeoutMs));
+child.once('error', (err) => {
+  stderr += String(err && err.message ? err.message : err);
+  void finish(null);
+});
+child.once('exit', (code) => {
+  exitStatus = code;
+  if (closed) void finish(exitStatus);
+});
+child.once('close', (code) => {
+  closed = true;
+  void finish(exitStatus !== null ? exitStatus : code);
+});
+`;
+
+/**
+ * 以獨立程序群組執行點火命令，期限到時先送 SIGTERM、必要時送 SIGKILL 終止整組後代並等待管線關閉後才回傳，
+ * 避免 /bin/sh 逾時結束後底下的 CLI 仍在背景執行或寫檔。
+ */
+function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSync } = {}) {
+  if (spawnSyncImpl !== spawnSync) {
+    return spawnSyncImpl('/bin/sh', ['-c', cmd], {
+      cwd,
+      env,
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+  }
+  const res = spawnSync(process.execPath, ['-e', PROBE_GROUP_RUNNER_SCRIPT, cmd, String(timeoutMs)], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (res.error) return res;
+  try {
+    const parsed = JSON.parse(String(res.stdout || '').trim());
+    if (parsed.timedOut) {
+      const err = new Error('ETIMEDOUT');
+      err.code = 'ETIMEDOUT';
+      return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err };
+    }
+    return { status: parsed.status, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: null };
+  } catch {
+    return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '', error: null };
+  }
 }
 
 /**
  * 對已登記的 AI 座位執行十秒極小點火試跑（--probe [<座位識別值>]）。
- * 在系統暫存區建立極小隔離 Git 樹與 8 行標準通過提示，實跑啟動樣板並交由 prepareVerdict 驗收件格式。
+ * 在系統暫存區建立極小隔離 Git 樹與標準通過提示，實跑啟動樣板並交由 prepareVerdict／prepareScan 驗收件格式。
  */
 function probeSeats(settings = {}, {
   seatFilter = '*',
   cwd = process.cwd(),
   timeoutMs = 60000,
   which,
-  authFile = path.join(os.homedir(), '.grok', 'auth.json'),
+  env = process.env,
+  homedir = os.homedir(),
+  authFile = path.join(homedir || os.homedir(), '.grok', 'auth.json'),
   grokBin,
   fsImpl = fs,
   spawnSyncImpl = spawnSync,
 } = {}) {
-  const staticCheck = checkSeats(settings, { which, authFile, grokBin, fsImpl });
+  const staticCheck = checkSeats(settings, { which, env, homedir, authFile, grokBin, fsImpl });
   const seatMap = collectSeats(settings);
   const allEntries = [...seatMap.values()];
   if (!allEntries.length) {
@@ -375,7 +513,8 @@ function probeSeats(settings = {}, {
       continue;
     }
 
-    const rawTemplate = String(seat.probeCommand || '').replace(/\{scanTree\}/gu, '{reviewTree}');
+    const rawTemplate = String(seat.probeCommand || '');
+    const isScanProbe = seat.probeMode === 'scan' || /--mode\s+scan\b/u.test(rawTemplate);
     const probeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `ack-probe-${seat.participant.toLowerCase()}-`)));
     const reviewTree = path.join(probeRoot, 'tree');
     const mutationCopy = path.join(probeRoot, 'mutation');
@@ -395,24 +534,38 @@ function probeSeats(settings = {}, {
       const headShort = headSha.slice(0, 7);
       spawnSync('git', ['clone', '--quiet', reviewTree, mutationCopy], { cwd: probeRoot, env: gEnv });
 
-      const promptBody = [
-        '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
-        `🤖 ${seat.participant}｜來源：${seat.source}｜審 \`${headShort}\`｜r1｜結論：通過`,
-        '',
-        '### 本輪實際用的設定',
-        '- 點火試跑',
-        '',
-        '### 清單逐項結果',
-        '- 零發現',
-        '未貼',
-        '',
-      ].join('\n');
+      const metaPayload = JSON.stringify({ base: headSha, head: headSha, root: reviewTree });
+      fs.writeFileSync(path.join(probeRoot, 'launch.json'), metaPayload);
+      fs.writeFileSync(path.join(probeRoot, 'scan.json'), metaPayload);
+
+      const promptBody = isScanProbe
+        ? [
+            '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 4 行即可）：',
+            `🔍 ${seat.participant}｜來源：${seat.source}｜掃 \`${headShort}\``,
+            '',
+            '- 零發現',
+            '未貼',
+            '',
+          ].join('\n')
+        : [
+            '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
+            `🤖 ${seat.participant}｜來源：${seat.source}｜審 \`${headShort}\`｜r1｜結論：通過`,
+            '',
+            '### 本輪實際用的設定',
+            '- 點火試跑',
+            '',
+            '### 清單逐項結果',
+            '- 零發現',
+            '未貼',
+            '',
+          ].join('\n');
       fs.writeFileSync(promptFile, promptBody);
 
       const { text: cmd } = substitute(rawTemplate, {
         model: seat.model,
         effort: seat.effort,
         reviewTree,
+        scanTree: reviewTree,
         mutationCopy,
         promptFile,
         outFile,
@@ -420,38 +573,46 @@ function probeSeats(settings = {}, {
         project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
       }, `${seat.participant} 點火指令`);
 
-      const home = os.homedir();
-      const extraPaths = [
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-        home ? path.join(home, '.local', 'bin') : '',
-        home ? path.join(home, '.grok', 'bin') : '',
-      ].filter(Boolean);
+      const resolvedDirs = st.binPath
+        ? st.binPath.split('、').map((p) => path.dirname(p)).filter(Boolean)
+        : [];
+      const searchDirs = [...new Set([...resolvedDirs, ...buildSearchDirs({ env, homedir })])];
       const probeEnv = {
-        ...process.env,
-        PATH: [...new Set([...extraPaths, ...String(process.env.PATH || '').split(path.delimiter).filter(Boolean)])].join(path.delimiter),
+        ...env,
+        PATH: searchDirs.join(path.delimiter),
       };
       delete probeEnv.CLAUDECODE;
 
-      const runRes = spawnSyncImpl('/bin/sh', ['-c', cmd], {
+      const runRes = runProbeCommandSync(cmd, {
         cwd,
         env: probeEnv,
-        encoding: 'utf8',
-        timeout: timeoutMs,
+        timeoutMs,
+        spawnSyncImpl,
       });
       const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
       const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
       let verdictErr = null;
       let verdictOk = false;
+      const verifierName = isScanProbe ? 'prepareScan' : 'prepareVerdict';
       if (!runRes.error && runRes.status === 0 && rawOut.trim()) {
         try {
-          prepareVerdict(rawOut, {
-            reviewer: seat.participant,
-            source: seat.source,
-            round: 1,
-            head: headSha,
-            usable: usableRoles,
-          });
+          if (isScanProbe) {
+            prepareScan(rawOut, {
+              scanner: seat.participant,
+              source: seat.source,
+              head: headSha,
+              usable: usableRoles,
+              forceGrok: String(seat.source).includes('Grok'),
+            });
+          } else {
+            prepareVerdict(rawOut, {
+              reviewer: seat.participant,
+              source: seat.source,
+              round: 1,
+              head: headSha,
+              usable: usableRoles,
+            });
+          }
           verdictOk = true;
         } catch (err) {
           verdictErr = err;
@@ -459,7 +620,7 @@ function probeSeats(settings = {}, {
       }
 
       if (verdictOk) {
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 prepareVerdict 收件核驗）`);
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 ${verifierName} 收件核驗）`);
         probes.push({ participant: seat.participant, ok: true, status: 0, reason: null });
       } else {
         const reason = summarizeProbeFailure(runRes, rawOut, verdictErr);
