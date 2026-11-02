@@ -17,7 +17,7 @@ const { gitEnv } = require('../tools/git-env.js');
 const { run, parseArgs, checkOpenChanges, checkSeats, probeSeats, summarizeProbeFailure, extractCommandSpec, defaultWhich } = require('../tools/preflight.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
 
-test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', () => {
+test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', async () => {
   assert.deepEqual(parseArgs([]), { change: undefined, base: undefined, skipDownstream: false, skipSeats: false });
   assert.deepEqual(parseArgs(['115', '--base', 'origin/main', '--skip-downstream', '--skip-seats']), {
     change: '115',
@@ -30,7 +30,7 @@ test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', ()
   assert.deepEqual(parseArgs(['134', '--probe=Grok']), { change: '134', base: undefined, skipDownstream: false, skipSeats: false, probe: 'Grok' });
   for (const bad of [['--base'], ['--base', '--skip-seats'], ['--unknown'], ['1', '2'], ['--probe='], ['--probe', '--skip-seats']]) {
     assert.ok(parseArgs(bad).error, `應拒收壞參數：${bad.join(' ')}`);
-    assert.equal(run(bad).code, 2);
+    assert.equal((await run(bad)).code, 2);
   }
   assert.deepEqual(extractCommandSpec('codex exec --cd {reviewTree}'), { bin: 'codex', usesGrokExec: false });
   assert.deepEqual(extractCommandSpec('cd {reviewTree} && claude -p --model {model}'), { bin: 'claude', usesGrokExec: false });
@@ -41,7 +41,7 @@ test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', ()
   assert.deepEqual(extractCommandSpec('未設定'), { bin: null, usesGrokExec: false });
 });
 
-test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子工具，任一項非 0 時總退出碼為 2 但其餘照跑', () => {
+test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子工具，任一項非 0 時總退出碼為 2 但其餘照跑', async () => {
   const called = [];
   const fakeRunners = (failId = null) => ({
     pendingRulings: () => { called.push('pending'); return { code: failId === 'pending' ? 2 : 0, lines: ['pending-line'] }; },
@@ -53,27 +53,27 @@ test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子
   });
 
   // (a) 開工前模式：跑 4 項
-  const preWork = run(['--base', 'HEAD~1'], { runners: fakeRunners() });
+  const preWork = await run(['--base', 'HEAD~1'], { runners: fakeRunners() });
   assert.equal(preWork.code, 0);
   assert.deepEqual(called, ['pending', 'backlog:--base HEAD~1', 'downstream', 'seats']);
   assert.match(preWork.lines.join('\n'), /開工前模式｜共 4 項/u);
 
   // (b) 送審前模式：跑 6 項
   called.length = 0;
-  const preReview = run(['115', '--base', 'HEAD~1'], { runners: fakeRunners() });
+  const preReview = await run(['115', '--base', 'HEAD~1'], { runners: fakeRunners() });
   assert.equal(preReview.code, 0);
   assert.deepEqual(called, ['pending', 'backlog:--base HEAD~1', 'downstream', 'stale:--base HEAD~1', 'risk:115', 'seats']);
   assert.match(preReview.lines.join('\n'), /送審前模式（變更 115）｜共 6 項/u);
 
   // (c) 中途有子工具退 2 時，後面子工具仍照跑，且總退出碼為 2
   called.length = 0;
-  const partialFail = run(['--skip-seats'], { runners: fakeRunners('pending') });
+  const partialFail = await run(['--skip-seats'], { runners: fakeRunners('pending') });
   assert.equal(partialFail.code, 2);
   assert.deepEqual(called, ['pending', 'backlog:', 'downstream']);
 
   // (d) 中途有子工具拋錯時，該節記為退 2、總退出碼為 2，且後面子工具仍照跑（r4 Finding 1）
   called.length = 0;
-  const thrownRun = run(['--skip-seats'], {
+  const thrownRun = await run(['--skip-seats'], {
     runners: {
       ...fakeRunners(),
       pendingRulings: () => { called.push('pending-throw'); throw new Error('子工具炸了'); },
@@ -86,7 +86,7 @@ test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子
 
   // (e) 中途有子工具回傳壞形狀時，該節記為退 2、總退出碼為 2，且後面子工具仍照跑
   called.length = 0;
-  const badShapeRun = run(['--skip-seats'], {
+  const badShapeRun = await run(['--skip-seats'], {
     runners: {
       ...fakeRunners(),
       pendingRulings: () => { called.push('pending-null'); return null; },
@@ -98,7 +98,7 @@ test('② 開工前模式（4 項）與送審前模式（6 項）：串接各子
   assert.deepEqual(called, ['pending-null', 'backlog:', 'downstream']);
 });
 
-test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路徑、同人雙角色命令聯集，且盒外憑證只 lstatSync 絕不讀取或輸出內容', () => {
+test('③ checkSeats 與 defaultWhich：AI 座位體檢、保留明確路徑、同人雙角色命令聯集，且盒外憑證只 lstatSync 絕不讀取或輸出內容', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-preflight-test-'));
   try {
     const binDir = path.join(tmp, 'bin');
@@ -164,7 +164,7 @@ test('③ checkSeats 與 defaultWhich：4 家 AI 座位檢核、保留明確路�
     });
     assert.equal(okRes.code, 0);
     assert.equal(okRes.seats.length, 4);
-    assert.ok(okRes.seats.every((s) => s.ok), '4 家 CLI 與 Grok auth.json 皆就緒');
+    assert.ok(okRes.seats.every((s) => s.ok), '各家 CLI 與 Grok auth.json 皆就緒');
     assert.equal(okRes.seats.find((s) => s.participant === 'Grok').binPath, grokFixedBin, '--grok-exec 座位對應 ~/.grok/bin/grok 固定執行檔');
     assert.ok(lstatCalls > 0, '有執行 lstatSync 檢查狀態');
     assert.equal(readCalls, 0, '絕不呼叫任何檔案讀取 API 讀取 auth.json 內容');
@@ -401,12 +401,12 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
     const which = (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp });
 
     // (a) 指定不存在的座位應退 2
-    const unknownSeat = probeSeats(settings, { seatFilter: 'NoSuchAI', which });
+    const unknownSeat = await probeSeats(settings, { seatFilter: 'NoSuchAI', which });
     assert.equal(unknownSeat.code, 2);
     assert.match(unknownSeat.lines[0], /找不到已登記的座位「NoSuchAI」/u);
 
     // (b) Codex 點火通過（提取 prompt 內的標準標頭寫入 outFile）、Claude 點火失敗（含 email 與短敏感值，確認白名單摘要完全不回顯原始敏感值，N4）
-    const probeRes = probeSeats(settings, {
+    const probeRes = await probeSeats(settings, {
       seatFilter: '*',
       which,
       spawnSyncImpl: (_bin, args) => {
@@ -480,7 +480,7 @@ test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火�
         command: 'node tools/review-launch.js --grok-exec --mode scan --cwd {scanTree} --prompt-file {promptFile} --out-file {outFile} --model {model} --effort {effort}',
       },
     };
-    const scanProbeRes = probeSeats(scannerOnlySettings, {
+    const scanProbeRes = await probeSeats(scannerOnlySettings, {
       seatFilter: 'Grok',
       env: { PATH: process.env.PATH },
       homedir: tmp,
@@ -539,7 +539,7 @@ process.exit(1);
     };
     const staticOrderCheck = checkSeats(singleCodexSettings, { env: customEnv, homedir: tmp });
     assert.equal(staticOrderCheck.seats[0].binPath, frontCli, 'checkSeats 應優先選中現有 PATH 最前面的 CLI');
-    const realOrderProbe = probeSeats(singleCodexSettings, {
+    const realOrderProbe = await probeSeats(singleCodexSettings, {
       seatFilter: 'Codex',
       env: customEnv,
       homedir: tmp,
@@ -547,28 +547,37 @@ process.exit(1);
     assert.equal(realOrderProbe.probes[0].ok, true);
     assert.equal(fs.readFileSync(markerPath, 'utf8'), 'front', 'probeSeats 實際執行的必須與 checkSeats 同一支前置 CLI');
 
-    // (e) N1：點火逾時必須一併終止 /bin/sh 底下的子程序群組，回傳「執行逾時」後子程序不得繼續存活寫入標記
+    // (e) N1：點火逾時必須一併終止 /bin/sh 底下的子程序群組（含忽略 SIGTERM 的子程序），回傳「執行逾時」時已終止且不再寫入標記
     const timeoutMarker = path.join(tmp, 'late-write-after-timeout.txt');
+    const timeoutPidFile = path.join(tmp, 'timeout-child.pid');
     fs.writeFileSync(
       frontCli,
       `#!/usr/bin/env node
 const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(timeoutPidFile)}, String(process.pid));
+process.on('SIGTERM', () => {});
 setTimeout(() => {
   fs.writeFileSync(${JSON.stringify(timeoutMarker)}, 'escaped');
   process.exit(0);
-}, 600);
+}, 1600);
 `,
       { mode: 0o755 },
     );
-    const timeoutProbe = probeSeats(singleCodexSettings, {
+    const timeoutProbe = await probeSeats(singleCodexSettings, {
       seatFilter: 'Codex',
       env: customEnv,
       homedir: tmp,
-      timeoutMs: 120,
+      timeoutMs: 800,
+      graceMs: 80,
     });
+    assert.equal(fs.existsSync(timeoutPidFile), true, '逾時測試的合成 CLI 應已啟動並寫出就緒 PID');
+    const timeoutChildPid = Number(fs.readFileSync(timeoutPidFile, 'utf8'));
+    let timeoutChildAlive = false;
+    try { process.kill(timeoutChildPid, 0); timeoutChildAlive = true; } catch { /* expected ESRCH */ }
+    assert.equal(timeoutChildAlive, false, 'probeSeats 回傳時忽略 SIGTERM 的逾時子程序必須已被 SIGKILL 終止');
     assert.equal(timeoutProbe.probes[0].ok, false);
     assert.equal(timeoutProbe.probes[0].reason, '執行逾時');
-    await new Promise((r) => setTimeout(r, 750));
+    await new Promise((r) => setTimeout(r, 900));
     assert.equal(fs.existsSync(timeoutMarker), false, '逾時收尾後子程序群組必須已被終止，不得在函式回傳後繼續寫檔');
 
     // (f) N1（續）：巢狀 runGrokChild（忽略 SIGTERM 的內層 detached 程序群組）於逾時收尾時必須一併終止，回傳後不得繼續存活或寫入標記
@@ -584,14 +593,14 @@ setTimeout(() => {
         `fs.writeFileSync(${JSON.stringify(nestedPidFile)}, String(process.pid));`,
         "process.on('SIGTERM', () => {});",
         `setInterval(() => fs.appendFileSync(${JSON.stringify(nestedTicks)}, Date.now() + '\\n'), 30);`,
-        'setTimeout(() => process.exit(0), 6000);',
+        'setTimeout(() => process.exit(0), 8000);',
       ].join('\n'),
     );
     fs.writeFileSync(
       nestedWrapperScript,
       [
         `const { runGrokChild } = require(${JSON.stringify(reviewLaunchPath)});`,
-        `runGrokChild(process.execPath, [${JSON.stringify(nestedChildScript)}], { env: process.env }, { wallMs: 5000 }).then((r) => { process.exitCode = r.status; });`,
+        `runGrokChild(process.execPath, [${JSON.stringify(nestedChildScript)}], { env: process.env }, { wallMs: 7000 }).then((r) => { process.exitCode = r.status; });`,
       ].join('\n'),
     );
     fs.writeFileSync(
@@ -600,14 +609,15 @@ setTimeout(() => {
       { mode: 0o755 },
     );
     const countLines = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).length : 0);
-    const nestedTimeoutProbe = probeSeats(singleCodexSettings, {
+    const nestedTimeoutProbe = await probeSeats(singleCodexSettings, {
       seatFilter: 'Codex',
       env: customEnv,
       homedir: tmp,
-      timeoutMs: 350,
+      timeoutMs: 1000,
     });
     const ticksAtReturn = countLines(nestedTicks);
     const nestedPid = fs.existsSync(nestedPidFile) ? Number(fs.readFileSync(nestedPidFile, 'utf8')) : null;
+    assert.ok(nestedPid && nestedPid > 1, '巢狀內層程序在逾時前應已啟動並寫出就緒 PID');
     await new Promise((r) => setTimeout(r, 350));
     const ticksAfterWait = countLines(nestedTicks);
     let nestedStillAlive = false;
@@ -620,9 +630,10 @@ setTimeout(() => {
     assert.equal(nestedStillAlive, false, '巢狀 runGrokChild 內層程序在 probeSeats 回傳時必須已終止');
     assert.equal(ticksAfterWait, ticksAtReturn, 'probeSeats 回傳後巢狀內層程序不得再新增任何標記');
 
-    // (g) N1（續）：外層點火收到整組（-pid）或單一主程序（pid）之 SIGINT／SIGTERM 取消時，必須終止已 detached 的 CLI 子程序且中斷後續座位點火（不吞掉取消、不誤啟動下一座位）
+    // (g) N1（續）：外層點火收到單一主程序（pid）或整組（-pid）之 SIGINT／SIGTERM 取消時，必須退出 130／143、終止受管 CLI，且停止同座位下一角色與下一座位
     const cancelTicks = path.join(tmp, 'cancel-cli.ticks');
     const cancelPidFile = path.join(tmp, 'cancel-cli.pid');
+    const firstSeatScanMarker = path.join(tmp, 'cancel-first-seat-scan-ran.txt');
     const secondSeatMarker = path.join(tmp, 'cancel-second-seat-ran.txt');
     const cancelOuterScript = path.join(tmp, 'cancel-outer.cjs');
     const preflightPath = path.join(__dirname, '..', 'tools', 'preflight.js');
@@ -632,6 +643,11 @@ setTimeout(() => {
       [
         '#!/usr/bin/env node',
         "const fs = require('node:fs');",
+        "if (process.argv.includes('--scan-role')) {",
+        `  fs.writeFileSync(${JSON.stringify(firstSeatScanMarker)}, 'ran');`,
+        '  process.exit(0);',
+        '}',
+        `fs.appendFileSync(${JSON.stringify(cancelTicks)}, Date.now() + '\\n');`,
         `fs.writeFileSync(${JSON.stringify(cancelPidFile)}, String(process.pid));`,
         `setInterval(() => fs.appendFileSync(${JSON.stringify(cancelTicks)}, Date.now() + '\\n'), 30);`,
         'setTimeout(() => process.exit(0), 6000);',
@@ -651,24 +667,47 @@ setTimeout(() => {
     const twoSeatCancelSettings = {
       ...settings,
       reviewers: [settings.reviewers[0], settings.reviewers[1]],
+      scanner: {
+        participant: 'Codex',
+        tool: 'Codex CLI',
+        source: 'codex CLI',
+        strongest: 'gpt-6-astra',
+        maxEffort: 'max',
+        command: 'codex exec --scan-role -m {model} -C {scanTree} -o {outFile} - < {promptFile}',
+      },
     };
     fs.writeFileSync(
       cancelOuterScript,
       [
-        `const { probeSeats } = require(${JSON.stringify(preflightPath)});`,
+        `const { run, checkSeats, probeSeats } = require(${JSON.stringify(preflightPath)});`,
         `const settings = ${JSON.stringify(twoSeatCancelSettings)};`,
-        `const res = probeSeats(settings, { seatFilter: '*', env: ${JSON.stringify(customEnv)}, homedir: ${JSON.stringify(tmp)}, timeoutMs: 3000 });`,
-        'process.stdout.write(JSON.stringify(res));',
+        `const env = ${JSON.stringify(customEnv)};`,
+        `const homedir = ${JSON.stringify(tmp)};`,
+        '(async () => {',
+        "  const res = await run(['--skip-downstream', '--probe'], {",
+        '    settings,',
+        '    runners: {',
+        "      pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),",
+        "      backlogTouch: () => ({ code: 0, lines: ['backlog-ok'] }),",
+        '      seats: (s) => checkSeats(s, { env, homedir }),',
+        '      probeSeats: (s, opts) => probeSeats(s, { ...opts, env, homedir, timeoutMs: 3000 }),',
+        '    },',
+        '  });',
+        '  process.exitCode = res.code;',
+        '  process.stdout.write(JSON.stringify(res));',
+        '})();',
       ].join('\n'),
     );
     const { spawn: spawnAsync } = require('node:child_process');
     for (const cancelMode of [
-      { label: '群組 SIGTERM (-pid)', toGroup: true, sig: 'SIGTERM' },
-      { label: '單一主程序 SIGINT (pid)', toGroup: false, sig: 'SIGINT' },
-      { label: '單一主程序 SIGTERM (pid)', toGroup: false, sig: 'SIGTERM' },
+      { label: '單一主程序 SIGINT (pid)', toGroup: false, sig: 'SIGINT', expectedCode: 130 },
+      { label: '單一主程序 SIGTERM (pid)', toGroup: false, sig: 'SIGTERM', expectedCode: 143 },
+      { label: '群組 SIGINT (-pid)', toGroup: true, sig: 'SIGINT', expectedCode: 130 },
+      { label: '群組 SIGTERM (-pid)', toGroup: true, sig: 'SIGTERM', expectedCode: 143 },
     ]) {
       try { fs.unlinkSync(cancelPidFile); } catch { /* ignore */ }
       try { fs.unlinkSync(cancelTicks); } catch { /* ignore */ }
+      try { fs.unlinkSync(firstSeatScanMarker); } catch { /* ignore */ }
       try { fs.unlinkSync(secondSeatMarker); } catch { /* ignore */ }
       const cancelJob = spawnAsync(process.execPath, [cancelOuterScript], {
         env: customEnv,
@@ -681,7 +720,7 @@ setTimeout(() => {
       for (let i = 0; i < 150 && !fs.existsSync(cancelPidFile); i += 1) {
         await new Promise((r) => setTimeout(r, 20));
       }
-      assert.equal(fs.existsSync(cancelPidFile), true, `${cancelMode.label}：合成 CLI 應已啟動並寫出 PID`);
+      assert.equal(fs.existsSync(cancelPidFile), true, `${cancelMode.label}：合成 CLI 應已啟動並寫出就緒 PID`);
       process.kill(cancelMode.toGroup ? -cancelJob.pid : cancelJob.pid, cancelMode.sig);
       const exitInfo = await cancelJobExit;
       const cancelTicksBefore = countLines(cancelTicks);
@@ -693,20 +732,18 @@ setTimeout(() => {
       try { process.kill(cancelChildPid, 'SIGKILL'); } catch { /* cleanup */ }
       assert.equal(cancelChildAlive, false, `${cancelMode.label}：外層點火結束時，detached CLI 子程序必須已一併終止`);
       assert.equal(cancelTicksAfter, cancelTicksBefore, `${cancelMode.label}：外層點火結束後 CLI 子程序不得繼續寫入標記`);
+      assert.equal(fs.existsSync(firstSeatScanMarker), false, `${cancelMode.label}：第一座位取消後不得繼續啟動同座位下一角色（掃描）`);
       assert.equal(fs.existsSync(secondSeatMarker), false, `${cancelMode.label}：第一座位取消後不得繼續啟動第二座位`);
-      if (!cancelMode.toGroup) {
-        const parsedOut = JSON.parse(cancelStdout);
-        assert.equal(parsedOut.probes.length, 1, `${cancelMode.label}：取消後應立即跳出座位迴圈`);
-        assert.equal(parsedOut.probes[0].reason, '執行已取消');
-        assert.equal(exitInfo.code, cancelMode.sig === 'SIGINT' ? 130 : 143);
-      }
+      assert.equal(exitInfo.code, cancelMode.expectedCode, `${cancelMode.label}：CLI 退出碼必須為 ${cancelMode.expectedCode}`);
+      const parsedOut = JSON.parse(cancelStdout);
+      assert.equal(parsedOut.code, cancelMode.expectedCode, `${cancelMode.label}：run() 回傳碼必須保留 ${cancelMode.expectedCode}`);
+      assert.match(parsedOut.lines.join('\n'), /執行已取消/u, `${cancelMode.label}：輸出應記錄執行已取消`);
     }
 
     // (h) N6：點火必須清掉 GIT_* 選倉環境變數與 platform.clearEnv，使 CLI 內部 Git 指向隔離點火樹而非外部 GIT_DIR
     const decoyRepo = path.join(tmp, 'decoy-git-repo');
     fs.mkdirSync(decoyRepo, { recursive: true });
     const { spawnSync: realSpawnSync } = require('node:child_process');
-    const { gitEnv } = require('../tools/git-env.js');
     realSpawnSync('git', ['init', '-q', decoyRepo], { env: gitEnv(), encoding: 'utf8' });
     const observedEnvFile = path.join(tmp, 'observed-git-env.json');
     fs.writeFileSync(
@@ -731,7 +768,7 @@ setTimeout(() => {
       GIT_WORK_TREE: decoyRepo,
       GH_REPO: 'poison/repo',
     };
-    const envProbeRes = probeSeats(
+    const envProbeRes = await probeSeats(
       { ...singleCodexSettings, platform: { clearEnv: ['GH_REPO'] } },
       { seatFilter: 'Codex', env: envWithPoison, homedir: tmp },
     );
@@ -781,7 +818,7 @@ setTimeout(() => {
       FAKE_GIT_MODE: 'signing',
     };
     try { fs.unlinkSync(cliRanMarker); } catch { /* ignore */ }
-    const signingProbe = probeSeats(singleCodexSettings, {
+    const signingProbe = await probeSeats(singleCodexSettings, {
       seatFilter: 'Codex',
       env: signingEnv,
       homedir: tmp,
@@ -799,7 +836,7 @@ setTimeout(() => {
     process.env.TMPDIR = outerRepoTmp;
     let failInitOnlyProbe;
     try {
-      failInitOnlyProbe = probeSeats(singleCodexSettings, {
+      failInitOnlyProbe = await probeSeats(singleCodexSettings, {
         seatFilter: 'Codex',
         env: { ...signingEnv, FAKE_GIT_MODE: 'fail-init-only', TMPDIR: outerRepoTmp },
         homedir: tmp,
@@ -844,7 +881,7 @@ setTimeout(() => {
       },
     };
     const dualCalledModes = [];
-    const dualBothPass = probeSeats(dualRoleSettings, {
+    const dualBothPass = await probeSeats(dualRoleSettings, {
       seatFilter: 'Grok',
       env: { PATH: process.env.PATH },
       homedir: tmp,
@@ -866,7 +903,7 @@ setTimeout(() => {
     assert.equal(dualBothPass.probes[0].ok, true);
     assert.match(dualBothPass.lines.join('\n'), /Grok.*🟢 點火通過.*prepareVerdict＋prepareScan/u);
 
-    const dualScanFail = probeSeats(dualRoleSettings, {
+    const dualScanFail = await probeSeats(dualRoleSettings, {
       seatFilter: 'Grok',
       env: { PATH: process.env.PATH },
       homedir: tmp,
@@ -889,7 +926,7 @@ setTimeout(() => {
     assert.equal(dualScanFail.probes[0].status, 7);
     assert.match(dualScanFail.probes[0].reason, /［掃描］/u);
 
-    const dualReviewFail = probeSeats(dualRoleSettings, {
+    const dualReviewFail = await probeSeats(dualRoleSettings, {
       seatFilter: 'Grok',
       env: { PATH: process.env.PATH },
       homedir: tmp,
@@ -909,7 +946,7 @@ setTimeout(() => {
     assert.match(dualReviewFail.probes[0].reason, /［複審］/u);
 
     // (k) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
-    const fullProbeRun = run(['--skip-downstream', '--probe', 'Codex'], {
+    const fullProbeRun = await run(['--skip-downstream', '--probe', 'Codex'], {
       runners: {
         pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),
         openChanges: () => ({ code: 0, lines: ['進行中變更（C1）：⚠️ 目前已開啟 2 支'] }),
@@ -921,6 +958,312 @@ setTimeout(() => {
     assert.equal(fullProbeRun.code, 0);
     assert.match(fullProbeRun.lines.join('\n'), /進行中變更（C1）：⚠️ 目前已開啟 2 支/u);
     assert.match(fullProbeRun.lines.join('\n'), /probe-ran:Codex/u);
+
+    // (l) N1（續）：shell 先退出、後代仍持有管線或已關閉管線時，從 exit 即啟動收尾（不假通過、不無限等待），且收尾期限內無法確認清空時明確報失敗、保留暫存樹並停止後續座位
+    const pipeHolderPidFile = path.join(tmp, 'pipe-holder.pid');
+    const pipeHolderTicks = path.join(tmp, 'pipe-holder.ticks');
+    const pipeHolderChild = path.join(tmp, 'pipe-holder-child.cjs');
+    fs.writeFileSync(
+      pipeHolderChild,
+      [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(pipeHolderPidFile)}, String(process.pid));`,
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(pipeHolderTicks)}, Date.now() + '\\n'), 30);`,
+        'setTimeout(() => process.exit(0), 6000);',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, [${JSON.stringify(pipeHolderChild)}], { stdio: 'inherit' });`,
+        `const until = Date.now() + 2500; while (!fs.existsSync(${JSON.stringify(pipeHolderPidFile)}) && Date.now() < until) {}`,
+        'process.exit(1);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const tPipeStart = Date.now();
+    const openPipeRes = await probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      timeoutMs: 5000,
+      graceMs: 80,
+      cleanupMs: 1200,
+    });
+    const pipeElapsed = Date.now() - tPipeStart;
+    assert.ok(pipeElapsed < 3500, `shell 先退出但後代仍持管線時應從 exit 立即啟動收尾，不等滿 timeoutMs（實際 ${pipeElapsed}ms）`);
+    assert.equal(openPipeRes.probes[0].ok, false);
+    const pipeHolderPid = Number(fs.readFileSync(pipeHolderPidFile, 'utf8'));
+    let pipeHolderAlive = false;
+    try { process.kill(pipeHolderPid, 0); pipeHolderAlive = true; } catch { /* expected ESRCH */ }
+    assert.equal(pipeHolderAlive, false, '持有管線的後代程序於回傳時必須已終止');
+    const pipeTicksBefore = countLines(pipeHolderTicks);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(countLines(pipeHolderTicks), pipeTicksBefore, '回傳後持有管線的後代不得再新增標記');
+
+    const closedPipePidFile = path.join(tmp, 'closed-pipe.pid');
+    const closedPipeTicks = path.join(tmp, 'closed-pipe.ticks');
+    const closedPipeChild = path.join(tmp, 'closed-pipe-child.cjs');
+    fs.writeFileSync(
+      closedPipeChild,
+      [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(closedPipePidFile)}, String(process.pid));`,
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(closedPipeTicks)}, Date.now() + '\\n'), 30);`,
+        'setTimeout(() => process.exit(0), 6000);',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        'const args = process.argv.slice(2);',
+        "const outFile = args[args.indexOf('-o') + 1];",
+        "const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');",
+        'fs.writeFileSync(outFile, prompt);',
+        `const bg = spawn(process.execPath, [${JSON.stringify(closedPipeChild)}], { stdio: 'ignore' });`,
+        'bg.unref();',
+        `const until = Date.now() + 2500; while (!fs.existsSync(${JSON.stringify(closedPipePidFile)}) && Date.now() < until) {}`,
+        'process.exit(0);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const closedPipeRes = await probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      timeoutMs: 4000,
+      graceMs: 80,
+      cleanupMs: 1200,
+    });
+    assert.equal(closedPipeRes.probes[0].ok, true);
+    const closedPipePid = Number(fs.readFileSync(closedPipePidFile, 'utf8'));
+    let closedPipeAlive = false;
+    try { process.kill(closedPipePid, 0); closedPipeAlive = true; } catch { /* expected ESRCH */ }
+    assert.equal(closedPipeAlive, false, '即使後代已關閉管線（close 先觸發），成功路徑亦必須清理群組殘留背景程序後才回傳');
+    const closedTicksBefore = countLines(closedPipeTicks);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(countLines(closedPipeTicks), closedTicksBefore);
+
+    // 收尾期限內無法確認清空（ECLEANUP）：報失敗、停止後續座位且不提早刪除暫存樹
+    try { fs.unlinkSync(secondSeatMarker); } catch { /* ignore */ }
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        'const args = process.argv.slice(2);',
+        "const outFile = args[args.indexOf('-o') + 1];",
+        "const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');",
+        'fs.writeFileSync(outFile, prompt);',
+        'process.exit(0);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const stuckRes = await probeSeats(
+      { ...settings, reviewers: [settings.reviewers[0], settings.reviewers[1]] },
+      {
+        seatFilter: '*',
+        env: customEnv,
+        homedir: tmp,
+        graceMs: 20,
+        cleanupMs: 80,
+        kill: (targetPid, sig) => {
+          if (targetPid < 0 && sig === 0) return true;
+          return process.kill(targetPid, sig);
+        },
+      },
+    );
+    try {
+      assert.equal(stuckRes.probes.length, 1, '無法確認群組清空時必須立即停止後續座位');
+      assert.equal(stuckRes.probes[0].ok, false, '無法確認群組清空時不得假通過');
+      assert.equal(stuckRes.probes[0].reason, '子程序群組未完成收尾');
+      assert.equal(stuckRes.probes[0].cleanupFailed, true);
+      assert.equal(fs.existsSync(secondSeatMarker), false, '無法確認群組清空時不得啟動第二座位');
+      assert.ok(stuckRes.probes[0].probeRoot && fs.existsSync(stuckRes.probes[0].probeRoot), '無法確認群組清空時不得提早刪除暫存樹');
+    } finally {
+      if (stuckRes.probes[0] && stuckRes.probes[0].probeRoot) {
+        fs.rmSync(stuckRes.probes[0].probeRoot, { recursive: true, force: true });
+      }
+    }
+
+    // (m) N1（續）：收尾期間收到取消與重複取消訊號時，保留首個取消退出碼、只結算一次、停止後續座位且不殘留監聽器
+    const cleanupCancelPidFile = path.join(tmp, 'cleanup-cancel.pid');
+    const cleanupCancelChild = path.join(tmp, 'cleanup-cancel-child.cjs');
+    try { fs.unlinkSync(secondSeatMarker); } catch { /* ignore */ }
+    fs.writeFileSync(
+      cleanupCancelChild,
+      [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(cleanupCancelPidFile)}, String(process.pid));`,
+        'setTimeout(() => process.exit(0), 5000);',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        `const bg = spawn(process.execPath, [${JSON.stringify(cleanupCancelChild)}], { stdio: 'ignore' });`,
+        'bg.unref();',
+        `const until = Date.now() + 2500; while (!fs.existsSync(${JSON.stringify(cleanupCancelPidFile)}) && Date.now() < until) {}`,
+        'process.exit(1);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    const sigintCountBefore = process.listenerCount('SIGINT');
+    const sigtermCountBefore = process.listenerCount('SIGTERM');
+    const prevExitCode = process.exitCode;
+    let cleanupCancelRes;
+    try {
+      const p = probeSeats(
+        { ...settings, reviewers: [settings.reviewers[0], settings.reviewers[1]] },
+        {
+          seatFilter: '*',
+          env: customEnv,
+          homedir: tmp,
+          timeoutMs: 4000,
+          graceMs: 300,
+          cleanupMs: 1500,
+        },
+      );
+      for (let i = 0; i < 150 && !fs.existsSync(cleanupCancelPidFile); i += 1) {
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      assert.equal(fs.existsSync(cleanupCancelPidFile), true, '收尾期間取消測試的背景程序應已啟動並寫出就緒 PID');
+      await new Promise((r) => setTimeout(r, 40));
+      process.emit('SIGINT', 'SIGINT');
+      process.emit('SIGTERM', 'SIGTERM');
+      process.emit('SIGINT', 'SIGINT');
+      cleanupCancelRes = await p;
+      assert.equal(process.exitCode, 130, '首個取消訊號 SIGINT 應將 process.exitCode 設為 130，不被後續 SIGTERM 覆寫');
+    } finally {
+      process.exitCode = prevExitCode;
+    }
+    assert.equal(cleanupCancelRes.code, 130);
+    assert.equal(cleanupCancelRes.cancelled, true);
+    assert.equal(cleanupCancelRes.cancelSignal, 'SIGINT');
+    assert.equal(cleanupCancelRes.probes.length, 1);
+    assert.equal(cleanupCancelRes.probes[0].reason, '執行已取消');
+    assert.equal(fs.existsSync(secondSeatMarker), false, '收尾期間取消後不得啟動第二座位');
+    const bgPid = Number(fs.readFileSync(cleanupCancelPidFile, 'utf8'));
+    let bgAlive = false;
+    try { process.kill(bgPid, 0); bgAlive = true; } catch { /* expected ESRCH */ }
+    assert.equal(bgAlive, false, '收尾期間取消完成後背景子程序必須已終止');
+    assert.equal(process.listenerCount('SIGINT'), sigintCountBefore, '不得殘留 SIGINT 監聽器');
+    assert.equal(process.listenerCount('SIGTERM'), sigtermCountBefore, '不得殘留 SIGTERM 監聽器');
+
+    // (n) N1（續）：真 PTY 正常對照與 TIOCSWINSZ 視窗縮放（SIGWINCH）驗證——縮放不得誤判取消、不殺 CLI
+    const pythonBin = defaultWhich('python3');
+    assert.ok(pythonBin, '測試環境應具備 python3 以執行真 PTY TIOCSWINSZ 驗證');
+    const ptyReadyFile = path.join(tmp, 'pty-cli.ready');
+    const ptySettingsFile = path.join(tmp, 'pty-settings.json');
+    fs.writeFileSync(
+      frontCli,
+      [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        'const args = process.argv.slice(2);',
+        "const outFile = args[args.indexOf('-o') + 1];",
+        "const prompt = fs.readFileSync(0, 'utf8').split('\\n').slice(1).join('\\n');",
+        `fs.writeFileSync(${JSON.stringify(ptyReadyFile)}, String(process.pid));`,
+        'setTimeout(() => {',
+        '  fs.writeFileSync(outFile, prompt);',
+        '  process.exit(0);',
+        '}, 220);',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(ptySettingsFile, JSON.stringify({
+      ...singleCodexSettings,
+      owner: 'Boss',
+      mainBranch: 'main',
+      backlog: { file: 'BACKLOG.md', section: '# 待辦' },
+    }));
+    const ptyHarness = path.join(tmp, 'pty-harness.py');
+    fs.writeFileSync(
+      ptyHarness,
+      [
+        'import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time',
+        'master, slave = pty.openpty()',
+        'resize = os.environ.get("DO_RESIZE") == "1"',
+        'ready_file = os.environ["PTY_READY_FILE"]',
+        'cmd = [os.environ["NODE_BIN"], os.environ["RUNNER_JS"]]',
+        'proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True)',
+        'os.close(slave)',
+        'chunks = []',
+        'resized = False',
+        'while True:',
+        '    if resize and not resized and os.path.exists(ready_file):',
+        '        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 132, 0, 0))',
+        '        resized = True',
+        '    r, _, _ = select.select([master], [], [], 0.02)',
+        '    if r:',
+        '        try:',
+        '            data = os.read(master, 4096)',
+        '            if data:',
+        '                chunks.append(data)',
+        '        except OSError:',
+        '            pass',
+        '    if proc.poll() is not None:',
+        '        break',
+        'while True:',
+        '    r, _, _ = select.select([master], [], [], 0.02)',
+        '    if not r:',
+        '        break',
+        '    try:',
+        '        data = os.read(master, 4096)',
+        '        if not data:',
+        '            break',
+        '        chunks.append(data)',
+        '    except OSError:',
+        '        break',
+        'os.close(master)',
+        'sys.stdout.write(json.dumps({"code": proc.returncode, "resized": resized, "out": b"".join(chunks).decode("utf-8", "replace")}))',
+      ].join('\n'),
+    );
+    const ptyRunnerJs = path.join(tmp, 'pty-runner.cjs');
+    fs.writeFileSync(
+      ptyRunnerJs,
+      [
+        `const { probeSeats } = require(${JSON.stringify(preflightPath)});`,
+        `const settings = ${JSON.stringify(singleCodexSettings)};`,
+        '(async () => {',
+        `  const res = await probeSeats(settings, { seatFilter: 'Codex', env: ${JSON.stringify(customEnv)}, homedir: ${JSON.stringify(tmp)}, timeoutMs: 3000 });`,
+        '  process.exitCode = res.code;',
+        "  process.stdout.write(res.lines.join('\\n') + '\\n');",
+        '})();',
+      ].join('\n'),
+    );
+    for (const doResize of ['0', '1']) {
+      try { fs.unlinkSync(ptyReadyFile); } catch { /* ignore */ }
+      const ptyRes = realSpawnSync(pythonBin, [ptyHarness], {
+        env: {
+          ...customEnv,
+          DO_RESIZE: doResize,
+          PTY_READY_FILE: ptyReadyFile,
+          NODE_BIN: process.execPath,
+          RUNNER_JS: ptyRunnerJs,
+        },
+        encoding: 'utf8',
+      });
+      assert.equal(ptyRes.status, 0, `PTY 測試腳本（DO_RESIZE=${doResize}）應正常結束：${ptyRes.stderr}`);
+      const ptyParsed = JSON.parse(ptyRes.stdout);
+      if (doResize === '1') {
+        assert.equal(ptyParsed.resized, true, 'DO_RESIZE=1 時必須在合成 CLI 就緒後實際執行 TIOCSWINSZ 縮放');
+      }
+      assert.equal(ptyParsed.code, 0, `真 PTY（DO_RESIZE=${doResize}）退出碼必須為 0，不可誤判取消（實際 ${ptyParsed.code}）：${ptyParsed.out}`);
+      assert.match(ptyParsed.out, /🟢 點火通過/u, `真 PTY（DO_RESIZE=${doResize}）應正常點火通過`);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 開工與送審前體檢總表（規矩 D1、F6、K5、D4、F11、G1）：把開工前與送審前散在多支的唯讀檢查與 4 個 AI 座位體檢收成一鍵執行；只列不擋。
+// 開工與送審前體檢總表（規矩 D1、F6、K5、D4、F11、G1）：把開工前與送審前散在多支的唯讀檢查與 AI 座位體檢收成一鍵執行；只列不擋。
 //
 // 為什麼：開工前要跑 pending-rulings、backlog-touch、downstream-lag，送審前還要再跑 backlog-touch、stale-text、risk-tier，
 // 多家 AI 協作時還要確認本機各家 CLI 執行檔（與 Grok 盒外憑證檔）在不在。散成 5〜6 條指令時容易漏跑其中一條；
@@ -8,12 +8,11 @@
 // 誠實劃界（規矩 K3）：
 //   ①這支只是唯讀總表，不是合併閘；個別項目（待裁、待辦、下游落後、舊文字、風險分級）的守不到範圍見各支工具檔頭；
 //   ②AI 座位體檢預設只看設定裡登記的啟動指令執行檔在不在（以及走 --grok-exec 時盒外 ~/.grok/auth.json 是否為一般檔案），
-//     絕不讀取或印出憑證內容，也不發網路請求驗權杖有沒有過期；加上 --probe [<座位識別值>] 時才會在暫存區開極小審查樹實跑點火並驗 prepareVerdict 收件。
+//     絕不讀取或印出憑證內容，也不發網路請求驗權杖有沒有過期；加上 --probe [<座位識別值>] 時才會在暫存區開極小審查樹實跑點火並驗 prepareVerdict／prepareScan 收件。
 //
-// 退出碼：0＝所有執行的項目都順利算完（含「0 筆命中」、C1 黃燈提醒、座位缺執行檔或點火未過的提醒）／2＝參數不對，或任一子工具算不出來（如設定未填、平台問不到、基準版本找不到、--probe 指定了不存在的座位）。⚠️ 不是閘。
+// 退出碼：0＝所有執行的項目都順利算完（含「0 筆命中」、C1 黃燈提醒、座位缺執行檔或點火未過的提醒）／2＝參數不對，或任一子工具算不出來（如設定未填、平台問不到、基準版本找不到、--probe 指定了不存在的座位）／130、143＝--probe 點火期間收到 SIGINT、SIGTERM 取消。⚠️ 不是閘。
 'use strict';
-const { spawnSync } = require('node:child_process');
-const { Worker, MessageChannel, receiveMessageOnPort } = require('node:worker_threads');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -318,8 +317,15 @@ function checkSeats(settings = {}, {
  */
 function summarizeProbeFailure(runRes, rawOut, verdictErr) {
   if (runRes && runRes.error) {
-    if (runRes.error.code === 'ETIMEDOUT') return '執行逾時';
-    if (runRes.error.code === 'ECANCELLED') return '執行已取消';
+    if (runRes.error.code === 'ETIMEDOUT') {
+      return runRes.cleanupFailed ? '執行逾時（子程序群組未完成收尾）' : '執行逾時';
+    }
+    if (runRes.error.code === 'ECANCELLED') {
+      return runRes.cleanupFailed ? '執行已取消（子程序群組未完成收尾）' : '執行已取消';
+    }
+    if (runRes.error.code === 'ECLEANUP') {
+      return '子程序群組未完成收尾';
+    }
     const safeCode = typeof runRes.error.code === 'string' && /^[A-Z0-9_]{2,24}$/u.test(runRes.error.code)
       ? `（${runRes.error.code}）`
       : '';
@@ -370,324 +376,346 @@ function summarizeProbeFailure(runRes, rawOut, verdictErr) {
   return 'CLI 執行失敗（已遮蔽原始輸出，請於本機單獨執行該 CLI 檢查登入與連線狀態）';
 }
 
-let cachedSignalPipeFd;
-function getSignalPipeFd() {
-  if (cachedSignalPipeFd !== undefined) return cachedSignalPipeFd;
-  const beforeFds = new Map();
-  for (let fd = 3; fd < 64; fd += 1) {
-    try {
-      const st = fs.fstatSync(fd);
-      if (st.isFIFO()) beforeFds.set(fd, st.size);
-    } catch { /* ignore */ }
-  }
-  const initNoop = () => {};
-  process.on('SIGCONT', initNoop);
-  try { process.kill(process.pid, 'SIGCONT'); } catch { /* ignore */ }
-  let found = null;
-  for (let fd = 3; fd < 64; fd += 1) {
-    try {
-      const st = fs.fstatSync(fd);
-      if (st.isFIFO()) {
-        const oldSize = beforeFds.has(fd) ? beforeFds.get(fd) : 0;
-        if (st.size - oldSize >= 8) {
-          found = fd;
-          break;
-        }
-      }
-    } catch { /* ignore */ }
-  }
-  process.removeListener('SIGCONT', initNoop);
-  cachedSignalPipeFd = found;
-  return cachedSignalPipeFd;
+function makeProbeError(code) {
+  const err = new Error(code);
+  err.code = code;
+  return err;
 }
-
-const PROBE_GROUP_RUNNER_SCRIPT = `
-'use strict';
-const { spawn } = require('node:child_process');
-const cmd = process.argv[1] || '';
-const timeoutMs = Number(process.argv[2]) || 60000;
-let pid = 0;
-let stdout = '';
-let stderr = '';
-let closed = false;
-let timedOut = false;
-let cancelledSignal = null;
-let finishing = false;
-let exitStatus = null;
-let child = null;
-function anyAlive() {
-  if (!pid || pid <= 1) return false;
-  try { process.kill(-pid, 0); return true; } catch { /* ignore */ }
-  try { process.kill(pid, 0); return true; } catch { /* ignore */ }
-  return false;
-}
-function signalGroup(sig) {
-  if (!pid || pid <= 1) return;
-  try { process.kill(-pid, sig); } catch { /* ignore */ }
-  try { process.kill(pid, sig); } catch { /* ignore */ }
-}
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-async function finish(status) {
-  if (finishing) return;
-  finishing = true;
-  clearTimeout(timer);
-  if (anyAlive()) {
-    signalGroup('SIGTERM');
-    const forceAt = Date.now() + 360;
-    const deadline = Date.now() + 2500;
-    let forced = false;
-    while (anyAlive() && Date.now() < deadline) {
-      if (!forced && Date.now() >= forceAt) {
-        forced = true;
-        signalGroup('SIGKILL');
-      } else if (forced) {
-        signalGroup('SIGKILL');
-      }
-      await delay(20);
-    }
-    if (anyAlive()) {
-      signalGroup('SIGKILL');
-    }
-  }
-  const pipeDeadline = Date.now() + 1000;
-  while (!closed && Date.now() < pipeDeadline) await delay(20);
-  if (timedOut || cancelledSignal) await delay(40);
-  if (child) {
-    child.stdout.destroy();
-    child.stderr.destroy();
-  }
-  const payload = JSON.stringify({
-    status: timedOut || cancelledSignal ? null : status,
-    stdout,
-    stderr,
-    timedOut,
-    cancelledSignal,
-  });
-  await new Promise((resolve) => {
-    let done = false;
-    const finishWait = () => {
-      if (done) return;
-      done = true;
-      resolve();
-    };
-    process.stdin.once('end', finishWait);
-    process.stdin.once('close', finishWait);
-    process.stdin.once('error', finishWait);
-    process.stdin.resume();
-    process.stdout.write('RESULT:' + payload + '\\n');
-    setTimeout(finishWait, 500);
-  });
-  process.exit(0);
-}
-function onCancel(sig) {
-  cancelledSignal = typeof sig === 'string' ? sig : 'SIGTERM';
-  void finish(null);
-}
-process.on('SIGINT', () => onCancel('SIGINT'));
-process.on('SIGTERM', () => onCancel('SIGTERM'));
-process.on('SIGHUP', () => onCancel('SIGHUP'));
-const timer = setTimeout(() => {
-  timedOut = true;
-  void finish(null);
-}, Math.max(1, timeoutMs));
-try {
-  child = spawn('/bin/sh', ['-c', cmd], {
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  pid = child.pid;
-} catch (err) {
-  closed = true;
-  stderr += String(err && err.message ? err.message : err);
-  process.stdout.write('READY\\n');
-  void finish(null);
-}
-if (child) {
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (d) => { stdout += d; });
-  child.stderr.on('data', (d) => { stderr += d; });
-  child.once('error', (err) => {
-    stderr += String(err && err.message ? err.message : err);
-    void finish(null);
-  });
-  child.once('exit', (code) => {
-    exitStatus = code;
-    if (closed) void finish(exitStatus);
-  });
-  child.once('close', (code) => {
-    closed = true;
-    void finish(exitStatus !== null ? exitStatus : code);
-  });
-  process.stdout.write('READY\\n');
-}
-`;
-
-const PROBE_GROUP_WORKER_SCRIPT = `
-'use strict';
-const fs = require('node:fs');
-const { spawn } = require('node:child_process');
-const { workerData } = require('node:worker_threads');
-const { runnerScript, cmd, cwd, env, timeoutMs, sigPipeFd, initSigSize, port, i32 } = workerData;
-const runner = spawn(process.execPath, ['-e', runnerScript, cmd, String(timeoutMs)], {
-  cwd,
-  env,
-  stdio: ['pipe', 'pipe', 'pipe'],
-});
-let outBuf = '';
-let runnerReady = false;
-let runnerDone = false;
-let resultMsg = null;
-let pendingCancel = false;
-let forwardedCancel = false;
-function forwardCancelIfReady() {
-  if (!pendingCancel || forwardedCancel || runnerDone || !runnerReady) return;
-  forwardedCancel = true;
-  clearInterval(parentWatch);
-  try { runner.kill('SIGTERM'); } catch { /* ignore */ }
-}
-runner.stdout.setEncoding('utf8');
-runner.stdout.on('data', (chunk) => {
-  outBuf += chunk;
-  const lines = outBuf.split('\\n');
-  outBuf = lines.pop();
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line === 'READY') {
-      runnerReady = true;
-      forwardCancelIfReady();
-    } else if (line.startsWith('RESULT:') && !runnerDone) {
-      runnerDone = true;
-      clearInterval(parentWatch);
-      try {
-        resultMsg = JSON.parse(line.slice('RESULT:'.length));
-      } catch {
-        resultMsg = null;
-      }
-      try { runner.stdin.end(); } catch { /* ignore */ }
-    }
-  }
-});
-const parentWatch = setInterval(() => {
-  if (runnerDone || forwardedCancel) return;
-  if (typeof sigPipeFd === 'number' && Number.isFinite(initSigSize) && initSigSize >= 0) {
-    try {
-      if (fs.fstatSync(sigPipeFd).size > initSigSize) {
-        pendingCancel = true;
-        forwardCancelIfReady();
-      }
-    } catch { /* ignore */ }
-  }
-}, 15);
-runner.once('close', () => {
-  clearInterval(parentWatch);
-  if (!resultMsg && pendingCancel) {
-    resultMsg = { status: null, stdout: '', stderr: '', timedOut: false, cancelledSignal: 'SIGTERM' };
-  }
-  port.postMessage(resultMsg);
-  Atomics.store(i32, 0, 1);
-  Atomics.notify(i32, 0);
-  process.exit(0);
-});
-`;
 
 /**
- * 以獨立程序群組執行點火命令，期限到或收到取消訊號（含單一主程序 PID 或整組 SIGINT／SIGTERM）時，
- * 先送 SIGTERM 並留 360ms 讓內層受管子群組（如 runGrokChild 的 250ms 升級）完成清理、必要時再送 SIGKILL 終止整組並等待管線關閉後才回傳。
+ * 以非同步事件迴圈與獨立程序群組（detached: true）執行點火命令。
+ * - 從 exit、error、逾時或取消即啟動群組收尾（不等 close 才開始，避免後代持有管線造成無限等待）；
+ * - 取消或殘留程序收尾時先送 SIGTERM、保留非同步寬限期（預設 360ms 供內層如 runGrokChild 的 250ms 升級收尾），仍存活再送 SIGKILL；
+ * - 確認程序群組清空（ESRCH）且管線關閉才回傳；若在 cleanupMs 期限內無法確認清空，明確標記 cleanupFailed 與 ECLEANUP 錯誤。
  */
-function runProbeCommandSync(cmd, { cwd, env, timeoutMs, spawnSyncImpl = spawnSync } = {}) {
-  if (spawnSyncImpl !== spawnSync) {
-    return spawnSyncImpl('/bin/sh', ['-c', cmd], {
-      cwd,
-      env,
-      encoding: 'utf8',
-      timeout: timeoutMs,
-    });
-  }
-  const sigPipeFd = getSignalPipeFd();
-  let caughtSignal = null;
-  const onSignal = (sig) => {
-    caughtSignal = sig;
-    process.exitCode = sig === 'SIGINT' ? 130 : 143;
+async function runProbeCommand(cmd, {
+  cwd,
+  env,
+  timeoutMs = 60000,
+  graceMs = 360,
+  cleanupMs = 3000,
+  cancelState = null,
+  spawnImpl = spawn,
+  spawnSyncImpl = spawnSync,
+  kill = process.kill.bind(process),
+} = {}) {
+  const ownCancelState = !cancelState;
+  const activeCancelState = cancelState || {
+    signal: null,
+    exitCode: null,
+    listeners: new Set(),
   };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
-  let initSigSize = -1;
-  if (typeof sigPipeFd === 'number') {
-    try {
-      initSigSize = fs.fstatSync(sigPipeFd).size;
-    } catch {
-      initSigSize = -1;
+  const ownOnSignal = (sig) => {
+    const normalized = sig === 'SIGINT' ? 'SIGINT' : 'SIGTERM';
+    if (!activeCancelState.signal) {
+      activeCancelState.signal = normalized;
+      activeCancelState.exitCode = normalized === 'SIGINT' ? 130 : 143;
+      process.exitCode = activeCancelState.exitCode;
     }
+    for (const fn of [...activeCancelState.listeners]) {
+      try { fn(normalized); } catch { /* ignore */ }
+    }
+  };
+  if (ownCancelState) {
+    process.on('SIGINT', ownOnSignal);
+    process.on('SIGTERM', ownOnSignal);
   }
-  const sab = new SharedArrayBuffer(4);
-  const i32 = new Int32Array(sab);
-  const { port1, port2 } = new MessageChannel();
-  let parsed = null;
+
   try {
-    const worker = new Worker(PROBE_GROUP_WORKER_SCRIPT, {
-      eval: true,
-      workerData: {
-        runnerScript: PROBE_GROUP_RUNNER_SCRIPT,
-        cmd,
+    if (activeCancelState.signal) {
+      return {
+        status: null,
+        stdout: '',
+        stderr: '',
+        error: makeProbeError('ECANCELLED'),
+        cancelled: true,
+        cancelSignal: activeCancelState.signal,
+        groupEmpty: true,
+        cleanupFailed: false,
+      };
+    }
+
+    if (spawnSyncImpl !== spawnSync) {
+      const syncRes = spawnSyncImpl('/bin/sh', ['-c', cmd], {
         cwd,
         env,
-        timeoutMs: Math.max(1, Number(timeoutMs) || 60000),
-        sigPipeFd,
-        initSigSize,
-        port: port2,
-        i32,
-      },
-      transferList: [port2],
-    });
-    Atomics.wait(i32, 0, 0, Math.max(1, Number(timeoutMs) || 60000) + 5000);
-    const msg = receiveMessageOnPort(port1);
-    parsed = msg ? msg.message : null;
-    void worker.terminate();
-  } finally {
-    port1.close();
-    setImmediate(() => {
-      process.removeListener('SIGINT', onSignal);
-      process.removeListener('SIGTERM', onSignal);
-    }).unref();
-  }
-  if (!parsed) {
-    const err = new Error('ETIMEDOUT');
-    err.code = 'ETIMEDOUT';
-    return { status: null, stdout: '', stderr: '', error: err };
-  }
-  const cancelSig = caughtSignal || parsed.cancelledSignal || null;
-  if (cancelSig) {
-    if (process.exitCode === undefined) {
-      process.exitCode = cancelSig === 'SIGINT' ? 130 : 143;
+        encoding: 'utf8',
+        timeout: timeoutMs,
+      });
+      if (activeCancelState.signal) {
+        return {
+          status: null,
+          stdout: (syncRes && syncRes.stdout) || '',
+          stderr: (syncRes && syncRes.stderr) || '',
+          error: makeProbeError('ECANCELLED'),
+          cancelled: true,
+          cancelSignal: activeCancelState.signal,
+          groupEmpty: true,
+          cleanupFailed: false,
+        };
+      }
+      return {
+        status: syncRes ? syncRes.status : null,
+        stdout: (syncRes && syncRes.stdout) || '',
+        stderr: (syncRes && syncRes.stderr) || '',
+        error: (syncRes && syncRes.error) || null,
+        cancelled: false,
+        cancelSignal: null,
+        groupEmpty: true,
+        cleanupFailed: false,
+      };
     }
-    const err = new Error('ECANCELLED');
-    err.code = 'ECANCELLED';
-    return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err, cancelled: true };
+
+    const effTimeoutMs = Math.max(1, Number(timeoutMs) || 60000);
+    const effCleanupMs = Math.max(40, Number(cleanupMs) || 3000);
+    const effGraceMs = Math.max(0, Math.min(Number.isFinite(Number(graceMs)) ? Number(graceMs) : 550, effCleanupMs));
+
+    let child;
+    try {
+      child = spawnImpl('/bin/sh', ['-c', cmd], {
+        cwd,
+        env,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      const spawnError = err instanceof Error ? err : new Error(String(err));
+      return {
+        status: null,
+        stdout: '',
+        stderr: '',
+        error: activeCancelState.signal ? makeProbeError('ECANCELLED') : spawnError,
+        cancelled: Boolean(activeCancelState.signal),
+        cancelSignal: activeCancelState.signal || null,
+        groupEmpty: true,
+        cleanupFailed: false,
+      };
+    }
+
+    const pid = child.pid;
+    const trustedPid = Number.isSafeInteger(pid) && pid > 1;
+    let stdout = '';
+    let stderr = '';
+    let childExited = false;
+    let exitStatus = null;
+    let closed = false;
+    let timedOut = false;
+    let cancelledSignal = activeCancelState.signal || null;
+    let spawnErr = null;
+    let finishing = false;
+    let termSent = false;
+    let killSent = false;
+    let cleanupFailed = !trustedPid;
+    let settled = false;
+    let settle;
+    const done = new Promise((resolve) => { settle = resolve; });
+
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d) => { stdout += d; });
+    child.stderr?.on('data', (d) => { stderr += d; });
+
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+    function groupState() {
+      if (!trustedPid) return 'unknown';
+      try {
+        kill(-pid, 0);
+        return 'alive';
+      } catch (err) {
+        return err && err.code === 'ESRCH' ? 'empty' : 'unknown';
+      }
+    }
+    function signalGroup(sig) {
+      if (!trustedPid) return false;
+      try {
+        kill(-pid, sig);
+        return true;
+      } catch (err) {
+        return Boolean(err && err.code === 'ESRCH');
+      }
+    }
+
+    async function finish() {
+      if (finishing) return;
+      finishing = true;
+      clearTimeout(timer);
+      const cleanupDeadline = Date.now() + effCleanupMs;
+      let state = groupState();
+      if (state === 'alive') {
+        termSent = true;
+        if (!signalGroup('SIGTERM')) cleanupFailed = true;
+        const forceAt = Date.now() + effGraceMs;
+        while (state === 'alive' && Date.now() < cleanupDeadline) {
+          if (Date.now() >= forceAt) {
+            killSent = true;
+            if (!signalGroup('SIGKILL')) cleanupFailed = true;
+          }
+          await delay(20);
+          state = groupState();
+        }
+        if (state === 'alive') {
+          killSent = true;
+          if (!signalGroup('SIGKILL')) cleanupFailed = true;
+          await delay(20);
+          state = groupState();
+        }
+      }
+      while ((!closed || (!childExited && !spawnErr)) && Date.now() < cleanupDeadline) {
+        const curState = groupState();
+        if (curState === 'alive' && !termSent) {
+          termSent = true;
+          if (!signalGroup('SIGTERM')) cleanupFailed = true;
+        } else if (curState === 'alive' && !killSent && Date.now() + 40 >= cleanupDeadline) {
+          killSent = true;
+          if (!signalGroup('SIGKILL')) cleanupFailed = true;
+        }
+        await delay(20);
+      }
+      await delay(0);
+      state = groupState();
+      const groupEmpty = state === 'empty' || (spawnErr !== null && !trustedPid);
+      if (!groupEmpty || !closed || (!childExited && !spawnErr)) {
+        cleanupFailed = true;
+      }
+      activeCancelState.listeners.delete(onCancel);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref?.();
+      if (settled) return;
+      settled = true;
+      const finalCancel = activeCancelState.signal || cancelledSignal || null;
+      if (finalCancel) {
+        settle({
+          status: null,
+          stdout,
+          stderr,
+          error: makeProbeError('ECANCELLED'),
+          cancelled: true,
+          cancelSignal: finalCancel,
+          groupEmpty,
+          cleanupFailed,
+        });
+        return;
+      }
+      if (timedOut) {
+        settle({
+          status: null,
+          stdout,
+          stderr,
+          error: makeProbeError('ETIMEDOUT'),
+          cancelled: false,
+          cancelSignal: null,
+          groupEmpty,
+          cleanupFailed,
+        });
+        return;
+      }
+      if (spawnErr) {
+        settle({
+          status: null,
+          stdout,
+          stderr,
+          error: spawnErr,
+          cancelled: false,
+          cancelSignal: null,
+          groupEmpty,
+          cleanupFailed,
+        });
+        return;
+      }
+      if (cleanupFailed) {
+        settle({
+          status: exitStatus,
+          stdout,
+          stderr,
+          error: makeProbeError('ECLEANUP'),
+          cancelled: false,
+          cancelSignal: null,
+          groupEmpty,
+          cleanupFailed: true,
+        });
+        return;
+      }
+      settle({
+        status: exitStatus,
+        stdout,
+        stderr,
+        error: null,
+        cancelled: false,
+        cancelSignal: null,
+        groupEmpty: true,
+        cleanupFailed: false,
+      });
+    }
+
+    function onCancel(sig) {
+      const normalized = sig === 'SIGINT' ? 'SIGINT' : 'SIGTERM';
+      if (!cancelledSignal) cancelledSignal = normalized;
+      if (finishing) {
+        if (groupState() === 'alive' && !termSent) {
+          termSent = true;
+          if (!signalGroup('SIGTERM')) cleanupFailed = true;
+        }
+        return;
+      }
+      void finish();
+    }
+
+    activeCancelState.listeners.add(onCancel);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void finish();
+    }, effTimeoutMs);
+
+    child.once('error', (err) => {
+      spawnErr = err instanceof Error ? err : new Error(String(err));
+      void finish();
+    });
+    child.once('exit', (code) => {
+      childExited = true;
+      exitStatus = code;
+      void finish();
+    });
+    child.once('close', (code) => {
+      closed = true;
+      if (exitStatus === null) exitStatus = code;
+      void finish();
+    });
+
+    if (activeCancelState.signal) {
+      onCancel(activeCancelState.signal);
+    } else if (!trustedPid) {
+      void finish();
+    }
+
+    return await done;
+  } finally {
+    if (ownCancelState) {
+      process.removeListener('SIGINT', ownOnSignal);
+      process.removeListener('SIGTERM', ownOnSignal);
+    }
   }
-  if (parsed.timedOut) {
-    const err = new Error('ETIMEDOUT');
-    err.code = 'ETIMEDOUT';
-    return { status: null, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: err };
-  }
-  return { status: parsed.status, stdout: parsed.stdout || '', stderr: parsed.stderr || '', error: null };
 }
 
 /**
  * 對已登記的 AI 座位執行十秒極小點火試跑（--probe [<座位識別值>]）。
  * 在系統暫存區建立極小隔離 Git 樹與標準通過提示，對座位登記的每一個角色模式實跑啟動樣板並交由 prepareVerdict／prepareScan 驗收件格式。
  */
-function probeSeats(settings = {}, {
+async function probeSeats(settings = {}, {
   seatFilter = '*',
   cwd = process.cwd(),
   timeoutMs = 60000,
+  graceMs = 550,
+  cleanupMs = 3000,
   which,
   env = process.env,
   homedir = os.homedir(),
   authFile = path.join(homedir || os.homedir(), '.grok', 'auth.json'),
   grokBin,
   fsImpl = fs,
+  spawnImpl = spawn,
   spawnSyncImpl = spawnSync,
+  kill = process.kill.bind(process),
 } = {}) {
   const staticCheck = checkSeats(settings, { which, env, homedir, authFile, grokBin, fsImpl });
   const seatMap = collectSeats(settings);
@@ -717,228 +745,306 @@ function probeSeats(settings = {}, {
   ];
   const probes = [];
 
-  for (const seat of targets) {
-    const st = staticByParticipant.get(seat.participant);
-    if (!st || !st.ok) {
-      const reason = '執行檔或盒外憑證檔未就緒，略過點火';
-      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 ${reason}`);
-      probes.push({ participant: seat.participant, ok: false, status: null, reason });
-      continue;
+  const cancelState = {
+    signal: null,
+    exitCode: null,
+    listeners: new Set(),
+  };
+  const onSignal = (sig) => {
+    const normalized = sig === 'SIGINT' ? 'SIGINT' : 'SIGTERM';
+    if (!cancelState.signal) {
+      cancelState.signal = normalized;
+      cancelState.exitCode = normalized === 'SIGINT' ? 130 : 143;
+      process.exitCode = cancelState.exitCode;
     }
+    for (const fn of [...cancelState.listeners]) {
+      try { fn(normalized); } catch { /* ignore */ }
+    }
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
 
-    const specsToRun = Array.isArray(seat.probeSpecs) && seat.probeSpecs.length > 0
-      ? seat.probeSpecs
-      : [{
-          mode: seat.probeMode || 'review',
-          command: seat.probeCommand,
-          source: seat.source,
-          model: seat.model,
-          effort: seat.effort,
-        }];
-    const probeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `ack-probe-${seat.participant.toLowerCase()}-`)));
-    const reviewTree = path.join(probeRoot, 'tree');
-    const mutationCopy = path.join(probeRoot, 'mutation');
-    const promptFile = path.join(probeRoot, 'prompt.md');
-    const outFile = path.join(probeRoot, 'output.log');
-    const t0 = Date.now();
-    let shouldBreak = false;
-    try {
-      const resolvedDirs = st.binPath
-        ? st.binPath.split('、').map((p) => path.dirname(p)).filter(Boolean)
-        : [];
-      const searchDirs = [...new Set([...resolvedDirs, ...buildSearchDirs({ env, homedir })])];
-      const probeEnv = gitEnv({
-        ...env,
-        PATH: searchDirs.join(path.delimiter),
-      });
-      const clearEnvList = Array.isArray(settings?.platform?.clearEnv)
-        ? settings.platform.clearEnv
-        : [];
-      for (const k of clearEnvList) delete probeEnv[k];
-      delete probeEnv.CLAUDECODE;
-
-      fs.mkdirSync(reviewTree, { recursive: true });
-      const runGitStep = (args, stepCwd = reviewTree) => spawnSync('git', args, {
-        cwd: stepCwd,
-        env: probeEnv,
-        encoding: 'utf8',
-      });
-      const stepOk = (r) => Boolean(r && !r.error && !r.signal && r.status === 0);
-      const initRes = runGitStep(['init', '-q', '-b', 'main']);
-      const hasLocalGitDir = stepOk(initRes) && fs.existsSync(path.join(reviewTree, '.git'));
-      const nameRes = hasLocalGitDir ? runGitStep(['config', '--local', 'user.name', 'probe']) : null;
-      const emailRes = stepOk(nameRes) ? runGitStep(['config', '--local', 'user.email', 'probe@localhost']) : null;
-      const gitStepsOk = stepOk(emailRes);
-      let headSha = '';
-      let treeReady = false;
-      if (gitStepsOk) {
-        fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
-        const addRes = runGitStep(['add', 'README.md']);
-        const commitRes = stepOk(addRes)
-          ? runGitStep(['commit', '--no-gpg-sign', '-q', '-m', 'probe'])
-          : null;
-        const revRes = stepOk(commitRes)
-          ? runGitStep(['rev-parse', '--verify', 'HEAD'])
-          : null;
-        const candidateSha = stepOk(revRes)
-          ? String(revRes.stdout || '').trim()
-          : '';
-        if (/^[0-9a-f]{40}$/u.test(candidateSha) && fs.existsSync(path.join(reviewTree, '.git'))) {
-          const cloneRes = runGitStep(['clone', '--quiet', reviewTree, mutationCopy], probeRoot);
-          const mutRev = stepOk(cloneRes)
-            ? runGitStep(['rev-parse', '--verify', 'HEAD'], mutationCopy)
-            : null;
-          const mutSha = stepOk(mutRev)
-            ? String(mutRev.stdout || '').trim()
-            : '';
-          if (mutSha === candidateSha && fs.existsSync(path.join(mutationCopy, '.git'))) {
-            headSha = candidateSha;
-            treeReady = true;
-          }
-        }
-      }
-      if (!treeReady) {
-        const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
-        const reason = '建立隔離點火 Git 樹失敗（請確認本機 git 可正常執行 init／commit／clone）';
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${reason}）`);
+  try {
+    for (const seat of targets) {
+      if (cancelState.signal) break;
+      const st = staticByParticipant.get(seat.participant);
+      if (!st || !st.ok) {
+        const reason = '執行檔或盒外憑證檔未就緒，略過點火';
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 ${reason}`);
         probes.push({ participant: seat.participant, ok: false, status: null, reason });
         continue;
       }
-      const headShort = headSha.slice(0, 7);
 
-      const metaPayload = JSON.stringify({ base: headSha, head: headSha, root: reviewTree });
-      fs.writeFileSync(path.join(probeRoot, 'launch.json'), metaPayload);
-      fs.writeFileSync(path.join(probeRoot, 'scan.json'), metaPayload);
-
-      const verifiedNames = [];
-      let seatFailed = null;
-      for (const spec of specsToRun) {
-        const rawTemplate = String(spec.command || '');
-        const isScanProbe = spec.mode === 'scan' || /--mode\s+scan\b/u.test(rawTemplate);
-        const specSource = filled(spec.source) ? spec.source : seat.source;
-        const specModel = filled(spec.model) ? spec.model : seat.model;
-        const specEffort = filled(spec.effort) ? spec.effort : seat.effort;
-        const modeLabel = specsToRun.length > 1 ? `［${isScanProbe ? '掃描' : '複審'}］` : '';
-
-        try { fs.rmSync(outFile, { force: true }); } catch { /* ignore */ }
-        try { fs.rmSync(path.join(probeRoot, 'execution.json'), { force: true }); } catch { /* ignore */ }
-        const promptBody = isScanProbe
-          ? [
-              '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 4 行即可）：',
-              `🔍 ${seat.participant}｜來源：${specSource}｜掃 \`${headShort}\``,
-              '',
-              '- 零發現',
-              '未貼',
-              '',
-            ].join('\n')
-          : [
-              '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
-              `🤖 ${seat.participant}｜來源：${specSource}｜審 \`${headShort}\`｜r1｜結論：通過`,
-              '',
-              '### 本輪實際用的設定',
-              '- 點火試跑',
-              '',
-              '### 清單逐項結果',
-              '- 零發現',
-              '未貼',
-              '',
-            ].join('\n');
-        fs.writeFileSync(promptFile, promptBody);
-
-        const { text: cmd } = substitute(rawTemplate, {
-          model: specModel,
-          effort: specEffort,
-          reviewTree,
-          scanTree: reviewTree,
-          mutationCopy,
-          promptFile,
-          outFile,
-          change: '1',
-          project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
-        }, `${seat.participant}${modeLabel} 點火指令`);
-
-        const runRes = runProbeCommandSync(cmd, {
-          cwd,
-          env: probeEnv,
-          timeoutMs,
-          spawnSyncImpl,
+      const specsToRun = Array.isArray(seat.probeSpecs) && seat.probeSpecs.length > 0
+        ? seat.probeSpecs
+        : [{
+            mode: seat.probeMode || 'review',
+            command: seat.probeCommand,
+            source: seat.source,
+            model: seat.model,
+            effort: seat.effort,
+          }];
+      const probeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `ack-probe-${seat.participant.toLowerCase()}-`)));
+      const reviewTree = path.join(probeRoot, 'tree');
+      const mutationCopy = path.join(probeRoot, 'mutation');
+      const promptFile = path.join(probeRoot, 'prompt.md');
+      const outFile = path.join(probeRoot, 'output.log');
+      const t0 = Date.now();
+      let shouldBreak = false;
+      let keepProbeRoot = false;
+      try {
+        const resolvedDirs = st.binPath
+          ? st.binPath.split('、').map((p) => path.dirname(p)).filter(Boolean)
+          : [];
+        const searchDirs = [...new Set([...resolvedDirs, ...buildSearchDirs({ env, homedir })])];
+        const probeEnv = gitEnv({
+          ...env,
+          PATH: searchDirs.join(path.delimiter),
         });
-        if (runRes && runRes.cancelled) shouldBreak = true;
-        const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
-        let verdictErr = null;
-        let verdictOk = false;
-        const verifierName = isScanProbe ? 'prepareScan' : 'prepareVerdict';
-        if (!runRes.error && runRes.status === 0 && rawOut.trim()) {
-          try {
-            if (isScanProbe) {
-              prepareScan(rawOut, {
-                scanner: seat.participant,
-                source: specSource,
-                head: headSha,
-                usable: usableRoles,
-                forceGrok: String(specSource).includes('Grok'),
-              });
-            } else {
-              prepareVerdict(rawOut, {
-                reviewer: seat.participant,
-                source: specSource,
-                round: 1,
-                head: headSha,
-                usable: usableRoles,
-              });
+        const clearEnvList = Array.isArray(settings?.platform?.clearEnv)
+          ? settings.platform.clearEnv
+          : [];
+        for (const k of clearEnvList) delete probeEnv[k];
+        delete probeEnv.CLAUDECODE;
+
+        fs.mkdirSync(reviewTree, { recursive: true });
+        const runGitStep = (args, stepCwd = reviewTree) => spawnSync('git', args, {
+          cwd: stepCwd,
+          env: probeEnv,
+          encoding: 'utf8',
+        });
+        const stepOk = (r) => Boolean(r && !r.error && !r.signal && r.status === 0);
+        const initRes = runGitStep(['init', '-q', '-b', 'main']);
+        const hasLocalGitDir = stepOk(initRes) && fs.existsSync(path.join(reviewTree, '.git'));
+        const nameRes = hasLocalGitDir ? runGitStep(['config', '--local', 'user.name', 'probe']) : null;
+        const emailRes = stepOk(nameRes) ? runGitStep(['config', '--local', 'user.email', 'probe@localhost']) : null;
+        const gitStepsOk = stepOk(emailRes);
+        let headSha = '';
+        let treeReady = false;
+        if (gitStepsOk) {
+          fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
+          const addRes = runGitStep(['add', 'README.md']);
+          const commitRes = stepOk(addRes)
+            ? runGitStep(['commit', '--no-gpg-sign', '-q', '-m', 'probe'])
+            : null;
+          const revRes = stepOk(commitRes)
+            ? runGitStep(['rev-parse', '--verify', 'HEAD'])
+            : null;
+          const candidateSha = stepOk(revRes)
+            ? String(revRes.stdout || '').trim()
+            : '';
+          if (/^[0-9a-f]{40}$/u.test(candidateSha) && fs.existsSync(path.join(reviewTree, '.git'))) {
+            const cloneRes = runGitStep(['clone', '--quiet', reviewTree, mutationCopy], probeRoot);
+            const mutRev = stepOk(cloneRes)
+              ? runGitStep(['rev-parse', '--verify', 'HEAD'], mutationCopy)
+              : null;
+            const mutSha = stepOk(mutRev)
+              ? String(mutRev.stdout || '').trim()
+              : '';
+            if (mutSha === candidateSha && fs.existsSync(path.join(mutationCopy, '.git'))) {
+              headSha = candidateSha;
+              treeReady = true;
             }
-            verdictOk = true;
-          } catch (err) {
-            verdictErr = err;
           }
         }
-
-        if (!verdictOk) {
-          const baseReason = summarizeProbeFailure(runRes, rawOut, verdictErr);
-          seatFailed = {
-            status: runRes ? runRes.status : null,
-            reason: `${modeLabel}${baseReason}`,
-          };
+        await new Promise((r) => setImmediate(r));
+        if (cancelState.signal) {
+          const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+          const reason = '執行已取消';
+          lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜未完成｜${reason}）`);
+          probes.push({ participant: seat.participant, ok: false, status: null, reason });
           break;
         }
-        verifiedNames.push(verifierName);
-        if (shouldBreak) break;
-      }
+        if (!treeReady) {
+          const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+          const reason = '建立隔離點火 Git 樹失敗（請確認本機 git 可正常執行 init／commit／clone）';
+          lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${reason}）`);
+          probes.push({ participant: seat.participant, ok: false, status: null, reason });
+          continue;
+        }
+        const headShort = headSha.slice(0, 7);
 
-      const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
-      if (!seatFailed) {
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 ${verifiedNames.join('＋')} 收件核驗）`);
-        probes.push({ participant: seat.participant, ok: true, status: 0, reason: null });
-      } else {
-        const codeLabel = typeof seatFailed.status === 'number' ? `退 ${seatFailed.status}` : '未完成';
-        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${codeLabel}｜${seatFailed.reason}）`);
-        probes.push({ participant: seat.participant, ok: false, status: seatFailed.status, reason: seatFailed.reason });
+        const metaPayload = JSON.stringify({ base: headSha, head: headSha, root: reviewTree });
+        fs.writeFileSync(path.join(probeRoot, 'launch.json'), metaPayload);
+        fs.writeFileSync(path.join(probeRoot, 'scan.json'), metaPayload);
+
+        const verifiedNames = [];
+        let seatFailed = null;
+        for (const spec of specsToRun) {
+          const rawTemplate = String(spec.command || '');
+          const isScanProbe = spec.mode === 'scan' || /--mode\s+scan\b/u.test(rawTemplate);
+          const specSource = filled(spec.source) ? spec.source : seat.source;
+          const specModel = filled(spec.model) ? spec.model : seat.model;
+          const specEffort = filled(spec.effort) ? spec.effort : seat.effort;
+          const modeLabel = specsToRun.length > 1 ? `［${isScanProbe ? '掃描' : '複審'}］` : '';
+
+          try { fs.rmSync(outFile, { force: true }); } catch { /* ignore */ }
+          try { fs.rmSync(path.join(probeRoot, 'execution.json'), { force: true }); } catch { /* ignore */ }
+          const promptBody = isScanProbe
+            ? [
+                '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 4 行即可）：',
+                `🔍 ${seat.participant}｜來源：${specSource}｜掃 \`${headShort}\``,
+                '',
+                '- 零發現',
+                '未貼',
+                '',
+              ].join('\n')
+            : [
+                '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
+                `🤖 ${seat.participant}｜來源：${specSource}｜審 \`${headShort}\`｜r1｜結論：通過`,
+                '',
+                '### 本輪實際用的設定',
+                '- 點火試跑',
+                '',
+                '### 清單逐項結果',
+                '- 零發現',
+                '未貼',
+                '',
+              ].join('\n');
+          fs.writeFileSync(promptFile, promptBody);
+
+          const { text: cmd } = substitute(rawTemplate, {
+            model: specModel,
+            effort: specEffort,
+            reviewTree,
+            scanTree: reviewTree,
+            mutationCopy,
+            promptFile,
+            outFile,
+            change: '1',
+            project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
+          }, `${seat.participant}${modeLabel} 點火指令`);
+
+          const runRes = await runProbeCommand(cmd, {
+            cwd,
+            env: probeEnv,
+            timeoutMs,
+            graceMs,
+            cleanupMs,
+            cancelState,
+            spawnImpl,
+            spawnSyncImpl,
+            kill,
+          });
+          if (runRes && runRes.cleanupFailed) {
+            keepProbeRoot = true;
+            shouldBreak = true;
+          }
+          if ((runRes && runRes.cancelled) || cancelState.signal) {
+            shouldBreak = true;
+          }
+          const effectiveRunRes = cancelState.signal && (!runRes || !runRes.cancelled)
+            ? {
+                ...(runRes || {}),
+                status: null,
+                error: makeProbeError('ECANCELLED'),
+                cancelled: true,
+                cancelSignal: cancelState.signal,
+              }
+            : runRes;
+          const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
+          let verdictErr = null;
+          let verdictOk = false;
+          const verifierName = isScanProbe ? 'prepareScan' : 'prepareVerdict';
+          if (!effectiveRunRes.error && effectiveRunRes.status === 0 && rawOut.trim()) {
+            try {
+              if (isScanProbe) {
+                prepareScan(rawOut, {
+                  scanner: seat.participant,
+                  source: specSource,
+                  head: headSha,
+                  usable: usableRoles,
+                  forceGrok: String(specSource).includes('Grok'),
+                });
+              } else {
+                prepareVerdict(rawOut, {
+                  reviewer: seat.participant,
+                  source: specSource,
+                  round: 1,
+                  head: headSha,
+                  usable: usableRoles,
+                });
+              }
+              verdictOk = true;
+            } catch (err) {
+              verdictErr = err;
+            }
+          }
+
+          if (!verdictOk) {
+            const baseReason = summarizeProbeFailure(effectiveRunRes, rawOut, verdictErr);
+            seatFailed = {
+              status: effectiveRunRes ? effectiveRunRes.status : null,
+              reason: `${modeLabel}${baseReason}`,
+              cleanupFailed: Boolean(effectiveRunRes && effectiveRunRes.cleanupFailed),
+               retainedProbeRoot: keepProbeRoot ? probeRoot : null,
+            };
+            break;
+          }
+          verifiedNames.push(verifierName);
+          if (shouldBreak) break;
+        }
+
+        const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+        if (!seatFailed) {
+          lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 ${verifiedNames.join('＋')} 收件核驗）`);
+          probes.push({ participant: seat.participant, ok: true, status: 0, reason: null });
+        } else {
+          const codeLabel = typeof seatFailed.status === 'number' ? `退 ${seatFailed.status}` : '未完成';
+          lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${codeLabel}｜${seatFailed.reason}）`);
+          probes.push({
+            participant: seat.participant,
+            ok: false,
+            status: seatFailed.status,
+            reason: seatFailed.reason,
+            ...(seatFailed.cleanupFailed ? { cleanupFailed: true, probeRoot } : {}),
+          });
+        }
+      } catch (e) {
+        const reason = summarizeProbeFailure(null, '', e);
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${reason}）`);
+        probes.push({ participant: seat.participant, ok: false, status: null, reason });
+      } finally {
+        if (!keepProbeRoot) {
+          try { fs.rmSync(probeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+        }
       }
-    } catch (e) {
-      const reason = summarizeProbeFailure(null, '', e);
-      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${reason}）`);
-      probes.push({ participant: seat.participant, ok: false, status: null, reason });
-    } finally {
-      try { fs.rmSync(probeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+      if (shouldBreak) break;
     }
-    if (shouldBreak) break;
+  } finally {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  }
+
+  if (cancelState.signal) {
+    const cancelCode = cancelState.exitCode || (cancelState.signal === 'SIGINT' ? 130 : 143);
+    process.exitCode = cancelCode;
+    return {
+      code: cancelCode,
+      cancelled: true,
+      cancelSignal: cancelState.signal,
+      lines,
+      probes,
+    };
   }
 
   return { code: 0, lines, probes };
 }
 
 /**
- * 執行開工／送審前體檢總表。
+ * 執行開工／送審前體檢總表（非同步回傳 Promise）。
  * 不帶變更編號＝開工前模式（待裁、待辦、下游落後、AI 座位）；帶變更編號＝送審前模式（加跑舊文字掃描與合併前風險分級）。
  */
-function run(argv = [], {
+async function run(argv = [], {
   settings = readSettings(),
   platform = { ask },
   cwd = process.cwd(),
   which,
   authFile,
   fsImpl,
+  spawnImpl,
   spawnSyncImpl,
+  kill,
   runners = {},
 } = {}) {
   const parsed = parseArgs(argv);
@@ -960,10 +1066,10 @@ function run(argv = [], {
     {
       id: 'pending-rulings',
       title: '待裁清單（D1）',
-      exec: () => {
-        const pendingRes = (runners.pendingRulings || runPending)({ settings, platform });
+      exec: async () => {
+        const pendingRes = await (runners.pendingRulings || runPending)({ settings, platform });
         if (!openChangesConfigured) return pendingRes;
-        const openRes = (runners.openChanges || checkOpenChanges)({ settings, platform });
+        const openRes = await (runners.openChanges || checkOpenChanges)({ settings, platform });
         if (!pendingRes || typeof pendingRes.code !== 'number' || !Array.isArray(pendingRes.lines)) return pendingRes;
         if (!openRes || typeof openRes.code !== 'number' || !Array.isArray(openRes.lines)) return openRes;
         return {
@@ -975,7 +1081,7 @@ function run(argv = [], {
     {
       id: 'backlog-touch',
       title: '開工印待辦（F6）',
-      exec: () => (runners.backlogTouch || runBacklog)({ settings, cwd, argv: baseArgv }),
+      exec: async () => (runners.backlogTouch || runBacklog)({ settings, cwd, argv: baseArgv }),
     },
   ];
 
@@ -983,7 +1089,7 @@ function run(argv = [], {
     tasks.push({
       id: 'downstream-lag',
       title: '下游落後（開工手動跑）',
-      exec: () => (runners.downstreamLag || runDownstream)({ settings, platform, root: cwd }),
+      exec: async () => (runners.downstreamLag || runDownstream)({ settings, platform, root: cwd }),
     });
   }
 
@@ -992,12 +1098,12 @@ function run(argv = [], {
       {
         id: 'stale-text',
         title: '舊文字掃描（K5）',
-        exec: () => (runners.staleText || runStale)(baseArgv, { settings, cwd }),
+        exec: async () => (runners.staleText || runStale)(baseArgv, { settings, cwd }),
       },
       {
         id: 'risk-tier',
         title: `合併前風險分級（D4｜變更 ${parsed.change}）`,
-        exec: () => (runners.riskTier || runRisk)(parsed.change, { settings, platform, git: gitIn(cwd) }),
+        exec: async () => (runners.riskTier || runRisk)(parsed.change, { settings, platform, git: gitIn(cwd) }),
       },
     );
   }
@@ -1006,17 +1112,29 @@ function run(argv = [], {
     tasks.push({
       id: 'seats',
       title: '參與 AI 座位體檢（F11、G1）',
-      exec: () => {
-        const baseRes = (runners.seats || checkSeats)(settings, { which, authFile, fsImpl });
+      exec: async () => {
+        const baseRes = await (runners.seats || checkSeats)(settings, { which, authFile, fsImpl });
         if (!parsed.probe) return baseRes;
-        const probeRes = (runners.probeSeats || probeSeats)(settings, {
+        const probeRes = await (runners.probeSeats || probeSeats)(settings, {
           seatFilter: parsed.probe,
           cwd,
           which,
           authFile,
           fsImpl,
+          spawnImpl,
           spawnSyncImpl,
+          kill,
         });
+        if (probeRes && (probeRes.cancelled || probeRes.code === 130 || probeRes.code === 143)) {
+          return {
+            code: probeRes.code,
+            cancelled: true,
+            cancelSignal: probeRes.cancelSignal || null,
+            lines: [...baseRes.lines, ...probeRes.lines],
+            seats: baseRes.seats,
+            probes: probeRes.probes,
+          };
+        }
         return {
           code: baseRes.code !== 0 || probeRes.code !== 0 ? 2 : 0,
           lines: [...baseRes.lines, ...probeRes.lines],
@@ -1037,25 +1155,29 @@ function run(argv = [], {
     lines.push('', `=== [${i + 1}/${tasks.length}] ${t.title} ===`);
     let res;
     try {
-      res = t.exec();
+      res = await t.exec();
     } catch (e) {
       res = { code: 2, lines: [`${t.title}：未預期錯誤（${(e && e.message) || '不明'}）——算不出來。`] };
     }
     if (!res || typeof res.code !== 'number' || !Array.isArray(res.lines)) {
       res = { code: 2, lines: [`${t.title}：回傳格式不對——算不出來。`] };
     }
-    if (res.code !== 0) overallCode = 2;
     lines.push(...res.lines);
     sections.push({ id: t.id, code: res.code, lines: res.lines });
+    if (res.cancelled || res.code === 130 || res.code === 143) {
+      overallCode = res.code;
+      break;
+    }
+    if (res.code !== 0) overallCode = 2;
   }
 
   return { code: overallCode, lines, sections };
 }
 
-if (require.main === module) {
+async function main() {
   let result;
   try {
-    result = run(process.argv.slice(2));
+    result = await run(process.argv.slice(2));
   } catch (e) {
     result = { code: 2, lines: [`體檢總表：沒預期到的錯誤（${(e && e.code) || (e && e.message) || '不明'}）——算不出來。`] };
   }
@@ -1064,4 +1186,8 @@ if (require.main === module) {
   process.stdout.write(`${result.lines.join('\n')}\n`);
 }
 
-module.exports = { run, parseArgs, checkOpenChanges, checkSeats, probeSeats, summarizeProbeFailure, extractCommandSpec, defaultWhich, USAGE };
+if (require.main === module) {
+  void main();
+}
+
+module.exports = { run, parseArgs, checkOpenChanges, checkSeats, probeSeats, runProbeCommand, summarizeProbeFailure, extractCommandSpec, defaultWhich, USAGE };
