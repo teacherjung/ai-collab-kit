@@ -2043,6 +2043,11 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
         oidc_client_id: GROK_PINNED_CLIENT_ID,
         key: 'OLD-KEY-SECRET-1111',
         refresh_token: 'OLD-REFRESH-SECRET-2222',
+        email: 'owner@example.com',
+        first_name: 'William',
+        last_name: 'Jung',
+        coding_data_retention_opt_out: true,
+        principal_type: 'user',
       },
     };
     fs.writeFileSync(authFile, JSON.stringify(expiredAuth, null, 2), { mode: 0o600 });
@@ -2061,6 +2066,10 @@ test('Grok 隔離執行（--grok-exec）：參數檢查、OIDC 續期與白名�
     assert.equal(refreshed.realBearer, 'NEW-KEY-SECRET-3333');
     assert.equal(refreshed.forBox[entryKey].key, refreshed.dummyBearer);
     assert.equal(refreshed.forBox[entryKey].refresh_token, undefined);
+    assert.equal(refreshed.forBox[entryKey].first_name, undefined);
+    assert.ok(refreshed.needles.includes('NEW-KEY-SECRET-3333') && refreshed.needles.includes('NEW-REFRESH-SECRET-4444') && refreshed.needles.includes('owner@example.com'));
+    assert.equal(refreshed.needles.includes('William'), false, '公開顯示名 first_name 不誤納入 DLP 針');
+    assert.equal(refreshed.needles.includes('Jung'), false, '公開顯示名 last_name 不誤納入 DLP 針');
 
     // 連結檔 auth.json 一律拒收
     const linkAuth = path.join(tmp, 'link-auth.json');

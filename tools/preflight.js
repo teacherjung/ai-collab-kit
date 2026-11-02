@@ -7,14 +7,16 @@
 //
 // 誠實劃界（規矩 K3）：
 //   ①這支只是唯讀總表，不是合併閘；個別項目（待裁、待辦、下游落後、舊文字、風險分級）的守不到範圍見各支工具檔頭；
-//   ②AI 座位體檢只看設定裡登記的啟動指令執行檔在不在（以及走 --grok-exec 時盒外 ~/.grok/auth.json 是否為一般檔案），
-//     絕不讀取或印出憑證內容，也不發網路請求驗權杖有沒有過期（Grok 權杖續期與 Seatbelt 預檢在實際啟動 --grok-exec 時才跑）。
+//   ②AI 座位體檢預設只看設定裡登記的啟動指令執行檔在不在（以及走 --grok-exec 時盒外 ~/.grok/auth.json 是否為一般檔案），
+//     絕不讀取或印出憑證內容，也不發網路請求驗權杖有沒有過期；加上 --probe [<座位識別值>] 時才會在暫存區開極小審查樹實跑點火並驗 prepareVerdict 收件。
 //
-// 退出碼：0＝所有執行的項目都順利算完（含「0 筆命中」或座位缺執行檔的提醒）／2＝參數不對，或任一子工具算不出來（如設定未填、平台問不到、基準版本找不到）。⚠️ 不是閘。
+// 退出碼：0＝所有執行的項目都順利算完（含「0 筆命中」、C1 黃燈提醒、座位缺執行檔或點火未過的提醒）／2＝參數不對，或任一子工具算不出來（如設定未填、平台問不到、基準版本找不到、--probe 指定了不存在的座位）。⚠️ 不是閘。
 'use strict';
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { gitEnv } = require('./git-env.js');
 const { ask } = require('./platform.js');
 const { read: readSettings } = require('./settings-data.js');
 const { run: runPending } = require('./pending-rulings.js');
@@ -22,9 +24,11 @@ const { run: runBacklog } = require('./backlog-touch.js');
 const { run: runDownstream } = require('./downstream-lag.js');
 const { run: runStale } = require('./stale-text.js');
 const { run: runRisk, gitIn } = require('./risk-tier.js');
+const { substitute, prepareVerdict } = require('./review-launch.js');
+const { rolesOf } = require('./gates/check-collab-fields.js');
 
 const UNSET = '未設定';
-const USAGE = '用法：node tools/preflight.js [<變更編號>] [--base <基準版本>] [--skip-downstream] [--skip-seats]';
+const USAGE = '用法：node tools/preflight.js [<變更編號>] [--base <基準版本>] [--skip-downstream] [--skip-seats] [--probe [<座位識別值>]]';
 
 function filled(v) {
   return typeof v === 'string' && v.trim() !== '' && v.trim() !== UNSET;
@@ -44,6 +48,18 @@ function parseArgs(argv = []) {
       out.skipDownstream = true;
     } else if (a === '--skip-seats') {
       out.skipSeats = true;
+    } else if (a === '--probe') {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--') && !/^\d+$/u.test(next)) {
+        out.probe = next;
+        i += 1;
+      } else {
+        out.probe = '*';
+      }
+    } else if (a.startsWith('--probe=')) {
+      const v = a.slice('--probe='.length).trim();
+      if (!v) return { error: `--probe= 後面要接座位識別值。${USAGE}` };
+      out.probe = v;
     } else if (a.startsWith('--')) {
       return { error: `不認得的參數：${a}。${USAGE}` };
     } else if (out.change === undefined) {
@@ -52,7 +68,50 @@ function parseArgs(argv = []) {
       return { error: `多給了一個參數：${a}。${USAGE}` };
     }
   }
+  if (out.probe && out.skipSeats) {
+    return { error: `--probe 與 --skip-seats 不能同時使用。${USAGE}` };
+  }
   return out;
+}
+
+/**
+ * 檢查目前開啟中的變更支數（規矩 C1：每個專案各工作線全體最多兩支進行中、草稿也算）。
+ * 只列不擋：達 2 支或以上時印黃燈提醒；問不到平台時退 2。
+ */
+function checkOpenChanges({ settings = readSettings(), platform = { ask } } = {}) {
+  let changes;
+  try {
+    changes = platform.ask('openChanges', {}, { settings });
+  } catch (e) {
+    return {
+      code: 2,
+      lines: [`進行中變更（C1）：問不到平台開啟中變更清單（${(e && e.message) || '不明'}）——算不出來。`],
+      openChanges: null,
+    };
+  }
+  if (!Array.isArray(changes)) {
+    return {
+      code: 2,
+      lines: ['進行中變更（C1）：平台回傳的開啟中變更清單格式不對——算不出來。'],
+      openChanges: null,
+    };
+  }
+  const fmt = (c) => `#${c.id}${c.isDraft ? '（草稿）' : ''}`;
+  if (changes.length >= 2) {
+    return {
+      code: 0,
+      lines: [
+        `進行中變更（C1）：⚠️ 目前已開啟 ${changes.length} 支（${changes.map(fmt).join('、')}），已達或超過 C1「每個專案各工作線全體最多兩支、草稿也算」上限（只列不擋）`,
+      ],
+      openChanges: changes,
+    };
+  }
+  const desc = changes.length === 0 ? '0 支' : `1 支（${fmt(changes[0])}）`;
+  return {
+    code: 0,
+    lines: [`進行中變更（C1）：目前開啟 ${desc}（未達 2 支上限；只列不擋）`],
+    openChanges: changes,
+  };
 }
 
 /** 在環境 PATH 與常見本機安裝路徑裡找可執行檔（純檔案系統檢查，不起子行程）；若已帶路徑則只驗該路徑本身。 */
@@ -114,6 +173,42 @@ function extractCommandSpec(command) {
   return { bin: null, usesGrokExec: false };
 }
 
+/** 收集設定裡登記的 reviewers 與 scanner 座位清單。 */
+function collectSeats(settings = {}) {
+  const seats = new Map();
+  for (const r of Array.isArray(settings.reviewers) ? settings.reviewers : []) {
+    if (!r || !filled(r.participant)) continue;
+    seats.set(r.participant, {
+      participant: r.participant,
+      roles: ['複審候選'],
+      source: filled(r.source) ? r.source : '未填來源',
+      model: filled(r.strongest) ? r.strongest : '未填模型',
+      effort: filled(r.maxEffort) ? r.maxEffort : '未填推理',
+      commands: [r.command],
+      probeCommand: r.command,
+    });
+  }
+  const sc = settings.scanner || {};
+  if (sc && sc.tool !== '無' && filled(sc.participant)) {
+    const existing = seats.get(sc.participant);
+    if (existing) {
+      existing.roles.push('掃描者');
+      existing.commands.push(sc.command);
+    } else {
+      seats.set(sc.participant, {
+        participant: sc.participant,
+        roles: ['掃描者'],
+        source: filled(sc.source) ? sc.source : '未填來源',
+        model: filled(sc.strongest) ? sc.strongest : '未填模型',
+        effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
+        commands: [sc.command],
+        probeCommand: sc.command,
+      });
+    }
+  }
+  return seats;
+}
+
 /**
  * 檢查設定裡登記的 AI 座位（複審者名單 + 掃描者）在本機的 CLI 執行檔與必要盒外憑證檔狀態。
  * 唯讀、只列不擋（退出碼永遠 0），絕不讀取或輸出憑證檔內容。
@@ -133,34 +228,7 @@ function checkSeats(settings = {}, {
   const sc = settings.scanner || {};
   const scanName = sc.tool === '無' ? '無' : (filled(sc.participant) ? sc.participant : '未設定');
 
-  const seats = new Map();
-  for (const r of Array.isArray(settings.reviewers) ? settings.reviewers : []) {
-    if (!r || !filled(r.participant)) continue;
-    seats.set(r.participant, {
-      participant: r.participant,
-      roles: ['複審候選'],
-      source: filled(r.source) ? r.source : '未填來源',
-      model: filled(r.strongest) ? r.strongest : '未填模型',
-      effort: filled(r.maxEffort) ? r.maxEffort : '未填推理',
-      commands: [r.command],
-    });
-  }
-  if (sc && sc.tool !== '無' && filled(sc.participant)) {
-    const existing = seats.get(sc.participant);
-    if (existing) {
-      existing.roles.push('掃描者');
-      existing.commands.push(sc.command);
-    } else {
-      seats.set(sc.participant, {
-        participant: sc.participant,
-        roles: ['掃描者'],
-        source: filled(sc.source) ? sc.source : '未填來源',
-        model: filled(sc.strongest) ? sc.strongest : '未填模型',
-        effort: filled(sc.maxEffort) ? sc.maxEffort : '未填推理',
-        commands: [sc.command],
-      });
-    }
-  }
+  const seats = collectSeats(settings);
 
   const lines = [
     `AI 座位體檢｜分工設定：實作＝${impl}、複審＝${rev}、掃描＝${scanName}｜已登記 CLI 座位 ${seats.size} 個（只列不擋）`,
@@ -218,6 +286,199 @@ function checkSeats(settings = {}, {
   return { code: 0, lines, seats: results };
 }
 
+/** 將點火失敗輸出濃縮為單行安全診斷摘要（遮蔽長權杖字串，絕不讀憑證檔）。 */
+function summarizeProbeFailure(runRes, rawOut, verdictErr) {
+  const redact = (s) => String(s || '')
+    .replace(/\b(?:Bearer\s+)?[A-Za-z0-9._~+/=-]{28,}\b/gu, '[REDACTED]')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (runRes && runRes.error) {
+    if (runRes.error.code === 'ETIMEDOUT') return '執行逾時';
+    return `子行程錯誤：${redact(runRes.error.message || runRes.error.code)}`;
+  }
+  const trimmedOut = String(rawOut || '').trim();
+  if (trimmedOut.startsWith('{') || trimmedOut.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmedOut);
+      const item = Array.isArray(parsed)
+        ? [...parsed].reverse().find((el) => el && typeof el === 'object' && (el.is_error || typeof el.result === 'string'))
+        : parsed;
+      if (item && item.is_error && typeof item.result === 'string' && item.result.trim()) {
+        return redact(item.result).slice(0, 160);
+      }
+    } catch {
+      /* 非標準 JSON 物件／陣列，繼續看文字行 */
+    }
+  }
+  const combined = `${String((runRes && runRes.stderr) || '')}\n${String((runRes && runRes.stdout) || '')}\n${trimmedOut}`;
+  const allLines = combined.split(/\r?\n/u).map((l) => l.trim()).filter(Boolean);
+  const specificLine = allLines.find((l) => /OAuth|expired|ModelNotFoundError|RESOURCE_EXHAUSTED|credits|prepayment|quota|not trusted|認證|憑證|外流|dlp_/iu.test(l));
+  if (specificLine) {
+    const innerMessages = [...specificLine.matchAll(/\\?"message\\?":\s*\\?"([^"\\]{6,})/gu)].map((m) => m[1].trim()).filter((m) => !m.startsWith('{'));
+    const chosen = innerMessages.length ? innerMessages[innerMessages.length - 1] : specificLine;
+    return redact(chosen).slice(0, 160);
+  }
+  const genericErrLine = allLines.find((l) => /Error:|error:/iu.test(l) && !/[:{]\s*$/u.test(l));
+  if (genericErrLine) return redact(genericErrLine).slice(0, 160);
+  if (verdictErr && verdictErr.message) return redact(verdictErr.message).slice(0, 160);
+  return allLines[0] ? redact(allLines[0]).slice(0, 160) : '未產生有效結論輸出';
+}
+
+/**
+ * 對已登記的 AI 座位執行十秒極小點火試跑（--probe [<座位識別值>]）。
+ * 在系統暫存區建立極小隔離 Git 樹與 8 行標準通過提示，實跑啟動樣板並交由 prepareVerdict 驗收件格式。
+ */
+function probeSeats(settings = {}, {
+  seatFilter = '*',
+  cwd = process.cwd(),
+  timeoutMs = 60000,
+  which,
+  authFile = path.join(os.homedir(), '.grok', 'auth.json'),
+  grokBin,
+  fsImpl = fs,
+  spawnSyncImpl = spawnSync,
+} = {}) {
+  const staticCheck = checkSeats(settings, { which, authFile, grokBin, fsImpl });
+  const seatMap = collectSeats(settings);
+  const allEntries = [...seatMap.values()];
+  if (!allEntries.length) {
+    return { code: 0, lines: ['AI 座位點火試跑：尚未登記任何座位'], probes: [] };
+  }
+  const filterNorm = String(seatFilter || '*').trim().toLowerCase();
+  const targets = filterNorm === '*'
+    ? allEntries
+    : allEntries.filter((s) => s.participant.toLowerCase() === filterNorm);
+  if (!targets.length) {
+    return {
+      code: 2,
+      lines: [
+        `AI 座位點火試跑：找不到已登記的座位「${seatFilter}」（已登記：${allEntries.map((s) => s.participant).join('、')}）。`,
+      ],
+      probes: [],
+    };
+  }
+
+  const { usable } = rolesOf(settings);
+  const usableRoles = usable.length ? usable : allEntries.map((s) => s.participant);
+  const staticByParticipant = new Map(staticCheck.seats.map((s) => [s.participant, s]));
+  const lines = [
+    `AI 座位點火試跑（--probe｜目標：${filterNorm === '*' ? `全部 ${targets.length} 個座位` : targets[0].participant}｜只列不擋）：`,
+  ];
+  const probes = [];
+
+  for (const seat of targets) {
+    const st = staticByParticipant.get(seat.participant);
+    if (!st || !st.ok) {
+      const reason = '執行檔或盒外憑證檔未就緒，略過點火';
+      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 ${reason}`);
+      probes.push({ participant: seat.participant, ok: false, status: null, reason });
+      continue;
+    }
+
+    const rawTemplate = String(seat.probeCommand || '').replace(/\{scanTree\}/gu, '{reviewTree}');
+    const probeRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `ack-probe-${seat.participant.toLowerCase()}-`)));
+    const reviewTree = path.join(probeRoot, 'tree');
+    const mutationCopy = path.join(probeRoot, 'mutation');
+    const promptFile = path.join(probeRoot, 'prompt.md');
+    const outFile = path.join(probeRoot, 'output.log');
+    const t0 = Date.now();
+    try {
+      fs.mkdirSync(reviewTree, { recursive: true });
+      const gEnv = gitEnv();
+      spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: reviewTree, env: gEnv });
+      spawnSync('git', ['config', 'user.name', 'probe'], { cwd: reviewTree, env: gEnv });
+      spawnSync('git', ['config', 'user.email', 'probe@localhost'], { cwd: reviewTree, env: gEnv });
+      fs.writeFileSync(path.join(reviewTree, 'README.md'), 'probe\n');
+      spawnSync('git', ['add', 'README.md'], { cwd: reviewTree, env: gEnv });
+      spawnSync('git', ['commit', '-q', '-m', 'probe'], { cwd: reviewTree, env: gEnv });
+      const headSha = String(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: reviewTree, env: gEnv, encoding: 'utf8' }).stdout || '').trim() || '0123456789abcdef0123456789abcdef01234567';
+      const headShort = headSha.slice(0, 7);
+      spawnSync('git', ['clone', '--quiet', reviewTree, mutationCopy], { cwd: probeRoot, env: gEnv });
+
+      const promptBody = [
+        '這是座位接線十秒點火試跑（不要呼叫任何工具或讀取檔案，直接原樣輸出以下 8 行即可）：',
+        `🤖 ${seat.participant}｜來源：${seat.source}｜審 \`${headShort}\`｜r1｜結論：通過`,
+        '',
+        '### 本輪實際用的設定',
+        '- 點火試跑',
+        '',
+        '### 清單逐項結果',
+        '- 零發現',
+        '未貼',
+        '',
+      ].join('\n');
+      fs.writeFileSync(promptFile, promptBody);
+
+      const { text: cmd } = substitute(rawTemplate, {
+        model: seat.model,
+        effort: seat.effort,
+        reviewTree,
+        mutationCopy,
+        promptFile,
+        outFile,
+        change: '1',
+        project: (settings.platform && filled(settings.platform.project)) ? settings.platform.project : 'probe/repo',
+      }, `${seat.participant} 點火指令`);
+
+      const home = os.homedir();
+      const extraPaths = [
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        home ? path.join(home, '.local', 'bin') : '',
+        home ? path.join(home, '.grok', 'bin') : '',
+      ].filter(Boolean);
+      const probeEnv = {
+        ...process.env,
+        PATH: [...new Set([...extraPaths, ...String(process.env.PATH || '').split(path.delimiter).filter(Boolean)])].join(path.delimiter),
+      };
+      delete probeEnv.CLAUDECODE;
+
+      const runRes = spawnSyncImpl('/bin/sh', ['-c', cmd], {
+        cwd,
+        env: probeEnv,
+        encoding: 'utf8',
+        timeout: timeoutMs,
+      });
+      const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+      const rawOut = fs.existsSync(outFile) ? fs.readFileSync(outFile, 'utf8') : '';
+      let verdictErr = null;
+      let verdictOk = false;
+      if (!runRes.error && runRes.status === 0 && rawOut.trim()) {
+        try {
+          prepareVerdict(rawOut, {
+            reviewer: seat.participant,
+            source: seat.source,
+            round: 1,
+            head: headSha,
+            usable: usableRoles,
+          });
+          verdictOk = true;
+        } catch (err) {
+          verdictErr = err;
+        }
+      }
+
+      if (verdictOk) {
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🟢 點火通過（${elapsedSec}s｜輸出通過 prepareVerdict 收件核驗）`);
+        probes.push({ participant: seat.participant, ok: true, status: 0, reason: null });
+      } else {
+        const reason = summarizeProbeFailure(runRes, rawOut, verdictErr);
+        const codeLabel = runRes && typeof runRes.status === 'number' ? `退 ${runRes.status}` : '未完成';
+        lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${elapsedSec}s｜${codeLabel}｜${reason}）`);
+        probes.push({ participant: seat.participant, ok: false, status: runRes ? runRes.status : null, reason });
+      }
+    } catch (e) {
+      const reason = summarizeProbeFailure(null, '', e);
+      lines.push(`  ・${seat.participant}（${seat.source}｜${seat.model}／${seat.effort}）：🔴 點火失敗（${reason}）`);
+      probes.push({ participant: seat.participant, ok: false, status: null, reason });
+    } finally {
+      try { fs.rmSync(probeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
+  return { code: 0, lines, probes };
+}
+
 /**
  * 執行開工／送審前體檢總表。
  * 不帶變更編號＝開工前模式（待裁、待辦、下游落後、AI 座位）；帶變更編號＝送審前模式（加跑舊文字掃描與合併前風險分級）。
@@ -229,17 +490,39 @@ function run(argv = [], {
   which,
   authFile,
   fsImpl,
+  spawnSyncImpl,
   runners = {},
 } = {}) {
   const parsed = parseArgs(argv);
   if (parsed.error) return { code: 2, lines: [parsed.error] };
+
+  const openChangesConfigured = Boolean(
+    runners.openChanges
+    || (!runners.pendingRulings
+      && settings
+      && settings.platform
+      && settings.platform.operations
+      && Array.isArray(settings.platform.operations.openChanges)
+      && settings.platform.operations.openChanges.length > 0
+      && settings.platform.operations.openChanges.every(filled)),
+  );
 
   const baseArgv = parsed.base ? ['--base', parsed.base] : [];
   const tasks = [
     {
       id: 'pending-rulings',
       title: '待裁清單（D1）',
-      exec: () => (runners.pendingRulings || runPending)({ settings, platform }),
+      exec: () => {
+        const pendingRes = (runners.pendingRulings || runPending)({ settings, platform });
+        if (!openChangesConfigured) return pendingRes;
+        const openRes = (runners.openChanges || checkOpenChanges)({ settings, platform });
+        if (!pendingRes || typeof pendingRes.code !== 'number' || !Array.isArray(pendingRes.lines)) return pendingRes;
+        if (!openRes || typeof openRes.code !== 'number' || !Array.isArray(openRes.lines)) return openRes;
+        return {
+          code: pendingRes.code !== 0 || openRes.code !== 0 ? 2 : 0,
+          lines: [...openRes.lines, ...pendingRes.lines],
+        };
+      },
     },
     {
       id: 'backlog-touch',
@@ -275,7 +558,24 @@ function run(argv = [], {
     tasks.push({
       id: 'seats',
       title: '參與 AI 座位體檢（F11、G1）',
-      exec: () => (runners.seats || checkSeats)(settings, { which, authFile, fsImpl }),
+      exec: () => {
+        const baseRes = (runners.seats || checkSeats)(settings, { which, authFile, fsImpl });
+        if (!parsed.probe) return baseRes;
+        const probeRes = (runners.probeSeats || probeSeats)(settings, {
+          seatFilter: parsed.probe,
+          cwd,
+          which,
+          authFile,
+          fsImpl,
+          spawnSyncImpl,
+        });
+        return {
+          code: baseRes.code !== 0 || probeRes.code !== 0 ? 2 : 0,
+          lines: [...baseRes.lines, ...probeRes.lines],
+          seats: baseRes.seats,
+          probes: probeRes.probes,
+        };
+      },
     });
   }
 
@@ -316,4 +616,4 @@ if (require.main === module) {
   process.stdout.write(`${result.lines.join('\n')}\n`);
 }
 
-module.exports = { run, parseArgs, checkSeats, extractCommandSpec, defaultWhich, USAGE };
+module.exports = { run, parseArgs, checkOpenChanges, checkSeats, probeSeats, summarizeProbeFailure, extractCommandSpec, defaultWhich, USAGE };

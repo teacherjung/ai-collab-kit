@@ -40,7 +40,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
     ['Claude', 'claude-fable-5-1', 'max', 'Ultracode', 'Claude CLI'],
     ['Codex', 'gpt-6-astra', 'max', 'ultra（這一檔會自動派助手）', 'codex CLI'],
     ['Grok', 'grok-4.7', 'xhigh', '自動選模', 'Grok CLI'],
-    ['Gemini', 'gemini-3.1-pro', 'high', 'auto-model', 'Gemini CLI'],
+    ['Gemini', 'gemini-3.1-pro-preview', 'high', 'auto-model', 'Gemini CLI'],
     ['Sol', 'gpt-6.1-sol', 'xhigh', '不使用自動模式', 'codex CLI'],
   ]);
   assert.deepEqual(s.gates.map((g) => g.name), [
@@ -75,6 +75,7 @@ test('套件倉庫 settings.json 釘住的值', { skip: IN_KIT ? false : '不是
   );
   const geminiRev = s.reviewers.find((r) => r.participant === 'Gemini');
   assert.ok(geminiRev.command.startsWith('cd {reviewTree} && '), 'Gemini 複審啟動指令先切換至 {reviewTree}');
+  assert.ok(geminiRev.command.includes('--skip-trust'), 'Gemini 複審啟動指令含 --skip-trust 以放行系統暫存區審查樹');
   // 機器表：哪些已啟用（名字 → 狀態）；新增或停用一台都要連這裡一起改
   const states = Object.fromEntries(s.machines.map((m) => [m.name.split('（')[0], m.state]));
   assert.deepEqual(states, {
@@ -177,6 +178,9 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
         key: 'SYNTHETIC-REAL-BEARER-SECRET-9999',
         refresh_token: 'SYNTHETIC-REFRESH-TOKEN-SECRET-8888',
         email: 'secret-owner@example.com',
+        first_name: 'William',
+        last_name: 'Jung',
+        coding_data_retention_opt_out: true,
         principal_type: 'user',
       },
     };
@@ -188,9 +192,12 @@ test('Grok 隔離執行（--grok-exec）：預設拒絕 Seatbelt、受控認證�
     assert.equal(boxCred.key, prepared.dummyBearer, '盒內 auth.json 僅含假權杖');
     assert.equal(boxCred.refresh_token, undefined, '盒內 auth.json 不含 refresh_token');
     assert.equal(boxCred.email, undefined, '盒內 auth.json 不含 email');
+    assert.equal(boxCred.first_name, undefined, '盒內 auth.json 不含 first_name');
     assert.ok(prepared.needles.includes('SYNTHETIC-REAL-BEARER-SECRET-9999'), '真實 key 納入 DLP 針');
     assert.ok(prepared.needles.includes('SYNTHETIC-REFRESH-TOKEN-SECRET-8888'), 'refresh_token 納入 DLP 針');
     assert.ok(prepared.needles.includes('secret-owner@example.com'), 'email 納入 DLP 針');
+    assert.equal(prepared.needles.includes('William'), false, '公開顯示名 first_name 不誤納入 DLP 針（避免讀到倉庫擁有者名稱時誤殺 dlp_raw）');
+    assert.equal(prepared.needles.includes('Jung'), false, '公開顯示名 last_name 不誤納入 DLP 針');
 
     // 3. 受控認證通道（端點白名單、假權杖驗證與真權杖代換）
     assert.equal(grokRelayRejectReason({ method: 'POST', url: '/v1/responses', headers: { authorization: `Bearer ${prepared.dummyBearer}` } }, prepared.dummyBearer), null);

@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { gitEnv } = require('../tools/git-env.js');
-const { run, parseArgs, checkSeats, extractCommandSpec, defaultWhich } = require('../tools/preflight.js');
+const { run, parseArgs, checkOpenChanges, checkSeats, probeSeats, summarizeProbeFailure, extractCommandSpec, defaultWhich } = require('../tools/preflight.js');
 const { runInCopy, unfilled } = require('./helpers/kit-copy.js');
 
 test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', () => {
@@ -25,7 +25,10 @@ test('① parseArgs 與 extractCommandSpec：合法參數與壞參數分類', ()
     skipDownstream: true,
     skipSeats: true,
   });
-  for (const bad of [['--base'], ['--base', '--skip-seats'], ['--unknown'], ['1', '2']]) {
+  assert.deepEqual(parseArgs(['--probe']), { change: undefined, base: undefined, skipDownstream: false, skipSeats: false, probe: '*' });
+  assert.deepEqual(parseArgs(['--probe', 'Codex']), { change: undefined, base: undefined, skipDownstream: false, skipSeats: false, probe: 'Codex' });
+  assert.deepEqual(parseArgs(['134', '--probe=Grok']), { change: '134', base: undefined, skipDownstream: false, skipSeats: false, probe: 'Grok' });
+  for (const bad of [['--base'], ['--base', '--skip-seats'], ['--unknown'], ['1', '2'], ['--probe='], ['--probe', '--skip-seats']]) {
     assert.ok(parseArgs(bad).error, `應拒收壞參數：${bad.join(' ')}`);
     assert.equal(run(bad).code, 2);
   }
@@ -324,5 +327,140 @@ test('⑤ 真 CLI 長輸出經管線與普通檔案 fd 逐位元組一致；成�
     assert.equal(epipeExit.code, 2, `下游提早關閉管線（EPIPE）應退 2（實際 code=${epipeExit.code}, stderr=${epipeExit.errOut}）`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('⑥ C1 開啟支數提醒（checkOpenChanges）與 AI 座位十秒點火試跑（probeSeats / --probe）', () => {
+  // 1. checkOpenChanges：0 支、1 支（未達上限）、>=2 支（含草稿印 C1 黃燈提醒，只列不擋退 0）、平台失敗退 2，且呼叫簽章為 ask('openChanges', {}, { settings })
+  let askCall = null;
+  const fakeSettings = { platform: { project: 'fake/repo' } };
+  const zeroOpen = checkOpenChanges({
+    settings: fakeSettings,
+    platform: {
+      ask: (opName, args, opts) => {
+        askCall = { opName, args, opts };
+        return [];
+      },
+    },
+  });
+  assert.equal(zeroOpen.code, 0);
+  assert.equal(askCall.opName, 'openChanges');
+  assert.deepEqual(askCall.args, {});
+  assert.equal(askCall.opts.settings, fakeSettings);
+  assert.match(zeroOpen.lines[0], /目前開啟 0 支（未達 2 支上限；只列不擋）/u);
+
+  const oneOpen = checkOpenChanges({ platform: { ask: () => [{ id: '134', isDraft: true }] } });
+  assert.equal(oneOpen.code, 0);
+  assert.match(oneOpen.lines[0], /目前開啟 1 支（#134（草稿））（未達 2 支上限；只列不擋）/u);
+
+  const twoOpen = checkOpenChanges({
+    platform: { ask: () => [{ id: '134', isDraft: false }, { id: '135', isDraft: true }] },
+  });
+  assert.equal(twoOpen.code, 0);
+  assert.match(twoOpen.lines[0], /⚠️ 目前已開啟 2 支（#134、#135（草稿）），已達或超過 C1/u);
+
+  const errOpen = checkOpenChanges({ platform: { ask: () => { throw new Error('網路斷線'); } } });
+  assert.equal(errOpen.code, 2);
+  assert.match(errOpen.lines[0], /問不到平台開啟中變更清單（網路斷線）——算不出來/u);
+
+  // 2. probeSeats：成功輸出經 prepareVerdict 核驗通過、失敗輸出濃縮診斷並遮蔽長權杖、指定未知座位退 2
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ack-probe-unit-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir);
+    for (const name of ['codex', 'claude']) {
+      fs.writeFileSync(path.join(binDir, name), '#!/bin/sh\n', { mode: 0o755 });
+    }
+    const settings = {
+      participants: [
+        { role: '裁示者（人）', id: 'Boss', account: 'boss' },
+        { role: 'AI 甲', id: 'Codex', account: 'ai' },
+        { role: 'AI 乙', id: 'Claude', account: 'ai' },
+      ],
+      defaultDivision: { implementer: 'Claude', reviewer: 'Codex' },
+      platform: { project: 'fake/repo' },
+      reviewers: [
+        {
+          participant: 'Codex',
+          source: 'codex CLI',
+          strongest: 'gpt-6-astra',
+          maxEffort: 'max',
+          command: 'codex exec -m {model} -c model_reasoning_effort=\'"max"\' -C {reviewTree} -o {outFile} - < {promptFile}',
+        },
+        {
+          participant: 'Claude',
+          source: 'Claude CLI',
+          strongest: 'claude-fable-5-1',
+          maxEffort: 'max',
+          command: 'cd {reviewTree} && claude -p "$(cat {promptFile})" --model {model} --effort {effort} --verbose --output-format json > {outFile}',
+        },
+      ],
+      scanner: { tool: '無' },
+    };
+
+    const which = (b) => defaultWhich(b, { env: { PATH: binDir }, homedir: tmp });
+
+    // (a) 指定不存在的座位應退 2
+    const unknownSeat = probeSeats(settings, { seatFilter: 'NoSuchAI', which });
+    assert.equal(unknownSeat.code, 2);
+    assert.match(unknownSeat.lines[0], /找不到已登記的座位「NoSuchAI」/u);
+
+    // (b) Codex 點火通過（提取 prompt 內的標準標頭寫入 outFile）、Claude 點火失敗（JSON 陣列事件包裹 OAuth 過期且遮蔽長權杖）
+    const probeRes = probeSeats(settings, {
+      seatFilter: '*',
+      which,
+      spawnSyncImpl: (_bin, args) => {
+        const cmdStr = args[1];
+        const outMatch = /-o\s+([^\s]+)\s+-|(?:>\s*([^\s]+)$)/u.exec(cmdStr);
+        const promptMatch = /<\s*([^\s]+)$|\$\(cat\s+([^)]+)\)/u.exec(cmdStr);
+        const outFile = outMatch && (outMatch[1] || outMatch[2]);
+        const promptFile = promptMatch && (promptMatch[1] || promptMatch[2]);
+        if (cmdStr.includes('codex exec')) {
+          const promptLines = fs.readFileSync(promptFile, 'utf8').split('\n').slice(1);
+          fs.writeFileSync(outFile, promptLines.join('\n'));
+          return { status: 0, stdout: '', stderr: '' };
+        }
+        const leakedSecret = 'SUPER_LONG_SECRET_BEARER_TOKEN_1234567890ABCDEF';
+        fs.writeFileSync(outFile, JSON.stringify([
+          { type: 'system', subtype: 'init' },
+          {
+            type: 'result',
+            is_error: true,
+            result: `Failed to authenticate: OAuth session expired (${leakedSecret})`,
+          },
+        ]));
+        return { status: 1, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(probeRes.code, 0);
+    assert.equal(probeRes.probes.length, 2);
+    assert.equal(probeRes.probes[0].participant, 'Codex');
+    assert.equal(probeRes.probes[0].ok, true);
+    assert.equal(probeRes.probes[1].participant, 'Claude');
+    assert.equal(probeRes.probes[1].ok, false);
+    assert.match(probeRes.lines.join('\n'), /Codex.*🟢 點火通過/u);
+    assert.match(probeRes.lines.join('\n'), /Claude.*🔴 點火失敗.*OAuth session expired/u);
+    assert.equal(probeRes.lines.join('\n').includes('SUPER_LONG_SECRET_BEARER_TOKEN_1234567890ABCDEF'), false, '點火錯誤摘要必須遮蔽長權杖字串');
+    assert.match(summarizeProbeFailure({ status: 1, stdout: '', stderr: '' }, '{"is_error":true,"result":"Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"}', null), /\[REDACTED\]/u);
+    assert.match(
+      summarizeProbeFailure({ status: 1, stdout: '', stderr: '_ApiError [Error]: {\n  "message": "Your prepayment credits are depleted."\n}' }, '', null),
+      /Your prepayment credits are depleted\./u,
+    );
+
+    // (c) run(['--probe', 'Codex']) 串接 checkOpenChanges 與 probeSeats
+    const fullProbeRun = run(['--skip-downstream', '--probe', 'Codex'], {
+      runners: {
+        pendingRulings: () => ({ code: 0, lines: ['pending-ok'] }),
+        openChanges: () => ({ code: 0, lines: ['進行中變更（C1）：⚠️ 目前已開啟 2 支'] }),
+        backlogTouch: () => ({ code: 0, lines: ['backlog-ok'] }),
+        seats: () => ({ code: 0, lines: ['seats-static-ok'], seats: [{ participant: 'Codex', ok: true }] }),
+        probeSeats: (_s, { seatFilter }) => ({ code: 0, lines: [`probe-ran:${seatFilter}`], probes: [{ participant: 'Codex', ok: true }] }),
+      },
+    });
+    assert.equal(fullProbeRun.code, 0);
+    assert.match(fullProbeRun.lines.join('\n'), /進行中變更（C1）：⚠️ 目前已開啟 2 支/u);
+    assert.match(fullProbeRun.lines.join('\n'), /probe-ran:Codex/u);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

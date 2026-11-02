@@ -81,28 +81,28 @@
 - 2026-10-19（[套件 #114 複審後掃第 4 項](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278666609)；2026-10-21 補收件）`snapshotTreeState` 僅比較執行前後快照、無法觀察中途改後還原，且目錄的權限位元（mode）與延伸屬性（xattr）未納入雜湊；輸出 DLP 只比對 `stdout` 是否包含既知完整針值（已被提示文字包含的針會先排除、短欄位無下限、無 `auth.json` 以外祕密的輸出側比對；`stderr` 目前不納入回傳或輸出檔，未來若新增 `stderr` 診斷輸出須先做外流檢查）／`tools/review-launch.js` 的 `snapshotTreeState`（第 2038〜2061 行）與 `runGrokExec`（第 2231〜2235、2338〜2347 行）／下一次調整 `snapshotTreeState` 快照範圍、強化輸出側 DLP 或新增 `stderr` 診斷輸出時。
 - 2026-10-19（[套件 #114 複審後掃第 5 項](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278666609)；2026-10-21 補收件）`runGrokSeatbeltProbe` 未要求 `dns.lookup` 失敗與 `/usr` 下 `security`／`open`／`osascript` 負面預檢，且 `runGrokExec` 無牆鐘逾時、結束時未對 `sandbox-exec` 行程群組發信號清理背景子程序／`tools/review-launch.js` 的 `GROK_SEATBELT_PROFILE`、`runGrokSeatbeltProbe`（第 1744〜1777 行）與 `runGrokExec`（第 2310〜2356 行）／下一次調整 Grok 沙盒預檢探針，或發現 `--grok-exec` 逾時掛住、背景子程序殘留時。
 - 2026-10-19（[套件 #114 複審後掃第 7 項](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278666609)；2026-10-21 補收件）`runGrokExec` 抽取提示內額外 SHA 的正規式只認兩點 `diff A..B`、未認三點 `diff A...B`，且同目錄 `scan.json`／`launch.json` 解析失敗時靜默忽略，致無紀錄檔或紀錄檔損壞時非祖先基底不會進入 `wantedShas`／`tools/review-launch.js` 的 `runGrokExec`（第 2199〜2212 行）／當支援不經 `--scan`／送審產生器而無 `scan.json`／`launch.json` 的手動 `--grok-exec` 呼叫、或下一次動到 `wantedShas` 抽取邏輯時。
-- 2026-10-19（[套件 #114 r7 複審 N3](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278019285)；2026-10-21 補收件）區分 Gemini 啟動時與退出計畫後的權限：依非互動樣板啟動後，若模型呼叫 `exit_plan_mode`，Gemini CLI 會自動切為 YOLO，只讀 `machine` 欄容易把初始狀態當成全程限制／`settings.json` 的 Gemini `machine`／`promptOnly`（改完重產 `PROJECT-SETTINGS.md`）／下一次更新 Gemini 複審接線或 CLI 版本時，補上「非互動退出轉 YOLO，之後唯讀靠提示與事後核樹」。
 - 2026-10-19（[套件 #114 PR 說明對帳表自記待辦](https://github.com/teacherjung/ai-collab-kit/pull/114)；2026-10-21 補收件）`materializeIsolatedGitRepo` 為保留非祖先上一輪提交而建立的引用置於 `refs/keep/wanted-*`（供盒內 `git fsck --unreachable --no-reflogs` 維持零未引用物件），盒內執行 `git for-each-ref` 或 `git log --all` 會看到該命名空間／`tools/review-launch.js` 的 `materializeIsolatedGitRepo`（第 2114 行）／當盒內工具對 `git for-each-ref` 或 `--all` 有零額外可見引用要求且一併調整 `kit-only/settings-pin.test.js` 的 `fsck --unreachable` 驗證方式時。
-- 最晚 2026-09-23（定案頁第 2 批第 4 件；2026-10-30 成本重算由「排定」轉入，依 [2026-10-30 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 擁有者本人回覆「選項 A（」及 10/20 常設授權 Gemini 代裁採子題選項 a）C1 支數提醒：本文 C1 規定每個專案各工作線全體最多兩支進行中、草稿也算（C1 文字已於 #121 對齊；10/30 量測近 30 支 #102〜#131 建立／關閉區間內最大同時開啟數為 2，單獨改共用工具並觸發雙倉同步成本高於收益）／`tools/preflight.js` 讀取既有 `openChanges` 筆數，若大於或等於 2 則印黃燈提醒（只列不擋）／下一次因別的需求本來就要修改 `tools/preflight.js` 時順手併入，或第一次發生超開第 3 支 PR 的違規事故時。
 
 ## 排定
 
-現行順序（擁有者 2026-09-30 裁 a、2026-10-07 裁 a 調整；留痕：[09/30 順序](https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5903615689)、[09/30 盤點](https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5905198310)、[10/07 提前三台](https://github.com/teacherjung/ai-collab-kit/pull/48#issuecomment-6034414847)、[10/30 排定⑤收尾](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860)）：①收件處收尾（#22，已完）→ ②套件說明書網頁（#36、#40、#85、#87，已完）→ ③第 2 批機器提前三台（#48、#49、#50，已完）→ ④盤點現成可換（10/15 報告、10/29 六題裁定歸位，已完）→ ⑤第 2 批其餘機器（已完：第 7 件於 #114 完成，第 3、6 件於 #132 結案，第 4 件於 #132 轉入「## 待辦」依條件觸發）。「## 待辦」各行不另排時段，照各行條件觸發。
+現行順序（擁有者 2026-09-30 裁 a、2026-10-07 裁 a 調整；留痕：[09/30 順序](https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5903615689)、[09/30 盤點](https://github.com/teacherjung/ai-collab-kit/pull/22#issuecomment-5905198310)、[10/07 提前三台](https://github.com/teacherjung/ai-collab-kit/pull/48#issuecomment-6034414847)、[10/30 排定⑤收尾](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860)）：①收件處收尾（#22，已完）→ ②套件說明書網頁（#36、#40、#85、#87，已完）→ ③第 2 批機器提前三台（#48、#49、#50，已完）→ ④盤點現成可換（10/15 報告、10/29 六題裁定歸位，已完）→ ⑤第 2 批其餘機器（已完：第 7 件於 #114 完成，第 3、6 件於 #132 結案，第 4 件於 #134 完成）。「## 待辦」各行不另排時段，照各行條件觸發。
 
 **第 2 批機器**（第二輪定案頁「要新蓋的機器」，一件一支 PR，動手前重算成本；做完的搬到下一節）：
 
 1. 待辦的固定去處——做完（清單＝#21、#22；開工印待辦＝#50）。
 2. A5 待裁閘——做完（#48）。
 3. G1 提醒——做完（#88 `tools/merge.js` 合併後印 H6 規矩原文、#114 `tools/review-launch.js` 自動判斷是否應掃描並於 `--scan-post` 自動補齊掃描時序；#132 依 [10/30 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 結案）。
-4. C1 支數——轉入「## 待辦」依條件觸發（#121 已對齊 C1 文字；#132 依 [10/30 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 改列待辦於下次動 `tools/preflight.js` 時順手併入）。
+4. C1 支數——做完（#121 對齊 C1 文字；#134 於 `tools/preflight.js` 補齊 `checkOpenChanges` 讀取 `openChanges` 筆數並於達 2 支以上時印黃燈提醒）。
 5. F3 送審說明產生器——做完（#49）。
 6. E8 半自動突變表——做完（#132 完成樹外 Stryker 實測與成本重算，依 [10/30 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 結案）。
 7. G2 掃描指令——做完（#114）。
 
 ## 做完的
 
-> 各條原始完整調查、中間量測與三欄背景全文已歸檔於主目錄上一層歸檔區（`kit-backlog-completed-full-20261029.md`、`batch2-remaining-machines-report-20261030.md`），本節保留每件來源、主題與落地 PR 摘要（共 69 件，不刪條目）。
+> 各條原始完整調查、中間量測與三欄背景全文已歸檔於主目錄上一層歸檔區（`kit-backlog-completed-full-20261029.md`、`batch2-remaining-machines-report-20261030.md`），本節保留每件來源、主題與落地 PR 摘要（共 71 件，不刪條目）。
 
+- 最晚 2026-09-23（定案頁第 2 批第 4 件；2026-10-30 依 [#132 裁示](https://github.com/teacherjung/ai-collab-kit/pull/132#issuecomment-6527336860) 轉待辦）C1 支數提醒（每個專案各工作線全體最多兩支進行中、草稿也算）——落地：套件 #121（對齊 C1 條文）與套件 #134（`tools/preflight.js` 新增 `checkOpenChanges` 讀取 `openChanges` 筆數，達 2 支或以上時印出黃燈提醒，只列不擋）。
+- 2026-10-19（[套件 #114 r7 複審 N3](https://github.com/teacherjung/ai-collab-kit/pull/114#issuecomment-6278019285)；2026-10-21 補收件）區分 Gemini 啟動時與退出計畫後的權限（非互動退出轉 YOLO，之後唯讀靠提示與事後核樹）——落地：套件 #134（更新 `settings.json` 與 `PROJECT-SETTINGS.md` 的 Gemini `command`、`machine` 與 `promptOnly`，補齊 `--skip-trust`、`gemini-3.1-pro-preview` 模型代號與退出規劃模式後轉 YOLO 之唯讀邊界說明）。
 - 2026-10-08（原記 S141）說明書手寫缺點「多數修改要審兩輪以上」的已合併 PR 輪數重數——落地：套件 #133（`manual/plain.md` 更新為 2026-10-31 下午量：套件倉庫已合併的 117 支裡有 75 支，並同步更新第 8 項掃描隔離與本機工具現況）。
 - 2026-10-15（套件「協作套件的檔只在套件改」施工舊文字掃描）說明書 `manual/plain.md` 套用流向更新為 D5 無例外與 `manual/build.verify.js` 兩處樣本更新——落地：套件 #133（依 #107 擁有者裁示 `⚖️ 6185765768` 與 #133 裁示更新 `manual/plain.md` 套用節及 `manual/build.verify.js` 的 `HEADER_SAMPLES` 與套用頁第二節第一項粗體樣本）。
 - 2026-10-14（套件 #99 複審後掃 1-1〜1-4）說明書手冊 `manual/handbook.md` K2 白話補齊進門第一問細節——落地：套件 #133（依 #107 擁有者裁示 `⚖️ 6185766145` 與 #133 裁示更新 K2 白話）。

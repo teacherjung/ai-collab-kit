@@ -101,7 +101,7 @@
 
   Claude 當複審者（工作目錄＝審查樹；放行清單是 2026-10-03 在玩具資料夾實測的寫法換成本倉庫的考題指令，本倉庫沒實跑過，`gh pr comment` 那一條也沒測過）。兩個路徑都寫絕對路徑，`Edit(/<突變副本>/**)` 展開後開頭是兩條斜線，那是絕對路徑的寫法。帶 `--setting-sources user,project` 是為了不讀主目錄的本機設定檔（它會跟進工作資料夾）。助手被拒時最後的輸出看不到，要在輸出檔逐筆搜 `has been denied`。
 
-  Grok 與 Gemini 當複審者（工作目錄＝審查樹；2026-10-19 起統一改用無頭 CLI 樣板，寫在 `settings.json` 的 reviewers）：Grok 用 `node tools/review-launch.js --grok-exec --mode review --cwd <審查樹> --mutation-copy <突變副本> --model <模型> --reasoning-effort <推理> --prompt-file <提示檔> --out <輸出檔>`（以預設拒絕 Seatbelt、單提交獨立 Git 副本、本機受控認證轉送通道、啟動前隔離預檢、純檔案系統快照核驗與輸出憑證 DLP 執行；完整檢核條件與射程見 `MACHINES.md` 的 `F1、F3、F11、G1、G2` 那一列）；Gemini 用 `cd <審查樹> && GEMINI_EFFORT=<推理> gemini --model <模型> --approval-mode plan --include-directories <突變副本> -p "$(cat <提示檔>)" > <輸出檔>`。Gemini 將純文字結論寫入 `<輸出檔>`（文末單獨寫「未貼」）；Grok `--out` 則保留完整原生 NDJSON，代貼時核對其完成狀態及最後正文（正文文末可未貼），且兩者之正文均須驗首行標頭與兩小標。審完由外殼跑 `node tools/review-launch.js --post <編號>` 驗樹、標頭與正文後代貼。
+  Grok 與 Gemini 當複審者（工作目錄＝審查樹；2026-10-19 起統一改用無頭 CLI 樣板，寫在 `settings.json` 的 reviewers）：Grok 用 `node tools/review-launch.js --grok-exec --mode review --cwd <審查樹> --mutation-copy <突變副本> --model <模型> --reasoning-effort <推理> --prompt-file <提示檔> --out <輸出檔>`（以預設拒絕 Seatbelt、單提交獨立 Git 副本、本機受控認證轉送通道、啟動前隔離預檢、純檔案系統快照核驗與輸出憑證 DLP 執行；完整檢核條件與射程見 `MACHINES.md` 的 `F1、F3、F11、G1、G2` 那一列）；Gemini 用 `cd <審查樹> && GEMINI_EFFORT=<推理> gemini --skip-trust --model <模型> --approval-mode plan --include-directories <突變副本> -p "$(cat <提示檔>)" > <輸出檔>`。Gemini 將純文字結論寫入 `<輸出檔>`（文末單獨寫「未貼」）；Grok `--out` 則保留完整原生 NDJSON，代貼時核對其完成狀態及最後正文（正文文末可未貼），且兩者之正文均須驗首行標頭與兩小標。審完由外殼跑 `node tools/review-launch.js --post <編號>` 驗樹、標頭與正文後代貼。
 
   裁示者指派與換人登記、留痕做法見 `templates/ruling-record.md` 與 `MACHINES.md`「專案設定」節（A1、D1、I3）。
 
