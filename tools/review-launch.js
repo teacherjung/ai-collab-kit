@@ -1592,6 +1592,12 @@ function unwrapScanOutput(raw, kindLabel = '掃描回覆', forceGrok = false) {
     if (obj.is_error === true || (obj.subtype !== undefined && obj.subtype !== 'success')) {
       throw new LaunchError(`${kindLabel} JSON 標示執行失敗（is_error 或非 success），不代貼`);
     }
+    if (Object.hasOwn(obj, 'status') && Object.hasOwn(obj, 'response')) {
+      if (obj.status !== 'SUCCESS' || typeof obj.response !== 'string' || !obj.response.trim()) {
+        throw new LaunchError(`${kindLabel} JSON 標示執行失敗（status 非 SUCCESS 或 response 為空），不代貼`);
+      }
+      return obj.response;
+    }
     return typeof obj.result === 'string' ? obj.result : null;
   };
   if (Array.isArray(parsed)) {
@@ -2802,7 +2808,7 @@ const GROK_BOX_FIELDS = Object.freeze({
   oidc_issuer: (v) => v === GROK_PINNED_ISSUER,
   oidc_client_id: (v) => v === GROK_PINNED_CLIENT_ID,
 });
-const GROK_ENUM_FIELDS = Object.freeze(['principal_type']);
+const GROK_ENUM_FIELDS = Object.freeze(['principal_type', 'first_name', 'last_name', 'coding_data_retention_opt_out']);
 const GROK_ALLOWED_REQUESTS = Object.freeze([
   { method: 'GET', path: /^\/v1\/models$/u },
   { method: 'GET', path: /^\/v1\/settings$/u },
@@ -3539,11 +3545,33 @@ async function runGrokChild(command, args, options, deps = {}) {
   if (deps.signal?.aborted) return beforeSpawn('cancelled');
   try { deps.onStart?.({ startedAt, deadline, wallMs, cleanupMs }); }
   catch { return beforeSpawn('record_failed'); }
+  const pgidRecordFile = process.env.ACK_PROBE_PGID_FILE || (options && options.env && options.env.ACK_PROBE_PGID_FILE);
+  const recordProbePgid = (line) => {
+    if (typeof pgidRecordFile !== 'string' || pgidRecordFile.trim() === '') return true;
+    try {
+      fs.appendFileSync(pgidRecordFile, `${line}\n`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!recordProbePgid('starting')) return beforeSpawn('record_failed');
   let child;
   try { child = (deps.spawnChild || spawn)(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
-  catch { return beforeSpawn('spawn_failed'); }
+  catch {
+    recordProbePgid('aborted');
+    return beforeSpawn('spawn_failed');
+  }
   const pid = child.pid;
   const trustedPid = Number.isSafeInteger(pid) && pid > 1;
+  if (trustedPid) {
+    if (!recordProbePgid(`pid:${pid}`)) {
+      try { kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+      return beforeSpawn('record_failed');
+    }
+  } else {
+    recordProbePgid('aborted');
+  }
   let stdout = '';
   let stderr = '';
   let closed = false;
@@ -4280,4 +4308,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, unwrapScanOutput, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, runGrokChild, GROK_WALL_MS, GROK_CLEANUP_MS, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
+module.exports = { main, launch, close, post, scanLaunch, scanPost, scanClose, deriveScanCommand, resolveScannerSpec, stripGrokPreamble, prepareVerdict, prepareScan, unwrapScanOutput, splitCommandArgs, defaultRunPost, defaultRunExec, fill, promptPart, substitute, scopeOf, roundsOf, twoMissesInARow, parseArgs, templateProblems, freshEntries, lockedTrees, runGrokExec, runGrokChild, GROK_WALL_MS, GROK_CLEANUP_MS, parseGrokExecArgs, materializeIsolatedGitRepo, snapshotTreeState, prepareGrokBoxAuth, grokAuthNeedles, startGrokRelay, grokRelayRejectReason, isGrokToleratedRefusal, runGrokSeatbeltProbe, verifyGrokSeatbeltProfile, canApplySeatbelt, GROK_SEATBELT_PROFILE, GROK_ALLOWED_REQUESTS, GROK_TOLERATED_REFUSALS, GROK_BOX_FIELDS, GROK_ENUM_FIELDS, GROK_PINNED_ISSUER, GROK_PINNED_CLIENT_ID, GROK_DUMMY_BEARER_PREFIX, FILL, SCAN_FILL, SCAN_TEMPLATE, SCAN_HEADER, FILE_SLOT, SAFE, COMMAND_TOKENS, SCAN_COMMAND_TOKENS, LaunchError };
