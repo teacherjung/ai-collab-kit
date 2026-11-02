@@ -3545,11 +3545,33 @@ async function runGrokChild(command, args, options, deps = {}) {
   if (deps.signal?.aborted) return beforeSpawn('cancelled');
   try { deps.onStart?.({ startedAt, deadline, wallMs, cleanupMs }); }
   catch { return beforeSpawn('record_failed'); }
+  const pgidRecordFile = process.env.ACK_PROBE_PGID_FILE || (options && options.env && options.env.ACK_PROBE_PGID_FILE);
+  const recordProbePgid = (line) => {
+    if (typeof pgidRecordFile !== 'string' || pgidRecordFile.trim() === '') return true;
+    try {
+      fs.appendFileSync(pgidRecordFile, `${line}\n`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (!recordProbePgid('starting')) return beforeSpawn('record_failed');
   let child;
   try { child = (deps.spawnChild || spawn)(command, args, { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
-  catch { return beforeSpawn('spawn_failed'); }
+  catch {
+    recordProbePgid('aborted');
+    return beforeSpawn('spawn_failed');
+  }
   const pid = child.pid;
   const trustedPid = Number.isSafeInteger(pid) && pid > 1;
+  if (trustedPid) {
+    if (!recordProbePgid(`pid:${pid}`)) {
+      try { kill(-pid, 'SIGKILL'); } catch { /* ignore */ }
+      return beforeSpawn('record_failed');
+    }
+  } else {
+    recordProbePgid('aborted');
+  }
   let stdout = '';
   let stderr = '';
   let closed = false;

@@ -580,12 +580,19 @@ setTimeout(() => {
     await new Promise((r) => setTimeout(r, 900));
     assert.equal(fs.existsSync(timeoutMarker), false, '逾時收尾後子程序群組必須已被終止，不得在函式回傳後繼續寫檔');
 
-    // (f) N1（續）：巢狀 runGrokChild（忽略 SIGTERM 的內層 detached 程序群組）於逾時收尾時必須一併終止，回傳後不得繼續存活或寫入標記
+    // (f) N1（續）：巢狀 runGrokChild（忽略 SIGTERM 的內層 detached 程序群組，且外層監督程序同步忙碌 1800ms 暫時無法回應 SIGTERM）於逾時或取消收尾時必須一併終止內層群組；若無法確認內層清空則標記未完成收尾、保留暫存樹並停止下一座位
     const nestedTicks = path.join(tmp, 'nested-grok.ticks');
     const nestedPidFile = path.join(tmp, 'nested-grok.pid');
+    const nestedSecondSeatMarker = path.join(tmp, 'nested-second-seat.txt');
     const nestedChildScript = path.join(tmp, 'nested-grok-child.cjs');
     const nestedWrapperScript = path.join(tmp, 'nested-grok-wrapper.cjs');
     const reviewLaunchPath = path.join(__dirname, '..', 'tools', 'review-launch.js');
+    const claudeNestedCli = path.join(pathFrontDir, 'claude');
+    fs.writeFileSync(
+      claudeNestedCli,
+      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(nestedSecondSeatMarker)}, 'ran');\n`,
+      { mode: 0o755 },
+    );
     fs.writeFileSync(
       nestedChildScript,
       [
@@ -599,8 +606,16 @@ setTimeout(() => {
     fs.writeFileSync(
       nestedWrapperScript,
       [
+        "const fs = require('node:fs');",
         `const { runGrokChild } = require(${JSON.stringify(reviewLaunchPath)});`,
         `runGrokChild(process.execPath, [${JSON.stringify(nestedChildScript)}], { env: process.env }, { wallMs: 7000 }).then((r) => { process.exitCode = r.status; });`,
+        'const waitPid = setInterval(() => {',
+        `  if (fs.existsSync(${JSON.stringify(nestedPidFile)})) {`,
+        '    clearInterval(waitPid);',
+        '    const busyUntil = Date.now() + 1800;',
+        '    while (Date.now() < busyUntil) {}',
+        '  }',
+        '}, 10);',
       ].join('\n'),
     );
     fs.writeFileSync(
@@ -613,12 +628,13 @@ setTimeout(() => {
       seatFilter: 'Codex',
       env: customEnv,
       homedir: tmp,
-      timeoutMs: 1000,
+      timeoutMs: 900,
+      graceMs: 120,
     });
     const ticksAtReturn = countLines(nestedTicks);
     const nestedPid = fs.existsSync(nestedPidFile) ? Number(fs.readFileSync(nestedPidFile, 'utf8')) : null;
     assert.ok(nestedPid && nestedPid > 1, '巢狀內層程序在逾時前應已啟動並寫出就緒 PID');
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 300));
     const ticksAfterWait = countLines(nestedTicks);
     let nestedStillAlive = false;
     if (nestedPid) {
@@ -627,8 +643,84 @@ setTimeout(() => {
     }
     assert.equal(nestedTimeoutProbe.probes[0].ok, false);
     assert.equal(nestedTimeoutProbe.probes[0].reason, '執行逾時');
-    assert.equal(nestedStillAlive, false, '巢狀 runGrokChild 內層程序在 probeSeats 回傳時必須已終止');
+    assert.equal(nestedStillAlive, false, '外層監督程序同步忙碌遭 SIGKILL 時，巢狀 runGrokChild 內層程序在 probeSeats 回傳時亦必須已終止');
     assert.equal(ticksAfterWait, ticksAtReturn, 'probeSeats 回傳後巢狀內層程序不得再新增任何標記');
+
+    // (f-2) 外層監督程序同步忙碌 1800ms 期間收到 SIGINT 取消：必須回 130、終止內層群組、停止第二座位
+    try { fs.unlinkSync(nestedPidFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(nestedTicks); } catch { /* ignore */ }
+    try { fs.unlinkSync(nestedSecondSeatMarker); } catch { /* ignore */ }
+    const twoSeatNestedSettings = {
+      ...settings,
+      reviewers: [settings.reviewers[0], settings.reviewers[1]],
+    };
+    const prevNestedExitCode = process.exitCode;
+    let nestedCancelRes;
+    try {
+      const nestedCancelPromise = probeSeats(twoSeatNestedSettings, {
+        seatFilter: '*',
+        env: customEnv,
+        homedir: tmp,
+        timeoutMs: 8000,
+        graceMs: 120,
+      });
+      for (let i = 0; i < 200 && !fs.existsSync(nestedPidFile); i += 1) {
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      assert.equal(fs.existsSync(nestedPidFile), true, '巢狀取消測試的內層程序應已寫出就緒 PID');
+      await new Promise((r) => setTimeout(r, 30));
+      process.emit('SIGINT', 'SIGINT');
+      nestedCancelRes = await nestedCancelPromise;
+    } finally {
+      process.exitCode = prevNestedExitCode;
+    }
+    const cancelNestedPid = Number(fs.readFileSync(nestedPidFile, 'utf8'));
+    const cancelTicksAtReturn = countLines(nestedTicks);
+    let cancelNestedAlive = false;
+    try { process.kill(cancelNestedPid, 0); cancelNestedAlive = true; } catch { /* expected ESRCH */ }
+    try { process.kill(-cancelNestedPid, 'SIGKILL'); } catch { /* cleanup if needed */ }
+    await new Promise((r) => setTimeout(r, 250));
+    const cancelTicksAfterWait = countLines(nestedTicks);
+    assert.equal(nestedCancelRes.code, 130);
+    assert.equal(nestedCancelRes.cancelled, true);
+    assert.equal(nestedCancelRes.probes.length, 1, '取消後不得啟動第二座位');
+    assert.equal(fs.existsSync(nestedSecondSeatMarker), false, '取消後第二座位不得被執行');
+    assert.equal(cancelNestedAlive, false, '外層監督程序忙碌期間取消回傳時，內層 runGrokChild 程序必須已終止');
+    assert.equal(cancelTicksAfterWait, cancelTicksAtReturn, '取消回傳後內層程序不得再新增標記');
+
+    // (f-3) 當內層群組無法確認清空時（例如收尾期限內內層仍存活），逾時路徑必須標記 cleanupFailed、保留點火樹並停止第二座位
+    try { fs.unlinkSync(nestedPidFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(nestedTicks); } catch { /* ignore */ }
+    try { fs.unlinkSync(nestedSecondSeatMarker); } catch { /* ignore */ }
+    const unconfirmedNestedRes = await probeSeats(twoSeatNestedSettings, {
+      seatFilter: '*',
+      env: customEnv,
+      homedir: tmp,
+      timeoutMs: 700,
+      graceMs: 40,
+      cleanupMs: 120,
+      kill: (targetPid, sig) => {
+        const innerP = fs.existsSync(nestedPidFile) ? Number(fs.readFileSync(nestedPidFile, 'utf8')) : 0;
+        if (innerP > 1 && targetPid === -innerP && sig === 0) return true;
+        return process.kill(targetPid, sig);
+      },
+    });
+    const unconfirmedInnerPid = fs.existsSync(nestedPidFile) ? Number(fs.readFileSync(nestedPidFile, 'utf8')) : null;
+    if (unconfirmedInnerPid) {
+      try { process.kill(-unconfirmedInnerPid, 'SIGKILL'); } catch { /* cleanup */ }
+    }
+    try {
+      assert.equal(unconfirmedNestedRes.cleanupFailed, true, '內層群組無法確認清空時頂層結果應標記 cleanupFailed');
+      assert.equal(unconfirmedNestedRes.probes.length, 1, '內層群組無法確認清空時必須立即停止第二座位');
+      assert.equal(unconfirmedNestedRes.probes[0].cleanupFailed, true);
+      assert.match(unconfirmedNestedRes.probes[0].reason, /子程序群組未完成收尾/u);
+      assert.equal(fs.existsSync(nestedSecondSeatMarker), false, '內層群組未完成收尾時不得啟動第二座位');
+      assert.ok(unconfirmedNestedRes.probes[0].probeRoot && fs.existsSync(unconfirmedNestedRes.probes[0].probeRoot), '內層群組未完成收尾時必須保留暫存點火樹供查');
+    } finally {
+      if (unconfirmedNestedRes.probes[0] && unconfirmedNestedRes.probes[0].probeRoot) {
+        fs.rmSync(unconfirmedNestedRes.probes[0].probeRoot, { recursive: true, force: true });
+      }
+    }
 
     // (g) N1（續）：外層點火收到單一主程序（pid）或整組（-pid）之 SIGINT／SIGTERM 取消時，必須退出 130／143、終止受管 CLI，且停止同座位下一角色與下一座位
     const cancelTicks = path.join(tmp, 'cancel-cli.ticks');
@@ -1143,7 +1235,6 @@ setTimeout(() => {
       await new Promise((r) => setTimeout(r, 40));
       process.emit('SIGINT', 'SIGINT');
       process.emit('SIGTERM', 'SIGTERM');
-      process.emit('SIGINT', 'SIGINT');
       cleanupCancelRes = await p;
       assert.equal(process.exitCode, 130, '首個取消訊號 SIGINT 應將 process.exitCode 設為 130，不被後續 SIGTERM 覆寫');
     } finally {
@@ -1162,7 +1253,51 @@ setTimeout(() => {
     assert.equal(process.listenerCount('SIGINT'), sigintCountBefore, '不得殘留 SIGINT 監聽器');
     assert.equal(process.listenerCount('SIGTERM'), sigtermCountBefore, '不得殘留 SIGTERM 監聽器');
 
-    // (n) N1（續）：真 PTY 正常對照與 TIOCSWINSZ 視窗縮放（SIGWINCH）驗證——縮放不得誤判取消、不殺 CLI
+    // 補齊收件核驗與非零退出碼突變攔截：review 壞標頭、scan 壞標頭、以及寫出合法結論但退出碼非 0 皆必須判為失敗
+    const badReviewHeaderProbe = await probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      spawnSyncImpl: (_bin, args) => {
+        const outFile = /-o\s+([^\s]+)/u.exec(args[1])[1];
+        fs.writeFileSync(outFile, '這不是合規複審標頭\n\n### 本輪實際用的設定\n- 測試\n\n### 清單逐項結果\n- 零發現\n');
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(badReviewHeaderProbe.probes[0].ok, false, '複審點火輸出壞標頭時必須判為點火失敗');
+    assert.match(badReviewHeaderProbe.probes[0].reason, /輸出第一行不是合規標頭/u);
+
+    const badScanHeaderProbe = await probeSeats(scannerOnlySettings, {
+      seatFilter: 'Grok',
+      env: { PATH: process.env.PATH },
+      homedir: tmp,
+      authFile: fakeAuthFile,
+      grokBin: fakeGrokBin,
+      spawnSyncImpl: (_bin, args) => {
+        const outFile = /--out-file\s+([^\s]+)/u.exec(args[1])[1];
+        fs.writeFileSync(outFile, '這不是合規掃描標頭\n\n### 驗了什麼\n- 測試\n\n### 發現\n- 零發現\n');
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(badScanHeaderProbe.probes[0].ok, false, '掃描點火輸出壞標頭時必須判為點火失敗');
+    assert.match(badScanHeaderProbe.probes[0].reason, /輸出第一行不是合規標頭/u);
+
+    const validBodyNonZeroProbe = await probeSeats(singleCodexSettings, {
+      seatFilter: 'Codex',
+      env: customEnv,
+      homedir: tmp,
+      spawnSyncImpl: (_bin, args) => {
+        const outFile = /-o\s+([^\s]+)/u.exec(args[1])[1];
+        const promptFile = /<\s+([^\s]+)/u.exec(args[1])[1];
+        const promptLines = fs.readFileSync(promptFile, 'utf8').split('\n').slice(1);
+        fs.writeFileSync(outFile, promptLines.join('\n'));
+        return { status: 3, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(validBodyNonZeroProbe.probes[0].ok, false, '即使輸出檔含合法結論正文，CLI 退出碼非 0 時仍必須判為點火失敗');
+    assert.equal(validBodyNonZeroProbe.probes[0].status, 3);
+
+    // (n) N1（續）：真控制終端機（setsid＋TIOCSCTTY）與 TIOCSWINSZ 視窗縮放（SIGWINCH）驗證——縮放不得誤判取消、不殺 CLI
     const pythonBin = defaultWhich('python3');
     assert.ok(pythonBin, '測試環境應具備 python3 以執行真 PTY TIOCSWINSZ 驗證');
     const ptyReadyFile = path.join(tmp, 'pty-cli.ready');
@@ -1195,10 +1330,17 @@ setTimeout(() => {
       [
         'import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time',
         'master, slave = pty.openpty()',
+        'fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))',
         'resize = os.environ.get("DO_RESIZE") == "1"',
         'ready_file = os.environ["PTY_READY_FILE"]',
         'cmd = [os.environ["NODE_BIN"], os.environ["RUNNER_JS"]]',
-        'proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True)',
+        'def setup_ctty():',
+        '    os.setsid()',
+        '    try:',
+        '        fcntl.ioctl(0, termios.TIOCSCTTY, 0)',
+        '    except OSError:',
+        '        pass',
+        'proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True, preexec_fn=setup_ctty)',
         'os.close(slave)',
         'chunks = []',
         'resized = False',

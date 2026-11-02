@@ -392,8 +392,9 @@ async function runProbeCommand(cmd, {
   cwd,
   env,
   timeoutMs = 60000,
-  graceMs = 360,
+  graceMs = 550,
   cleanupMs = 3000,
+  pgidFile = null,
   cancelState = null,
   spawnImpl = spawn,
   spawnSyncImpl = spawnSync,
@@ -421,6 +422,16 @@ async function runProbeCommand(cmd, {
     process.on('SIGTERM', ownOnSignal);
   }
 
+  let ownPgidFile = null;
+  const effectivePgidFile = pgidFile || (() => {
+    ownPgidFile = path.join(
+      os.tmpdir(),
+      `ack-probe-pgids-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`,
+    );
+    return ownPgidFile;
+  })();
+  const spawnEnv = env ? { ...env, ACK_PROBE_PGID_FILE: effectivePgidFile } : { ...process.env, ACK_PROBE_PGID_FILE: effectivePgidFile };
+
   try {
     if (activeCancelState.signal) {
       return {
@@ -438,7 +449,7 @@ async function runProbeCommand(cmd, {
     if (spawnSyncImpl !== spawnSync) {
       const syncRes = spawnSyncImpl('/bin/sh', ['-c', cmd], {
         cwd,
-        env,
+        env: spawnEnv,
         encoding: 'utf8',
         timeout: timeoutMs,
       });
@@ -474,7 +485,7 @@ async function runProbeCommand(cmd, {
     try {
       child = spawnImpl('/bin/sh', ['-c', cmd], {
         cwd,
-        env,
+        env: spawnEnv,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -505,6 +516,8 @@ async function runProbeCommand(cmd, {
     let finishing = false;
     let termSent = false;
     let killSent = false;
+    const termSentPids = new Set();
+    const killSentPids = new Set();
     let cleanupFailed = !trustedPid;
     let settled = false;
     let settle;
@@ -516,23 +529,92 @@ async function runProbeCommand(cmd, {
     child.stderr?.on('data', (d) => { stderr += d; });
 
     const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-    function groupState() {
-      if (!trustedPid) return 'unknown';
-      try {
-        kill(-pid, 0);
-        return 'alive';
-      } catch (err) {
-        return err && err.code === 'ESRCH' ? 'empty' : 'unknown';
+    function readPgidState() {
+      const pids = [];
+      if (trustedPid) pids.push(pid);
+      let startingCount = 0;
+      let resolvedCount = 0;
+      let readError = false;
+      if (effectivePgidFile) {
+        try {
+          if (fs.existsSync(effectivePgidFile)) {
+            const raw = fs.readFileSync(effectivePgidFile, 'utf8');
+            for (const rawLine of raw.split(/\r?\n/u)) {
+              const line = rawLine.trim();
+              if (!line) continue;
+              if (line === 'starting') {
+                startingCount += 1;
+              } else if (line === 'aborted') {
+                resolvedCount += 1;
+              } else if (line.startsWith('pid:')) {
+                const n = Number(line.slice(4).trim());
+                if (Number.isSafeInteger(n) && n > 1) {
+                  resolvedCount += 1;
+                  if (!pids.includes(n)) pids.push(n);
+                } else {
+                  readError = true;
+                }
+              } else {
+                const n = Number(line);
+                if (Number.isSafeInteger(n) && n > 1) {
+                  if (!pids.includes(n)) pids.push(n);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          if (!err || err.code !== 'ENOENT') readError = true;
+        }
       }
+      return {
+        pids,
+        unconfirmedStart: readError || startingCount > resolvedCount,
+      };
     }
-    function signalGroup(sig) {
-      if (!trustedPid) return false;
-      try {
-        kill(-pid, sig);
-        return true;
-      } catch (err) {
-        return Boolean(err && err.code === 'ESRCH');
+    function groupState() {
+      const { pids } = readPgidState();
+      if (pids.length === 0) return 'unknown';
+      let anyAlive = false;
+      for (const targetPid of pids) {
+        try {
+          kill(-targetPid, 0);
+          anyAlive = true;
+        } catch (err) {
+          if (!err || err.code !== 'ESRCH') return 'unknown';
+        }
       }
+      return anyAlive ? 'alive' : 'empty';
+    }
+    function sendTermToTracked() {
+      const { pids } = readPgidState();
+      if (pids.length === 0) return false;
+      let ok = true;
+      for (const targetPid of pids) {
+        if (termSentPids.has(targetPid)) continue;
+        termSentPids.add(targetPid);
+        termSent = true;
+        try {
+          kill(-targetPid, 'SIGTERM');
+        } catch (err) {
+          if (!err || err.code !== 'ESRCH') ok = false;
+        }
+      }
+      return ok;
+    }
+    function sendKillToTracked() {
+      const { pids } = readPgidState();
+      if (pids.length === 0) return false;
+      let ok = true;
+      for (const targetPid of pids) {
+        killSentPids.add(targetPid);
+        killSent = true;
+        try {
+          kill(-targetPid, 'SIGKILL');
+        } catch (err) {
+          if (!err || err.code !== 'ESRCH') ok = false;
+        }
+      }
+      return ok;
     }
 
     async function finish() {
@@ -540,40 +622,32 @@ async function runProbeCommand(cmd, {
       finishing = true;
       clearTimeout(timer);
       const cleanupDeadline = Date.now() + effCleanupMs;
+      let forceAt = null;
       let state = groupState();
       if (state === 'alive') {
-        termSent = true;
-        if (!signalGroup('SIGTERM')) cleanupFailed = true;
-        const forceAt = Date.now() + effGraceMs;
-        while (state === 'alive' && Date.now() < cleanupDeadline) {
-          if (Date.now() >= forceAt) {
-            killSent = true;
-            if (!signalGroup('SIGKILL')) cleanupFailed = true;
-          }
-          await delay(20);
-          state = groupState();
-        }
-        if (state === 'alive') {
-          killSent = true;
-          if (!signalGroup('SIGKILL')) cleanupFailed = true;
-          await delay(20);
-          state = groupState();
-        }
+        forceAt = Date.now() + effGraceMs;
+        if (!sendTermToTracked()) cleanupFailed = true;
       }
-      while ((!closed || (!childExited && !spawnErr)) && Date.now() < cleanupDeadline) {
-        const curState = groupState();
-        if (curState === 'alive' && !termSent) {
-          termSent = true;
-          if (!signalGroup('SIGTERM')) cleanupFailed = true;
-        } else if (curState === 'alive' && !killSent && Date.now() + 40 >= cleanupDeadline) {
-          killSent = true;
-          if (!signalGroup('SIGKILL')) cleanupFailed = true;
+      while ((state === 'alive' || !closed || (!childExited && !spawnErr)) && Date.now() < cleanupDeadline) {
+        if (state === 'alive') {
+          if (forceAt === null) forceAt = Date.now() + effGraceMs;
+          if (!sendTermToTracked()) cleanupFailed = true;
+          if (Date.now() >= forceAt || Date.now() + 40 >= cleanupDeadline) {
+            if (!sendKillToTracked()) cleanupFailed = true;
+          }
         }
         await delay(20);
+        state = groupState();
+      }
+      if (state === 'alive') {
+        if (!sendKillToTracked()) cleanupFailed = true;
+        await delay(20);
+        state = groupState();
       }
       await delay(0);
       state = groupState();
-      const groupEmpty = state === 'empty' || (spawnErr !== null && !trustedPid);
+      const { unconfirmedStart } = readPgidState();
+      const groupEmpty = (state === 'empty' || (spawnErr !== null && !trustedPid)) && !unconfirmedStart;
       if (!groupEmpty || !closed || (!childExited && !spawnErr)) {
         cleanupFailed = true;
       }
@@ -652,9 +726,8 @@ async function runProbeCommand(cmd, {
       const normalized = sig === 'SIGINT' ? 'SIGINT' : 'SIGTERM';
       if (!cancelledSignal) cancelledSignal = normalized;
       if (finishing) {
-        if (groupState() === 'alive' && !termSent) {
-          termSent = true;
-          if (!signalGroup('SIGTERM')) cleanupFailed = true;
+        if (groupState() === 'alive') {
+          if (!sendTermToTracked()) cleanupFailed = true;
         }
         return;
       }
@@ -690,6 +763,9 @@ async function runProbeCommand(cmd, {
 
     return await done;
   } finally {
+    if (ownPgidFile) {
+      try { fs.rmSync(ownPgidFile, { force: true }); } catch { /* ignore */ }
+    }
     if (ownCancelState) {
       process.removeListener('SIGINT', ownOnSignal);
       process.removeListener('SIGTERM', ownOnSignal);
@@ -921,6 +997,7 @@ async function probeSeats(settings = {}, {
             timeoutMs,
             graceMs,
             cleanupMs,
+            pgidFile: path.join(probeRoot, '.ack-probe-pgids'),
             cancelState,
             spawnImpl,
             spawnSyncImpl,
@@ -977,7 +1054,7 @@ async function probeSeats(settings = {}, {
               status: effectiveRunRes ? effectiveRunRes.status : null,
               reason: `${modeLabel}${baseReason}`,
               cleanupFailed: Boolean(effectiveRunRes && effectiveRunRes.cleanupFailed),
-               retainedProbeRoot: keepProbeRoot ? probeRoot : null,
+              retainedProbeRoot: keepProbeRoot ? probeRoot : null,
             };
             break;
           }
@@ -1016,6 +1093,7 @@ async function probeSeats(settings = {}, {
     process.removeListener('SIGTERM', onSignal);
   }
 
+  const anyCleanupFailed = probes.some((p) => Boolean(p && p.cleanupFailed));
   if (cancelState.signal) {
     const cancelCode = cancelState.exitCode || (cancelState.signal === 'SIGINT' ? 130 : 143);
     process.exitCode = cancelCode;
@@ -1023,12 +1101,18 @@ async function probeSeats(settings = {}, {
       code: cancelCode,
       cancelled: true,
       cancelSignal: cancelState.signal,
+      ...(anyCleanupFailed ? { cleanupFailed: true } : {}),
       lines,
       probes,
     };
   }
 
-  return { code: 0, lines, probes };
+  return {
+    code: 0,
+    ...(anyCleanupFailed ? { cleanupFailed: true } : {}),
+    lines,
+    probes,
+  };
 }
 
 /**
