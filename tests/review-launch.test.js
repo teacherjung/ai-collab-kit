@@ -3423,6 +3423,8 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
         JSON.stringify({type:"result",subtype:"success",is_error:false,stop_reason:"end_turn",session_id:sessId,result:passText})
       ];
       const resReview = await runStream(successStream, 'review', 0, successStream.join('\n') + '\n');
+      assert.ok(resReview.capturedArgs.includes('--always-approve'), 'review 應有 --always-approve 避免盒內單輪權限詢問取消');
+      assert.ok(resReview.capturedArgs.includes('--disable-web-search'), 'review 應停用外部網路搜尋工具');
       assert.ok(resReview.capturedArgs.includes('--allow'), 'review 應有 --allow');
       assert.ok(resReview.capturedArgs.includes('Bash(*)'), 'review 應允許 Bash');
 
@@ -3434,6 +3436,8 @@ test('Grok 隔離執行：E8 原生 JSON 串流解析、cancelled 拒絕、DLP �
         JSON.stringify({type:"result",subtype:"success",is_error:false,stop_reason:"end_turn",session_id:sessId,result:scanText})
       ];
       const resScan = await runStream(scanStream, 'scan', 0, scanStream.join('\n') + '\n');
+      assert.ok(resScan.capturedArgs.includes('--disable-web-search'), 'scan 應停用外部網路搜尋工具');
+      assert.ok(!resScan.capturedArgs.includes('--always-approve'), 'scan 不應開啟 --always-approve');
       assert.ok(resScan.capturedArgs.includes('--output-format'), '必須傳遞 output-format');
       assert.ok(resScan.capturedArgs.includes('streaming-messages-json'), '必須使用 streaming-messages-json 格式');
 
