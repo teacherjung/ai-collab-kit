@@ -3851,11 +3851,12 @@ async function runGrokExec(argv, deps = {}) {
 
     const instruction = parsed.mode === 'scan'
       ? `先使用 read_file 讀取盒內絕對路徑提示檔 ${boxPromptFile}，可分段直到讀完，並依該提示內容與附加之 git diff 材料工作。請僅使用提供之工具進行檢查，絕不可嘗試執行終端或測試指令。直接在目前工作目錄照做，只輸出最終掃描留言正文（第一行必須是 🔍 標頭，不要輸出任何前言或後記）。`
-      : `先使用 read_file 讀取盒內絕對路徑提示檔 ${boxPromptFile}，可分段直到讀完，並依該提示內容工作。請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，文末單獨一行寫「未貼」）。`;
+      : `先使用 read_file 讀取盒內絕對路徑提示檔 ${boxPromptFile}，可分段直到讀完，並依該提示內容工作（盒內已由沙盒隔離外部網路與上一層目錄寫入，請針對受審相關考題檔執行 node --test，需要暫存檔請寫入 $TMPDIR，不必寫結論檔或執行 gh 貼文）。請直接在目前工作目錄照做，只輸出最終複審結論正文（第一行必須是 🤖 標頭，不要輸出任何前言或後記，文末單獨一行寫「未貼」）。`;
 
     const grokArgs = [
       '--sandbox', 'off',
       '--no-subagents',
+      '--disable-web-search',
       '--output-format', 'streaming-messages-json'
     ];
     if (parsed.mode === 'scan') {
@@ -3868,6 +3869,7 @@ async function runGrokExec(argv, deps = {}) {
       );
     } else {
       grokArgs.push(
+        '--always-approve',
         '--allow', 'Bash(*)',
         '--allow', 'Read(*)',
         '--allow', 'Edit(*)',
