@@ -514,10 +514,7 @@ async function runProbeCommand(cmd, {
     let cancelledSignal = activeCancelState.signal || null;
     let spawnErr = null;
     let finishing = false;
-    let termSent = false;
-    let killSent = false;
     const termSentPids = new Set();
-    const killSentPids = new Set();
     let cleanupFailed = !trustedPid;
     let settled = false;
     let settle;
@@ -592,7 +589,6 @@ async function runProbeCommand(cmd, {
       for (const targetPid of pids) {
         if (termSentPids.has(targetPid)) continue;
         termSentPids.add(targetPid);
-        termSent = true;
         try {
           kill(-targetPid, 'SIGTERM');
         } catch (err) {
@@ -606,8 +602,6 @@ async function runProbeCommand(cmd, {
       if (pids.length === 0) return false;
       let ok = true;
       for (const targetPid of pids) {
-        killSentPids.add(targetPid);
-        killSent = true;
         try {
           kill(-targetPid, 'SIGKILL');
         } catch (err) {
@@ -642,7 +636,6 @@ async function runProbeCommand(cmd, {
       if (state === 'alive') {
         if (!sendKillToTracked()) cleanupFailed = true;
         await delay(20);
-        state = groupState();
       }
       await delay(0);
       state = groupState();
